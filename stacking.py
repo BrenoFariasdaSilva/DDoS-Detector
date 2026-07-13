@@ -3751,12 +3751,13 @@ def extract_principal_component_analysis_features(file_path, config=None):
             )
             return None  # Return None if the file does not exist
 
-        print(f"{BackgroundColors.GREEN}[INFO] PCA feature file found: {BackgroundColors.CYAN}{pca_results_path}{Style.RESET_ALL}")  # Log the resolved PCA results file path
+        print(f"{BackgroundColors.GREEN}[INFO] PCA_Results.csv found at: {BackgroundColors.CYAN}{pca_results_path}{Style.RESET_ALL}")  # Identify the analysis CSV resolved for component selection.
 
         try:  # Try to load the PCA results
             low_memory = config.get("execution", {}).get("low_memory", False)  # Read low memory flag from config
             df = pd.read_csv(pca_results_path, low_memory=low_memory)  # Load the PCA results file
             df.columns = df.columns.str.strip()  # Remove leading/trailing whitespace from column names
+            print(f"{BackgroundColors.GREEN}[INFO] PCA analysis results loaded from: {BackgroundColors.CYAN}{pca_results_path}{Style.RESET_ALL}")  # Confirm successful CSV parsing before ranking configurations.
 
             if df.empty:  # Verify if the DataFrame is empty
                 print(
@@ -3793,6 +3794,7 @@ def extract_principal_component_analysis_features(file_path, config=None):
             )  # Output the verbose message
 
             best_n_components_int = int(cast(Any, pd.to_numeric(best_n_components, errors="raise")))  # Ensure it's an integer
+            print(f"{BackgroundColors.GREEN}[INFO] PCA optimal component count selected from PCA_Results.csv: {BackgroundColors.CYAN}{best_n_components_int}{Style.RESET_ALL}")  # Report the selected component count separately from transformer loading.
 
             return best_n_components_int  # Return the optimal number of components
 
@@ -5032,50 +5034,46 @@ def build_optimized_hyperparameter_models(file_path: str, config: Optional[dict]
     return optimized_models, optimized_params  # Return only classifiers with verified optimized parameters.
 
 
+def resolve_pca_cache_path(file_path: str, pca_n_components: int) -> str:  # Resolve the stacking PCA cache path from a dataset file or directory.
+    """
+    Resolve the stacking PCA cache path without discarding a directory identity.
+
+    :param file_path: Dataset file or directory path.
+    :param pca_n_components: Number of PCA components represented by the cache file.
+    :return: Normalized PCA cache file path.
+    """
+
+    path_text = str(file_path).strip()  # Normalize the incoming dataset path text.
+    path_is_directory = resolve_path_represents_directory(path_text)  # Distinguish combined-directory identities from dataset files.
+    dataset_root = path_text.rstrip("/\\") if path_is_directory else os.path.dirname(path_text)  # Preserve the combined dataset directory as the cache root.
+    cache_path = os.path.join(dataset_root, "Cache", f"PCA_{int(pca_n_components)}_components.pkl")  # Build the component-specific PCA cache path.
+
+    return os.path.normpath(cache_path)  # Return a normalized path without changing relative-path semantics.
+
+
 def load_pca_object(file_path, pca_n_components, config=None):
     """
-    Loads a pre-fitted PCA object from a pickle file.
+    Locate a fitted PCA transformer cache and reject entries without provenance.
 
     :param file_path: Path to the dataset CSV file.
     :param pca_n_components: Number of PCA components to load.
     :param config: Configuration dictionary (uses global CONFIG if None)
-    :return: PCA object if found, None otherwise.
+    :return: None because stacking has no provenance-bearing PCA cache writer.
     """
     
     try:
         if config is None:  # If no config provided
             config = CONFIG  # Use global CONFIG
 
-        verbose_output(
-            f"{BackgroundColors.GREEN}Loading the PCA Cache object with {BackgroundColors.CYAN}{pca_n_components}{BackgroundColors.GREEN} components from file {BackgroundColors.CYAN}{file_path}{Style.RESET_ALL}",
-            config=config
-        )  # Output the verbose message
-
-        file_dir = os.path.dirname(file_path)  # Get the directory of the dataset
-        pca_file = os.path.join(
-            file_dir, "Cache", f"PCA_{pca_n_components}_components.pkl"
-        )  # Construct the path to the PCA pickle file
+        pca_file = resolve_pca_cache_path(file_path, pca_n_components)  # Resolve the cache beneath the actual dataset file or combined directory.
+        print(f"{BackgroundColors.GREEN}[INFO] Attempting to load fitted PCA transformer cache from: {BackgroundColors.CYAN}{pca_file}{Style.RESET_ALL}")  # Distinguish transformer cache lookup from PCA_Results.csv loading.
 
         if not verify_filepath_exists(pca_file):  # Verify if the PCA file exists
-            verbose_output(
-                f"{BackgroundColors.YELLOW}PCA object file not found at {BackgroundColors.CYAN}{pca_file}{Style.RESET_ALL}",
-                config=config
-            )
+            print(f"{BackgroundColors.YELLOW}[INFO] Fitted PCA transformer cache not found at: {BackgroundColors.CYAN}{pca_file}{Style.RESET_ALL}")  # Report that fitting is required because no cache file exists.
             return None  # Return None if the file doesn't exist
 
-        try:  # Try to load the PCA object
-            with open(pca_file, "rb") as f:  # Open the PCA pickle file
-                pca = pickle.load(f)  # Load the PCA object
-            verbose_output(
-                f"{BackgroundColors.GREEN}Successfully loaded PCA object from {BackgroundColors.CYAN}{pca_file}{Style.RESET_ALL}",
-                config=config
-            )
-            return pca  # Return the loaded PCA object
-        except Exception as e:  # Handle any errors during loading
-            print(
-                f"{BackgroundColors.RED}Error loading PCA object from {BackgroundColors.CYAN}{pca_file}{BackgroundColors.RED}: {e}{Style.RESET_ALL}"
-            )
-            return None  # Return None if there was an error
+        print(f"{BackgroundColors.YELLOW}[WARNING] Fitted PCA transformer cache exists at {BackgroundColors.CYAN}{pca_file}{BackgroundColors.YELLOW} but will not be reused because it has no verifiable dataset, row split, scaling, and feature-order provenance.{Style.RESET_ALL}")  # Reject an unverified transformer without deserializing it.
+        return None  # Require a fresh fit until stacking writes provenance-bearing transformer caches.
     except Exception as e:
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
@@ -5106,11 +5104,6 @@ def apply_pca_transformation(X_train_scaled, X_test_scaled, pca_n_components, fi
         X_test_pca = None  # Initialize PCA testing features
 
         if pca_n_components is not None and pca_n_components > 0:  # If PCA components are specified
-            verbose_output(
-                f"{BackgroundColors.GREEN}Starting PCA transformation with {BackgroundColors.CYAN}{pca_n_components}{BackgroundColors.GREEN} components...{Style.RESET_ALL}",
-                config=config
-            )  # Output the verbose message
-
             n_features = X_train_scaled.shape[1]  # Get the number of features in the training set
             n_components = min(
                 pca_n_components, n_features
@@ -5121,28 +5114,23 @@ def apply_pca_transformation(X_train_scaled, X_test_scaled, pca_n_components, fi
                     f"{BackgroundColors.YELLOW}Warning: Reduced PCA components from {pca_n_components} to {n_components} due to limited features ({n_features}).{Style.RESET_ALL}"
                 )
 
-            pca = None  # Initialize PCA object as None
-            if file_path:  # Only attempt to load if file_path is provided
-                pca = load_pca_object(file_path, n_components, config=config)  # Load pre-fitted PCA object
+            dataset_reference = str(file_path) if file_path else "unspecified dataset"  # Resolve the dataset identity shown in stage logs and Telegram.
+            dataset_scope = "combined dataset" if file_path and resolve_path_represents_directory(str(file_path)) else "dataset"  # Describe directory-backed evaluation accurately.
+            cache_path = resolve_pca_cache_path(str(file_path), n_components) if file_path else None  # Resolve the fitted transformer path before stage notification.
+            print(f"{BackgroundColors.GREEN}[INFO] Starting PCA feature extraction for {dataset_scope} using {BackgroundColors.CYAN}{n_components}{BackgroundColors.GREEN} components. PCA_Results.csv selected: {BackgroundColors.CYAN}{pca_n_components}{BackgroundColors.GREEN}. Dataset: {BackgroundColors.CYAN}{dataset_reference}{Style.RESET_ALL}")  # Announce the selected and effective component counts before transformation.
+            cache_notice = f"Fitted PCA transformer cache will be attempted at: {cache_path}." if cache_path else "No fitted PCA transformer cache path is available; a new transformer will be fitted."  # Describe the cache action without implying availability.
+            send_telegram_message(TELEGRAM_BOT, f"PCA feature extraction/transformation started for {dataset_scope}.\nComponents selected from PCA_Results.csv: {pca_n_components}.\nComponents used: {n_components}.\nDataset: {dataset_reference}\n{cache_notice}")  # Send one stage-level PCA notification through the existing Telegram path.
 
-            if pca is None:  # If PCA object wasn't loaded, fit a new one
-                verbose_output(
-                    f"{BackgroundColors.GREEN}Fitting new PCA model with {BackgroundColors.CYAN}{n_components}{BackgroundColors.GREEN} components...{Style.RESET_ALL}",
-                    config=config
-                )
-                pca = PCA(n_components=n_components)  # Initialize PCA with the effective number of components
-                X_train_pca = pca.fit_transform(X_train_scaled)  # Fit and transform the training data
-            else:  # PCA object was loaded successfully
-                print(
-                    f"{BackgroundColors.GREEN}Using pre-fitted PCA model with {BackgroundColors.CYAN}{n_components}{BackgroundColors.GREEN} components{Style.RESET_ALL}"
-                )
-                X_train_pca = pca.transform(X_train_scaled)  # Only transform the training data
+            if file_path:  # Only attempt to load if file_path is provided
+                load_pca_object(file_path, n_components, config=config)  # Inspect the legacy cache location without reusing an unverified transformer.
+
+            print(f"{BackgroundColors.GREEN}[INFO] Fitted PCA transformer cache was not loaded. Fitting PCA and transforming the training matrix now using {BackgroundColors.CYAN}{n_components}{BackgroundColors.GREEN} components.{Style.RESET_ALL}")  # State why computation begins after cache lookup.
+            pca = PCA(n_components=n_components)  # Initialize PCA with the effective number of components
+            X_train_pca = pca.fit_transform(X_train_scaled)  # Fit and transform the training data
 
             X_test_pca = pca.transform(X_test_scaled)  # Transform the testing data
 
-            verbose_output(
-                f"{BackgroundColors.GREEN}PCA applied successfully. Transformed data shape: {BackgroundColors.CYAN}{X_train_pca.shape}{Style.RESET_ALL}"
-            )  # Output the transformed shape
+            print(f"{BackgroundColors.GREEN}[INFO] PCA feature extraction completed. Transformed training data shape: {BackgroundColors.CYAN}{X_train_pca.shape}{BackgroundColors.GREEN}. Transformed test data shape: {BackgroundColors.CYAN}{X_test_pca.shape}{Style.RESET_ALL}")  # Report both dense transformed matrix shapes before model evaluation.
 
         return X_train_pca, X_test_pca  # Return the transformed features
     except Exception as e:
@@ -9826,6 +9814,7 @@ def iterate_feature_sets_sequentially(feature_source_arrays: dict, feature_names
             if pca_signature not in feature_signatures:  # Suppress duplicate PCA mode.
                 feature_signatures.add(pca_signature)  # Register PCA component identity.
                 try:
+                    print(f"{BackgroundColors.GREEN}[INFO] Starting model evaluation on PCA Components with {BackgroundColors.CYAN}{X_train_pca.shape[1]}{BackgroundColors.GREEN} features.{Style.RESET_ALL}")  # Mark the boundary between PCA transformation and classifier evaluation.
                     yield "PCA Components", X_train_pca, X_test_pca, None  # Yield PCA matrices with synthetic names.
                 finally:
                     del X_train_pca, X_test_pca  # Release PCA matrices after caller finishes or aborts this mode.
@@ -10031,7 +10020,7 @@ def collect_classifier_results_from_futures(future_to_model, individual_models, 
     return results_dict  # Return accumulated result entries
 
 
-def recover_cached_individual_classifier_result(cache_dict, execution_mode_str, data_source_label, experiment_mode, augmentation_ratio, attack_types_combined, feature_set_name, model_name, results_dict, current_combination, total_steps, progress_bar, hyperparameters_enabled=False):
+def recover_cached_individual_classifier_result(cache_dict, execution_mode_str, data_source_label, experiment_mode, augmentation_ratio, attack_types_combined, feature_set_name, model_name, results_dict, current_combination, total_steps, progress_bar, hyperparameters_enabled=False, expected_n_features=None, expected_feature_names=None, expected_n_samples_train=None, expected_n_samples_test=None):  # Recover a cached classifier result only when its evaluated data shape matches.
     """
     Recover one cached individual-classifier result (if present), emit resume logs, and advance progress counters.
 
@@ -10047,6 +10036,11 @@ def recover_cached_individual_classifier_result(cache_dict, execution_mode_str, 
     :param current_combination: Current combination counter value.
     :param total_steps: Total number of evaluation steps for progress messaging.
     :param progress_bar: tqdm progress bar instance to advance when recovered.
+    :param hyperparameters_enabled: Whether the active evaluation uses optimized hyperparameters.
+    :param expected_n_features: Feature count required for safe cache recovery.
+    :param expected_feature_names: Ordered feature names required for safe cache recovery.
+    :param expected_n_samples_train: Training sample count required for safe cache recovery.
+    :param expected_n_samples_test: Test sample count required for safe cache recovery.
     :return: Tuple (recovered, next_current_combination) where recovered indicates if cache was hit.
     """
 
@@ -10068,6 +10062,22 @@ def recover_cached_individual_classifier_result(cache_dict, execution_mode_str, 
         return (False, current_combination)  # Signal cache miss and unchanged counter
 
     cached_result = cache_dict[resume_key]  # Retrieve cached result entry for this classifier
+    cached_n_features = cached_result.get("n_features", None)  # Read the feature count persisted with the cached evaluation.
+    cached_feature_names = cached_result.get("features_list", None)  # Read the ordered feature names persisted with the cached evaluation.
+    cached_n_samples_train = cached_result.get("n_samples_train", None)  # Read the cached training sample count.
+    cached_n_samples_test = cached_result.get("n_samples_test", None)  # Read the cached test sample count.
+    normalized_expected_features = [str(feature) for feature in expected_feature_names] if expected_feature_names is not None else None  # Normalize active feature names for deterministic comparison.
+    normalized_cached_features = [str(feature) for feature in cached_feature_names] if isinstance(cached_feature_names, list) else None  # Normalize cached feature names when the payload is a list.
+    feature_count_matches = expected_n_features is None or (cached_n_features is not None and int(cached_n_features) == int(expected_n_features))  # Require the active PCA dimensionality or subset width to match.
+    feature_names_match = normalized_expected_features is None or normalized_cached_features == normalized_expected_features  # Require the exact ordered feature identity to match.
+    train_count_matches = expected_n_samples_train is None or (cached_n_samples_train is not None and int(cached_n_samples_train) == int(expected_n_samples_train))  # Require the active training sample count to match.
+    test_count_matches = expected_n_samples_test is None or (cached_n_samples_test is not None and int(cached_n_samples_test) == int(expected_n_samples_test))  # Require the active test sample count to match.
+
+    if not all((feature_count_matches, feature_names_match, train_count_matches, test_count_matches)):  # Reject stale cache rows that share a broad resume key but represent different evaluated data.
+        del cache_dict[resume_key]  # Remove the stale in-memory identity so the recomputed result can be persisted.
+        print(f"{BackgroundColors.YELLOW}[RESUME] Ignored incompatible cached combination for {BackgroundColors.CYAN}{feature_set_name} - {model_name}{BackgroundColors.YELLOW}: active shape or feature identity differs from saved partial progress.{Style.RESET_ALL}")  # Explain why this classifier will be recomputed.
+        return (False, current_combination)  # Signal cache rejection without advancing the progress counter.
+
     results_dict[(feature_set_name, model_name)] = cached_result  # Reuse cached entry without recomputation
     combination_header = build_telegram_combination_header(feature_set_name, model_name, augmentation_ratio, hyperparameters_enabled)  # Build full recovered combination label
     print(
@@ -10146,7 +10156,7 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
         X_test_values = X_test_df.to_numpy(copy=False) if hasattr(X_test_df, "to_numpy") else np.asarray(X_test_df)  # Reuse one no-copy test array view for all classifiers in this feature set
 
         for model_name, model in individual_models.items():  # Iterate over each individual model sequentially to prevent loky deadlock
-            recovered, current_combination = recover_cached_individual_classifier_result(cache_dict, execution_mode_str, data_source_label, experiment_mode, augmentation_ratio, attack_types_combined, name, model_name, results_dict, current_combination, total_steps, progress_bar, hyperparameters_enabled=hyperparameters_enabled)  # Attempt to recover cached result for this model and advance counters when recovered
+            recovered, current_combination = recover_cached_individual_classifier_result(cache_dict, execution_mode_str, data_source_label, experiment_mode, augmentation_ratio, attack_types_combined, name, model_name, results_dict, current_combination, total_steps, progress_bar, hyperparameters_enabled=hyperparameters_enabled, expected_n_features=X_train_n_cols, expected_feature_names=subset_feature_names, expected_n_samples_train=len(y_train), expected_n_samples_test=len(y_test))  # Recover only rows produced with the same active data shape and ordered features.
             if recovered:  # Skip recomputation when cache recovery succeeds
                 continue  # Move to next model because this one has already been recovered
             active_model = clone(model)  # Clone the estimator prototype so fitted state is not retained across atomic classifiers
