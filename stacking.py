@@ -76,6 +76,7 @@ import math  # For mathematical operations
 import matplotlib  # For plotting configuration
 matplotlib.use('Agg')  # Use non-interactive backend for server environments
 import matplotlib.pyplot as plt  # For creating t-SNE visualization plots
+import multiprocessing as mp  # For process-isolated explainability execution
 import numpy as np  # Import numpy for numerical operations
 import optuna  # For Bayesian hyperparameter optimization (AutoML)
 import os  # For running a command in the terminal
@@ -83,6 +84,7 @@ import pandas as pd  # Import pandas for data manipulation
 import pickle  # For loading PCA objects
 import platform  # For getting the operating system name
 import psutil  # For verifying system RAM
+import queue as queue_module  # For queue timeout exceptions from explainability status channels
 import re  # For regular expressions
 import seaborn as sns  # For generating feature usage heatmaps
 import shutil  # For removing temporary feature-source spill directories
@@ -90,6 +92,7 @@ import shap  # For SHAP explainability analysis
 import subprocess  # For running small system commands (sysctl/wmic)
 import sys  # For system-specific parameters and functions
 import telegram_bot as telegram_module  # For setting Telegram prefix and device info
+import threading  # For low-overhead training RAM sampling
 import time  # For measuring execution time
 import tempfile  # For atomic cache file writes using temp-file and rename strategy
 import traceback  # For formatting and printing exception tracebacks
@@ -153,8 +156,11 @@ TELEGRAM_BOT = None  # Global Telegram bot instance (initialized in setup_telegr
 
 # Logger Setup:
 logger = None  # Will be initialized in initialize_logger()
-EXPLAINABILITY_EXECUTOR: Optional[concurrent.futures.ThreadPoolExecutor] = None  # Manages queued explainability jobs in one background worker.
-EXPLAINABILITY_FUTURES: List[concurrent.futures.Future] = []  # Tracks scheduled explainability futures until finalization.
+EXPLAINABILITY_PROCESSES: List[dict] = []  # Tracks process-isolated explainability jobs until finalization.
+EXPLAINABILITY_RAM_THRESHOLD_PERCENT = 50.0  # Defines the strict RAM ceiling for asynchronous explainability dispatch.
+TRAINING_RAM_SAMPLE_INTERVAL_SECONDS = 1.0  # Defines the classifier training RAM polling interval.
+EXPLAINABILITY_PROCESS_START_TIMEOUT_SECONDS = 10.0  # Defines the maximum wait for child initialization status.
+EXPLAINABILITY_PROCESS_JOIN_TIMEOUT_SECONDS = 5.0  # Defines bounded join polling for live explainability children.
 MEMORY_WATCHER_PROCESS: Optional[subprocess.Popen] = None  # Holds the single watcher sidecar process for this stacking run
 MEMORY_WATCHER_RUN_DIR: Optional[str] = None  # Holds the unique watcher output directory for this stacking run
 MEMORY_WATCHER_PHASE_STATE_PATH: Optional[str] = None  # Holds the atomic phase-state path shared with the watcher
@@ -254,6 +260,119 @@ def get_classifier_params_digest(model: Any) -> dict:  # Build stable classifier
     except Exception as exc:  # Keep diagnostics from interrupting training
         digest = hashlib.sha256(str(model).encode("utf-8", errors="replace")).hexdigest()  # Compute fallback digest from model string
         return {"digest": digest, "parameter_count": None, "error": str(exc)}  # Return fallback digest metadata
+
+
+def read_system_ram_percent() -> float:
+    """
+    Read current system RAM usage percentage.
+
+    :return: Current system RAM usage percentage.
+    """
+
+    return float(psutil.virtual_memory().percent)  # Return the current system RAM usage percentage from psutil.
+
+
+def sample_training_ram_usage(stop_event: threading.Event, samples: List[float], interval_seconds: float) -> None:
+    """
+    Sample system RAM usage until classifier training stops.
+
+    :param stop_event: Event used to stop RAM sampling.
+    :param samples: Mutable list receiving RAM usage percentages.
+    :param interval_seconds: Sampling interval in seconds.
+    :return: None.
+    """
+
+    while not stop_event.wait(interval_seconds):  # Continue sampling until the caller stops training monitoring.
+        samples.append(read_system_ram_percent())  # Store the current system RAM usage percentage for this classifier.
+
+
+def start_training_ram_monitor(interval_seconds: float) -> dict:
+    """
+    Start low-overhead RAM sampling for one classifier training period.
+
+    :param interval_seconds: Sampling interval in seconds.
+    :return: Monitor state dictionary used to stop sampling.
+    """
+
+    samples: List[float] = [read_system_ram_percent()]  # Record an immediate RAM sample before classifier fit starts.
+    stop_event = threading.Event()  # Create a stop event owned by this classifier training monitor.
+    safe_interval = max(float(interval_seconds), 0.1)  # Bound the interval away from busy waiting.
+    thread = threading.Thread(target=sample_training_ram_usage, args=(stop_event, samples, safe_interval), name="training-ram-monitor", daemon=True)  # Create one daemon sampler thread for this classifier fit.
+    thread.start()  # Start RAM sampling immediately before classifier fit.
+    return {"stop_event": stop_event, "samples": samples, "thread": thread, "interval_seconds": safe_interval}  # Return monitor state to the caller.
+
+
+def stop_training_ram_monitor(monitor: Optional[dict]) -> dict:
+    """
+    Stop RAM sampling and summarize one classifier training period.
+
+    :param monitor: Monitor state dictionary returned by start_training_ram_monitor.
+    :return: Dictionary containing latest, average, sample count, and thread state.
+    """
+
+    if monitor is None:  # Preserve callers that did not start monitoring.
+        current_percent = read_system_ram_percent()  # Read a fallback RAM value when no monitor exists.
+        return {"latest_percent": current_percent, "average_percent": current_percent, "sample_count": 1, "thread_alive": False}  # Return a one-sample fallback summary.
+    samples = monitor.get("samples", [])  # Read samples collected for this classifier.
+    samples.append(read_system_ram_percent())  # Record the terminal RAM sample immediately after classifier fit exits.
+    stop_event = cast(Any, monitor.get("stop_event"))  # Read the stop event from monitor state.
+    thread = monitor.get("thread")  # Read the sampler thread from monitor state.
+    interval_seconds = float(monitor.get("interval_seconds", TRAINING_RAM_SAMPLE_INTERVAL_SECONDS))  # Read the effective sampling interval.
+    if stop_event is not None:  # Verify that the monitor stop event is present.
+        stop_event.set()  # Signal the sampler thread to stop.
+    if isinstance(thread, threading.Thread):  # Verify that the monitor thread is valid.
+        thread.join(timeout=max(interval_seconds + 1.0, 1.0))  # Wait briefly for sampler cleanup without delaying training flow indefinitely.
+    numeric_samples = [float(value) for value in samples if isinstance(value, (int, float)) and not math.isnan(float(value))]  # Keep numeric RAM samples only.
+    if not numeric_samples:  # Use a fallback sample if all collected values were invalid.
+        numeric_samples = [read_system_ram_percent()]  # Read current RAM usage as the fallback sample.
+    latest_percent = float(numeric_samples[-1])  # Resolve latest observed RAM usage for this classifier.
+    average_percent = float(sum(numeric_samples) / len(numeric_samples))  # Compute arithmetic mean RAM usage for this classifier training period.
+    thread_alive = bool(isinstance(thread, threading.Thread) and thread.is_alive())  # Record whether sampler cleanup completed.
+    return {"latest_percent": latest_percent, "average_percent": average_percent, "sample_count": len(numeric_samples), "thread_alive": thread_alive}  # Return classifier RAM summary.
+
+
+def store_training_ram_stats(stats_holder: Optional[dict], stats: dict) -> None:
+    """
+    Store RAM statistics in the caller-owned classifier state holder.
+
+    :param stats_holder: Mutable state holder supplied by the classifier loop.
+    :param stats: RAM statistics produced by stop_training_ram_monitor.
+    :return: None.
+    """
+
+    if stats_holder is not None:  # Preserve optional caller state ownership.
+        stats_holder.clear()  # Remove stale classifier RAM values before storing this classifier's values.
+        stats_holder.update(stats)  # Store the RAM statistics for the matching classifier.
+
+
+def resolve_training_ram_percent(stats: Optional[dict], key: str) -> Optional[float]:
+    """
+    Resolve one RAM percentage value from classifier training statistics.
+
+    :param stats: RAM statistics dictionary for one classifier.
+    :param key: Statistic key to read.
+    :return: RAM percentage value, or None when unavailable.
+    """
+
+    if not isinstance(stats, dict):  # Treat missing or invalid statistics as unavailable.
+        return None  # Return unavailable percentage.
+    value = stats.get(key)  # Read the requested RAM statistic.
+    if value is None:  # Treat missing values as unavailable.
+        return None  # Return unavailable percentage.
+    return float(value)  # Return the RAM percentage as a float.
+
+
+def format_ram_percent(value: Optional[float]) -> str:
+    """
+    Format a RAM percentage value for logs.
+
+    :param value: RAM percentage value.
+    :return: Formatted RAM percentage string.
+    """
+
+    if value is None:  # Render unavailable values explicitly.
+        return "unavailable"  # Return the unavailable marker.
+    return f"{float(value):.2f}%"  # Return RAM usage formatted with two decimal places.
 
 
 def build_memory_phase_metadata(config: Optional[dict] = None, **metadata: Any) -> dict:  # Build compact phase-state metadata
@@ -819,7 +938,7 @@ def get_default_explainability_config():
             "lime_num_features": 10,  # Number of features to show in LIME explanations
             "shap_max_samples": 100,  # Maximum samples for SHAP computation
             "perm_max_samples": 5000,  # Maximum samples for permutation importance computation to prevent OOM on large datasets
-            "background": False,  # Run explainability synchronously by default to avoid retained model snapshots during later fits
+            "background": False,  # Retain legacy setting while RAM-gated process dispatch is selected automatically
             "random_state": 42,  # Random state for reproducibility
             "output_subdir": "explainability",  # Subdirectory for explainability outputs
         }  # Return default explainability configuration
@@ -3632,12 +3751,13 @@ def extract_principal_component_analysis_features(file_path, config=None):
             )
             return None  # Return None if the file does not exist
 
-        print(f"{BackgroundColors.GREEN}[INFO] PCA feature file found: {BackgroundColors.CYAN}{pca_results_path}{Style.RESET_ALL}")  # Log the resolved PCA results file path
+        print(f"{BackgroundColors.GREEN}[INFO] PCA_Results.csv found at: {BackgroundColors.CYAN}{pca_results_path}{Style.RESET_ALL}")  # Identify the analysis CSV resolved for component selection.
 
         try:  # Try to load the PCA results
             low_memory = config.get("execution", {}).get("low_memory", False)  # Read low memory flag from config
             df = pd.read_csv(pca_results_path, low_memory=low_memory)  # Load the PCA results file
             df.columns = df.columns.str.strip()  # Remove leading/trailing whitespace from column names
+            print(f"{BackgroundColors.GREEN}[INFO] PCA analysis results loaded from: {BackgroundColors.CYAN}{pca_results_path}{Style.RESET_ALL}")  # Confirm successful CSV parsing before ranking configurations.
 
             if df.empty:  # Verify if the DataFrame is empty
                 print(
@@ -3674,6 +3794,7 @@ def extract_principal_component_analysis_features(file_path, config=None):
             )  # Output the verbose message
 
             best_n_components_int = int(cast(Any, pd.to_numeric(best_n_components, errors="raise")))  # Ensure it's an integer
+            print(f"{BackgroundColors.GREEN}[INFO] PCA optimal component count selected from PCA_Results.csv: {BackgroundColors.CYAN}{best_n_components_int}{Style.RESET_ALL}")  # Report the selected component count separately from transformer loading.
 
             return best_n_components_int  # Return the optimal number of components
 
@@ -4913,57 +5034,328 @@ def build_optimized_hyperparameter_models(file_path: str, config: Optional[dict]
     return optimized_models, optimized_params  # Return only classifiers with verified optimized parameters.
 
 
-def load_pca_object(file_path, pca_n_components, config=None):
+def build_stacking_pca_cache_context(file_path: str, source_files: List[str], feature_names: List[Any], X_train_scaled: Any, X_test_scaled: Any, scaler: Any, n_components: int, evaluation_identity: dict) -> dict:  # Build deterministic provenance for one fitted stacking PCA transformer.
     """
-    Loads a pre-fitted PCA object from a pickle file.
+    Build deterministic provenance for one fitted stacking PCA transformer.
 
-    :param file_path: Path to the dataset CSV file.
-    :param pca_n_components: Number of PCA components to load.
-    :param config: Configuration dictionary (uses global CONFIG if None)
-    :return: PCA object if found, None otherwise.
+    :param file_path: Dataset file or directory identity used by stacking.
+    :param source_files: Ordered source file paths used to build the evaluated dataset.
+    :param feature_names: Ordered numeric input feature names before PCA.
+    :param X_train_scaled: Scaled training matrix used to fit PCA.
+    :param X_test_scaled: Scaled testing matrix transformed by PCA.
+    :param scaler: Fitted scaler that produced the scaled matrices.
+    :param n_components: Effective PCA component count.
+    :param evaluation_identity: Split and experiment identity metadata.
+    :return: JSON-compatible provenance dictionary used for cache identity and validation.
     """
-    
-    try:
-        if config is None:  # If no config provided
-            config = CONFIG  # Use global CONFIG
 
-        verbose_output(
-            f"{BackgroundColors.GREEN}Loading the PCA Cache object with {BackgroundColors.CYAN}{pca_n_components}{BackgroundColors.GREEN} components from file {BackgroundColors.CYAN}{file_path}{Style.RESET_ALL}",
-            config=config
-        )  # Output the verbose message
+    if not source_files:  # Require exact source-file provenance before cache reuse can be enabled.
+        raise ValueError("PCA cache provenance requires an ordered non-empty source file list")  # Reject incomplete dataset provenance.
+    normalized_features = [str(feature) for feature in feature_names]  # Normalize ordered feature names for deterministic comparison.
+    if len(normalized_features) != int(X_train_scaled.shape[1]):  # Require feature metadata to describe every PCA input column.
+        raise ValueError(f"PCA cache feature metadata has {len(normalized_features)} names for {X_train_scaled.shape[1]} columns")  # Reject ambiguous feature order.
 
-        file_dir = os.path.dirname(file_path)  # Get the directory of the dataset
-        pca_file = os.path.join(
-            file_dir, "Cache", f"PCA_{pca_n_components}_components.pkl"
-        )  # Construct the path to the PCA pickle file
+    source_metadata = []  # Accumulate ordered source-file filesystem metadata.
+    for source_index, source_file in enumerate(source_files):  # Preserve source order because combined row order affects the split and fitted PCA state.
+        source_path = Path(str(source_file)).expanduser().resolve()  # Resolve one source path without changing its identity.
+        if not source_path.is_file():  # Require every provenance source to exist as a regular file.
+            raise FileNotFoundError(f"PCA cache source file is unavailable: {source_path}")  # Reject incomplete source provenance.
+        source_stat = source_path.stat()  # Read stable filesystem metadata for compatibility validation.
+        source_metadata.append({"index": source_index, "path": str(source_path), "size": int(source_stat.st_size), "mtime_ns": int(source_stat.st_mtime_ns)})  # Store ordered path, size, and nanosecond modification time.
 
-        if not verify_filepath_exists(pca_file):  # Verify if the PCA file exists
-            verbose_output(
-                f"{BackgroundColors.YELLOW}PCA object file not found at {BackgroundColors.CYAN}{pca_file}{Style.RESET_ALL}",
-                config=config
-            )
-            return None  # Return None if the file doesn't exist
+    scaler_state = {  # Capture fitted scaling state without serializing a duplicate scaler artifact.
+        "mean_": getattr(scaler, "mean_", None),  # Store the fitted per-feature means.
+        "scale_": getattr(scaler, "scale_", None),  # Store the fitted per-feature scaling factors.
+        "var_": getattr(scaler, "var_", None),  # Store the fitted per-feature variances.
+        "n_samples_seen_": getattr(scaler, "n_samples_seen_", None),  # Store the scaler fitting sample count.
+    }  # Complete the fitted scaler-state payload.
+    normalized_scaler_state = normalize_metadata_for_json(scaler_state)  # Normalize fitted scaler arrays for deterministic hashing.
+    scaler_state_digest = hashlib.sha256(json.dumps(normalized_scaler_state, sort_keys=True, allow_nan=False).encode("utf-8")).hexdigest()  # Fingerprint the fitted scaler state used before PCA.
+    expected_pca = PCA(n_components=int(n_components))  # Build the exact unfitted PCA configuration expected by this flow.
+    sklearn_module = sys.modules.get("sklearn")  # Resolve the already imported scikit-learn package metadata.
+    dataset_path = str(Path(str(file_path)).expanduser().resolve())  # Resolve the evaluated dataset identity to an absolute path.
 
-        try:  # Try to load the PCA object
-            with open(pca_file, "rb") as f:  # Open the PCA pickle file
-                pca = pickle.load(f)  # Load the PCA object
-            verbose_output(
-                f"{BackgroundColors.GREEN}Successfully loaded PCA object from {BackgroundColors.CYAN}{pca_file}{Style.RESET_ALL}",
-                config=config
-            )
-            return pca  # Return the loaded PCA object
-        except Exception as e:  # Handle any errors during loading
-            print(
-                f"{BackgroundColors.RED}Error loading PCA object from {BackgroundColors.CYAN}{pca_file}{BackgroundColors.RED}: {e}{Style.RESET_ALL}"
-            )
-            return None  # Return None if there was an error
-    except Exception as e:
-        print(str(e))
-        send_exception_via_telegram(type(e), e, e.__traceback__)
-        raise
+    cache_context = {  # Assemble the complete compatibility identity without creation-time fields.
+        "artifact_type": "stacking_fitted_pca_transformer",  # Identify the artifact as a stacking-fitted PCA transformer.
+        "schema_version": 1,  # Identify the supported metadata schema.
+        "dataset_path": dataset_path,  # Store the resolved stacking dataset identity.
+        "source_files": source_metadata,  # Store ordered source-file provenance.
+        "feature_names": normalized_features,  # Store exact pre-PCA feature order.
+        "feature_count": int(X_train_scaled.shape[1]),  # Store pre-PCA input dimensionality.
+        "n_components": int(n_components),  # Store effective PCA output dimensionality.
+        "train_sample_count": int(X_train_scaled.shape[0]),  # Store the PCA fitting sample count.
+        "test_sample_count": int(X_test_scaled.shape[0]),  # Store the transformed test sample count.
+        "train_dtype": str(np.asarray(X_train_scaled).dtype),  # Store training matrix numeric representation.
+        "test_dtype": str(np.asarray(X_test_scaled).dtype),  # Store testing matrix numeric representation.
+        "scaling_method": f"{scaler.__class__.__module__}.{scaler.__class__.__name__}",  # Store the fitted scaler class identity.
+        "scaler_params": normalize_metadata_for_json(scaler.get_params(deep=False) if hasattr(scaler, "get_params") else {}),  # Store scaler constructor semantics.
+        "scaler_state_digest": scaler_state_digest,  # Store the fitted scaler-state fingerprint.
+        "split_identity": normalize_metadata_for_json(evaluation_identity),  # Store split and data-variant semantics.
+        "random_state": int(evaluation_identity.get("random_state", 42)),  # Store the split random seed explicitly.
+        "pca_class": f"{PCA.__module__}.{PCA.__name__}",  # Store the expected transformer class identity.
+        "pca_params": normalize_metadata_for_json(expected_pca.get_params(deep=False)),  # Store exact PCA constructor semantics.
+        "sklearn_version": str(getattr(sklearn_module, "__version__", "unknown")),  # Store the scikit-learn compatibility version.
+        "numpy_version": str(np.__version__),  # Store the NumPy compatibility version.
+    }  # Complete the deterministic PCA cache context.
+
+    return cache_context  # Return the complete deterministic compatibility context.
 
 
-def apply_pca_transformation(X_train_scaled, X_test_scaled, pca_n_components, file_path=None, config=None):
+def resolve_stacking_pca_artifact_paths(file_path: str, cache_context: dict, config: dict) -> dict:  # Resolve dataset-local fitted PCA artifact paths using the stacking model convention.
+    """
+    Resolve dataset-local fitted PCA artifact paths using the stacking model convention.
+
+    :param file_path: Dataset file or directory identity used by stacking.
+    :param cache_context: Deterministic PCA compatibility context.
+    :param config: Runtime configuration dictionary.
+    :return: Dictionary containing stacking, model, metadata, transformer, and legacy paths.
+    """
+
+    dataset_root = resolve_dataset_root_path(str(file_path))  # Resolve the dataset-local root that owns the Stacking directory.
+    dataset_identity = resolve_canonical_dataset_identity(str(dataset_root), True)  # Build the same canonical directory identity used by stacking artifacts.
+    dataset_slug = build_filename_safe_dataset_identity(dataset_identity)  # Generate the existing dataset slug convention.
+    stacking_directory = Path(get_stacking_output_dir(str(file_path), config)).resolve()  # Resolve the dataset-local Stacking directory.
+    models_directory = (stacking_directory / "Models" / dataset_slug).resolve()  # Resolve the dataset-specific fitted model directory.
+    cache_identity = hashlib.sha256(json.dumps(cache_context, sort_keys=True, allow_nan=False).encode("utf-8")).hexdigest()  # Derive a stable identity that separates data variants and split contexts.
+    artifact_slug = f"{int(cache_context['n_components'])}_components_{cache_identity[:12]}"  # Build a short stable PCA feature slug for coexistence across compatible variants.
+    artifact_base = f"PCA Transformer__PCA Components__{artifact_slug}__"  # Match the existing model, feature-set, and feature-slug delimiter convention.
+    metadata_path = (models_directory / f"{artifact_base}_meta.json").resolve()  # Build the companion provenance metadata path.
+    transformer_path = (models_directory / f"{artifact_base}_transformer.joblib").resolve()  # Build the fitted PCA transformer joblib path.
+    legacy_path = (dataset_root / "Cache" / f"PCA_{int(cache_context['n_components'])}_components.pkl").resolve()  # Resolve the rejected legacy bare pickle path for explicit diagnostics.
+    shared_legacy_path = (dataset_root.parent / "Cache" / f"PCA_{int(cache_context['n_components'])}_components.pkl").resolve()  # Resolve the historical parent-shared bare pickle path for rejection diagnostics.
+    legacy_paths = [str(legacy_path)]  # Start with the corrected dataset-local legacy location.
+    if shared_legacy_path != legacy_path:  # Avoid duplicate diagnostics when both legacy path forms resolve identically.
+        legacy_paths.append(str(shared_legacy_path))  # Include the historical shared-parent location without treating it as reusable.
+    validate_output_path(str(stacking_directory), str(models_directory))  # Verify the model directory remains inside the dataset-local Stacking root.
+    validate_output_path(str(stacking_directory), str(metadata_path))  # Verify the metadata path remains inside the dataset-local Stacking root.
+    validate_output_path(str(stacking_directory), str(transformer_path))  # Verify the transformer path remains inside the dataset-local Stacking root.
+
+    artifact_paths = {  # Assemble resolved dataset-local artifact paths and identities.
+        "stacking_directory": str(stacking_directory),  # Store the dataset-specific Stacking directory.
+        "models_directory": str(models_directory),  # Store the dataset-slug model directory.
+        "dataset_slug": dataset_slug,  # Store the existing filename-safe dataset identity.
+        "cache_identity": cache_identity,  # Store the complete deterministic cache fingerprint.
+        "metadata_path": str(metadata_path),  # Store the companion metadata path.
+        "transformer_path": str(transformer_path),  # Store the fitted transformer joblib path.
+        "legacy_path": str(legacy_path),  # Store the rejected bare pickle path for diagnostics.
+        "legacy_paths": legacy_paths,  # Store every known bare pickle location for explicit rejection diagnostics.
+    }  # Complete the artifact-path payload.
+
+    return artifact_paths  # Return all resolved artifact paths and identity fields.
+
+
+def calculate_file_sha256(file_path: str) -> str:  # Calculate a streaming SHA-256 digest for one artifact file.
+    """
+    Calculate a streaming SHA-256 digest for one artifact file.
+
+    :param file_path: Artifact file path to digest.
+    :return: Lowercase SHA-256 hexadecimal digest.
+    """
+
+    digest = hashlib.sha256()  # Initialize the artifact integrity digest.
+    with open(file_path, "rb") as file_obj:  # Open the artifact for bounded streaming reads.
+        for chunk in iter(lambda: file_obj.read(1024 * 1024), b""):  # Read one MiB chunks without loading the whole artifact into memory.
+            digest.update(chunk)  # Add the current artifact bytes to the digest.
+    return digest.hexdigest()  # Return the completed artifact digest.
+
+
+def write_stacking_pca_artifact_atomically(value: Any, destination_path: str, artifact_format: str) -> None:  # Write one PCA cache artifact through a same-directory atomic replacement.
+    """
+    Write one PCA cache artifact through a same-directory atomic replacement.
+
+    :param value: Python object or metadata dictionary to persist.
+    :param destination_path: Final artifact path.
+    :param artifact_format: Serialization format, either joblib or json.
+    :return: None.
+    """
+
+    destination = Path(destination_path)  # Normalize the final artifact path.
+    destination.parent.mkdir(parents=True, exist_ok=True)  # Create the dataset-specific model directory before writing.
+    temporary_fd, temporary_path = tempfile.mkstemp(dir=str(destination.parent), prefix=f".{destination.name}.", suffix=".tmp")  # Allocate the temporary file beside the final artifact.
+    os.close(temporary_fd)  # Close the raw descriptor before opening it through the selected serializer.
+    try:  # Ensure temporary files are removed after success or failure.
+        if artifact_format == "joblib":  # Serialize fitted estimators with the existing joblib dependency.
+            with open(temporary_path, "wb") as file_obj:  # Open the temporary artifact for binary serialization.
+                dump(value, file_obj)  # Serialize the fitted PCA transformer into the temporary file.
+                file_obj.flush()  # Flush Python buffers before publishing the artifact.
+                os.fsync(file_obj.fileno())  # Flush artifact bytes to the filesystem before replacement.
+        elif artifact_format == "json":  # Serialize provenance metadata as readable JSON.
+            with open(temporary_path, "w", encoding="utf-8") as file_obj:  # Open the temporary metadata file with explicit encoding.
+                json.dump(value, file_obj, indent=2, sort_keys=True, allow_nan=False)  # Serialize deterministic standards-compliant metadata.
+                file_obj.flush()  # Flush Python buffers before publishing the metadata.
+                os.fsync(file_obj.fileno())  # Flush metadata bytes to the filesystem before replacement.
+        else:  # Reject unknown serialization formats.
+            raise ValueError(f"Unsupported PCA artifact format: {artifact_format}")  # Prevent ambiguous artifact writes.
+        os.replace(temporary_path, destination)  # Atomically publish the completed artifact in the same directory.
+    finally:  # Remove only an unpublished temporary file.
+        if os.path.exists(temporary_path):  # Verify whether a temporary artifact remains after replacement or failure.
+            os.unlink(temporary_path)  # Remove the incomplete temporary artifact.
+
+
+def validate_stacking_pca_cache_metadata(metadata: Any, expected_context: dict, artifact_paths: dict) -> Optional[str]:  # Validate provenance metadata before any transformer deserialization.
+    """
+    Validate provenance metadata before any transformer deserialization.
+
+    :param metadata: Parsed PCA cache metadata payload.
+    :param expected_context: Current deterministic PCA compatibility context.
+    :param artifact_paths: Current expected artifact paths and cache identity.
+    :return: Rejection reason string, or None when metadata is compatible.
+    """
+
+    if not isinstance(metadata, dict):  # Require a JSON object as the metadata root.
+        return "metadata root is not a JSON object"  # Reject malformed metadata roots.
+    for field_name, expected_value in expected_context.items():  # Compare every deterministic provenance field before loading joblib content.
+        if metadata.get(field_name) != expected_value:  # Reject the first incompatible provenance field with an exact reason.
+            return f"metadata field '{field_name}' does not match the current PCA input context"  # Report the incompatible field without deserializing the transformer.
+    if metadata.get("cache_identity") != artifact_paths.get("cache_identity"):  # Require metadata to identify the exact artifact filename variant.
+        return "cache_identity does not match the expected artifact identity"  # Reject metadata copied between cache variants.
+    if metadata.get("stacking_directory") != artifact_paths.get("stacking_directory"):  # Require the recorded Stacking directory to match the current dataset root.
+        return "stacking_directory does not match the current dataset artifact root"  # Reject relocated or cross-dataset metadata.
+    if metadata.get("models_directory") != artifact_paths.get("models_directory"):  # Require the recorded dataset model directory to match.
+        return "models_directory does not match the current dataset slug directory"  # Reject metadata from another dataset slug.
+    if metadata.get("transformer_artifact") != os.path.basename(str(artifact_paths.get("transformer_path"))):  # Require the referenced joblib filename to match the expected path.
+        return "transformer_artifact does not match the expected joblib filename"  # Reject filename substitution before deserialization.
+    if metadata.get("scaler_artifact", "missing") is not None:  # The current PCA flow must use the freshly fitted pre-PCA scaler rather than a duplicate scaler artifact.
+        return "scaler_artifact must be null for the current pre-scaled PCA flow"  # Reject incompatible scaling artifact semantics.
+    transformer_sha256 = metadata.get("transformer_sha256")  # Read the expected transformer integrity digest.
+    if not isinstance(transformer_sha256, str) or re.fullmatch(r"[0-9a-f]{64}", transformer_sha256) is None:  # Require a valid lowercase SHA-256 value.
+        return "transformer_sha256 is missing or invalid"  # Reject metadata without usable artifact integrity data.
+    if not isinstance(metadata.get("transformer_size_bytes"), int) or metadata.get("transformer_size_bytes", 0) <= 0:  # Require a positive serialized artifact size.
+        return "transformer_size_bytes is missing or invalid"  # Reject incomplete artifact metadata.
+    if not isinstance(metadata.get("created_at"), str) or not metadata.get("created_at"):  # Require a creation timestamp for provenance.
+        return "created_at is missing or invalid"  # Reject incomplete provenance metadata.
+    if "fitted_svd_solver" not in metadata:  # Require the fitted PCA solver selected by scikit-learn.
+        return "fitted_svd_solver is missing"  # Reject metadata without fitted solver provenance.
+    return None  # Accept metadata only after every compatibility requirement passes.
+
+
+def validate_loaded_stacking_pca_transformer(transformer: Any, expected_context: dict, metadata: dict) -> Optional[str]:  # Validate the deserialized fitted PCA object against current provenance.
+    """
+    Validate the deserialized fitted PCA object against current provenance.
+
+    :param transformer: Deserialized fitted PCA object.
+    :param expected_context: Current deterministic PCA compatibility context.
+    :param metadata: Validated cache metadata payload.
+    :return: Rejection reason string, or None when the transformer is compatible.
+    """
+
+    if not isinstance(transformer, PCA):  # Require the exact estimator family used by the stacking PCA flow.
+        return f"loaded object type is {type(transformer).__name__}, expected PCA"  # Reject unrelated joblib content.
+    if normalize_metadata_for_json(transformer.get_params(deep=False)) != expected_context.get("pca_params"):  # Require constructor parameters to match current PCA semantics.
+        return "loaded PCA parameters do not match the current PCA configuration"  # Reject parameter drift.
+    if int(getattr(transformer, "n_components_", -1)) != int(expected_context.get("n_components", -1)):  # Require the fitted output dimensionality to match.
+        return "loaded PCA fitted component count does not match"  # Reject fitted dimensionality drift.
+    if int(getattr(transformer, "n_features_in_", -1)) != int(expected_context.get("feature_count", -1)):  # Require the fitted input width to match ordered feature provenance.
+        return "loaded PCA input feature count does not match"  # Reject fitted input-width drift.
+    components = getattr(transformer, "components_", None)  # Read the fitted component matrix for structural validation.
+    expected_shape = (int(expected_context.get("n_components", -1)), int(expected_context.get("feature_count", -1)))  # Build the required component matrix shape.
+    if not isinstance(components, np.ndarray) or components.shape != expected_shape:  # Require a complete fitted component matrix.
+        return f"loaded PCA component matrix shape does not match {expected_shape}"  # Reject incomplete or malformed fitted state.
+    if metadata.get("fitted_svd_solver") != getattr(transformer, "_fit_svd_solver", None):  # Require the serialized fitted solver to match metadata.
+        return "loaded PCA fitted solver does not match metadata"  # Reject inconsistent fitted-state provenance.
+    return None  # Accept the loaded transformer only after structural validation passes.
+
+
+def load_stacking_pca_cache(expected_context: dict, artifact_paths: dict, config: Optional[dict] = None) -> Optional[PCA]:  # Load a fitted PCA transformer only after strict metadata and integrity validation.
+    """
+    Load a fitted PCA transformer only after strict metadata and integrity validation.
+
+    :param expected_context: Current deterministic PCA compatibility context.
+    :param artifact_paths: Current expected artifact paths and cache identity.
+    :param config: Runtime configuration dictionary.
+    :return: Compatible fitted PCA transformer, or None when reuse is unsafe.
+    """
+
+    metadata_path = str(artifact_paths["metadata_path"])  # Read the expected companion metadata path.
+    transformer_path = str(artifact_paths["transformer_path"])  # Read the expected fitted transformer path.
+    legacy_paths = [str(path) for path in artifact_paths.get("legacy_paths", [artifact_paths["legacy_path"]])]  # Read every known rejected legacy bare pickle path.
+    for legacy_path in legacy_paths:  # Inspect legacy locations only for explicit rejection diagnostics.
+        if os.path.exists(legacy_path):  # Detect an old bare pickle without opening or deserializing it.
+            print(f"{BackgroundColors.YELLOW}[WARNING] Legacy bare PCA pickle rejected because provenance metadata is unavailable: {BackgroundColors.CYAN}{legacy_path}{Style.RESET_ALL}")  # Explain why the legacy cache is never reused.
+    if not os.path.isfile(metadata_path):  # Require companion provenance before considering any joblib artifact.
+        orphan_text = " An orphan transformer joblib was also found and rejected." if os.path.isfile(transformer_path) else ""  # Describe an unsafe transformer without metadata.
+        print(f"{BackgroundColors.YELLOW}[INFO] Compatible fitted PCA cache not found because metadata is missing at: {BackgroundColors.CYAN}{metadata_path}{BackgroundColors.YELLOW}.{orphan_text}{Style.RESET_ALL}")  # Report the exact cache miss reason.
+        return None  # Fit a new transformer when metadata is unavailable.
+    try:  # Parse metadata before loading executable joblib content.
+        with open(metadata_path, "r", encoding="utf-8") as file_obj:  # Open the companion provenance metadata.
+            metadata = json.load(file_obj)  # Parse the metadata JSON payload.
+    except Exception as exc:  # Treat corrupted metadata as a safe cache miss.
+        print(f"{BackgroundColors.YELLOW}[WARNING] Fitted PCA cache rejected because metadata could not be parsed at {BackgroundColors.CYAN}{metadata_path}{BackgroundColors.YELLOW}: {exc}{Style.RESET_ALL}")  # Report corrupted metadata without stopping evaluation.
+        return None  # Fit a new transformer after metadata corruption.
+
+    rejection_reason = validate_stacking_pca_cache_metadata(metadata, expected_context, artifact_paths)  # Validate path-independent provenance before deserialization.
+    if rejection_reason is not None:  # Reject stale or incompatible metadata explicitly.
+        print(f"{BackgroundColors.YELLOW}[WARNING] Fitted PCA cache rejected: {rejection_reason}. Metadata: {BackgroundColors.CYAN}{metadata_path}{Style.RESET_ALL}")  # Report the exact metadata incompatibility.
+        return None  # Fit a new transformer after metadata rejection.
+    if not os.path.isfile(transformer_path):  # Require the metadata-referenced transformer artifact.
+        print(f"{BackgroundColors.YELLOW}[WARNING] Fitted PCA cache rejected because transformer joblib is missing at: {BackgroundColors.CYAN}{transformer_path}{Style.RESET_ALL}")  # Report the missing serialized transformer.
+        return None  # Fit a new transformer when joblib content is unavailable.
+    actual_size = int(os.path.getsize(transformer_path))  # Read the serialized transformer size before deserialization.
+    if actual_size != int(metadata["transformer_size_bytes"]):  # Require the artifact size recorded during atomic save.
+        print(f"{BackgroundColors.YELLOW}[WARNING] Fitted PCA cache rejected because transformer size changed: expected {metadata['transformer_size_bytes']}, found {actual_size}.{Style.RESET_ALL}")  # Report artifact truncation or replacement.
+        return None  # Fit a new transformer after integrity failure.
+    actual_sha256 = calculate_file_sha256(transformer_path)  # Calculate the transformer integrity digest before joblib loading.
+    if actual_sha256 != metadata["transformer_sha256"]:  # Require exact artifact bytes written with the validated metadata.
+        print(f"{BackgroundColors.YELLOW}[WARNING] Fitted PCA cache rejected because transformer SHA-256 does not match metadata at: {BackgroundColors.CYAN}{transformer_path}{Style.RESET_ALL}")  # Report byte-level artifact corruption.
+        return None  # Fit a new transformer after integrity failure.
+    try:  # Deserialize only after metadata and artifact integrity validation succeed.
+        transformer = load(transformer_path)  # Load the fitted PCA transformer through the existing joblib dependency.
+    except Exception as exc:  # Treat corrupted or incompatible joblib content as a safe cache miss.
+        print(f"{BackgroundColors.YELLOW}[WARNING] Fitted PCA cache rejected because transformer joblib could not be loaded at {BackgroundColors.CYAN}{transformer_path}{BackgroundColors.YELLOW}: {exc}{Style.RESET_ALL}")  # Report deserialization failure without stopping evaluation.
+        return None  # Fit a new transformer after joblib corruption.
+    rejection_reason = validate_loaded_stacking_pca_transformer(transformer, expected_context, metadata)  # Validate fitted estimator type, parameters, and learned state.
+    if rejection_reason is not None:  # Reject incompatible deserialized state.
+        print(f"{BackgroundColors.YELLOW}[WARNING] Fitted PCA cache rejected: {rejection_reason}. Transformer: {BackgroundColors.CYAN}{transformer_path}{Style.RESET_ALL}")  # Report the exact fitted-state incompatibility.
+        return None  # Fit a new transformer after fitted-state rejection.
+    print(f"{BackgroundColors.GREEN}[INFO] Compatible fitted PCA transformer cache loaded from: {BackgroundColors.CYAN}{transformer_path}{Style.RESET_ALL}")  # Confirm safe reuse after all validation stages.
+    return cast(PCA, transformer)  # Return the strictly validated fitted PCA transformer.
+
+
+def save_stacking_pca_cache(transformer: PCA, cache_context: dict, artifact_paths: dict, config: Optional[dict] = None) -> bool:  # Atomically save a fitted PCA transformer and companion provenance metadata.
+    """
+    Atomically save a fitted PCA transformer and companion provenance metadata.
+
+    :param transformer: Fitted PCA transformer to persist.
+    :param cache_context: Deterministic PCA compatibility context.
+    :param artifact_paths: Resolved dataset-local artifact paths.
+    :param config: Runtime configuration dictionary.
+    :return: True when transformer and metadata were published successfully.
+    """
+
+    try:  # Keep cache persistence best-effort so scientific evaluation can continue after write failures.
+        fitted_solver = getattr(transformer, "_fit_svd_solver", None)  # Record the solver selected by scikit-learn during fitting.
+        fitted_metadata = {"fitted_svd_solver": fitted_solver}  # Build the fitted-state metadata required by estimator validation.
+        rejection_reason = validate_loaded_stacking_pca_transformer(transformer, cache_context, fitted_metadata)  # Validate the fitted object before writing any final artifact.
+        if rejection_reason is not None:  # Refuse to persist incomplete or incompatible fitted state.
+            raise ValueError(rejection_reason)  # Route invalid fitted state through the non-fatal save warning.
+        models_directory = str(artifact_paths["models_directory"])  # Read the dataset-specific Stacking model directory.
+        Path(models_directory).mkdir(parents=True, exist_ok=True)  # Create the existing model artifact directory convention.
+        transformer_path = str(artifact_paths["transformer_path"])  # Read the final transformer joblib path.
+        metadata_path = str(artifact_paths["metadata_path"])  # Read the final companion metadata path.
+        write_stacking_pca_artifact_atomically(transformer, transformer_path, "joblib")  # Publish the fitted transformer atomically before its metadata.
+        transformer_size = int(os.path.getsize(transformer_path))  # Record the published transformer size for integrity validation.
+        transformer_sha256 = calculate_file_sha256(transformer_path)  # Record the published transformer SHA-256 before metadata publication.
+        metadata = dict(cache_context)  # Copy deterministic provenance without mutating caller-owned context.
+        metadata.update({  # Add creation, path, integrity, and fitted-state metadata.
+            "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),  # Store an explicit UTC artifact creation timestamp.
+            "stacking_directory": str(artifact_paths["stacking_directory"]),  # Store the resolved dataset-local Stacking directory.
+            "models_directory": models_directory,  # Store the resolved dataset-slug model directory.
+            "cache_identity": str(artifact_paths["cache_identity"]),  # Store the deterministic provenance fingerprint.
+            "transformer_artifact": os.path.basename(transformer_path),  # Store the exact companion transformer filename.
+            "transformer_size_bytes": transformer_size,  # Store serialized transformer size for integrity validation.
+            "transformer_sha256": transformer_sha256,  # Store serialized transformer content integrity.
+            "scaler_artifact": None,  # Record that no duplicate scaler artifact is required by the pre-scaled PCA flow.
+            "fitted_svd_solver": fitted_solver,  # Store the solver selected during PCA fitting.
+        })  # Complete fitted artifact metadata without changing deterministic context fields.
+        write_stacking_pca_artifact_atomically(metadata, metadata_path, "json")  # Publish metadata atomically only after the transformer is complete.
+        print(f"{BackgroundColors.GREEN}[INFO] Provenance-bearing fitted PCA cache saved successfully. Metadata: {BackgroundColors.CYAN}{metadata_path}{BackgroundColors.GREEN}. Transformer: {BackgroundColors.CYAN}{transformer_path}{Style.RESET_ALL}")  # Confirm both final artifacts were published.
+        return True  # Report successful cache persistence.
+    except Exception as exc:  # Preserve PCA evaluation when artifact persistence fails.
+        print(f"{BackgroundColors.YELLOW}[WARNING] Failed to save fitted PCA transformer cache; evaluation will continue with the in-memory transformer: {exc}{Style.RESET_ALL}")  # Report the non-fatal cache save failure.
+        return False  # Report that no reusable cache was published.
+
+
+def apply_pca_transformation(X_train_scaled, X_test_scaled, pca_n_components, file_path=None, config=None, feature_names=None, scaler=None, source_files=None, cache_context=None):  # Apply or safely reuse the fitted PCA transformation for one evaluation split.
     """
     Applies Principal Component Analysis (PCA) transformation to the scaled training
     and testing datasets using the optimal number of components.
@@ -4976,6 +5368,10 @@ def apply_pca_transformation(X_train_scaled, X_test_scaled, pca_n_components, fi
     :param pca_n_components: Optimal number of components (integer), or None/0 if PCA is skipped.
     :param file_path: Path to the dataset CSV file (optional, for loading pre-fitted PCA).
     :param config: Configuration dictionary (uses global CONFIG if None)
+    :param feature_names: Ordered numeric feature names supplied to the scaled matrices.
+    :param scaler: Fitted scaler that produced the scaled matrices.
+    :param source_files: Ordered source files used to construct the evaluated data.
+    :param cache_context: Split and experiment identity metadata for compatibility validation.
     :return: Tuple (X_train_pca, X_test_pca) - Transformed features, or (None, None).
     """
     
@@ -4987,11 +5383,6 @@ def apply_pca_transformation(X_train_scaled, X_test_scaled, pca_n_components, fi
         X_test_pca = None  # Initialize PCA testing features
 
         if pca_n_components is not None and pca_n_components > 0:  # If PCA components are specified
-            verbose_output(
-                f"{BackgroundColors.GREEN}Starting PCA transformation with {BackgroundColors.CYAN}{pca_n_components}{BackgroundColors.GREEN} components...{Style.RESET_ALL}",
-                config=config
-            )  # Output the verbose message
-
             n_features = X_train_scaled.shape[1]  # Get the number of features in the training set
             n_components = min(
                 pca_n_components, n_features
@@ -5002,28 +5393,38 @@ def apply_pca_transformation(X_train_scaled, X_test_scaled, pca_n_components, fi
                     f"{BackgroundColors.YELLOW}Warning: Reduced PCA components from {pca_n_components} to {n_components} due to limited features ({n_features}).{Style.RESET_ALL}"
                 )
 
-            pca = None  # Initialize PCA object as None
-            if file_path:  # Only attempt to load if file_path is provided
-                pca = load_pca_object(file_path, n_components, config=config)  # Load pre-fitted PCA object
+            dataset_reference = str(file_path) if file_path else "unspecified dataset"  # Resolve the dataset identity shown in stage logs and Telegram.
+            dataset_scope = "combined dataset" if file_path and resolve_path_represents_directory(str(file_path)) else "dataset"  # Describe directory-backed evaluation accurately.
+            resolved_source_files = list(source_files) if source_files is not None else ([str(file_path)] if file_path and not resolve_path_represents_directory(str(file_path)) else [])  # Use exact caller provenance or the single evaluated dataset file.
+            pca_cache_context = None  # Initialize cache provenance as unavailable until every required field is built.
+            pca_artifact_paths = None  # Initialize artifact paths as unavailable until cache identity succeeds.
+            try:  # Disable cache reuse safely when complete provenance cannot be built.
+                pca_cache_context = build_stacking_pca_cache_context(str(file_path), resolved_source_files, list(feature_names or []), X_train_scaled, X_test_scaled, scaler, n_components, dict(cache_context or {}))  # Build strict dataset, split, scaling, and PCA compatibility provenance.
+                pca_artifact_paths = resolve_stacking_pca_artifact_paths(str(file_path), pca_cache_context, config)  # Resolve artifacts under the existing dataset-specific Stacking model directory.
+            except Exception as exc:  # Continue with a fresh in-memory fit when provenance is incomplete.
+                print(f"{BackgroundColors.YELLOW}[WARNING] Fitted PCA cache reuse is unavailable because provenance could not be built: {exc}{Style.RESET_ALL}")  # Report why safe cache reuse is disabled.
 
-            if pca is None:  # If PCA object wasn't loaded, fit a new one
-                verbose_output(
-                    f"{BackgroundColors.GREEN}Fitting new PCA model with {BackgroundColors.CYAN}{n_components}{BackgroundColors.GREEN} components...{Style.RESET_ALL}",
-                    config=config
-                )
-                pca = PCA(n_components=n_components)  # Initialize PCA with the effective number of components
-                X_train_pca = pca.fit_transform(X_train_scaled)  # Fit and transform the training data
-            else:  # PCA object was loaded successfully
-                print(
-                    f"{BackgroundColors.GREEN}Using pre-fitted PCA model with {BackgroundColors.CYAN}{n_components}{BackgroundColors.GREEN} components{Style.RESET_ALL}"
-                )
-                X_train_pca = pca.transform(X_train_scaled)  # Only transform the training data
+            metadata_path_text = str(pca_artifact_paths["metadata_path"]) if pca_artifact_paths is not None else "unavailable"  # Resolve metadata path text for stage logging.
+            transformer_path_text = str(pca_artifact_paths["transformer_path"]) if pca_artifact_paths is not None else "unavailable"  # Resolve transformer path text for stage logging.
+            print(f"{BackgroundColors.GREEN}[INFO] Starting PCA feature extraction for {dataset_scope} using {BackgroundColors.CYAN}{n_components}{BackgroundColors.GREEN} components. PCA_Results.csv selected: {BackgroundColors.CYAN}{pca_n_components}{BackgroundColors.GREEN}. Dataset: {BackgroundColors.CYAN}{dataset_reference}{Style.RESET_ALL}")  # Announce the selected and effective component counts before transformation.
+            print(f"{BackgroundColors.GREEN}[INFO] Expected fitted PCA cache metadata: {BackgroundColors.CYAN}{metadata_path_text}{Style.RESET_ALL}")  # Report the companion provenance path before lookup.
+            print(f"{BackgroundColors.GREEN}[INFO] Expected fitted PCA transformer: {BackgroundColors.CYAN}{transformer_path_text}{Style.RESET_ALL}")  # Report the joblib transformer path before lookup.
+            send_telegram_message(TELEGRAM_BOT, f"PCA feature extraction/transformation started for {dataset_scope}.\nComponents selected from PCA_Results.csv: {pca_n_components}.\nComponents used: {n_components}.\nDataset: {dataset_reference}\nFitted PCA metadata will be attempted at: {metadata_path_text}\nA compatible fitted transformer will be reused before fitting when provenance matches.")  # Send one stage-level PCA notification through the existing Telegram path.
+
+            pca = load_stacking_pca_cache(pca_cache_context, pca_artifact_paths, config=config) if pca_cache_context is not None and pca_artifact_paths is not None else None  # Load only a strictly compatible provenance-bearing fitted transformer.
+            if pca is None:  # Fit PCA only when no compatible fitted transformer cache is available.
+                print(f"{BackgroundColors.GREEN}[INFO] Compatible fitted PCA transformer cache was not loaded. Fitting PCA and transforming the training matrix now using {BackgroundColors.CYAN}{n_components}{BackgroundColors.GREEN} components.{Style.RESET_ALL}")  # State why computation begins after cache lookup.
+                pca = PCA(n_components=n_components)  # Initialize PCA with the effective number of components.
+                X_train_pca = pca.fit_transform(X_train_scaled)  # Fit PCA on training data only and transform that same matrix.
+                if pca_cache_context is not None and pca_artifact_paths is not None:  # Persist only when complete provenance and safe dataset-local paths exist.
+                    print(f"{BackgroundColors.GREEN}[INFO] Saving provenance-bearing fitted PCA transformer under: {BackgroundColors.CYAN}{pca_artifact_paths['models_directory']}{Style.RESET_ALL}")  # Announce the existing Stacking model artifact directory.
+                    save_stacking_pca_cache(pca, pca_cache_context, pca_artifact_paths, config=config)  # Atomically save transformer and companion metadata without changing evaluation semantics.
+            else:  # Reuse the validated fitted transformer without fitting again.
+                X_train_pca = pca.transform(X_train_scaled)  # Transform the current training matrix using the compatible cached fitted PCA.
 
             X_test_pca = pca.transform(X_test_scaled)  # Transform the testing data
 
-            verbose_output(
-                f"{BackgroundColors.GREEN}PCA applied successfully. Transformed data shape: {BackgroundColors.CYAN}{X_train_pca.shape}{Style.RESET_ALL}"
-            )  # Output the transformed shape
+            print(f"{BackgroundColors.GREEN}[INFO] PCA feature extraction completed. Transformed training data shape: {BackgroundColors.CYAN}{X_train_pca.shape}{BackgroundColors.GREEN}. Transformed test data shape: {BackgroundColors.CYAN}{X_test_pca.shape}{Style.RESET_ALL}")  # Report both dense transformed matrix shapes before model evaluation.
 
         return X_train_pca, X_test_pca  # Return the transformed features
     except Exception as e:
@@ -5410,7 +5811,7 @@ def load_existing_model_if_available(model, model_name, dataset_file, feature_se
         raise
 
 
-def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, y_test, dataset_file=None, scaler=None, feature_names=None, feature_set=None, config=None, phase_metadata=None):  # Evaluate one classifier with optional watcher metadata
+def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, y_test, dataset_file=None, scaler=None, feature_names=None, feature_set=None, config=None, phase_metadata=None, training_ram_stats=None):  # Evaluate one classifier with optional watcher metadata and RAM statistics
     """
     Trains an individual classifier and evaluates its performance on the test set.
 
@@ -5426,6 +5827,7 @@ def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, 
     :param feature_set: Feature set name
     :param config: Configuration dictionary (uses global CONFIG if None)
     :param phase_metadata: Optional compact watcher metadata for this classifier
+    :param training_ram_stats: Mutable holder receiving classifier training RAM statistics
     :return: Metrics tuple (acc, prec, rec, f1, fpr, fnr, elapsed_time)
     """
     
@@ -5433,6 +5835,7 @@ def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, 
         if config is None:  # If no config provided
             config = CONFIG  # Use global CONFIG
         phase_metadata = dict(phase_metadata or {})  # Normalize watcher metadata for safe reuse
+        training_ram_monitor = None  # Initialize classifier RAM monitor state for exception-safe cleanup.
         
         skip_train_if_model_exists = config.get("execution", {}).get("skip_train_if_model_exists", False)  # Get skip train flag from config
 
@@ -5473,10 +5876,19 @@ def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, 
                 existing_fit_metadata = dict(phase_metadata)  # Copy caller watcher metadata
                 existing_fit_metadata.update({"dataset_identity": os.path.basename(str(dataset_file)) if dataset_file is not None else existing_fit_metadata.get("dataset_identity"), "classifier_name": model_name, "classifier_params_digest": existing_params_digest, "classifier_params_reference": f"sha256:{existing_params_digest.get('digest')}", "train_sample_count": len(y_train), "test_sample_count": len(y_test), "feature_count": X_train.shape[1] if hasattr(X_train, "shape") and len(X_train.shape) > 1 else existing_fit_metadata.get("feature_count"), "n_jobs": get_classifier_n_jobs(model), "event_outcome": "loaded_existing_model"})  # Build skipped-fit watcher metadata
                 write_memory_phase_event("after_classifier_fit", config=config, **existing_fit_metadata)  # Publish skipped-fit outcome for existing model reuse
+                store_training_ram_stats(training_ram_stats, stop_training_ram_monitor(None))  # Store a one-sample RAM summary for cached classifier reuse.
                 return existing_metrics  # Return cached metrics without retraining
 
         sys.stdout.flush()  # Flush stdout before model training to ensure logs are visible under nohup
-        model.fit(X_train, y_train)  # Fit the model on the training data using its internal n_jobs parallelism
+        training_ram_monitor = start_training_ram_monitor(TRAINING_RAM_SAMPLE_INTERVAL_SECONDS)  # Start RAM monitoring immediately before classifier fit.
+        try:  # Ensure RAM monitoring stops even when classifier fit fails.
+            model.fit(X_train, y_train)  # Fit the model on the training data using its internal n_jobs parallelism
+        finally:  # Stop RAM monitoring immediately after classifier fit exits.
+            classifier_ram_stats = stop_training_ram_monitor(training_ram_monitor)  # Summarize RAM usage across this classifier fit.
+            store_training_ram_stats(training_ram_stats, classifier_ram_stats)  # Associate RAM statistics with this classifier only.
+            training_ram_monitor = None  # Clear monitor state after stop processing.
+        if classifier_ram_stats.get("thread_alive", False):  # Verify whether sampler thread cleanup completed.
+            verbose_output(f"{BackgroundColors.YELLOW}[WARNING] RAM monitor thread remained alive after training {model_name}.{Style.RESET_ALL}", config=config)  # Log monitor cleanup anomaly without changing classifier results.
         params_digest = get_classifier_params_digest(model)  # Build fitted classifier parameter digest
         fit_metadata = dict(phase_metadata)  # Copy caller watcher metadata
         fit_metadata.update({"dataset_identity": os.path.basename(str(dataset_file)) if dataset_file is not None else fit_metadata.get("dataset_identity"), "classifier_name": model_name, "classifier_params_digest": params_digest, "classifier_params_reference": f"sha256:{params_digest.get('digest')}", "train_sample_count": len(y_train), "test_sample_count": len(y_test), "feature_count": X_train.shape[1] if hasattr(X_train, "shape") and len(X_train.shape) > 1 else fit_metadata.get("feature_count"), "n_jobs": get_classifier_n_jobs(model), "event_outcome": "fit_completed"})  # Build fit completion watcher metadata
@@ -5536,7 +5948,7 @@ def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, 
         raise
 
 
-def evaluate_stacking_classifier(model, X_train, y_train, X_test, y_test):
+def evaluate_stacking_classifier(model, X_train, y_train, X_test, y_test, config=None, training_ram_stats=None):
     """
     Trains the StackingClassifier model and evaluates its performance on the test set.
 
@@ -5545,10 +5957,15 @@ def evaluate_stacking_classifier(model, X_train, y_train, X_test, y_test):
     :param y_train: Training target labels (encoded Series/array).
     :param X_test: Testing features (pandas DataFrame or numpy array with feature names).
     :param y_test: Testing target labels (encoded Series/array).
+    :param config: Configuration dictionary (uses global CONFIG if None).
+    :param training_ram_stats: Mutable holder receiving classifier training RAM statistics.
     :return: Metrics tuple (acc, prec, rec, f1, fpr, fnr, elapsed_time)
     """
     
     try:
+        if config is None:  # Use global configuration when no explicit configuration is supplied.
+            config = CONFIG  # Assign global CONFIG fallback.
+        training_ram_monitor = None  # Initialize stacking RAM monitor state for exception-safe cleanup.
         verbose_output(
             f"{BackgroundColors.GREEN}Starting training and evaluation of Stacking Classifier...{Style.RESET_ALL}"
         )  # Output the verbose message
@@ -5556,7 +5973,15 @@ def evaluate_stacking_classifier(model, X_train, y_train, X_test, y_test):
         start_time = time.time()  # Record the start time for timing training and prediction
 
         sys.stdout.flush()  # Flush stdout before stacking training to ensure logs are visible under nohup
-        model.fit(X_train, y_train)  # Fit the stacking model on the training data (accepts DataFrame or array)
+        training_ram_monitor = start_training_ram_monitor(TRAINING_RAM_SAMPLE_INTERVAL_SECONDS)  # Start RAM monitoring immediately before stacking fit.
+        try:  # Ensure RAM monitoring stops even when stacking fit fails.
+            model.fit(X_train, y_train)  # Fit the stacking model on the training data (accepts DataFrame or array)
+        finally:  # Stop RAM monitoring immediately after stacking fit exits.
+            stacking_ram_summary = stop_training_ram_monitor(training_ram_monitor)  # Summarize RAM usage across this stacking fit.
+            store_training_ram_stats(training_ram_stats, stacking_ram_summary)  # Associate RAM statistics with this stacking classifier only.
+            training_ram_monitor = None  # Clear monitor state after stop processing.
+        if stacking_ram_summary.get("thread_alive", False):  # Verify whether sampler thread cleanup completed.
+            verbose_output(f"{BackgroundColors.YELLOW}[WARNING] RAM monitor thread remained alive after training StackingClassifier.{Style.RESET_ALL}", config=config)  # Log monitor cleanup anomaly without changing stacking results.
 
         y_pred = model.predict(X_test)  # Predict the labels for the test set
 
@@ -5573,8 +5998,8 @@ def evaluate_stacking_classifier(model, X_train, y_train, X_test, y_test):
         total_seconds = int(round(elapsed_time))  # Reuse elapsed_time as total seconds for reporting
         train_seconds = total_seconds  # Reuse total seconds as training time when only one timer exists
         exec_seconds = total_seconds  # Reuse total seconds as execution time when only one timer exists
-        evaluation_mode = None  # Initialize evaluation mode string from global CONFIG
-        mode_raw = CONFIG.get("execution", {}).get("execution_mode")  # Obtain execution mode from global CONFIG if present
+        evaluation_mode = None  # Initialize evaluation mode string from runtime config
+        mode_raw = config.get("execution", {}).get("execution_mode")  # Obtain execution mode from runtime config if present
         if mode_raw:  # If an execution mode string exists in CONFIG
             evaluation_mode = mode_raw.replace("_", " ").title().replace(" ", "")  # Normalize to CamelCase style
         if evaluation_mode is None:  # If still not resolved
@@ -6607,26 +7032,9 @@ def snapshot_explainability_inputs(model: Any, X_test: Any, y_test: Any, feature
     return model_snapshot, X_test_snapshot, y_test_snapshot, feature_names_snapshot, config_snapshot  # Return the detached explainability inputs.
 
 
-def get_explainability_executor(config: Optional[dict]) -> concurrent.futures.ThreadPoolExecutor:
-    """
-    Return the bounded background executor for explainability jobs.
-
-    :param config: Configuration dictionary used for executor lifecycle.
-    :return: ThreadPoolExecutor used for queued explainability execution.
-    """
-
-    global EXPLAINABILITY_EXECUTOR  # Access the module-level explainability executor.
-    if config is None:  # Use global configuration when no configuration is provided.
-        config = CONFIG  # Preserve existing CONFIG fallback behavior.
-    if EXPLAINABILITY_EXECUTOR is None:  # Create the executor only once per active run.
-        max_workers = 1  # Use one worker because SHAP, LIME, Matplotlib, and SHAP progress patching share process resources.
-        EXPLAINABILITY_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="explainability")  # Start a bounded deterministic background worker.
-    return EXPLAINABILITY_EXECUTOR  # Return the active executor.
-
-
 def execute_explainability_job(model: Any, model_name: str, X_test: Any, y_test: Any, feature_names: List[Any], dataset_file: str, feature_set: str, execution_mode: str, config: dict) -> Optional[dict]:
     """
-    Run one queued explainability job and isolate its failures.
+    Run one explainability job and propagate its failures.
 
     :param model: Detached fitted model for explainability.
     :param model_name: Model name used for labels and filenames.
@@ -6637,21 +7045,248 @@ def execute_explainability_job(model: Any, model_name: str, X_test: Any, y_test:
     :param feature_set: Feature set label used for output directory construction.
     :param execution_mode: Execution mode string used for output directory construction.
     :param config: Detached configuration dictionary used by explainability routines.
-    :return: Explainability result dictionary or None when explainability fails.
+    :return: Explainability result dictionary, or None when explainability is disabled.
     """
 
-    try:  # Isolate background explainability failures from classifier execution.
+    try:  # Run the existing explainability implementation under one failure boundary.
         return run_explainability_pipeline(model, model_name, X_test, y_test, feature_names, dataset_file, feature_set, execution_mode, config)  # Run the existing explainability pipeline.
-    except Exception as e:  # Log any background explainability failure.
+    except Exception as e:  # Log explainability failure before propagating it.
         print(str(e))  # Print the error through the existing logging path.
         verbose_output(f"{BackgroundColors.YELLOW}Explainability failed for {model_name}: {e}{Style.RESET_ALL}", config=config)  # Log failure using the existing verbose pattern.
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send failure details through the existing Telegram exception path.
-        return None  # Prevent the failed explainability job from terminating unrelated processing.
+        raise  # Preserve explainability failure propagation.
 
 
-def schedule_explainability_job(model: Any, model_name: str, X_test: Any, y_test: Any, feature_names: Any, dataset_file: str, feature_set: str, execution_mode: str, config: Optional[dict], experiment_mode: str, hyperparameters_enabled: bool) -> Optional[concurrent.futures.Future]:
+def prepare_explainability_child_config(config: dict) -> dict:
     """
-    Queue explainability execution after classifier result completion.
+    Prepare a process-safe configuration snapshot for explainability.
+
+    :param config: Configuration dictionary used by explainability routines.
+    :return: Detached configuration dictionary for a child process.
+    """
+
+    config_snapshot = pickle.loads(pickle.dumps(config))  # Detach configuration before it crosses the process boundary.
+    config_snapshot.setdefault("logging", {})["clean"] = False  # Prevent child logger initialization from truncating the parent log.
+    return config_snapshot  # Return child-safe configuration snapshot.
+
+
+def run_explainability_process(status_queue: Any, model: Any, model_name: str, X_test: Any, y_test: Any, feature_names: List[Any], dataset_file: str, feature_set: str, execution_mode: str, config: dict) -> None:
+    """
+    Run explainability inside a child process and report lifecycle status.
+
+    :param status_queue: Multiprocessing queue used to report child status.
+    :param model: Detached fitted model for explainability.
+    :param model_name: Model name used for labels and filenames.
+    :param X_test: Detached test feature matrix.
+    :param y_test: Detached test labels.
+    :param feature_names: Detached feature name list.
+    :param dataset_file: Dataset file path used for output directory construction.
+    :param feature_set: Feature set label used for output directory construction.
+    :param execution_mode: Execution mode string used for output directory construction.
+    :param config: Detached configuration dictionary used by explainability routines.
+    :return: None.
+    """
+
+    global CONFIG  # Allow the child process to reuse the standard CONFIG fallback.
+    global logger  # Allow child logger initialization to update the module logger.
+    try:  # Initialize child-side runtime state before reporting startup.
+        CONFIG = config  # Set child CONFIG so existing fallback logic remains valid.
+        if logger is None:  # Initialize child logging only when the child has no logger.
+            initialize_logger(config=config)  # Attach child stdout and stderr to the existing log file in append mode.
+        setup_telegram_bot(config=config)  # Initialize Telegram in the child when configured.
+        status_queue.put({"status": "started", "pid": os.getpid(), "model_name": model_name, "feature_set": feature_set})  # Confirm successful child startup before heavy explainability begins.
+        result = execute_explainability_job(model, model_name, X_test, y_test, feature_names, dataset_file, feature_set, execution_mode, config)  # Run the existing explainability pipeline without reimplementation.
+        result_keys = sorted(result.keys()) if isinstance(result, dict) else []  # Summarize result shape without sending large artifacts through the queue.
+        status_queue.put({"status": "success", "pid": os.getpid(), "model_name": model_name, "feature_set": feature_set, "result_keys": result_keys})  # Report successful explainability completion.
+    except BaseException as e:  # Report any child failure before preserving the nonzero exit.
+        status_queue.put({"status": "failure", "pid": os.getpid(), "model_name": model_name, "feature_set": feature_set, "exception_type": type(e).__name__, "message": str(e), "traceback": traceback.format_exc()})  # Send structured child failure details to the parent.
+        try:  # Preserve existing Telegram exception reporting for child failures.
+            send_exception_via_telegram(type(e), e, e.__traceback__)  # Notify Telegram about the child failure.
+        except Exception:  # Avoid masking the original child failure during notification.
+            pass  # Preserve the original child failure.
+        raise  # Preserve nonzero child process exit status.
+    finally:  # Flush child logs before process exit.
+        try:  # Flush child logger when it exists.
+            if logger is not None:  # Verify child logger exists before flushing.
+                logger.flush()  # Flush child log writes.
+        except Exception:  # Avoid masking child process status during logger flush.
+            pass  # Preserve the original child process status.
+
+
+def drain_explainability_status_queue(status_queue: Any) -> List[dict]:
+    """
+    Drain queued child process status messages without blocking.
+
+    :param status_queue: Multiprocessing queue containing child status messages.
+    :return: List of status dictionaries.
+    """
+
+    statuses: List[dict] = []  # Collect every available child status message.
+    while True:  # Drain until the queue reports no immediately available message.
+        try:  # Read one status message without blocking.
+            statuses.append(status_queue.get_nowait())  # Append the available child status message.
+        except queue_module.Empty:  # Stop when the queue is empty.
+            break  # Leave the draining loop.
+    return statuses  # Return drained status messages.
+
+
+def await_explainability_process_start(process_record: dict, timeout_seconds: float, config: Optional[dict]) -> dict:
+    """
+    Wait for a child process to confirm explainability startup.
+
+    :param process_record: Process record containing process and status queue.
+    :param timeout_seconds: Maximum startup wait in seconds.
+    :param config: Configuration dictionary used for logging.
+    :return: Startup status dictionary.
+    """
+
+    process = process_record["process"]  # Read child process from process record.
+    status_queue = process_record["status_queue"]  # Read child status queue from process record.
+    deadline = time.time() + float(timeout_seconds)  # Compute absolute startup deadline.
+    while time.time() < deadline:  # Wait until child startup succeeds, fails, or times out.
+        try:  # Poll child status with a short timeout.
+            status = status_queue.get(timeout=0.2)  # Wait briefly for a startup status message.
+            process_record.setdefault("statuses", []).append(status)  # Preserve startup status for finalization logs.
+            if status.get("status") == "started":  # Verify successful child startup status.
+                return status  # Return startup status to the scheduler.
+            if status.get("status") == "failure":  # Treat startup failure as unsafe asynchronous dispatch.
+                raise RuntimeError(f"Explainability child failed before startup confirmation for {process_record.get('model_name')}: {status.get('message')}")  # Raise structured startup failure.
+        except queue_module.Empty:  # No status arrived during this poll interval.
+            pass  # Continue waiting until deadline or process exit.
+        if process.exitcode is not None:  # Detect child exit before startup confirmation.
+            raise RuntimeError(f"Explainability child exited before startup confirmation for {process_record.get('model_name')} with exitcode {process.exitcode}")  # Raise failed startup status.
+    raise TimeoutError(f"Explainability child did not confirm startup for {process_record.get('model_name')} within {timeout_seconds:.1f}s")  # Raise startup timeout.
+
+
+def finalize_explainability_process_record(process_record: dict, config: Optional[dict], terminate: bool) -> None:
+    """
+    Join one explainability process and surface its final status.
+
+    :param process_record: Process record containing process, queue, and metadata.
+    :param config: Configuration dictionary used for logging.
+    :param terminate: Whether to terminate a live child during abnormal shutdown.
+    :return: None.
+    """
+
+    process = process_record["process"]  # Read child process from process record.
+    model_name = process_record.get("model_name", "unknown")  # Resolve model name for logs.
+    feature_set = process_record.get("feature_set", "unknown")  # Resolve feature set for logs.
+    if terminate and process.is_alive():  # Terminate live child during abnormal shutdown.
+        print(f"{BackgroundColors.YELLOW}[WARNING] Terminating asynchronous explainability child PID {process.pid} for {model_name} - {feature_set}.{Style.RESET_ALL}")  # Log abnormal child termination.
+        process.terminate()  # Ask the child process to terminate.
+        process.join(timeout=EXPLAINABILITY_PROCESS_JOIN_TIMEOUT_SECONDS)  # Wait briefly after terminate.
+        if process.is_alive():  # Escalate only when the child ignored terminate.
+            process.kill()  # Force-stop the child process.
+            process.join(timeout=EXPLAINABILITY_PROCESS_JOIN_TIMEOUT_SECONDS)  # Reap the force-stopped child.
+    else:  # Normal finalization waits for child completion.
+        while process.is_alive():  # Wait for explainability completion without busy waiting.
+            process.join(timeout=EXPLAINABILITY_PROCESS_JOIN_TIMEOUT_SECONDS)  # Reap progress in bounded intervals.
+    process.join(timeout=0.0)  # Reap final process status after it has stopped.
+    statuses = list(process_record.get("statuses", []))  # Start with statuses consumed during startup confirmation.
+    statuses.extend(drain_explainability_status_queue(process_record["status_queue"]))  # Add any completion or failure statuses.
+    process_record["statuses"] = statuses  # Store complete statuses for diagnostics.
+    exitcode = process.exitcode  # Read final child exit code.
+    status_names = [str(status.get("status")) for status in statuses]  # Extract compact status names for logs.
+    success_seen = any(status.get("status") == "success" for status in statuses)  # Detect successful explainability completion.
+    failure_statuses = [status for status in statuses if status.get("status") == "failure"]  # Collect structured child failures.
+    verbose_output(f"{BackgroundColors.GREEN}[DEBUG] Explainability child finalized: model={model_name}, feature_set={feature_set}, pid={process.pid}, exitcode={exitcode}, statuses={status_names}{Style.RESET_ALL}", config=config)  # Log final child process status.
+    try:  # Release queue feeder resources after draining statuses.
+        process_record["status_queue"].close()  # Close the multiprocessing queue in the parent.
+        process_record["status_queue"].join_thread()  # Join queue feeder resources.
+    except Exception:  # Keep queue cleanup best-effort after child has ended.
+        pass  # Preserve child failure reporting.
+    try:  # Release Process resources after join.
+        process.close()  # Close process object resources after reaping.
+    except Exception:  # Keep process object cleanup best-effort.
+        pass  # Preserve child failure reporting.
+    if terminate:  # Abnormal shutdown cleanup should not mask the original program failure.
+        return  # Return after cleanup during abnormal shutdown.
+    if failure_statuses:  # Surface structured child failure during normal finalization.
+        failure = failure_statuses[-1]  # Use the latest failure status for the error message.
+        raise RuntimeError(f"Explainability child failed for {model_name} - {feature_set}: {failure.get('exception_type')}: {failure.get('message')}")  # Raise child failure before successful program completion.
+    if exitcode not in (0, None):  # Surface nonzero child exit without a structured failure message.
+        raise RuntimeError(f"Explainability child exited with code {exitcode} for {model_name} - {feature_set}")  # Raise nonzero child exit.
+    if not success_seen:  # Require explicit child success on normal finalization.
+        raise RuntimeError(f"Explainability child ended without success status for {model_name} - {feature_set}")  # Raise missing success status.
+
+
+def reap_finished_explainability_processes(config: Optional[dict] = None) -> None:
+    """
+    Reap completed asynchronous explainability processes.
+
+    :param config: Configuration dictionary used for logging.
+    :return: None.
+    """
+
+    if config is None:  # Use global configuration when no configuration is supplied.
+        config = CONFIG  # Preserve existing CONFIG fallback behavior.
+    tracked_processes = list(EXPLAINABILITY_PROCESSES)  # Snapshot tracked process records before mutation.
+    EXPLAINABILITY_PROCESSES.clear()  # Rebuild the active process list after reaping completed records.
+    for process_record in tracked_processes:  # Inspect each tracked explainability child.
+        process = process_record.get("process")  # Read process object from record.
+        if process is not None and process.is_alive():  # Keep live child records for later finalization.
+            EXPLAINABILITY_PROCESSES.append(process_record)  # Preserve active child process record.
+        else:  # Reap completed child process immediately.
+            finalize_explainability_process_record(process_record, config=config, terminate=False)  # Join and validate completed child process status.
+
+
+def start_explainability_process(model: Any, model_name: str, X_test: Any, y_test: Any, feature_names: Any, dataset_file: str, feature_set: str, execution_mode: str, config: dict) -> dict:
+    """
+    Start one asynchronous explainability process after snapshotting inputs.
+
+    :param model: Fitted model object from the completed classifier result.
+    :param model_name: Model name used for labels and filenames.
+    :param X_test: Test feature matrix for explainability.
+    :param y_test: Test labels for explainability.
+    :param feature_names: Feature names associated with the test feature matrix.
+    :param dataset_file: Dataset file path used for output directory construction.
+    :param feature_set: Feature set label used for output directory construction.
+    :param execution_mode: Execution mode string used for output directory construction.
+    :param config: Configuration dictionary used by explainability routines.
+    :return: Process record for the started child process.
+    """
+
+    model_snapshot, X_test_snapshot, y_test_snapshot, feature_names_snapshot, config_snapshot = snapshot_explainability_inputs(model, X_test, y_test, feature_names, config)  # Snapshot only explainability inputs before process dispatch.
+    config_snapshot = prepare_explainability_child_config(config_snapshot)  # Prepare child configuration without truncating logs.
+    context = mp.get_context("spawn")  # Use spawn context for deterministic process isolation across platforms.
+    status_queue = context.Queue()  # Create a status queue owned by the same multiprocessing context.
+    process = context.Process(target=run_explainability_process, args=(status_queue, model_snapshot, model_name, X_test_snapshot, y_test_snapshot, feature_names_snapshot, dataset_file, feature_set, execution_mode, config_snapshot), name=f"Explainability-{model_name}")  # Build child process for existing explainability pipeline.
+    process.daemon = False  # Keep child non-daemonic so it can finish artifact writes and queue status.
+    process_record = {"process": process, "status_queue": status_queue, "model_name": model_name, "feature_set": feature_set, "statuses": []}  # Build process record before startup.
+    try:  # Ensure failed startup leaves no live child behind.
+        process.start()  # Start the child process.
+        if process.pid is None:  # Treat missing PID as failed startup.
+            raise RuntimeError(f"Explainability child did not provide a PID for {model_name} - {feature_set}")  # Raise unsafe startup status.
+        start_status = await_explainability_process_start(process_record, EXPLAINABILITY_PROCESS_START_TIMEOUT_SECONDS, config)  # Wait for explicit child startup confirmation.
+        process_record["started_status"] = start_status  # Store startup status for diagnostics.
+        return process_record  # Return confirmed process record.
+    except Exception:  # Reap any partially started child before synchronous fallback.
+        try:  # Terminate partial child process if it is still alive.
+            if process.is_alive():  # Verify process liveness before termination.
+                process.terminate()  # Terminate unsafe partial child startup.
+                process.join(timeout=EXPLAINABILITY_PROCESS_JOIN_TIMEOUT_SECONDS)  # Reap terminated partial child.
+                if process.is_alive():  # Escalate if terminate did not stop the child.
+                    process.kill()  # Force-stop unsafe partial child startup.
+                    process.join(timeout=EXPLAINABILITY_PROCESS_JOIN_TIMEOUT_SECONDS)  # Reap force-stopped partial child.
+            else:  # Process already exited during startup failure.
+                process.join(timeout=EXPLAINABILITY_PROCESS_JOIN_TIMEOUT_SECONDS)  # Reap exited partial child.
+        except Exception:  # Preserve original startup failure if cleanup fails.
+            pass  # Preserve startup failure propagation.
+        try:  # Release partial status queue resources.
+            status_queue.close()  # Close partial startup status queue.
+            status_queue.join_thread()  # Join partial startup queue feeder.
+        except Exception:  # Preserve original startup failure if queue cleanup fails.
+            pass  # Preserve startup failure propagation.
+        try:  # Release partial Process resources after cleanup.
+            process.close()  # Close partial child process object.
+        except Exception:  # Preserve original startup failure if process close fails.
+            pass  # Preserve startup failure propagation.
+        raise  # Propagate startup failure to trigger synchronous fallback.
+
+
+def schedule_explainability_job(model: Any, model_name: str, X_test: Any, y_test: Any, feature_names: Any, dataset_file: str, feature_set: str, execution_mode: str, config: Optional[dict], experiment_mode: str, hyperparameters_enabled: bool, training_ram_stats: Optional[dict] = None) -> Optional[dict]:
+    """
+    Dispatch explainability after classifier result completion.
 
     :param model: Fitted model object from the completed classifier result.
     :param model_name: Model name used for labels and filenames.
@@ -6664,69 +7299,74 @@ def schedule_explainability_job(model: Any, model_name: str, X_test: Any, y_test
     :param config: Configuration dictionary used by explainability routines.
     :param experiment_mode: Experiment mode string controlling original-only explainability.
     :param hyperparameters_enabled: Whether this classifier result used optimized hyperparameters.
-    :return: Future for the queued job, or None when no job is queued.
+    :param training_ram_stats: RAM statistics collected during classifier training.
+    :return: Dispatch outcome dictionary, or None when explainability is disabled for this classifier.
     """
 
-    try:  # Keep scheduling failures isolated from classifier progression.
-        if config is None:  # Use global configuration when no configuration is provided.
-            config = CONFIG  # Preserve existing CONFIG fallback behavior.
-        explainability_config = config.get("explainability", {})  # Read explainability settings from configuration.
-        if not explainability_config.get("enabled", False):  # Preserve disabled-run behavior.
-            return None  # Skip queuing when explainability is disabled.
-        if experiment_mode != "original_only":  # Preserve original-only explainability behavior.
-            return None  # Skip queuing for augmented experiments.
-        hyperparameter_label = "Optimized Hyperparameters" if hyperparameters_enabled else "Default Hyperparameters"  # Resolve HP label for isolated output paths.
-        explainability_feature_set = f"{feature_set} - {hyperparameter_label}"  # Isolate explainability artifacts across default and optimized HP runs.
-        run_in_background = bool(explainability_config.get("background", False))  # Resolve whether explainability may retain detached snapshots while training continues.
-        if not run_in_background:  # Run inline when memory-safe scheduling is active.
-            execute_explainability_job(model, model_name, X_test, y_test, list(feature_names) if feature_names is not None else [], dataset_file, explainability_feature_set, execution_mode, config)  # Run explainability before the next classifier starts.
-            gc.collect()  # Reclaim explainability temporaries before returning to the classifier loop.
-            verbose_output(f"{BackgroundColors.GREEN}Completed synchronous explainability for {BackgroundColors.CYAN}{model_name} - {explainability_feature_set}{Style.RESET_ALL}", config=config)  # Log synchronous explainability completion.
-            return None  # Return without creating a background future.
-        model_snapshot, X_test_snapshot, y_test_snapshot, feature_names_snapshot, config_snapshot = snapshot_explainability_inputs(model, X_test, y_test, feature_names, config)  # Snapshot inputs before dispatch.
-        executor = get_explainability_executor(config_snapshot)  # Resolve the bounded background executor.
-        future = executor.submit(execute_explainability_job, model_snapshot, model_name, X_test_snapshot, y_test_snapshot, feature_names_snapshot, dataset_file, explainability_feature_set, execution_mode, config_snapshot)  # Queue explainability without blocking the training loop.
-        EXPLAINABILITY_FUTURES.append(future)  # Track the future for shutdown finalization.
-        verbose_output(f"{BackgroundColors.GREEN}Queued explainability for {BackgroundColors.CYAN}{model_name} - {explainability_feature_set}{Style.RESET_ALL}", config=config)  # Log queued explainability work.
-        return future  # Return the queued future to the caller.
-    except Exception as e:  # Log scheduling failures and continue classifier processing.
-        print(str(e))  # Print the scheduling error through the existing logging path.
-        verbose_output(f"{BackgroundColors.YELLOW}Explainability scheduling failed for {model_name}: {e}{Style.RESET_ALL}", config=config)  # Log scheduling failure using the existing verbose pattern.
-        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send scheduling failure details through the existing Telegram exception path.
-        return None  # Keep the main classifier flow non-blocking on scheduling failure.
+    if config is None:  # Use global configuration when no configuration is provided.
+        config = CONFIG  # Preserve existing CONFIG fallback behavior.
+    explainability_config = config.get("explainability", {})  # Read explainability settings from configuration.
+    if not explainability_config.get("enabled", False):  # Preserve disabled-run behavior.
+        return None  # Return without dispatch when explainability is disabled.
+    if experiment_mode != "original_only":  # Preserve original-only explainability behavior.
+        return None  # Return without dispatch for augmented experiments.
+    hyperparameter_label = "Optimized Hyperparameters" if hyperparameters_enabled else "Default Hyperparameters"  # Resolve HP label for isolated output paths.
+    explainability_feature_set = f"{feature_set} - {hyperparameter_label}"  # Isolate explainability artifacts across default and optimized HP runs.
+    average_training_ram = resolve_training_ram_percent(training_ram_stats, "average_percent")  # Read average classifier training RAM usage.
+    latest_training_ram = resolve_training_ram_percent(training_ram_stats, "latest_percent")  # Read latest classifier training RAM usage.
+    dispatch_ram = read_system_ram_percent()  # Read current system RAM usage at the exact explainability dispatch point.
+    threshold = EXPLAINABILITY_RAM_THRESHOLD_PERCENT  # Resolve strict asynchronous RAM threshold.
+    can_dispatch_async = average_training_ram is not None and average_training_ram < threshold and dispatch_ram < threshold  # Apply strict RAM criteria for asynchronous explainability.
+    if can_dispatch_async:  # Attempt process-isolated explainability only when RAM criteria are satisfied.
+        reap_finished_explainability_processes(config=config)  # Reap any completed child before considering new dispatch.
+        if EXPLAINABILITY_PROCESSES:  # Enforce one active asynchronous explainability process at a time.
+            verbose_output(f"{BackgroundColors.GREEN}[DEBUG] Waiting for active asynchronous explainability before dispatching {model_name}: active={len(EXPLAINABILITY_PROCESSES)}{Style.RESET_ALL}", config=config)  # Log bounded concurrency synchronization.
+            finalize_pending_explainability_jobs(config=config, terminate=False)  # Wait for existing child before starting another child.
+        try:  # Start process-isolated explainability and fall back to synchronous on unsafe startup.
+            process_record = start_explainability_process(model, model_name, X_test, y_test, feature_names, dataset_file, explainability_feature_set, execution_mode, config)  # Start child and wait for startup confirmation.
+            EXPLAINABILITY_PROCESSES.append(process_record)  # Track child for later finalization.
+            verbose_output(f"{BackgroundColors.GREEN}[DEBUG] Explainability dispatch: model={model_name}, feature_set={explainability_feature_set}, avg_training_ram={format_ram_percent(average_training_ram)}, latest_training_ram={format_ram_percent(latest_training_ram)}, dispatch_ram={format_ram_percent(dispatch_ram)}, mode=asynchronous, pid={process_record['process'].pid}{Style.RESET_ALL}", config=config)  # Log asynchronous dispatch decision.
+            return {"mode": "asynchronous", "pid": process_record["process"].pid, "average_training_ram": average_training_ram, "latest_training_ram": latest_training_ram, "dispatch_ram": dispatch_ram}  # Return asynchronous dispatch metadata.
+        except Exception as e:  # Fall back to synchronous explainability when process startup is unsafe.
+            print(f"{BackgroundColors.YELLOW}[WARNING] Asynchronous explainability could not start for {model_name} - {explainability_feature_set}: {e}. Falling back to synchronous execution.{Style.RESET_ALL}")  # Log fallback reason using existing warning style.
+            send_exception_via_telegram(type(e), e, e.__traceback__)  # Report unsafe asynchronous startup through existing exception notification.
+    else:  # Use synchronous explainability when RAM criteria are not satisfied.
+        reason = "training_average_unavailable" if average_training_ram is None else "ram_threshold_not_met"  # Resolve synchronous dispatch reason.
+        verbose_output(f"{BackgroundColors.GREEN}[DEBUG] Explainability dispatch: model={model_name}, feature_set={explainability_feature_set}, avg_training_ram={format_ram_percent(average_training_ram)}, latest_training_ram={format_ram_percent(latest_training_ram)}, dispatch_ram={format_ram_percent(dispatch_ram)}, threshold={format_ram_percent(threshold)}, mode=synchronous, reason={reason}{Style.RESET_ALL}", config=config)  # Log synchronous dispatch decision.
+    execute_explainability_job(model, model_name, X_test, y_test, list(feature_names) if feature_names is not None else [], dataset_file, explainability_feature_set, execution_mode, config)  # Run explainability before the next classifier starts.
+    gc.collect()  # Reclaim explainability temporaries before returning to the classifier loop.
+    verbose_output(f"{BackgroundColors.GREEN}Completed synchronous explainability for {BackgroundColors.CYAN}{model_name} - {explainability_feature_set}{Style.RESET_ALL}", config=config)  # Log synchronous explainability completion.
+    return {"mode": "synchronous", "pid": None, "average_training_ram": average_training_ram, "latest_training_ram": latest_training_ram, "dispatch_ram": dispatch_ram}  # Return synchronous dispatch metadata.
 
 
-def finalize_pending_explainability_jobs(config: Optional[dict] = None) -> None:
+def finalize_pending_explainability_jobs(config: Optional[dict] = None, terminate: bool = False) -> None:
     """
-    Wait for queued explainability jobs and shut down the executor.
+    Wait for asynchronous explainability processes and surface failures.
 
     :param config: Configuration dictionary used for logging.
+    :param terminate: Whether live children should be terminated during abnormal shutdown.
     :return: None.
     """
 
-    global EXPLAINABILITY_EXECUTOR  # Access the module-level explainability executor for shutdown.
-    try:  # Keep finalization failures visible without masking the original program flow.
-        if config is None:  # Use global configuration when no configuration is provided.
-            config = CONFIG  # Preserve existing CONFIG fallback behavior.
-        tracked_futures = list(EXPLAINABILITY_FUTURES)  # Snapshot the tracked futures before waiting.
-        if not tracked_futures and EXPLAINABILITY_EXECUTOR is None:  # Skip finalization when no queued work or worker exists.
-            return  # Return immediately when there is nothing to finalize.
-        if tracked_futures:  # Wait only when futures have been queued.
-            verbose_output(f"{BackgroundColors.GREEN}Waiting for {len(tracked_futures)} queued explainability job(s) to finish before shutdown.{Style.RESET_ALL}", config=config)  # Log explainability finalization.
-            for future in concurrent.futures.as_completed(tracked_futures):  # Wait for every queued future to complete.
-                try:  # Surface any unexpected future exception through existing paths.
-                    future.result()  # Retrieve the result so executor exceptions cannot disappear.
-                except Exception as e:  # Log unexpected future exceptions.
-                    print(str(e))  # Print the future error through the existing logging path.
-                    verbose_output(f"{BackgroundColors.YELLOW}Queued explainability future failed: {e}{Style.RESET_ALL}", config=config)  # Log unexpected future failure.
-                    send_exception_via_telegram(type(e), e, e.__traceback__)  # Send unexpected future failure details through Telegram.
-            EXPLAINABILITY_FUTURES.clear()  # Clear completed futures after finalization.
-        if EXPLAINABILITY_EXECUTOR is not None:  # Shut down an active executor after futures complete.
-            EXPLAINABILITY_EXECUTOR.shutdown(wait=True)  # Stop the background worker after all queued jobs finish.
-            EXPLAINABILITY_EXECUTOR = None  # Allow a later programmatic run to create a fresh executor.
-    except Exception as e:  # Log finalization errors without hiding classifier results.
-        print(str(e))  # Print the finalization error through the existing logging path.
-        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send finalization failure details through the existing Telegram exception path.
+    if config is None:  # Use global configuration when no configuration is provided.
+        config = CONFIG  # Preserve existing CONFIG fallback behavior.
+    tracked_processes = list(EXPLAINABILITY_PROCESSES)  # Snapshot tracked child processes before waiting.
+    if not tracked_processes:  # Skip finalization when no child processes are tracked.
+        return  # Return immediately when there is nothing to finalize.
+    EXPLAINABILITY_PROCESSES.clear()  # Prevent duplicate finalization of the same child records.
+    verbose_output(f"{BackgroundColors.GREEN}Waiting for {len(tracked_processes)} asynchronous explainability process(es) to finish before shutdown.{Style.RESET_ALL}", config=config)  # Log explainability finalization.
+    finalization_errors: List[Exception] = []  # Collect child finalization errors for propagation.
+    for process_record in tracked_processes:  # Finalize every tracked child process.
+        try:  # Join one child and validate its final status.
+            finalize_explainability_process_record(process_record, config=config, terminate=terminate)  # Reap one child process and report failure status.
+        except Exception as e:  # Collect child finalization errors.
+            finalization_errors.append(e)  # Preserve child finalization error.
+            print(str(e))  # Print finalization error through existing logging path.
+            send_exception_via_telegram(type(e), e, e.__traceback__)  # Send finalization failure details through Telegram.
+            if terminate:  # Do not mask an earlier abnormal parent failure.
+                continue  # Continue cleanup for remaining child processes.
+    if finalization_errors and not terminate:  # Surface child failures before successful program completion.
+        raise RuntimeError("; ".join(str(error) for error in finalization_errors))  # Raise combined child finalization failure.
 
 
 def get_hardware_specifications():
@@ -9373,7 +10013,7 @@ def assemble_feature_sets(X_train_scaled, X_test_scaled, feature_names, ga_selec
         raise
 
 
-def iterate_feature_sets_sequentially(feature_source_arrays: dict, feature_names: List[Any], ga_selected_features: Any, pca_n_components: Any, rfe_selected_features: Any, file: str, feature_sets_config: dict, config: Optional[dict]) -> Any:
+def iterate_feature_sets_sequentially(feature_source_arrays: dict, feature_names: List[Any], ga_selected_features: Any, pca_n_components: Any, rfe_selected_features: Any, file: str, feature_sets_config: dict, config: Optional[dict], scaler: Any = None, source_files: Optional[List[str]] = None, pca_cache_context: Optional[dict] = None, pca_input_feature_names: Optional[List[Any]] = None) -> Any:  # Yield feature matrices while carrying exact PCA cache provenance.
     """
     Yield feature-set matrices one at a time.
 
@@ -9385,6 +10025,10 @@ def iterate_feature_sets_sequentially(feature_source_arrays: dict, feature_names
     :param file: Dataset path used for PCA artifact loading.
     :param feature_sets_config: Feature-set strategy configuration.
     :param config: Runtime configuration dictionary.
+    :param scaler: Fitted scaler that produced the full scaled source matrices.
+    :param source_files: Ordered source files used to build this evaluation dataset.
+    :param pca_cache_context: Split and experiment identity used for PCA cache validation.
+    :param pca_input_feature_names: Exact ordered numeric feature names consumed by PCA.
     :return: Iterator yielding feature-set tuples.
     """
 
@@ -9459,7 +10103,7 @@ def iterate_feature_sets_sequentially(feature_source_arrays: dict, feature_names
 
     if use_pca:  # Resolve PCA feature mode after GA to preserve sorted evaluation order.
         try:  # Preserve existing PCA failure tolerance.
-            X_train_pca, X_test_pca = apply_pca_transformation(feature_source_arrays["X_train_scaled"], feature_source_arrays["X_test_scaled"], pca_n_components, file, config=config)  # Materialize PCA matrices for this mode.
+            X_train_pca, X_test_pca = apply_pca_transformation(feature_source_arrays["X_train_scaled"], feature_source_arrays["X_test_scaled"], pca_n_components, file, config=config, feature_names=pca_input_feature_names if pca_input_feature_names is not None else feature_names, scaler=scaler, source_files=source_files, cache_context=pca_cache_context)  # Materialize PCA matrices with strict source, scaling, and split provenance.
         except Exception as e:  # Skip PCA mode when transformation fails.
             print(f"{BackgroundColors.YELLOW}[WARNING] PCA Components skipped because transformation failed for {BackgroundColors.CYAN}{file}{BackgroundColors.YELLOW}: {e}{Style.RESET_ALL}")  # Log PCA transformation failure.
             X_train_pca, X_test_pca = None, None  # Suppress PCA mode after failure.
@@ -9468,6 +10112,7 @@ def iterate_feature_sets_sequentially(feature_source_arrays: dict, feature_names
             if pca_signature not in feature_signatures:  # Suppress duplicate PCA mode.
                 feature_signatures.add(pca_signature)  # Register PCA component identity.
                 try:
+                    print(f"{BackgroundColors.GREEN}[INFO] Starting model evaluation on PCA Components with {BackgroundColors.CYAN}{X_train_pca.shape[1]}{BackgroundColors.GREEN} features.{Style.RESET_ALL}")  # Mark the boundary between PCA transformation and classifier evaluation.
                     yield "PCA Components", X_train_pca, X_test_pca, None  # Yield PCA matrices with synthetic names.
                 finally:
                     del X_train_pca, X_test_pca  # Release PCA matrices after caller finishes or aborts this mode.
@@ -9661,18 +10306,19 @@ def collect_classifier_results_from_futures(future_to_model, individual_models, 
         progress_bar.update(1)  # Advance progress bar by one step
 
         if config.get("explainability", {}).get("enabled", False) and experiment_mode == "original_only":  # Only queue explainability on original data
-            try:  # Attempt to queue explainability for this model
+            try:  # Attempt to dispatch explainability for this model.
                 trained_model = individual_models[model_name]  # Retrieve trained model object for snapshotting
-                schedule_explainability_job(trained_model, model_name, X_test_subset, y_test, subset_feature_names, file, name, execution_mode_str, config, experiment_mode, bool(hyperparams_map))  # Queue explainability without blocking future collection
+                schedule_explainability_job(trained_model, model_name, X_test_subset, y_test, subset_feature_names, file, name, execution_mode_str, config, experiment_mode, bool(hyperparams_map), training_ram_stats=None)  # Dispatch synchronous explainability when legacy future path lacks RAM statistics.
             except Exception as e:  # If explainability queueing fails
                 verbose_output(
                     f"{BackgroundColors.YELLOW}Explainability failed for {model_name}: {e}{Style.RESET_ALL}",
                     config=config
-                )  # Log error but continue evaluation
+                )  # Log explainability failure before propagation.
+                raise  # Preserve explainability failure propagation.
     return results_dict  # Return accumulated result entries
 
 
-def recover_cached_individual_classifier_result(cache_dict, execution_mode_str, data_source_label, experiment_mode, augmentation_ratio, attack_types_combined, feature_set_name, model_name, results_dict, current_combination, total_steps, progress_bar, hyperparameters_enabled=False):
+def recover_cached_individual_classifier_result(cache_dict, execution_mode_str, data_source_label, experiment_mode, augmentation_ratio, attack_types_combined, feature_set_name, model_name, results_dict, current_combination, total_steps, progress_bar, hyperparameters_enabled=False, expected_n_features=None, expected_feature_names=None, expected_n_samples_train=None, expected_n_samples_test=None):  # Recover a cached classifier result only when its evaluated data shape matches.
     """
     Recover one cached individual-classifier result (if present), emit resume logs, and advance progress counters.
 
@@ -9688,6 +10334,11 @@ def recover_cached_individual_classifier_result(cache_dict, execution_mode_str, 
     :param current_combination: Current combination counter value.
     :param total_steps: Total number of evaluation steps for progress messaging.
     :param progress_bar: tqdm progress bar instance to advance when recovered.
+    :param hyperparameters_enabled: Whether the active evaluation uses optimized hyperparameters.
+    :param expected_n_features: Feature count required for safe cache recovery.
+    :param expected_feature_names: Ordered feature names required for safe cache recovery.
+    :param expected_n_samples_train: Training sample count required for safe cache recovery.
+    :param expected_n_samples_test: Test sample count required for safe cache recovery.
     :return: Tuple (recovered, next_current_combination) where recovered indicates if cache was hit.
     """
 
@@ -9709,6 +10360,22 @@ def recover_cached_individual_classifier_result(cache_dict, execution_mode_str, 
         return (False, current_combination)  # Signal cache miss and unchanged counter
 
     cached_result = cache_dict[resume_key]  # Retrieve cached result entry for this classifier
+    cached_n_features = cached_result.get("n_features", None)  # Read the feature count persisted with the cached evaluation.
+    cached_feature_names = cached_result.get("features_list", None)  # Read the ordered feature names persisted with the cached evaluation.
+    cached_n_samples_train = cached_result.get("n_samples_train", None)  # Read the cached training sample count.
+    cached_n_samples_test = cached_result.get("n_samples_test", None)  # Read the cached test sample count.
+    normalized_expected_features = [str(feature) for feature in expected_feature_names] if expected_feature_names is not None else None  # Normalize active feature names for deterministic comparison.
+    normalized_cached_features = [str(feature) for feature in cached_feature_names] if isinstance(cached_feature_names, list) else None  # Normalize cached feature names when the payload is a list.
+    feature_count_matches = expected_n_features is None or (cached_n_features is not None and int(cached_n_features) == int(expected_n_features))  # Require the active PCA dimensionality or subset width to match.
+    feature_names_match = normalized_expected_features is None or normalized_cached_features == normalized_expected_features  # Require the exact ordered feature identity to match.
+    train_count_matches = expected_n_samples_train is None or (cached_n_samples_train is not None and int(cached_n_samples_train) == int(expected_n_samples_train))  # Require the active training sample count to match.
+    test_count_matches = expected_n_samples_test is None or (cached_n_samples_test is not None and int(cached_n_samples_test) == int(expected_n_samples_test))  # Require the active test sample count to match.
+
+    if not all((feature_count_matches, feature_names_match, train_count_matches, test_count_matches)):  # Reject stale cache rows that share a broad resume key but represent different evaluated data.
+        del cache_dict[resume_key]  # Remove the stale in-memory identity so the recomputed result can be persisted.
+        print(f"{BackgroundColors.YELLOW}[RESUME] Ignored incompatible cached combination for {BackgroundColors.CYAN}{feature_set_name} - {model_name}{BackgroundColors.YELLOW}: active shape or feature identity differs from saved partial progress.{Style.RESET_ALL}")  # Explain why this classifier will be recomputed.
+        return (False, current_combination)  # Signal cache rejection without advancing the progress counter.
+
     results_dict[(feature_set_name, model_name)] = cached_result  # Reuse cached entry without recomputation
     combination_header = build_telegram_combination_header(feature_set_name, model_name, augmentation_ratio, hyperparameters_enabled)  # Build full recovered combination label
     print(
@@ -9787,7 +10454,7 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
         X_test_values = X_test_df.to_numpy(copy=False) if hasattr(X_test_df, "to_numpy") else np.asarray(X_test_df)  # Reuse one no-copy test array view for all classifiers in this feature set
 
         for model_name, model in individual_models.items():  # Iterate over each individual model sequentially to prevent loky deadlock
-            recovered, current_combination = recover_cached_individual_classifier_result(cache_dict, execution_mode_str, data_source_label, experiment_mode, augmentation_ratio, attack_types_combined, name, model_name, results_dict, current_combination, total_steps, progress_bar, hyperparameters_enabled=hyperparameters_enabled)  # Attempt to recover cached result for this model and advance counters when recovered
+            recovered, current_combination = recover_cached_individual_classifier_result(cache_dict, execution_mode_str, data_source_label, experiment_mode, augmentation_ratio, attack_types_combined, name, model_name, results_dict, current_combination, total_steps, progress_bar, hyperparameters_enabled=hyperparameters_enabled, expected_n_features=X_train_n_cols, expected_feature_names=subset_feature_names, expected_n_samples_train=len(y_train), expected_n_samples_test=len(y_test))  # Recover only rows produced with the same active data shape and ordered features.
             if recovered:  # Skip recomputation when cache recovery succeeds
                 continue  # Move to next model because this one has already been recovered
             active_model = clone(model)  # Clone the estimator prototype so fitted state is not retained across atomic classifiers
@@ -9804,6 +10471,7 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
                 phase_metadata.update(build_array_memory_metadata("X_train", X_train_values))  # Record train matrix shape/dtype/layout
                 phase_metadata.update(build_array_memory_metadata("X_test", X_test_values))  # Record test matrix shape/dtype/layout
             write_memory_phase_event("before_classifier_fit", config=config, **phase_metadata, event_outcome="starting")  # Publish classifier fit start
+            training_ram_stats = {}  # Hold RAM statistics for this classifier fit only.
 
             metrics = evaluate_individual_classifier(
                 active_model,  # Use the fitted clone for this atomic classifier.
@@ -9818,6 +10486,7 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
                 artifact_feature_set,  # Use the HP-specific artifact label.
                 config=config,
                 phase_metadata=phase_metadata,  # Pass compact watcher context into fit completion and error events
+                training_ram_stats=training_ram_stats,  # Capture per-classifier RAM statistics for explainability scheduling.
             )  # Evaluate individual classifier sequentially using HP-isolated model artifact names
             write_memory_phase_event("after_prediction_and_metrics", config=config, **phase_metadata, accuracy=metrics[0], precision=metrics[1], recall=metrics[2], f1_score=metrics[3], event_outcome="metrics_completed")  # Publish prediction and metrics completion
 
@@ -9851,20 +10520,21 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
             write_memory_phase_event("before_explainability_schedule", config=config, **phase_metadata, event_outcome="starting")  # Publish explainability scheduling start
             explainability_outcome = "skipped"  # Track explainability scheduling outcome
             if config.get("explainability", {}).get("enabled", False) and experiment_mode == "original_only":  # Only queue explainability on original data
-                try:  # Attempt to queue explainability for this model
-                    schedule_explainability_job(active_model, model_name, X_test_subset, y_test, subset_feature_names, file, name, execution_mode_str, config, experiment_mode, hyperparameters_enabled)  # Queue explainability without blocking the next classifier
-                    explainability_outcome = "scheduled"  # Track successful explainability scheduling
+                try:  # Attempt to dispatch explainability for this model.
+                    explainability_dispatch = schedule_explainability_job(active_model, model_name, X_test_subset, y_test, subset_feature_names, file, name, execution_mode_str, config, experiment_mode, hyperparameters_enabled, training_ram_stats=training_ram_stats)  # Dispatch explainability according to RAM-gated process policy.
+                    explainability_outcome = f"scheduled:{explainability_dispatch.get('mode', 'none')}" if isinstance(explainability_dispatch, dict) else "scheduled:none"  # Track selected explainability execution mode.
                 except Exception as e:  # If explainability queueing fails
                     explainability_outcome = f"failed:{e}"  # Track explainability scheduling failure
                     verbose_output(
                         f"{BackgroundColors.YELLOW}Explainability failed for {model_name}: {e}{Style.RESET_ALL}",
                         config=config
-                    )  # Log error but continue evaluation
+                    )  # Log explainability failure before propagation.
+                    raise  # Preserve explainability failure propagation.
             write_memory_phase_event("after_explainability_schedule", config=config, **phase_metadata, event_outcome=explainability_outcome)  # Publish explainability scheduling completion
 
             current_combination += 1  # Advance the global combination counter
             write_memory_phase_event("before_memory_cleanup", config=config, **phase_metadata, event_outcome="starting")  # Publish per-classifier cleanup start
-            del active_model, metrics  # Release fitted estimator and metric tuple before the next classifier
+            del active_model, metrics, training_ram_stats  # Release fitted estimator, metrics, and RAM stats before the next classifier
             gc.collect()  # Reclaim estimator-owned memory before the next atomic classifier
             write_memory_phase_event("after_memory_cleanup", config=config, **phase_metadata, event_outcome="completed")  # Publish per-classifier cleanup completion
 
@@ -9876,6 +10546,8 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
                 del active_model
             if "metrics" in locals():  # Release metric tuple if the failure happened after evaluation
                 del metrics
+            if "training_ram_stats" in locals():  # Release classifier RAM statistics if allocated before failure
+                del training_ram_stats
             if "X_train_values" in locals():  # Release train array view held by this function frame
                 del X_train_values
             if "X_test_values" in locals():  # Release test array view held by this function frame
@@ -9976,9 +10648,10 @@ def run_stacking_evaluation_for_feature_set(name, stacking_model, X_train_df, y_
         phase_cache_digest = hashlib.sha256(json.dumps(phase_cache_key, sort_keys=True, default=str).encode("utf-8")).hexdigest()  # Build stable stacking cache identity digest
         phase_metadata = {"dataset_identity": os.path.basename(str(file)), "dataset_source": file, "execution_mode": execution_mode_str, "attack_scope": attack_types_combined, "data_source": data_source_label, "experiment_mode": experiment_mode, "augmentation_ratio": augmentation_ratio, "feature_set_name": name, "hyperparameter_mode": "Optimized Hyperparameters" if hyperparameters_enabled else "Default Hyperparameters", "classifier_name": "StackingClassifier", "classifier_params_digest": phase_params_digest, "classifier_params_reference": f"sha256:{phase_params_digest.get('digest')}", "train_sample_count": len(y_train), "test_sample_count": len(y_test), "feature_count": X_train_n_cols, "n_jobs": get_classifier_n_jobs(stacking_model), "cache_identity": phase_cache_digest, "cache_reference": cache_ref_file, "combination_index": current_combination, "total_combinations": total_steps}  # Build compact phase metadata for stacking
         write_memory_phase_event("before_classifier_fit", config=config, **phase_metadata, event_outcome="starting")  # Publish stacking fit start
+        stacking_ram_stats = {}  # Hold RAM statistics for this stacking fit only.
 
         stacking_metrics = evaluate_stacking_classifier(
-            stacking_model, X_train_df, y_train, X_test_df, y_test
+            stacking_model, X_train_df, y_train, X_test_df, y_test, config=config, training_ram_stats=stacking_ram_stats
         )  # Evaluate stacking model with DataFrames and retrieve metrics tuple
         write_memory_phase_event("after_classifier_fit", config=config, **phase_metadata, event_outcome="fit_and_prediction_completed")  # Publish stacking fit completion
         write_memory_phase_event("after_prediction_and_metrics", config=config, **phase_metadata, accuracy=stacking_metrics[0], precision=stacking_metrics[1], recall=stacking_metrics[2], f1_score=stacking_metrics[3], event_outcome="metrics_completed")  # Publish stacking metrics completion
@@ -10020,27 +10693,33 @@ def run_stacking_evaluation_for_feature_set(name, stacking_model, X_train_df, y_
         write_memory_phase_event("before_explainability_schedule", config=config, **phase_metadata, event_outcome="starting")  # Publish stacking explainability scheduling start
         explainability_outcome = "skipped"  # Track stacking explainability scheduling outcome
         if config.get("explainability", {}).get("enabled", False) and experiment_mode == "original_only":  # Only queue explainability on original data
-            try:  # Attempt to queue explainability for stacking model
-                schedule_explainability_job(stacking_model, "StackingClassifier", X_test_subset, y_test, subset_feature_names, file, name, execution_mode_str, config, experiment_mode, hyperparameters_enabled)  # Queue explainability without blocking the next feature set
-                explainability_outcome = "scheduled"  # Track successful stacking explainability scheduling
+            try:  # Attempt to dispatch explainability for stacking model.
+                explainability_dispatch = schedule_explainability_job(stacking_model, "StackingClassifier", X_test_subset, y_test, subset_feature_names, file, name, execution_mode_str, config, experiment_mode, hyperparameters_enabled, training_ram_stats=stacking_ram_stats)  # Dispatch explainability according to RAM-gated process policy.
+                explainability_outcome = f"scheduled:{explainability_dispatch.get('mode', 'none')}" if isinstance(explainability_dispatch, dict) else "scheduled:none"  # Track selected explainability execution mode.
             except Exception as e:  # If explainability queueing fails
                 explainability_outcome = f"failed:{e}"  # Track stacking explainability scheduling failure
                 verbose_output(
                     f"{BackgroundColors.YELLOW}Explainability failed for StackingClassifier: {e}{Style.RESET_ALL}",
                     config=config
-                )  # Log error but continue evaluation
+                )  # Log explainability failure before propagation.
+                raise  # Preserve explainability failure propagation.
         write_memory_phase_event("after_explainability_schedule", config=config, **phase_metadata, event_outcome=explainability_outcome)  # Publish stacking explainability scheduling completion
         write_memory_phase_event("before_memory_cleanup", config=config, **phase_metadata, event_outcome="starting")  # Publish stacking cleanup start
+        del stacking_ram_stats  # Release stacking RAM statistics before returning.
         gc.collect()  # Reclaim any released stacking temporaries before returning
         write_memory_phase_event("after_memory_cleanup", config=config, **phase_metadata, event_outcome="completed")  # Publish stacking cleanup completion
 
         return (stacking_result_entry, current_combination)  # Return result entry and updated combination counter
     except MemoryError as e:  # Handle stacking memory errors with diagnostic phase
+        if "stacking_ram_stats" in locals():  # Release stacking RAM statistics if allocated before memory failure.
+            del stacking_ram_stats  # Drop RAM statistics reference before error reporting.
         write_memory_phase_event("memory_error", config=config, classifier_name="StackingClassifier", feature_set_name=name, train_sample_count=len(y_train) if y_train is not None else None, test_sample_count=len(y_test) if y_test is not None else None, feature_count=X_train_n_cols, event_outcome=str(e))  # Publish stacking memory error
         print(str(e))  # Print memory error to terminal logs
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send memory error via Telegram
         raise  # Preserve original MemoryError behavior
     except Exception as e:
+        if "stacking_ram_stats" in locals():  # Release stacking RAM statistics if allocated before failure.
+            del stacking_ram_stats  # Drop RAM statistics reference before error reporting.
         write_memory_phase_event("model_error", config=config, classifier_name="StackingClassifier", feature_set_name=name, train_sample_count=len(y_train) if y_train is not None else None, test_sample_count=len(y_test) if y_test is not None else None, feature_count=X_train_n_cols, event_outcome=str(e))  # Publish stacking model error
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
@@ -10270,6 +10949,7 @@ def evaluate_on_dataset(
     cache_ref_file=None,
     hyperparameters_enabled=None,
     grid_progress=None,
+    source_files=None,  # Preserve ordered dataset provenance for PCA cache validation.
 ):
     """
     Evaluate classifiers on a single dataset with optional training-only augmentation.
@@ -10291,6 +10971,7 @@ def evaluate_on_dataset(
     :param config: Configuration dictionary (uses global CONFIG if None)
     :param cache_ref_file: Override file path to use when computing the cache file location (required when file is 'combined_files_combined')
     :param hyperparameters_enabled: Explicit hyperparameter mode flag for progress labels and result flow
+    :param source_files: Ordered original and augmented source files used to construct this evaluation dataset.
     :return: Dictionary mapping (feature_set, model_name) to results
     """
 
@@ -10310,6 +10991,31 @@ def evaluate_on_dataset(
         )  # Sanitize and verify GA/RFE feature selections against available features
 
         print_dataset_evaluation_header(data_source_label)  # Print formatted evaluation header for the current data source
+
+        pca_input_feature_names = [str(column) for column in df.iloc[:, :-1].select_dtypes(include=np.number).columns]  # Capture the exact ordered numeric columns consumed by scaling and PCA.
+        target_column_name = str(df.columns[-1])  # Capture the positional target column used by the split flow.
+        original_sample_count = int(len(df))  # Record the original sample population before split and augmentation merging.
+        augmented_sample_count = int(len(df_augmented_for_training)) if df_augmented_for_training is not None else 0  # Record the exact sampled augmentation population merged into training.
+        if source_files is not None:  # Use caller-supplied provenance for combined or explicitly sourced evaluation data.
+            pca_source_files = [str(source_file) for source_file in source_files]  # Preserve the caller's source order for deterministic combined-row provenance.
+        elif df_augmented_for_training is None and not resolve_path_represents_directory(str(file)):  # Infer only the unambiguous original-only single-file source.
+            pca_source_files = [str(file)]  # Use the evaluated file itself as complete source provenance.
+        else:  # Refuse inference for combined directories or augmented data with undisclosed source files.
+            pca_source_files = []  # Disable persistent PCA reuse when source provenance cannot be proven.
+        pca_cache_context = {  # Record the exact split and data-variant semantics that determine PCA fitting input.
+            "execution_mode": str(execution_mode_str),  # Store separate-file or combined-file execution semantics.
+            "data_source": str(data_source_label),  # Store the active original or augmented data variant label.
+            "experiment_mode": str(experiment_mode),  # Store original-only or training-augmentation semantics.
+            "augmentation_ratio": normalize_metadata_for_json(augmentation_ratio),  # Store the active sampled augmentation ratio.
+            "target_column": target_column_name,  # Store the positional target column identity.
+            "original_sample_count": original_sample_count,  # Store the original population size before splitting.
+            "augmented_sample_count": augmented_sample_count,  # Store the sampled population merged into training.
+            "test_size": 0.2,  # Store the fixed split ratio used by prepare_evaluation_data_splits.
+            "random_state": 42,  # Store the fixed split seed used by prepare_evaluation_data_splits.
+            "stratified": True,  # Store the stratified split semantics used by scale_and_split.
+            "augmentation_merged_into_training_after_split": df_augmented_for_training is not None,  # Store train-only augmentation placement.
+            "attack_types": normalize_metadata_for_json(attack_types_combined),  # Store combined-mode label scope when available.
+        }  # Complete the split and evaluation identity payload.
 
         data_splits = prepare_evaluation_data_splits(df, df_augmented_for_training, config=config)  # Prepare training/test data splits with optional augmentation
 
@@ -10359,7 +11065,7 @@ def evaluate_on_dataset(
             all_results = {}  # Initialize results for this data/HP slice
             current_combination = grid_progress["current_combination"]  # Continue from the previous grid slice
 
-        feature_sets_iter = iterate_feature_sets_sequentially(feature_source_arrays, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, file, feature_sets_config, config)  # Create lazy feature-set iterator
+        feature_sets_iter = iterate_feature_sets_sequentially(feature_source_arrays, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, file, feature_sets_config, config, scaler=scaler, source_files=pca_source_files, pca_cache_context=pca_cache_context, pca_input_feature_names=pca_input_feature_names)  # Create the lazy feature-set iterator with exact PCA source, feature, scaler, and split provenance.
         for idx, (name, X_train_subset, X_test_subset, subset_feature_names_list) in enumerate(feature_sets_iter, start=1):  # Evaluate one materialized feature set at a time
             if X_train_subset.shape[1] == 0:  # Verify if the subset is empty
                 print(
@@ -11560,6 +12266,7 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
                     experiment_id=generate_experiment_id(combined_dataset_reference, "combined_files_original_only"), experiment_mode="original_only", augmentation_ratio=None,  # Build original experiment identity from combined directory.
                     execution_mode_str="combined_files", attack_types_combined=attack_types_list, config=config,
                     hyperparameters_enabled=hyperparameters_enabled, grid_progress=grid_progress,
+                    source_files=original_files_list,  # Preserve the ordered original CSV provenance used to build this combined dataset.
                 )  # Evaluate the no-augmentation feature/classifier slice
                 del original_df_for_run_holder  # Release the empty HP slice transfer holder after evaluation returns.
                 gc.collect()  # Reclaim any released original-only dataframe references before augmentation handling.
@@ -11597,6 +12304,7 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
                         experiment_id=generate_experiment_id(combined_dataset_reference, "combined_files_original_plus_augmented", ratio), experiment_mode="original_plus_augmented", augmentation_ratio=ratio,  # Build augmented experiment identity from combined directory.
                         execution_mode_str="combined_files", attack_types_combined=attack_types_list, df_augmented_for_training=df_sampled_holder.pop(),
                         config=config, hyperparameters_enabled=hyperparameters_enabled, grid_progress=grid_progress,
+                        source_files=list(original_files_list) + list(augmentation_file_paths),  # Preserve ordered original and augmented CSV provenance for this ratio.
                     )  # Evaluate the same feature/classifier grid for this ratio
                     del ratio_original_df_holder, df_sampled_holder  # Release empty transfer holders after ratio evaluation returns.
                     gc.collect()  # Reclaim released ratio holder references before result aggregation.
@@ -12011,6 +12719,7 @@ def execute_original_combined_files_evaluation(files_to_process, ga_sel, pca_n, 
             execution_mode_str="combined_files", attack_types_combined=attack_types,
             df_augmented_for_training=None,
             cache_ref_file=combined_dataset_reference, config=config, hyperparameters_enabled=hyperparameters_enabled,  # Use directory identity for cache resume.
+            source_files=files_to_process,  # Preserve ordered original CSV provenance for legacy combined evaluation.
         )  # Evaluate combined files evaluation original dataset with directory cache reference and explicit config propagation
     except Exception as e:  # If evaluation fails
         print(f"{BackgroundColors.RED}Combined files evaluation failed for combo {suffix}: {e}{Style.RESET_ALL}")  # Error
@@ -12072,6 +12781,7 @@ def execute_combined_files_augmentation(files_to_process, combined_df, attack_ty
                             execution_mode_str="combined_files", attack_types_combined=attack_types,
                             df_augmented_for_training=df_sampled,
                             cache_ref_file=combined_dataset_reference, config=config, hyperparameters_enabled=hyperparameters_enabled,  # Use directory identity for cache resume.
+                            source_files=list(files_to_process) + [str(augmented_file) for augmented_file in augmented_files_list],  # Preserve ordered original and augmented CSV provenance for legacy ratio evaluation.
                         )  # Evaluate augmented combined files evaluation combination with directory cache reference and explicit config propagation
                     except Exception as e:  # If evaluation failed
                         print(f"{BackgroundColors.YELLOW}Augmented evaluation failed for ratio {ratio} combo {suffix}: {e}{Style.RESET_ALL}")  # Warn
@@ -12862,6 +13572,7 @@ def main(config=None):
     :return: None
     """
     
+    normal_completion = False  # Track whether the program reached successful explainability finalization.
     try:
         if config is None:  # If no config provided
             config = CONFIG  # Use global CONFIG
@@ -12916,7 +13627,8 @@ def main(config=None):
             paths = [p.strip() if isinstance(p, str) else p for p in paths] if isinstance(paths, list) else paths  # Normalize paths list by stripping each string entry
             process_dataset_paths(dataset_name, paths, config=config)  # Process all paths for this dataset
 
-        finalize_pending_explainability_jobs(config=config)  # Wait for queued explainability artifacts before final program reporting
+        finalize_pending_explainability_jobs(config=config, terminate=False)  # Wait for asynchronous explainability artifacts before final program reporting
+        normal_completion = True  # Mark successful explainability finalization before final success reporting.
 
         finish_time = datetime.datetime.now()  # Get the finish time of the program
         print(
@@ -12945,7 +13657,7 @@ def main(config=None):
         raise
     finally:  # Always finalize queued explainability work before leaving main
         finalize_memory_watcher(config=config, phase="abnormal_completion", event_outcome="leaving_main_without_normal_completion")  # Publish abnormal terminal phase if no earlier terminal event exists
-        finalize_pending_explainability_jobs(config=config)  # Finalize queued explainability work before main exits
+        finalize_pending_explainability_jobs(config=config, terminate=not normal_completion)  # Finalize or terminate asynchronous explainability work before main exits
 
 
 if __name__ == "__main__":
