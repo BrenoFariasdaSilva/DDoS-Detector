@@ -5034,53 +5034,328 @@ def build_optimized_hyperparameter_models(file_path: str, config: Optional[dict]
     return optimized_models, optimized_params  # Return only classifiers with verified optimized parameters.
 
 
-def resolve_pca_cache_path(file_path: str, pca_n_components: int) -> str:  # Resolve the stacking PCA cache path from a dataset file or directory.
+def build_stacking_pca_cache_context(file_path: str, source_files: List[str], feature_names: List[Any], X_train_scaled: Any, X_test_scaled: Any, scaler: Any, n_components: int, evaluation_identity: dict) -> dict:  # Build deterministic provenance for one fitted stacking PCA transformer.
     """
-    Resolve the stacking PCA cache path without discarding a directory identity.
+    Build deterministic provenance for one fitted stacking PCA transformer.
 
-    :param file_path: Dataset file or directory path.
-    :param pca_n_components: Number of PCA components represented by the cache file.
-    :return: Normalized PCA cache file path.
+    :param file_path: Dataset file or directory identity used by stacking.
+    :param source_files: Ordered source file paths used to build the evaluated dataset.
+    :param feature_names: Ordered numeric input feature names before PCA.
+    :param X_train_scaled: Scaled training matrix used to fit PCA.
+    :param X_test_scaled: Scaled testing matrix transformed by PCA.
+    :param scaler: Fitted scaler that produced the scaled matrices.
+    :param n_components: Effective PCA component count.
+    :param evaluation_identity: Split and experiment identity metadata.
+    :return: JSON-compatible provenance dictionary used for cache identity and validation.
     """
 
-    path_text = str(file_path).strip()  # Normalize the incoming dataset path text.
-    path_is_directory = resolve_path_represents_directory(path_text)  # Distinguish combined-directory identities from dataset files.
-    dataset_root = path_text.rstrip("/\\") if path_is_directory else os.path.dirname(path_text)  # Preserve the combined dataset directory as the cache root.
-    cache_path = os.path.join(dataset_root, "Cache", f"PCA_{int(pca_n_components)}_components.pkl")  # Build the component-specific PCA cache path.
+    if not source_files:  # Require exact source-file provenance before cache reuse can be enabled.
+        raise ValueError("PCA cache provenance requires an ordered non-empty source file list")  # Reject incomplete dataset provenance.
+    normalized_features = [str(feature) for feature in feature_names]  # Normalize ordered feature names for deterministic comparison.
+    if len(normalized_features) != int(X_train_scaled.shape[1]):  # Require feature metadata to describe every PCA input column.
+        raise ValueError(f"PCA cache feature metadata has {len(normalized_features)} names for {X_train_scaled.shape[1]} columns")  # Reject ambiguous feature order.
 
-    return os.path.normpath(cache_path)  # Return a normalized path without changing relative-path semantics.
+    source_metadata = []  # Accumulate ordered source-file filesystem metadata.
+    for source_index, source_file in enumerate(source_files):  # Preserve source order because combined row order affects the split and fitted PCA state.
+        source_path = Path(str(source_file)).expanduser().resolve()  # Resolve one source path without changing its identity.
+        if not source_path.is_file():  # Require every provenance source to exist as a regular file.
+            raise FileNotFoundError(f"PCA cache source file is unavailable: {source_path}")  # Reject incomplete source provenance.
+        source_stat = source_path.stat()  # Read stable filesystem metadata for compatibility validation.
+        source_metadata.append({"index": source_index, "path": str(source_path), "size": int(source_stat.st_size), "mtime_ns": int(source_stat.st_mtime_ns)})  # Store ordered path, size, and nanosecond modification time.
+
+    scaler_state = {  # Capture fitted scaling state without serializing a duplicate scaler artifact.
+        "mean_": getattr(scaler, "mean_", None),  # Store the fitted per-feature means.
+        "scale_": getattr(scaler, "scale_", None),  # Store the fitted per-feature scaling factors.
+        "var_": getattr(scaler, "var_", None),  # Store the fitted per-feature variances.
+        "n_samples_seen_": getattr(scaler, "n_samples_seen_", None),  # Store the scaler fitting sample count.
+    }  # Complete the fitted scaler-state payload.
+    normalized_scaler_state = normalize_metadata_for_json(scaler_state)  # Normalize fitted scaler arrays for deterministic hashing.
+    scaler_state_digest = hashlib.sha256(json.dumps(normalized_scaler_state, sort_keys=True, allow_nan=False).encode("utf-8")).hexdigest()  # Fingerprint the fitted scaler state used before PCA.
+    expected_pca = PCA(n_components=int(n_components))  # Build the exact unfitted PCA configuration expected by this flow.
+    sklearn_module = sys.modules.get("sklearn")  # Resolve the already imported scikit-learn package metadata.
+    dataset_path = str(Path(str(file_path)).expanduser().resolve())  # Resolve the evaluated dataset identity to an absolute path.
+
+    cache_context = {  # Assemble the complete compatibility identity without creation-time fields.
+        "artifact_type": "stacking_fitted_pca_transformer",  # Identify the artifact as a stacking-fitted PCA transformer.
+        "schema_version": 1,  # Identify the supported metadata schema.
+        "dataset_path": dataset_path,  # Store the resolved stacking dataset identity.
+        "source_files": source_metadata,  # Store ordered source-file provenance.
+        "feature_names": normalized_features,  # Store exact pre-PCA feature order.
+        "feature_count": int(X_train_scaled.shape[1]),  # Store pre-PCA input dimensionality.
+        "n_components": int(n_components),  # Store effective PCA output dimensionality.
+        "train_sample_count": int(X_train_scaled.shape[0]),  # Store the PCA fitting sample count.
+        "test_sample_count": int(X_test_scaled.shape[0]),  # Store the transformed test sample count.
+        "train_dtype": str(np.asarray(X_train_scaled).dtype),  # Store training matrix numeric representation.
+        "test_dtype": str(np.asarray(X_test_scaled).dtype),  # Store testing matrix numeric representation.
+        "scaling_method": f"{scaler.__class__.__module__}.{scaler.__class__.__name__}",  # Store the fitted scaler class identity.
+        "scaler_params": normalize_metadata_for_json(scaler.get_params(deep=False) if hasattr(scaler, "get_params") else {}),  # Store scaler constructor semantics.
+        "scaler_state_digest": scaler_state_digest,  # Store the fitted scaler-state fingerprint.
+        "split_identity": normalize_metadata_for_json(evaluation_identity),  # Store split and data-variant semantics.
+        "random_state": int(evaluation_identity.get("random_state", 42)),  # Store the split random seed explicitly.
+        "pca_class": f"{PCA.__module__}.{PCA.__name__}",  # Store the expected transformer class identity.
+        "pca_params": normalize_metadata_for_json(expected_pca.get_params(deep=False)),  # Store exact PCA constructor semantics.
+        "sklearn_version": str(getattr(sklearn_module, "__version__", "unknown")),  # Store the scikit-learn compatibility version.
+        "numpy_version": str(np.__version__),  # Store the NumPy compatibility version.
+    }  # Complete the deterministic PCA cache context.
+
+    return cache_context  # Return the complete deterministic compatibility context.
 
 
-def load_pca_object(file_path, pca_n_components, config=None):
+def resolve_stacking_pca_artifact_paths(file_path: str, cache_context: dict, config: dict) -> dict:  # Resolve dataset-local fitted PCA artifact paths using the stacking model convention.
     """
-    Locate a fitted PCA transformer cache and reject entries without provenance.
+    Resolve dataset-local fitted PCA artifact paths using the stacking model convention.
 
-    :param file_path: Path to the dataset CSV file.
-    :param pca_n_components: Number of PCA components to load.
-    :param config: Configuration dictionary (uses global CONFIG if None)
-    :return: None because stacking has no provenance-bearing PCA cache writer.
+    :param file_path: Dataset file or directory identity used by stacking.
+    :param cache_context: Deterministic PCA compatibility context.
+    :param config: Runtime configuration dictionary.
+    :return: Dictionary containing stacking, model, metadata, transformer, and legacy paths.
     """
-    
-    try:
-        if config is None:  # If no config provided
-            config = CONFIG  # Use global CONFIG
 
-        pca_file = resolve_pca_cache_path(file_path, pca_n_components)  # Resolve the cache beneath the actual dataset file or combined directory.
-        print(f"{BackgroundColors.GREEN}[INFO] Attempting to load fitted PCA transformer cache from: {BackgroundColors.CYAN}{pca_file}{Style.RESET_ALL}")  # Distinguish transformer cache lookup from PCA_Results.csv loading.
+    dataset_root = resolve_dataset_root_path(str(file_path))  # Resolve the dataset-local root that owns the Stacking directory.
+    dataset_identity = resolve_canonical_dataset_identity(str(dataset_root), True)  # Build the same canonical directory identity used by stacking artifacts.
+    dataset_slug = build_filename_safe_dataset_identity(dataset_identity)  # Generate the existing dataset slug convention.
+    stacking_directory = Path(get_stacking_output_dir(str(file_path), config)).resolve()  # Resolve the dataset-local Stacking directory.
+    models_directory = (stacking_directory / "Models" / dataset_slug).resolve()  # Resolve the dataset-specific fitted model directory.
+    cache_identity = hashlib.sha256(json.dumps(cache_context, sort_keys=True, allow_nan=False).encode("utf-8")).hexdigest()  # Derive a stable identity that separates data variants and split contexts.
+    artifact_slug = f"{int(cache_context['n_components'])}_components_{cache_identity[:12]}"  # Build a short stable PCA feature slug for coexistence across compatible variants.
+    artifact_base = f"PCA Transformer__PCA Components__{artifact_slug}__"  # Match the existing model, feature-set, and feature-slug delimiter convention.
+    metadata_path = (models_directory / f"{artifact_base}_meta.json").resolve()  # Build the companion provenance metadata path.
+    transformer_path = (models_directory / f"{artifact_base}_transformer.joblib").resolve()  # Build the fitted PCA transformer joblib path.
+    legacy_path = (dataset_root / "Cache" / f"PCA_{int(cache_context['n_components'])}_components.pkl").resolve()  # Resolve the rejected legacy bare pickle path for explicit diagnostics.
+    shared_legacy_path = (dataset_root.parent / "Cache" / f"PCA_{int(cache_context['n_components'])}_components.pkl").resolve()  # Resolve the historical parent-shared bare pickle path for rejection diagnostics.
+    legacy_paths = [str(legacy_path)]  # Start with the corrected dataset-local legacy location.
+    if shared_legacy_path != legacy_path:  # Avoid duplicate diagnostics when both legacy path forms resolve identically.
+        legacy_paths.append(str(shared_legacy_path))  # Include the historical shared-parent location without treating it as reusable.
+    validate_output_path(str(stacking_directory), str(models_directory))  # Verify the model directory remains inside the dataset-local Stacking root.
+    validate_output_path(str(stacking_directory), str(metadata_path))  # Verify the metadata path remains inside the dataset-local Stacking root.
+    validate_output_path(str(stacking_directory), str(transformer_path))  # Verify the transformer path remains inside the dataset-local Stacking root.
 
-        if not verify_filepath_exists(pca_file):  # Verify if the PCA file exists
-            print(f"{BackgroundColors.YELLOW}[INFO] Fitted PCA transformer cache not found at: {BackgroundColors.CYAN}{pca_file}{Style.RESET_ALL}")  # Report that fitting is required because no cache file exists.
-            return None  # Return None if the file doesn't exist
+    artifact_paths = {  # Assemble resolved dataset-local artifact paths and identities.
+        "stacking_directory": str(stacking_directory),  # Store the dataset-specific Stacking directory.
+        "models_directory": str(models_directory),  # Store the dataset-slug model directory.
+        "dataset_slug": dataset_slug,  # Store the existing filename-safe dataset identity.
+        "cache_identity": cache_identity,  # Store the complete deterministic cache fingerprint.
+        "metadata_path": str(metadata_path),  # Store the companion metadata path.
+        "transformer_path": str(transformer_path),  # Store the fitted transformer joblib path.
+        "legacy_path": str(legacy_path),  # Store the rejected bare pickle path for diagnostics.
+        "legacy_paths": legacy_paths,  # Store every known bare pickle location for explicit rejection diagnostics.
+    }  # Complete the artifact-path payload.
 
-        print(f"{BackgroundColors.YELLOW}[WARNING] Fitted PCA transformer cache exists at {BackgroundColors.CYAN}{pca_file}{BackgroundColors.YELLOW} but will not be reused because it has no verifiable dataset, row split, scaling, and feature-order provenance.{Style.RESET_ALL}")  # Reject an unverified transformer without deserializing it.
-        return None  # Require a fresh fit until stacking writes provenance-bearing transformer caches.
-    except Exception as e:
-        print(str(e))
-        send_exception_via_telegram(type(e), e, e.__traceback__)
-        raise
+    return artifact_paths  # Return all resolved artifact paths and identity fields.
 
 
-def apply_pca_transformation(X_train_scaled, X_test_scaled, pca_n_components, file_path=None, config=None):
+def calculate_file_sha256(file_path: str) -> str:  # Calculate a streaming SHA-256 digest for one artifact file.
+    """
+    Calculate a streaming SHA-256 digest for one artifact file.
+
+    :param file_path: Artifact file path to digest.
+    :return: Lowercase SHA-256 hexadecimal digest.
+    """
+
+    digest = hashlib.sha256()  # Initialize the artifact integrity digest.
+    with open(file_path, "rb") as file_obj:  # Open the artifact for bounded streaming reads.
+        for chunk in iter(lambda: file_obj.read(1024 * 1024), b""):  # Read one MiB chunks without loading the whole artifact into memory.
+            digest.update(chunk)  # Add the current artifact bytes to the digest.
+    return digest.hexdigest()  # Return the completed artifact digest.
+
+
+def write_stacking_pca_artifact_atomically(value: Any, destination_path: str, artifact_format: str) -> None:  # Write one PCA cache artifact through a same-directory atomic replacement.
+    """
+    Write one PCA cache artifact through a same-directory atomic replacement.
+
+    :param value: Python object or metadata dictionary to persist.
+    :param destination_path: Final artifact path.
+    :param artifact_format: Serialization format, either joblib or json.
+    :return: None.
+    """
+
+    destination = Path(destination_path)  # Normalize the final artifact path.
+    destination.parent.mkdir(parents=True, exist_ok=True)  # Create the dataset-specific model directory before writing.
+    temporary_fd, temporary_path = tempfile.mkstemp(dir=str(destination.parent), prefix=f".{destination.name}.", suffix=".tmp")  # Allocate the temporary file beside the final artifact.
+    os.close(temporary_fd)  # Close the raw descriptor before opening it through the selected serializer.
+    try:  # Ensure temporary files are removed after success or failure.
+        if artifact_format == "joblib":  # Serialize fitted estimators with the existing joblib dependency.
+            with open(temporary_path, "wb") as file_obj:  # Open the temporary artifact for binary serialization.
+                dump(value, file_obj)  # Serialize the fitted PCA transformer into the temporary file.
+                file_obj.flush()  # Flush Python buffers before publishing the artifact.
+                os.fsync(file_obj.fileno())  # Flush artifact bytes to the filesystem before replacement.
+        elif artifact_format == "json":  # Serialize provenance metadata as readable JSON.
+            with open(temporary_path, "w", encoding="utf-8") as file_obj:  # Open the temporary metadata file with explicit encoding.
+                json.dump(value, file_obj, indent=2, sort_keys=True, allow_nan=False)  # Serialize deterministic standards-compliant metadata.
+                file_obj.flush()  # Flush Python buffers before publishing the metadata.
+                os.fsync(file_obj.fileno())  # Flush metadata bytes to the filesystem before replacement.
+        else:  # Reject unknown serialization formats.
+            raise ValueError(f"Unsupported PCA artifact format: {artifact_format}")  # Prevent ambiguous artifact writes.
+        os.replace(temporary_path, destination)  # Atomically publish the completed artifact in the same directory.
+    finally:  # Remove only an unpublished temporary file.
+        if os.path.exists(temporary_path):  # Verify whether a temporary artifact remains after replacement or failure.
+            os.unlink(temporary_path)  # Remove the incomplete temporary artifact.
+
+
+def validate_stacking_pca_cache_metadata(metadata: Any, expected_context: dict, artifact_paths: dict) -> Optional[str]:  # Validate provenance metadata before any transformer deserialization.
+    """
+    Validate provenance metadata before any transformer deserialization.
+
+    :param metadata: Parsed PCA cache metadata payload.
+    :param expected_context: Current deterministic PCA compatibility context.
+    :param artifact_paths: Current expected artifact paths and cache identity.
+    :return: Rejection reason string, or None when metadata is compatible.
+    """
+
+    if not isinstance(metadata, dict):  # Require a JSON object as the metadata root.
+        return "metadata root is not a JSON object"  # Reject malformed metadata roots.
+    for field_name, expected_value in expected_context.items():  # Compare every deterministic provenance field before loading joblib content.
+        if metadata.get(field_name) != expected_value:  # Reject the first incompatible provenance field with an exact reason.
+            return f"metadata field '{field_name}' does not match the current PCA input context"  # Report the incompatible field without deserializing the transformer.
+    if metadata.get("cache_identity") != artifact_paths.get("cache_identity"):  # Require metadata to identify the exact artifact filename variant.
+        return "cache_identity does not match the expected artifact identity"  # Reject metadata copied between cache variants.
+    if metadata.get("stacking_directory") != artifact_paths.get("stacking_directory"):  # Require the recorded Stacking directory to match the current dataset root.
+        return "stacking_directory does not match the current dataset artifact root"  # Reject relocated or cross-dataset metadata.
+    if metadata.get("models_directory") != artifact_paths.get("models_directory"):  # Require the recorded dataset model directory to match.
+        return "models_directory does not match the current dataset slug directory"  # Reject metadata from another dataset slug.
+    if metadata.get("transformer_artifact") != os.path.basename(str(artifact_paths.get("transformer_path"))):  # Require the referenced joblib filename to match the expected path.
+        return "transformer_artifact does not match the expected joblib filename"  # Reject filename substitution before deserialization.
+    if metadata.get("scaler_artifact", "missing") is not None:  # The current PCA flow must use the freshly fitted pre-PCA scaler rather than a duplicate scaler artifact.
+        return "scaler_artifact must be null for the current pre-scaled PCA flow"  # Reject incompatible scaling artifact semantics.
+    transformer_sha256 = metadata.get("transformer_sha256")  # Read the expected transformer integrity digest.
+    if not isinstance(transformer_sha256, str) or re.fullmatch(r"[0-9a-f]{64}", transformer_sha256) is None:  # Require a valid lowercase SHA-256 value.
+        return "transformer_sha256 is missing or invalid"  # Reject metadata without usable artifact integrity data.
+    if not isinstance(metadata.get("transformer_size_bytes"), int) or metadata.get("transformer_size_bytes", 0) <= 0:  # Require a positive serialized artifact size.
+        return "transformer_size_bytes is missing or invalid"  # Reject incomplete artifact metadata.
+    if not isinstance(metadata.get("created_at"), str) or not metadata.get("created_at"):  # Require a creation timestamp for provenance.
+        return "created_at is missing or invalid"  # Reject incomplete provenance metadata.
+    if "fitted_svd_solver" not in metadata:  # Require the fitted PCA solver selected by scikit-learn.
+        return "fitted_svd_solver is missing"  # Reject metadata without fitted solver provenance.
+    return None  # Accept metadata only after every compatibility requirement passes.
+
+
+def validate_loaded_stacking_pca_transformer(transformer: Any, expected_context: dict, metadata: dict) -> Optional[str]:  # Validate the deserialized fitted PCA object against current provenance.
+    """
+    Validate the deserialized fitted PCA object against current provenance.
+
+    :param transformer: Deserialized fitted PCA object.
+    :param expected_context: Current deterministic PCA compatibility context.
+    :param metadata: Validated cache metadata payload.
+    :return: Rejection reason string, or None when the transformer is compatible.
+    """
+
+    if not isinstance(transformer, PCA):  # Require the exact estimator family used by the stacking PCA flow.
+        return f"loaded object type is {type(transformer).__name__}, expected PCA"  # Reject unrelated joblib content.
+    if normalize_metadata_for_json(transformer.get_params(deep=False)) != expected_context.get("pca_params"):  # Require constructor parameters to match current PCA semantics.
+        return "loaded PCA parameters do not match the current PCA configuration"  # Reject parameter drift.
+    if int(getattr(transformer, "n_components_", -1)) != int(expected_context.get("n_components", -1)):  # Require the fitted output dimensionality to match.
+        return "loaded PCA fitted component count does not match"  # Reject fitted dimensionality drift.
+    if int(getattr(transformer, "n_features_in_", -1)) != int(expected_context.get("feature_count", -1)):  # Require the fitted input width to match ordered feature provenance.
+        return "loaded PCA input feature count does not match"  # Reject fitted input-width drift.
+    components = getattr(transformer, "components_", None)  # Read the fitted component matrix for structural validation.
+    expected_shape = (int(expected_context.get("n_components", -1)), int(expected_context.get("feature_count", -1)))  # Build the required component matrix shape.
+    if not isinstance(components, np.ndarray) or components.shape != expected_shape:  # Require a complete fitted component matrix.
+        return f"loaded PCA component matrix shape does not match {expected_shape}"  # Reject incomplete or malformed fitted state.
+    if metadata.get("fitted_svd_solver") != getattr(transformer, "_fit_svd_solver", None):  # Require the serialized fitted solver to match metadata.
+        return "loaded PCA fitted solver does not match metadata"  # Reject inconsistent fitted-state provenance.
+    return None  # Accept the loaded transformer only after structural validation passes.
+
+
+def load_stacking_pca_cache(expected_context: dict, artifact_paths: dict, config: Optional[dict] = None) -> Optional[PCA]:  # Load a fitted PCA transformer only after strict metadata and integrity validation.
+    """
+    Load a fitted PCA transformer only after strict metadata and integrity validation.
+
+    :param expected_context: Current deterministic PCA compatibility context.
+    :param artifact_paths: Current expected artifact paths and cache identity.
+    :param config: Runtime configuration dictionary.
+    :return: Compatible fitted PCA transformer, or None when reuse is unsafe.
+    """
+
+    metadata_path = str(artifact_paths["metadata_path"])  # Read the expected companion metadata path.
+    transformer_path = str(artifact_paths["transformer_path"])  # Read the expected fitted transformer path.
+    legacy_paths = [str(path) for path in artifact_paths.get("legacy_paths", [artifact_paths["legacy_path"]])]  # Read every known rejected legacy bare pickle path.
+    for legacy_path in legacy_paths:  # Inspect legacy locations only for explicit rejection diagnostics.
+        if os.path.exists(legacy_path):  # Detect an old bare pickle without opening or deserializing it.
+            print(f"{BackgroundColors.YELLOW}[WARNING] Legacy bare PCA pickle rejected because provenance metadata is unavailable: {BackgroundColors.CYAN}{legacy_path}{Style.RESET_ALL}")  # Explain why the legacy cache is never reused.
+    if not os.path.isfile(metadata_path):  # Require companion provenance before considering any joblib artifact.
+        orphan_text = " An orphan transformer joblib was also found and rejected." if os.path.isfile(transformer_path) else ""  # Describe an unsafe transformer without metadata.
+        print(f"{BackgroundColors.YELLOW}[INFO] Compatible fitted PCA cache not found because metadata is missing at: {BackgroundColors.CYAN}{metadata_path}{BackgroundColors.YELLOW}.{orphan_text}{Style.RESET_ALL}")  # Report the exact cache miss reason.
+        return None  # Fit a new transformer when metadata is unavailable.
+    try:  # Parse metadata before loading executable joblib content.
+        with open(metadata_path, "r", encoding="utf-8") as file_obj:  # Open the companion provenance metadata.
+            metadata = json.load(file_obj)  # Parse the metadata JSON payload.
+    except Exception as exc:  # Treat corrupted metadata as a safe cache miss.
+        print(f"{BackgroundColors.YELLOW}[WARNING] Fitted PCA cache rejected because metadata could not be parsed at {BackgroundColors.CYAN}{metadata_path}{BackgroundColors.YELLOW}: {exc}{Style.RESET_ALL}")  # Report corrupted metadata without stopping evaluation.
+        return None  # Fit a new transformer after metadata corruption.
+
+    rejection_reason = validate_stacking_pca_cache_metadata(metadata, expected_context, artifact_paths)  # Validate path-independent provenance before deserialization.
+    if rejection_reason is not None:  # Reject stale or incompatible metadata explicitly.
+        print(f"{BackgroundColors.YELLOW}[WARNING] Fitted PCA cache rejected: {rejection_reason}. Metadata: {BackgroundColors.CYAN}{metadata_path}{Style.RESET_ALL}")  # Report the exact metadata incompatibility.
+        return None  # Fit a new transformer after metadata rejection.
+    if not os.path.isfile(transformer_path):  # Require the metadata-referenced transformer artifact.
+        print(f"{BackgroundColors.YELLOW}[WARNING] Fitted PCA cache rejected because transformer joblib is missing at: {BackgroundColors.CYAN}{transformer_path}{Style.RESET_ALL}")  # Report the missing serialized transformer.
+        return None  # Fit a new transformer when joblib content is unavailable.
+    actual_size = int(os.path.getsize(transformer_path))  # Read the serialized transformer size before deserialization.
+    if actual_size != int(metadata["transformer_size_bytes"]):  # Require the artifact size recorded during atomic save.
+        print(f"{BackgroundColors.YELLOW}[WARNING] Fitted PCA cache rejected because transformer size changed: expected {metadata['transformer_size_bytes']}, found {actual_size}.{Style.RESET_ALL}")  # Report artifact truncation or replacement.
+        return None  # Fit a new transformer after integrity failure.
+    actual_sha256 = calculate_file_sha256(transformer_path)  # Calculate the transformer integrity digest before joblib loading.
+    if actual_sha256 != metadata["transformer_sha256"]:  # Require exact artifact bytes written with the validated metadata.
+        print(f"{BackgroundColors.YELLOW}[WARNING] Fitted PCA cache rejected because transformer SHA-256 does not match metadata at: {BackgroundColors.CYAN}{transformer_path}{Style.RESET_ALL}")  # Report byte-level artifact corruption.
+        return None  # Fit a new transformer after integrity failure.
+    try:  # Deserialize only after metadata and artifact integrity validation succeed.
+        transformer = load(transformer_path)  # Load the fitted PCA transformer through the existing joblib dependency.
+    except Exception as exc:  # Treat corrupted or incompatible joblib content as a safe cache miss.
+        print(f"{BackgroundColors.YELLOW}[WARNING] Fitted PCA cache rejected because transformer joblib could not be loaded at {BackgroundColors.CYAN}{transformer_path}{BackgroundColors.YELLOW}: {exc}{Style.RESET_ALL}")  # Report deserialization failure without stopping evaluation.
+        return None  # Fit a new transformer after joblib corruption.
+    rejection_reason = validate_loaded_stacking_pca_transformer(transformer, expected_context, metadata)  # Validate fitted estimator type, parameters, and learned state.
+    if rejection_reason is not None:  # Reject incompatible deserialized state.
+        print(f"{BackgroundColors.YELLOW}[WARNING] Fitted PCA cache rejected: {rejection_reason}. Transformer: {BackgroundColors.CYAN}{transformer_path}{Style.RESET_ALL}")  # Report the exact fitted-state incompatibility.
+        return None  # Fit a new transformer after fitted-state rejection.
+    print(f"{BackgroundColors.GREEN}[INFO] Compatible fitted PCA transformer cache loaded from: {BackgroundColors.CYAN}{transformer_path}{Style.RESET_ALL}")  # Confirm safe reuse after all validation stages.
+    return cast(PCA, transformer)  # Return the strictly validated fitted PCA transformer.
+
+
+def save_stacking_pca_cache(transformer: PCA, cache_context: dict, artifact_paths: dict, config: Optional[dict] = None) -> bool:  # Atomically save a fitted PCA transformer and companion provenance metadata.
+    """
+    Atomically save a fitted PCA transformer and companion provenance metadata.
+
+    :param transformer: Fitted PCA transformer to persist.
+    :param cache_context: Deterministic PCA compatibility context.
+    :param artifact_paths: Resolved dataset-local artifact paths.
+    :param config: Runtime configuration dictionary.
+    :return: True when transformer and metadata were published successfully.
+    """
+
+    try:  # Keep cache persistence best-effort so scientific evaluation can continue after write failures.
+        fitted_solver = getattr(transformer, "_fit_svd_solver", None)  # Record the solver selected by scikit-learn during fitting.
+        fitted_metadata = {"fitted_svd_solver": fitted_solver}  # Build the fitted-state metadata required by estimator validation.
+        rejection_reason = validate_loaded_stacking_pca_transformer(transformer, cache_context, fitted_metadata)  # Validate the fitted object before writing any final artifact.
+        if rejection_reason is not None:  # Refuse to persist incomplete or incompatible fitted state.
+            raise ValueError(rejection_reason)  # Route invalid fitted state through the non-fatal save warning.
+        models_directory = str(artifact_paths["models_directory"])  # Read the dataset-specific Stacking model directory.
+        Path(models_directory).mkdir(parents=True, exist_ok=True)  # Create the existing model artifact directory convention.
+        transformer_path = str(artifact_paths["transformer_path"])  # Read the final transformer joblib path.
+        metadata_path = str(artifact_paths["metadata_path"])  # Read the final companion metadata path.
+        write_stacking_pca_artifact_atomically(transformer, transformer_path, "joblib")  # Publish the fitted transformer atomically before its metadata.
+        transformer_size = int(os.path.getsize(transformer_path))  # Record the published transformer size for integrity validation.
+        transformer_sha256 = calculate_file_sha256(transformer_path)  # Record the published transformer SHA-256 before metadata publication.
+        metadata = dict(cache_context)  # Copy deterministic provenance without mutating caller-owned context.
+        metadata.update({  # Add creation, path, integrity, and fitted-state metadata.
+            "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),  # Store an explicit UTC artifact creation timestamp.
+            "stacking_directory": str(artifact_paths["stacking_directory"]),  # Store the resolved dataset-local Stacking directory.
+            "models_directory": models_directory,  # Store the resolved dataset-slug model directory.
+            "cache_identity": str(artifact_paths["cache_identity"]),  # Store the deterministic provenance fingerprint.
+            "transformer_artifact": os.path.basename(transformer_path),  # Store the exact companion transformer filename.
+            "transformer_size_bytes": transformer_size,  # Store serialized transformer size for integrity validation.
+            "transformer_sha256": transformer_sha256,  # Store serialized transformer content integrity.
+            "scaler_artifact": None,  # Record that no duplicate scaler artifact is required by the pre-scaled PCA flow.
+            "fitted_svd_solver": fitted_solver,  # Store the solver selected during PCA fitting.
+        })  # Complete fitted artifact metadata without changing deterministic context fields.
+        write_stacking_pca_artifact_atomically(metadata, metadata_path, "json")  # Publish metadata atomically only after the transformer is complete.
+        print(f"{BackgroundColors.GREEN}[INFO] Provenance-bearing fitted PCA cache saved successfully. Metadata: {BackgroundColors.CYAN}{metadata_path}{BackgroundColors.GREEN}. Transformer: {BackgroundColors.CYAN}{transformer_path}{Style.RESET_ALL}")  # Confirm both final artifacts were published.
+        return True  # Report successful cache persistence.
+    except Exception as exc:  # Preserve PCA evaluation when artifact persistence fails.
+        print(f"{BackgroundColors.YELLOW}[WARNING] Failed to save fitted PCA transformer cache; evaluation will continue with the in-memory transformer: {exc}{Style.RESET_ALL}")  # Report the non-fatal cache save failure.
+        return False  # Report that no reusable cache was published.
+
+
+def apply_pca_transformation(X_train_scaled, X_test_scaled, pca_n_components, file_path=None, config=None, feature_names=None, scaler=None, source_files=None, cache_context=None):  # Apply or safely reuse the fitted PCA transformation for one evaluation split.
     """
     Applies Principal Component Analysis (PCA) transformation to the scaled training
     and testing datasets using the optimal number of components.
@@ -5093,6 +5368,10 @@ def apply_pca_transformation(X_train_scaled, X_test_scaled, pca_n_components, fi
     :param pca_n_components: Optimal number of components (integer), or None/0 if PCA is skipped.
     :param file_path: Path to the dataset CSV file (optional, for loading pre-fitted PCA).
     :param config: Configuration dictionary (uses global CONFIG if None)
+    :param feature_names: Ordered numeric feature names supplied to the scaled matrices.
+    :param scaler: Fitted scaler that produced the scaled matrices.
+    :param source_files: Ordered source files used to construct the evaluated data.
+    :param cache_context: Split and experiment identity metadata for compatibility validation.
     :return: Tuple (X_train_pca, X_test_pca) - Transformed features, or (None, None).
     """
     
@@ -5116,17 +5395,32 @@ def apply_pca_transformation(X_train_scaled, X_test_scaled, pca_n_components, fi
 
             dataset_reference = str(file_path) if file_path else "unspecified dataset"  # Resolve the dataset identity shown in stage logs and Telegram.
             dataset_scope = "combined dataset" if file_path and resolve_path_represents_directory(str(file_path)) else "dataset"  # Describe directory-backed evaluation accurately.
-            cache_path = resolve_pca_cache_path(str(file_path), n_components) if file_path else None  # Resolve the fitted transformer path before stage notification.
+            resolved_source_files = list(source_files) if source_files is not None else ([str(file_path)] if file_path and not resolve_path_represents_directory(str(file_path)) else [])  # Use exact caller provenance or the single evaluated dataset file.
+            pca_cache_context = None  # Initialize cache provenance as unavailable until every required field is built.
+            pca_artifact_paths = None  # Initialize artifact paths as unavailable until cache identity succeeds.
+            try:  # Disable cache reuse safely when complete provenance cannot be built.
+                pca_cache_context = build_stacking_pca_cache_context(str(file_path), resolved_source_files, list(feature_names or []), X_train_scaled, X_test_scaled, scaler, n_components, dict(cache_context or {}))  # Build strict dataset, split, scaling, and PCA compatibility provenance.
+                pca_artifact_paths = resolve_stacking_pca_artifact_paths(str(file_path), pca_cache_context, config)  # Resolve artifacts under the existing dataset-specific Stacking model directory.
+            except Exception as exc:  # Continue with a fresh in-memory fit when provenance is incomplete.
+                print(f"{BackgroundColors.YELLOW}[WARNING] Fitted PCA cache reuse is unavailable because provenance could not be built: {exc}{Style.RESET_ALL}")  # Report why safe cache reuse is disabled.
+
+            metadata_path_text = str(pca_artifact_paths["metadata_path"]) if pca_artifact_paths is not None else "unavailable"  # Resolve metadata path text for stage logging.
+            transformer_path_text = str(pca_artifact_paths["transformer_path"]) if pca_artifact_paths is not None else "unavailable"  # Resolve transformer path text for stage logging.
             print(f"{BackgroundColors.GREEN}[INFO] Starting PCA feature extraction for {dataset_scope} using {BackgroundColors.CYAN}{n_components}{BackgroundColors.GREEN} components. PCA_Results.csv selected: {BackgroundColors.CYAN}{pca_n_components}{BackgroundColors.GREEN}. Dataset: {BackgroundColors.CYAN}{dataset_reference}{Style.RESET_ALL}")  # Announce the selected and effective component counts before transformation.
-            cache_notice = f"Fitted PCA transformer cache will be attempted at: {cache_path}." if cache_path else "No fitted PCA transformer cache path is available; a new transformer will be fitted."  # Describe the cache action without implying availability.
-            send_telegram_message(TELEGRAM_BOT, f"PCA feature extraction/transformation started for {dataset_scope}.\nComponents selected from PCA_Results.csv: {pca_n_components}.\nComponents used: {n_components}.\nDataset: {dataset_reference}\n{cache_notice}")  # Send one stage-level PCA notification through the existing Telegram path.
+            print(f"{BackgroundColors.GREEN}[INFO] Expected fitted PCA cache metadata: {BackgroundColors.CYAN}{metadata_path_text}{Style.RESET_ALL}")  # Report the companion provenance path before lookup.
+            print(f"{BackgroundColors.GREEN}[INFO] Expected fitted PCA transformer: {BackgroundColors.CYAN}{transformer_path_text}{Style.RESET_ALL}")  # Report the joblib transformer path before lookup.
+            send_telegram_message(TELEGRAM_BOT, f"PCA feature extraction/transformation started for {dataset_scope}.\nComponents selected from PCA_Results.csv: {pca_n_components}.\nComponents used: {n_components}.\nDataset: {dataset_reference}\nFitted PCA metadata will be attempted at: {metadata_path_text}\nA compatible fitted transformer will be reused before fitting when provenance matches.")  # Send one stage-level PCA notification through the existing Telegram path.
 
-            if file_path:  # Only attempt to load if file_path is provided
-                load_pca_object(file_path, n_components, config=config)  # Inspect the legacy cache location without reusing an unverified transformer.
-
-            print(f"{BackgroundColors.GREEN}[INFO] Fitted PCA transformer cache was not loaded. Fitting PCA and transforming the training matrix now using {BackgroundColors.CYAN}{n_components}{BackgroundColors.GREEN} components.{Style.RESET_ALL}")  # State why computation begins after cache lookup.
-            pca = PCA(n_components=n_components)  # Initialize PCA with the effective number of components
-            X_train_pca = pca.fit_transform(X_train_scaled)  # Fit and transform the training data
+            pca = load_stacking_pca_cache(pca_cache_context, pca_artifact_paths, config=config) if pca_cache_context is not None and pca_artifact_paths is not None else None  # Load only a strictly compatible provenance-bearing fitted transformer.
+            if pca is None:  # Fit PCA only when no compatible fitted transformer cache is available.
+                print(f"{BackgroundColors.GREEN}[INFO] Compatible fitted PCA transformer cache was not loaded. Fitting PCA and transforming the training matrix now using {BackgroundColors.CYAN}{n_components}{BackgroundColors.GREEN} components.{Style.RESET_ALL}")  # State why computation begins after cache lookup.
+                pca = PCA(n_components=n_components)  # Initialize PCA with the effective number of components.
+                X_train_pca = pca.fit_transform(X_train_scaled)  # Fit PCA on training data only and transform that same matrix.
+                if pca_cache_context is not None and pca_artifact_paths is not None:  # Persist only when complete provenance and safe dataset-local paths exist.
+                    print(f"{BackgroundColors.GREEN}[INFO] Saving provenance-bearing fitted PCA transformer under: {BackgroundColors.CYAN}{pca_artifact_paths['models_directory']}{Style.RESET_ALL}")  # Announce the existing Stacking model artifact directory.
+                    save_stacking_pca_cache(pca, pca_cache_context, pca_artifact_paths, config=config)  # Atomically save transformer and companion metadata without changing evaluation semantics.
+            else:  # Reuse the validated fitted transformer without fitting again.
+                X_train_pca = pca.transform(X_train_scaled)  # Transform the current training matrix using the compatible cached fitted PCA.
 
             X_test_pca = pca.transform(X_test_scaled)  # Transform the testing data
 
@@ -9719,7 +10013,7 @@ def assemble_feature_sets(X_train_scaled, X_test_scaled, feature_names, ga_selec
         raise
 
 
-def iterate_feature_sets_sequentially(feature_source_arrays: dict, feature_names: List[Any], ga_selected_features: Any, pca_n_components: Any, rfe_selected_features: Any, file: str, feature_sets_config: dict, config: Optional[dict]) -> Any:
+def iterate_feature_sets_sequentially(feature_source_arrays: dict, feature_names: List[Any], ga_selected_features: Any, pca_n_components: Any, rfe_selected_features: Any, file: str, feature_sets_config: dict, config: Optional[dict], scaler: Any = None, source_files: Optional[List[str]] = None, pca_cache_context: Optional[dict] = None, pca_input_feature_names: Optional[List[Any]] = None) -> Any:  # Yield feature matrices while carrying exact PCA cache provenance.
     """
     Yield feature-set matrices one at a time.
 
@@ -9731,6 +10025,10 @@ def iterate_feature_sets_sequentially(feature_source_arrays: dict, feature_names
     :param file: Dataset path used for PCA artifact loading.
     :param feature_sets_config: Feature-set strategy configuration.
     :param config: Runtime configuration dictionary.
+    :param scaler: Fitted scaler that produced the full scaled source matrices.
+    :param source_files: Ordered source files used to build this evaluation dataset.
+    :param pca_cache_context: Split and experiment identity used for PCA cache validation.
+    :param pca_input_feature_names: Exact ordered numeric feature names consumed by PCA.
     :return: Iterator yielding feature-set tuples.
     """
 
@@ -9805,7 +10103,7 @@ def iterate_feature_sets_sequentially(feature_source_arrays: dict, feature_names
 
     if use_pca:  # Resolve PCA feature mode after GA to preserve sorted evaluation order.
         try:  # Preserve existing PCA failure tolerance.
-            X_train_pca, X_test_pca = apply_pca_transformation(feature_source_arrays["X_train_scaled"], feature_source_arrays["X_test_scaled"], pca_n_components, file, config=config)  # Materialize PCA matrices for this mode.
+            X_train_pca, X_test_pca = apply_pca_transformation(feature_source_arrays["X_train_scaled"], feature_source_arrays["X_test_scaled"], pca_n_components, file, config=config, feature_names=pca_input_feature_names if pca_input_feature_names is not None else feature_names, scaler=scaler, source_files=source_files, cache_context=pca_cache_context)  # Materialize PCA matrices with strict source, scaling, and split provenance.
         except Exception as e:  # Skip PCA mode when transformation fails.
             print(f"{BackgroundColors.YELLOW}[WARNING] PCA Components skipped because transformation failed for {BackgroundColors.CYAN}{file}{BackgroundColors.YELLOW}: {e}{Style.RESET_ALL}")  # Log PCA transformation failure.
             X_train_pca, X_test_pca = None, None  # Suppress PCA mode after failure.
@@ -10651,6 +10949,7 @@ def evaluate_on_dataset(
     cache_ref_file=None,
     hyperparameters_enabled=None,
     grid_progress=None,
+    source_files=None,  # Preserve ordered dataset provenance for PCA cache validation.
 ):
     """
     Evaluate classifiers on a single dataset with optional training-only augmentation.
@@ -10672,6 +10971,7 @@ def evaluate_on_dataset(
     :param config: Configuration dictionary (uses global CONFIG if None)
     :param cache_ref_file: Override file path to use when computing the cache file location (required when file is 'combined_files_combined')
     :param hyperparameters_enabled: Explicit hyperparameter mode flag for progress labels and result flow
+    :param source_files: Ordered original and augmented source files used to construct this evaluation dataset.
     :return: Dictionary mapping (feature_set, model_name) to results
     """
 
@@ -10691,6 +10991,31 @@ def evaluate_on_dataset(
         )  # Sanitize and verify GA/RFE feature selections against available features
 
         print_dataset_evaluation_header(data_source_label)  # Print formatted evaluation header for the current data source
+
+        pca_input_feature_names = [str(column) for column in df.iloc[:, :-1].select_dtypes(include=np.number).columns]  # Capture the exact ordered numeric columns consumed by scaling and PCA.
+        target_column_name = str(df.columns[-1])  # Capture the positional target column used by the split flow.
+        original_sample_count = int(len(df))  # Record the original sample population before split and augmentation merging.
+        augmented_sample_count = int(len(df_augmented_for_training)) if df_augmented_for_training is not None else 0  # Record the exact sampled augmentation population merged into training.
+        if source_files is not None:  # Use caller-supplied provenance for combined or explicitly sourced evaluation data.
+            pca_source_files = [str(source_file) for source_file in source_files]  # Preserve the caller's source order for deterministic combined-row provenance.
+        elif df_augmented_for_training is None and not resolve_path_represents_directory(str(file)):  # Infer only the unambiguous original-only single-file source.
+            pca_source_files = [str(file)]  # Use the evaluated file itself as complete source provenance.
+        else:  # Refuse inference for combined directories or augmented data with undisclosed source files.
+            pca_source_files = []  # Disable persistent PCA reuse when source provenance cannot be proven.
+        pca_cache_context = {  # Record the exact split and data-variant semantics that determine PCA fitting input.
+            "execution_mode": str(execution_mode_str),  # Store separate-file or combined-file execution semantics.
+            "data_source": str(data_source_label),  # Store the active original or augmented data variant label.
+            "experiment_mode": str(experiment_mode),  # Store original-only or training-augmentation semantics.
+            "augmentation_ratio": normalize_metadata_for_json(augmentation_ratio),  # Store the active sampled augmentation ratio.
+            "target_column": target_column_name,  # Store the positional target column identity.
+            "original_sample_count": original_sample_count,  # Store the original population size before splitting.
+            "augmented_sample_count": augmented_sample_count,  # Store the sampled population merged into training.
+            "test_size": 0.2,  # Store the fixed split ratio used by prepare_evaluation_data_splits.
+            "random_state": 42,  # Store the fixed split seed used by prepare_evaluation_data_splits.
+            "stratified": True,  # Store the stratified split semantics used by scale_and_split.
+            "augmentation_merged_into_training_after_split": df_augmented_for_training is not None,  # Store train-only augmentation placement.
+            "attack_types": normalize_metadata_for_json(attack_types_combined),  # Store combined-mode label scope when available.
+        }  # Complete the split and evaluation identity payload.
 
         data_splits = prepare_evaluation_data_splits(df, df_augmented_for_training, config=config)  # Prepare training/test data splits with optional augmentation
 
@@ -10740,7 +11065,7 @@ def evaluate_on_dataset(
             all_results = {}  # Initialize results for this data/HP slice
             current_combination = grid_progress["current_combination"]  # Continue from the previous grid slice
 
-        feature_sets_iter = iterate_feature_sets_sequentially(feature_source_arrays, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, file, feature_sets_config, config)  # Create lazy feature-set iterator
+        feature_sets_iter = iterate_feature_sets_sequentially(feature_source_arrays, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, file, feature_sets_config, config, scaler=scaler, source_files=pca_source_files, pca_cache_context=pca_cache_context, pca_input_feature_names=pca_input_feature_names)  # Create the lazy feature-set iterator with exact PCA source, feature, scaler, and split provenance.
         for idx, (name, X_train_subset, X_test_subset, subset_feature_names_list) in enumerate(feature_sets_iter, start=1):  # Evaluate one materialized feature set at a time
             if X_train_subset.shape[1] == 0:  # Verify if the subset is empty
                 print(
@@ -11941,6 +12266,7 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
                     experiment_id=generate_experiment_id(combined_dataset_reference, "combined_files_original_only"), experiment_mode="original_only", augmentation_ratio=None,  # Build original experiment identity from combined directory.
                     execution_mode_str="combined_files", attack_types_combined=attack_types_list, config=config,
                     hyperparameters_enabled=hyperparameters_enabled, grid_progress=grid_progress,
+                    source_files=original_files_list,  # Preserve the ordered original CSV provenance used to build this combined dataset.
                 )  # Evaluate the no-augmentation feature/classifier slice
                 del original_df_for_run_holder  # Release the empty HP slice transfer holder after evaluation returns.
                 gc.collect()  # Reclaim any released original-only dataframe references before augmentation handling.
@@ -11978,6 +12304,7 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
                         experiment_id=generate_experiment_id(combined_dataset_reference, "combined_files_original_plus_augmented", ratio), experiment_mode="original_plus_augmented", augmentation_ratio=ratio,  # Build augmented experiment identity from combined directory.
                         execution_mode_str="combined_files", attack_types_combined=attack_types_list, df_augmented_for_training=df_sampled_holder.pop(),
                         config=config, hyperparameters_enabled=hyperparameters_enabled, grid_progress=grid_progress,
+                        source_files=list(original_files_list) + list(augmentation_file_paths),  # Preserve ordered original and augmented CSV provenance for this ratio.
                     )  # Evaluate the same feature/classifier grid for this ratio
                     del ratio_original_df_holder, df_sampled_holder  # Release empty transfer holders after ratio evaluation returns.
                     gc.collect()  # Reclaim released ratio holder references before result aggregation.
@@ -12392,6 +12719,7 @@ def execute_original_combined_files_evaluation(files_to_process, ga_sel, pca_n, 
             execution_mode_str="combined_files", attack_types_combined=attack_types,
             df_augmented_for_training=None,
             cache_ref_file=combined_dataset_reference, config=config, hyperparameters_enabled=hyperparameters_enabled,  # Use directory identity for cache resume.
+            source_files=files_to_process,  # Preserve ordered original CSV provenance for legacy combined evaluation.
         )  # Evaluate combined files evaluation original dataset with directory cache reference and explicit config propagation
     except Exception as e:  # If evaluation fails
         print(f"{BackgroundColors.RED}Combined files evaluation failed for combo {suffix}: {e}{Style.RESET_ALL}")  # Error
@@ -12453,6 +12781,7 @@ def execute_combined_files_augmentation(files_to_process, combined_df, attack_ty
                             execution_mode_str="combined_files", attack_types_combined=attack_types,
                             df_augmented_for_training=df_sampled,
                             cache_ref_file=combined_dataset_reference, config=config, hyperparameters_enabled=hyperparameters_enabled,  # Use directory identity for cache resume.
+                            source_files=list(files_to_process) + [str(augmented_file) for augmented_file in augmented_files_list],  # Preserve ordered original and augmented CSV provenance for legacy ratio evaluation.
                         )  # Evaluate augmented combined files evaluation combination with directory cache reference and explicit config propagation
                     except Exception as e:  # If evaluation failed
                         print(f"{BackgroundColors.YELLOW}Augmented evaluation failed for ratio {ratio} combo {suffix}: {e}{Style.RESET_ALL}")  # Warn
