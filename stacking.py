@@ -132,6 +132,7 @@ from sklearn.preprocessing import LabelEncoder, StandardScaler  # For label enco
 from sklearn.svm import SVC  # For Support Vector Machine model
 from sklearn.tree import DecisionTreeClassifier  # For Decision Tree classifier model
 from telegram_bot import TelegramBot, send_exception_via_telegram, send_telegram_message, setup_global_exception_hook  # For sending progress messages to Telegram
+from threadpoolctl import threadpool_limits  # For narrowly limiting BLAS and OpenMP threads during feature extraction
 from tqdm import tqdm  # For progress bars
 from typing import Any, Callable, Optional, List, Tuple, cast  # For optional and collection typing hints
 from xgboost import XGBClassifier  # For XGBoost classifier
@@ -800,6 +801,7 @@ def parse_cli_args():
         parser.add_argument("--enable-stacking", dest="enable_stacking", action="store_true", default=None, help="Enable stacking classifier evaluation")
         parser.add_argument("--disable-stacking", dest="enable_stacking", action="store_false", help="Disable stacking classifier evaluation")
         parser.add_argument("--n-jobs", dest="n_jobs", type=int, default=None, help="Override evaluation.n_jobs for estimators that support parallel fitting (-1 uses all processors; 1 is memory-safe)",)
+        parser.add_argument("--feature-extraction-n-jobs", dest="feature_extraction_n_jobs", type=int, default=None, help="Override evaluation.feature_extraction_n_jobs for feature extraction/transformation stages such as PCA, not classifier training (-1 uses available CPUs; 1 is memory-safe)")  # Add the independent feature extraction thread override
         parser.add_argument("--low-memory", dest="low_memory", action="store_true", default=False, help="Enable low memory mode for pandas operations")  # Add low memory mode CLI argument
         parser.add_argument("--dataset-file-format", type=str, default=None, dest="dataset_file_format", help="File format for dataset files: arff, csv, parquet, txt")  # Dataset file format CLI override
         parser.add_argument("--augmentation-file-format", type=str, default=None, dest="augmentation_file_format", help="File format for augmentation files: arff, csv, parquet, txt")  # Augmentation file format CLI override
@@ -985,6 +987,7 @@ def get_default_config():
         "stacking": get_default_stacking_config(),  # Stacking pipeline configuration section
         "evaluation": {
             "n_jobs": 1,
+            "feature_extraction_n_jobs": 1,  # Use one thread for feature extraction by default without changing classifier training parallelism
             "threads_limit": 2,
             "cv_folds": 10,
             "random_state": 42,
@@ -1103,6 +1106,20 @@ def deep_merge_dicts(base, override):
         raise  # Re-raise to preserve original failure semantics
 
 
+def validate_feature_extraction_n_jobs(value: Any, source: str = "evaluation.feature_extraction_n_jobs") -> int:  # Validate the independent feature extraction thread setting.
+    """
+    Validate a feature extraction thread setting.
+
+    :param value: Configured feature extraction thread value.
+    :param source: User-facing setting name used in validation errors.
+    :return: Validated integer value.
+    """
+
+    if isinstance(value, bool) or not isinstance(value, int) or value == 0 or value < -1:  # Accept only positive integers or the existing all-CPU convention.
+        raise ValueError(f"{source} must be -1 or an integer greater than 0")  # Reject invalid feature extraction parallelism values.
+    return value  # Return the validated independent feature extraction setting.
+
+
 def merge_configs(defaults, file_config, cli_args):
     """
     Merge configurations with priority: CLI > file > defaults.
@@ -1122,6 +1139,7 @@ def merge_configs(defaults, file_config, cli_args):
             config["execution"]["execution_mode"] = _LEGACY_MODES.get(classification_mode, classification_mode)  # Normalize legacy mode name to canonical value before assigning
         
         if cli_args is None:  # If no CLI args
+            validate_feature_extraction_n_jobs(config.get("evaluation", {}).get("feature_extraction_n_jobs", 1))  # Validate the effective file or default feature extraction setting.
             return config  # Return merged config
         
         if hasattr(cli_args, "verbose") and cli_args.verbose:  # Verbose flag
@@ -1180,6 +1198,10 @@ def merge_configs(defaults, file_config, cli_args):
                 )  # Raise explicit validation error
             config.setdefault("evaluation", {})["n_jobs"] = cli_args.n_jobs  # Apply n_jobs override to estimator construction config
 
+        if hasattr(cli_args, "feature_extraction_n_jobs") and cli_args.feature_extraction_n_jobs is not None:  # Feature extraction n_jobs CLI override.
+            validated_feature_extraction_n_jobs = validate_feature_extraction_n_jobs(cli_args.feature_extraction_n_jobs, "--feature-extraction-n-jobs")  # Validate the independent CLI value.
+            config.setdefault("evaluation", {})["feature_extraction_n_jobs"] = validated_feature_extraction_n_jobs  # Apply the feature extraction override without changing classifier n_jobs.
+
         if hasattr(cli_args, "low_memory") and cli_args.low_memory:  # Low memory CLI override
             config["execution"]["low_memory"] = True  # Apply low memory override to config
 
@@ -1219,6 +1241,7 @@ def merge_configs(defaults, file_config, cli_args):
         if hasattr(cli_args, "enable_memory_tracemalloc") and cli_args.enable_memory_tracemalloc:  # Optional tracemalloc CLI toggle
             config.setdefault("memory_watcher", {})["capture_tracemalloc"] = True  # Enable optional Python allocation reports
 
+        validate_feature_extraction_n_jobs(config.get("evaluation", {}).get("feature_extraction_n_jobs", 1))  # Validate the effective feature extraction setting after CLI precedence is applied.
         return config  # Return final merged configuration
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
@@ -1419,6 +1442,36 @@ def set_threads_limit_based_on_ram(config=None):
         print(str(e))  # Print error to terminal for server logs
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
         raise  # Re-raise to preserve original failure semantics
+
+
+def resolve_feature_extraction_n_jobs(config=None) -> Tuple[int, int, Optional[str]]:  # Resolve requested and RAM-safe feature extraction thread counts.
+    """
+    Resolve requested and effective feature extraction thread counts.
+
+    :param config: Configuration dictionary (uses global CONFIG if None).
+    :return: Tuple of requested value, effective value, and optional adjustment reason.
+    """
+
+    if config is None:  # Use global configuration when no explicit configuration is supplied.
+        config = CONFIG  # Assign the global runtime configuration.
+
+    requested_n_jobs = validate_feature_extraction_n_jobs(config.get("evaluation", {}).get("feature_extraction_n_jobs", 1))  # Read and validate the independent feature extraction setting.
+    available_cpus = max(1, os.cpu_count() or 1)  # Resolve a safe positive CPU availability value.
+    effective_n_jobs = available_cpus if requested_n_jobs == -1 else min(requested_n_jobs, available_cpus)  # Resolve all-CPU mode and prevent CPU oversubscription.
+    adjustment_reasons = []  # Accumulate only reasons that reduce the requested feature extraction capacity.
+    if requested_n_jobs > available_cpus:  # Detect a fixed request above available CPU capacity.
+        adjustment_reasons.append(f"requested value exceeds {available_cpus} available CPUs")  # Record the CPU-capacity reduction reason.
+
+    low_memory = bool(config.get("execution", {}).get("low_memory", False))  # Read the existing low-memory safety setting.
+    ram_threshold = float(config.get("evaluation", {}).get("ram_threshold_gb", 32))  # Read the existing classifier RAM threshold without changing it.
+    ram_gb = psutil.virtual_memory().total / (1024**3)  # Read total system RAM using the existing project mechanism.
+    ram_constrained = ram_gb <= ram_threshold  # Apply the existing RAM threshold comparison to feature extraction.
+    if effective_n_jobs != 1 and (low_memory or ram_constrained):  # Force sequential feature extraction under the existing memory safety conditions.
+        effective_n_jobs = 1  # Reduce PCA numerical work to one thread for RAM safety.
+        adjustment_reasons.append("low_memory=True" if low_memory else f"ram_gb={ram_gb:.1f}GB (<={ram_threshold:g}GB)")  # Record the exact memory safety reason.
+
+    adjustment_reason = "; ".join(adjustment_reasons) if adjustment_reasons else None  # Format an optional concise adjustment reason.
+    return requested_n_jobs, effective_n_jobs, adjustment_reason  # Return independent requested and effective feature extraction values.
 
 
 def resolve_entry_with_trailing_space(current_path: str, entry: str, stripped_part: str) -> str:
@@ -5406,23 +5459,33 @@ def apply_pca_transformation(X_train_scaled, X_test_scaled, pca_n_components, fi
 
             metadata_path_text = str(pca_artifact_paths["metadata_path"]) if pca_artifact_paths is not None else "unavailable"  # Resolve metadata path text for stage logging.
             transformer_path_text = str(pca_artifact_paths["transformer_path"]) if pca_artifact_paths is not None else "unavailable"  # Resolve transformer path text for stage logging.
+            requested_feature_extraction_n_jobs, effective_feature_extraction_n_jobs, feature_extraction_adjustment_reason = resolve_feature_extraction_n_jobs(config=config)  # Resolve independent requested and RAM-safe PCA thread counts.
             print(f"{BackgroundColors.GREEN}[INFO] Starting PCA feature extraction for {dataset_scope} using {BackgroundColors.CYAN}{n_components}{BackgroundColors.GREEN} components. PCA_Results.csv selected: {BackgroundColors.CYAN}{pca_n_components}{BackgroundColors.GREEN}. Dataset: {BackgroundColors.CYAN}{dataset_reference}{Style.RESET_ALL}")  # Announce the selected and effective component counts before transformation.
+            print(f"{BackgroundColors.GREEN}[INFO] Feature extraction n_jobs requested: {BackgroundColors.CYAN}{requested_feature_extraction_n_jobs}{Style.RESET_ALL}")  # Report the user-controlled feature extraction request.
+            print(f"{BackgroundColors.GREEN}[INFO] Feature extraction n_jobs effective: {BackgroundColors.CYAN}{effective_feature_extraction_n_jobs}{Style.RESET_ALL}")  # Report the effective thread limit used for PCA numerical work.
+            if feature_extraction_adjustment_reason is not None:  # Report any CPU or RAM safety reduction once at the PCA stage.
+                print(f"{BackgroundColors.YELLOW}[WARNING] Feature extraction n_jobs reduced from {BackgroundColors.CYAN}{requested_feature_extraction_n_jobs}{BackgroundColors.YELLOW} to {BackgroundColors.CYAN}{effective_feature_extraction_n_jobs}{BackgroundColors.YELLOW} because {feature_extraction_adjustment_reason}.{Style.RESET_ALL}")  # Explain why the effective feature extraction value differs.
+            print(f"{BackgroundColors.GREEN}[INFO] Applying feature extraction thread limit during PCA fit/transform: {BackgroundColors.CYAN}{effective_feature_extraction_n_jobs}{Style.RESET_ALL}")  # Announce the narrowly scoped numerical thread limit.
             print(f"{BackgroundColors.GREEN}[INFO] Expected fitted PCA cache metadata: {BackgroundColors.CYAN}{metadata_path_text}{Style.RESET_ALL}")  # Report the companion provenance path before lookup.
             print(f"{BackgroundColors.GREEN}[INFO] Expected fitted PCA transformer: {BackgroundColors.CYAN}{transformer_path_text}{Style.RESET_ALL}")  # Report the joblib transformer path before lookup.
-            send_telegram_message(TELEGRAM_BOT, f"PCA feature extraction/transformation started for {dataset_scope}.\nComponents selected from PCA_Results.csv: {pca_n_components}.\nComponents used: {n_components}.\nDataset: {dataset_reference}\nFitted PCA metadata will be attempted at: {metadata_path_text}\nA compatible fitted transformer will be reused before fitting when provenance matches.")  # Send one stage-level PCA notification through the existing Telegram path.
+            telegram_adjustment_text = f"\nAdjustment reason: {feature_extraction_adjustment_reason}." if feature_extraction_adjustment_reason is not None else ""  # Format an optional RAM or CPU adjustment line without adding another Telegram message.
+            send_telegram_message(TELEGRAM_BOT, f"PCA feature extraction/transformation started for {dataset_scope}.\nComponents selected from PCA_Results.csv: {pca_n_components}.\nComponents used: {n_components}.\nRequested feature extraction jobs: {requested_feature_extraction_n_jobs}.\nEffective feature extraction jobs: {effective_feature_extraction_n_jobs}.{telegram_adjustment_text}\nDataset: {dataset_reference}\nFitted PCA metadata will be attempted at: {metadata_path_text}\nA compatible fitted transformer will be reused before fitting when provenance matches.")  # Send one stage-level PCA notification through the existing Telegram path.
 
             pca = load_stacking_pca_cache(pca_cache_context, pca_artifact_paths, config=config) if pca_cache_context is not None and pca_artifact_paths is not None else None  # Load only a strictly compatible provenance-bearing fitted transformer.
             if pca is None:  # Fit PCA only when no compatible fitted transformer cache is available.
                 print(f"{BackgroundColors.GREEN}[INFO] Compatible fitted PCA transformer cache was not loaded. Fitting PCA and transforming the training matrix now using {BackgroundColors.CYAN}{n_components}{BackgroundColors.GREEN} components.{Style.RESET_ALL}")  # State why computation begins after cache lookup.
                 pca = PCA(n_components=n_components)  # Initialize PCA with the effective number of components.
-                X_train_pca = pca.fit_transform(X_train_scaled)  # Fit PCA on training data only and transform that same matrix.
+                with threadpool_limits(limits=effective_feature_extraction_n_jobs):  # Limit only PCA BLAS and OpenMP work without changing process-global defaults permanently.
+                    X_train_pca = pca.fit_transform(X_train_scaled)  # Fit exact PCA on training data only and transform that same matrix.
                 if pca_cache_context is not None and pca_artifact_paths is not None:  # Persist only when complete provenance and safe dataset-local paths exist.
                     print(f"{BackgroundColors.GREEN}[INFO] Saving provenance-bearing fitted PCA transformer under: {BackgroundColors.CYAN}{pca_artifact_paths['models_directory']}{Style.RESET_ALL}")  # Announce the existing Stacking model artifact directory.
                     save_stacking_pca_cache(pca, pca_cache_context, pca_artifact_paths, config=config)  # Atomically save transformer and companion metadata without changing evaluation semantics.
             else:  # Reuse the validated fitted transformer without fitting again.
-                X_train_pca = pca.transform(X_train_scaled)  # Transform the current training matrix using the compatible cached fitted PCA.
+                with threadpool_limits(limits=effective_feature_extraction_n_jobs):  # Limit only cached PCA training transformation numerical work.
+                    X_train_pca = pca.transform(X_train_scaled)  # Transform the current training matrix using the compatible cached fitted PCA.
 
-            X_test_pca = pca.transform(X_test_scaled)  # Transform the testing data
+            with threadpool_limits(limits=effective_feature_extraction_n_jobs):  # Limit only PCA testing transformation numerical work.
+                X_test_pca = pca.transform(X_test_scaled)  # Transform the testing data with the same fitted PCA state.
 
             print(f"{BackgroundColors.GREEN}[INFO] PCA feature extraction completed. Transformed training data shape: {BackgroundColors.CYAN}{X_train_pca.shape}{BackgroundColors.GREEN}. Transformed test data shape: {BackgroundColors.CYAN}{X_test_pca.shape}{Style.RESET_ALL}")  # Report both dense transformed matrix shapes before model evaluation.
 
