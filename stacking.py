@@ -2310,8 +2310,8 @@ def combine_files_for_combined_evaluation(files_list, config=None):
 
 def find_data_augmentation_file(original_file_path, config=None):
     """
-    Find the corresponding data augmentation file for an original CSV file.
-    Matches wgangp.py naming: <parent>/Data_Augmentation/<stem>_data_augmented<suffix>.
+    Find the corresponding data augmentation artifact for an original dataset file.
+    Matches configured naming: <parent>/Data_Augmentation/Samples/<stem><augmentation suffix><format extension>.
 
     :param original_file_path: Path to the original CSV file
     :param config: Configuration dictionary (uses global CONFIG if None)
@@ -2327,9 +2327,7 @@ def find_data_augmentation_file(original_file_path, config=None):
             config=config
         )  # Output the verbose message
 
-        data_augmentation_suffix = config.get("execution", {}).get("results_suffix", None)  # Try execution-level suffix first
-        if not data_augmentation_suffix:  # If not set at execution level
-            data_augmentation_suffix = config.get("stacking", {}).get("data_augmentation_suffix", "_data_augmented")  # Fallback to stacking config
+        data_augmentation_suffix = config.get("stacking", {}).get("data_augmentation_suffix", "_data_augmented")  # Read the augmentation-specific suffix without using generic result artifact naming
         original_path = Path(original_file_path)  # Create Path object from the original file path
         data_aug_dir = config.get("paths", {}).get("data_augmentation_dir", "Data_Augmentation")  # Use configured data augmentation base directory name
         data_aug_sample_dir = config.get("paths", {}).get("data_augmentation_sample_dir", "Samples")  # Use configured augmented samples subdirectory name
@@ -2339,20 +2337,12 @@ def find_data_augmentation_file(original_file_path, config=None):
         augmented_filename = f"{original_path.stem}{data_augmentation_suffix}{augmentation_extension}"  # Build augmented filename with configured extension
         augmented_file = augmented_dir / augmented_filename  # Construct the full augmented file path
 
-        if augmented_file.exists():  # If the expected augmented file exists at the constructed path
+        if augmented_file.is_file():  # Verify the configured augmented artifact is a regular file
             verbose_output(
                 f"{BackgroundColors.GREEN}Found augmented file: {BackgroundColors.CYAN}{augmented_file}{Style.RESET_ALL}",
                 config=config
             )  # Output success message with the found path
             return str(augmented_file)  # Return the augmented file path as a string
-
-        fallback_candidates = list(augmented_dir.glob(f"{original_path.stem}*{data_augmentation_suffix}*"))  # Search for any file matching stem+suffix pattern as fallback
-        if fallback_candidates:  # If any fallback candidates were found via glob search
-            verbose_output(
-                f"{BackgroundColors.GREEN}Found augmented file via fallback glob: {BackgroundColors.CYAN}{fallback_candidates[0]}{Style.RESET_ALL}",
-                config=config
-            )  # Output fallback match message
-            return str(fallback_candidates[0])  # Return the first matching fallback candidate
 
         verbose_output(
             f"{BackgroundColors.YELLOW}No augmented file found for: {BackgroundColors.CYAN}{original_file_path}{BackgroundColors.YELLOW}. Expected: {BackgroundColors.CYAN}{augmented_file}{Style.RESET_ALL}",
