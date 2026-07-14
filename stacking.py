@@ -4672,7 +4672,7 @@ def get_models(config=None):
 
 def filter_matching_hyperparams(df: pd.DataFrame, csv_path: str, config: dict) -> pd.DataFrame:
     """
-    Filter hyperparameter optimization rows using priority-based matching for combined files evaluation mode.
+    Filter hyperparameter optimization rows by normalized dataset path for combined files evaluation mode.
 
     :param df: DataFrame loaded from the hyperparameter optimization CSV file.
     :param csv_path: Full path to the dataset CSV file being processed.
@@ -4681,38 +4681,32 @@ def filter_matching_hyperparams(df: pd.DataFrame, csv_path: str, config: dict) -
     """
 
     try:
-        csv_path_str = str(csv_path)  # Ensure csv_path is a string for safe column comparison
-        base_filename = os.path.basename(csv_path_str)  # Extract base filename from the full path
-        inferred_dataset_name = get_dataset_name(csv_path_str)  # Infer dataset name from path using existing utility
+        if "dataset_path" not in df.columns:  # Combined-files matching requires an explicit dataset directory identity.
+            return pd.DataFrame()  # Return no matches when the artifact cannot identify its dataset path.
 
-        if "dataset_path" in df.columns:  # Attempt dataset_path exact match (highest priority)
-            path_match = cast(pd.DataFrame, df.loc[df["dataset_path"] == csv_path_str, :])  # Filter rows by exact dataset_path value
-            if not path_match.empty:  # If dataset_path match found
-                verbose_output(
-                    f"[DEBUG] filter_matching_hyperparams: matched {len(path_match)} row(s) by dataset_path",
-                    config=config
-                )  # Log matched row count for dataset_path strategy
-                return path_match  # Return highest-priority match
+        repository_root = Path(__file__).resolve().parent  # Resolve relative artifact paths from the repository root used by the application.
+        runtime_path = Path(str(csv_path).strip()).expanduser()  # Normalize the representative runtime path without changing the raw input.
+        if not runtime_path.is_absolute():  # Resolve relative runtime inputs using the same repository-root convention.
+            runtime_path = repository_root / runtime_path  # Build the complete runtime path before directory normalization.
+        normalized_runtime_path = os.path.normcase(str(resolve_dataset_root_path(str(runtime_path))))  # Normalize the representative file to its complete dataset-directory path.
 
-        if "dataset_name" in df.columns:  # Attempt dataset_name fallback (secondary priority)
-            name_match = cast(pd.DataFrame, df.loc[df["dataset_name"] == inferred_dataset_name, :])  # Filter rows by inferred dataset name
-            if not name_match.empty:  # If dataset_name match found
-                verbose_output(
-                    f"[DEBUG] filter_matching_hyperparams: matched {len(name_match)} row(s) by dataset_name",
-                    config=config
-                )  # Log matched row count for dataset_name strategy
-                return name_match  # Return secondary-priority match
+        normalized_artifact_paths = []  # Store comparison-only paths without modifying the dataframe's raw dataset_path values.
+        for raw_dataset_path in df["dataset_path"]:  # Normalize each artifact dataset directory deterministically.
+            if pd.isna(raw_dataset_path) or not str(raw_dataset_path).strip():  # Ignore missing dataset identities.
+                normalized_artifact_paths.append(None)  # Preserve row alignment for non-matching missing values.
+                continue  # Continue with the next artifact row.
+            artifact_path = Path(str(raw_dataset_path).strip()).expanduser()  # Normalize user-home syntax and redundant path text.
+            if not artifact_path.is_absolute():  # Resolve relative artifact paths from the verified repository root.
+                artifact_path = repository_root / artifact_path  # Build the complete artifact dataset path.
+            normalized_artifact_paths.append(os.path.normcase(str(resolve_dataset_root_path(str(artifact_path)))))  # Normalize directory intent, dot components, and trailing separators.
 
-        if "base_csv" in df.columns:  # Attempt base_csv last resort fallback
-            base_match = cast(pd.DataFrame, df.loc[df["base_csv"] == base_filename, :])  # Filter rows by base CSV filename
-            if not base_match.empty:  # If base_csv match found
-                verbose_output(
-                    f"[DEBUG] filter_matching_hyperparams: matched {len(base_match)} row(s) by base_csv",
-                    config=config
-                )  # Log matched row count for base_csv last-resort strategy
-                return base_match  # Return last-resort fallback match
-
-        return pd.DataFrame()  # Return empty DataFrame if no priority match found
+        normalized_dataset_paths = pd.Series(normalized_artifact_paths, index=df.index, dtype="object")  # Align comparison-only normalized paths with the original rows.
+        path_match = cast(pd.DataFrame, df.loc[normalized_dataset_paths == normalized_runtime_path, :])  # Compare complete normalized dataset paths for equality.
+        verbose_output(
+            f"[DEBUG] filter_matching_hyperparams: matched {len(path_match)} row(s) by normalized dataset_path",
+            config=config
+        )  # Log the deterministic combined-files match count.
+        return path_match  # Return only exact normalized dataset-path matches.
     except Exception as e:
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
@@ -4724,8 +4718,8 @@ def extract_hyperparameter_optimization_results(csv_path, config=None):
     Extract hyperparameter optimization results for a specific dataset file.
 
     Looks for the HYPERPARAMETERS_FILENAME file in the "Classifiers_Hyperparameters"
-    subdirectory relative to the dataset CSV file. Filters results to match the
-    current base_csv filename being processed.
+    subdirectory relative to the dataset CSV file. Matches the normalized dataset
+    path in combined mode and the current base_csv filename in separate mode.
 
     This function extracts **only the best hyperparameters** for each classifier
     that corresponds to the current file being processed.
@@ -4776,12 +4770,12 @@ def extract_hyperparameter_optimization_results(csv_path, config=None):
             config=config
         )  # Log selected execution mode
 
-        if combined_files_enabled:  # Route to priority-based matching for combined files evaluation mode
+        if combined_files_enabled:  # Route to normalized dataset-path matching for combined files evaluation mode
             verbose_output(
-                "[DEBUG] extract_hyperparameter_optimization_results: using priority-based matching strategy",
+                "[DEBUG] extract_hyperparameter_optimization_results: using normalized dataset_path matching strategy",
                 config=config
             )  # Log selected matching strategy
-            matching_rows = filter_matching_hyperparams(df, csv_path, config)  # Apply priority-based filter for combined files evaluation
+            matching_rows = filter_matching_hyperparams(df, csv_path, config)  # Match the combined dataset directory independently of the representative base CSV
         else:  # Separate files evaluation mode: only filter by base_csv column
             verbose_output(
                 "[DEBUG] extract_hyperparameter_optimization_results: using legacy base_csv matching strategy",
