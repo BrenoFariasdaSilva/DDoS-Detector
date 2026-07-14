@@ -1800,12 +1800,13 @@ def detect_label_column(columns):
         raise  # Preserve original failure behavior
 
 
-def process_single_file(f, config=None):
+def process_single_file(f, config=None, remove_zero_variance=None):
     """
     Process a single dataset file: load, preprocess, and extract target and features.
 
     :param f: Path to the dataset CSV file
     :param config: Configuration dictionary (uses global CONFIG if None)
+    :param remove_zero_variance: Whether to remove zero-variance columns before returning.
     :return: Tuple (df_clean, target_col, feat_cols) or None if invalid
     """
 
@@ -1826,7 +1827,8 @@ def process_single_file(f, config=None):
             write_memory_phase_event("after_each_source_file_load", config=config, dataset_source=f, dataset_identity=os.path.basename(str(f)), event_outcome="load_failed")  # Publish failed source-file load
             return None  # Return None
         
-        remove_zero_variance = config.get("dataset", {}).get("remove_zero_variance", True)  # Get remove zero variance flag from config
+        if remove_zero_variance is None:
+            remove_zero_variance = config.get("dataset", {}).get("remove_zero_variance", True)  # Preserve configured behavior outside the stacking split flow.
         df_clean = preprocess_dataframe(df, remove_zero_variance=remove_zero_variance, config=config)  # Preprocess the dataframe
 
         del df  # Release raw dataframe to free memory after preprocessing
@@ -2207,12 +2209,13 @@ def compute_common_features_across_files(processed_files_with_labels, config):
     return common_features_list, target_col_name  # Return common features and target column name
 
 
-def process_files_and_extract_labels(files_list, config):
+def process_files_and_extract_labels(files_list, config, remove_zero_variance=False):
     """
     Process each dataset file, extract its attack type label, and accumulate results into a list suitable for combined files evaluation.
 
     :param files_list: List of dataset CSV file paths to process.
     :param config: Configuration dictionary passed through to processing helpers.
+    :param remove_zero_variance: Whether to remove zero-variance columns while loading each source.
     :return: Tuple of (processed_files_with_labels, attack_types_set) on success, or None when no files could be processed.
     """
 
@@ -2226,7 +2229,7 @@ def process_files_and_extract_labels(files_list, config):
         exec_cfg["progress_index"] = idx  # Set current file index in execution config
         exec_cfg["progress_total"] = total_files  # Set total files count in execution config
         cfg["execution"] = exec_cfg  # Assign modified execution config back into config copy
-        result = process_single_file(f, config=cfg)  # Process the single file with progress info in config
+        result = process_single_file(f, config=cfg, remove_zero_variance=remove_zero_variance)  # Preserve original training schema when loading augmented testing sources.
         if result is not None:  # If processing succeeded
             df_clean, target_col, feat_cols = result  # Unpack the result
             attack_label = extract_attack_label_from_path(f)  # Extract attack type from filename for tuple reference
@@ -2250,13 +2253,14 @@ def process_files_and_extract_labels(files_list, config):
     return processed_files_with_labels, attack_types_set  # Return processed data and attack types set
 
 
-def combine_files_for_combined_evaluation(files_list, config=None):
+def combine_files_for_combined_evaluation(files_list, config=None, remove_zero_variance=False):
     """
     Combine multiple dataset files into a single combined files evaluation dataset.
     Each file represents a different attack type and becomes a unique class label.
     
     :param files_list: List of dataset CSV file paths to combine for combined files evaluation
     :param config: Configuration dictionary (uses global CONFIG if None)
+    :param remove_zero_variance: Whether to remove zero-variance columns while loading each source.
     :return: Tuple (combined_df, attack_types_list, target_col_name) or (None, None, None) if failed
     """
 
@@ -2273,7 +2277,7 @@ def combine_files_for_combined_evaluation(files_list, config=None):
             print(f"{BackgroundColors.RED}No files provided for combined files evaluation combination.{Style.RESET_ALL}")  # Print error message
             return (None, None, None)  # Return None tuple
         
-        process_result = process_files_and_extract_labels(files_list, config)  # Process files and extract attack labels
+        process_result = process_files_and_extract_labels(files_list, config, remove_zero_variance=remove_zero_variance)  # Process files while preserving the requested feature schema.
         if process_result is None:  # If processing failed
             return (None, None, None)  # Return failure tuple
         processed_files_with_labels, attack_types_set = process_result  # Unpack processed data and attack types set
@@ -2670,7 +2674,7 @@ def generate_experiment_id(file_path, experiment_mode, augmentation_ratio=None):
     Generates a unique experiment identifier for traceability in CSV results.
 
     :param file_path: Path to the dataset file being processed
-    :param experiment_mode: Experiment mode string (e.g., 'original_only' or 'original_plus_augmented')
+    :param experiment_mode: Experiment mode string (e.g., 'original_only' or 'original_training_augmented_testing')
     :param augmentation_ratio: Augmentation ratio float (e.g., 0.25) or None for original-only mode
     :return: String experiment identifier combining timestamp, filename, mode and ratio
     """
@@ -3051,18 +3055,15 @@ def generate_augmentation_tsne_visualization(original_file, original_df, augment
         if experiment_mode == "original_only":  # Original-only experiment
             plot_filename = f"{file_stem}_original_only_tsne.png"  # Filename for original-only plot
             plot_title = f"t-SNE: {file_stem} (Original Only)"  # Title for original-only plot
-        else:  # Original + augmented experiment
+        else:  # Original versus augmented testing experiment
             ratio_pct = int(augmentation_ratio * 100) if augmentation_ratio else 0  # Convert ratio to percentage
             plot_filename = f"{file_stem}_augmented_{ratio_pct}pct_tsne.png"  # Filename for augmented plot
-            plot_title = f"t-SNE: {file_stem} (Original + {ratio_pct}% Augmented)"  # Title for augmented plot
+            plot_title = f"t-SNE: {file_stem} (Original vs {ratio_pct}% Augmented Test)"  # Title for augmented-testing plot
 
         output_path = tsne_output_dir / plot_filename  # Build full output path
 
         compute_and_save_tsne_plot(X_scaled, labels, str(output_path), plot_title)  # Generate and save visualization
 
-        send_telegram_message(
-            TELEGRAM_BOT, f"Generated t-SNE plot: {file_stem} ({experiment_mode}, ratio={augmentation_ratio})"
-        )  # Send notification via Telegram
     except Exception as e:
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
@@ -4474,21 +4475,19 @@ def preprocess_dataframe(df, remove_zero_variance=True, config=None):
         raise
 
 
-def scale_and_split(X, y, test_size=0.2, random_state=42, config=None, X_augmented=None, y_augmented=None):
+def scale_and_split(X, y, test_size=0.2, random_state=42, config=None):
     """
     Scales the numeric features using StandardScaler and splits the data
-    into training and testing sets. If augmented data is provided, it is merged ONLY into the training set AFTER splitting to ensure test set contains exclusively original samples.
+    into training and testing sets.
 
-    Note: The target variable 'y' is label-encoded before splitting.
+    Note: The target encoder is fitted after splitting, using original training labels only.
 
     :param X: Features DataFrame (must contain numeric features).
     :param y: Target Series or array.
     :param test_size: Fraction of the data to reserve for the test set.
     :param random_state: Seed for the random split for reproducibility.
     :param config: Configuration dictionary (uses global CONFIG if None)
-    :param X_augmented: Optional augmented features DataFrame to merge into training set only
-    :param y_augmented: Optional augmented target Series/array to merge into training set only
-    :return: Tuple (X_train_scaled, X_test_scaled, y_train, y_test, scaler)
+    :return: Tuple (X_train_scaled, X_test_scaled, y_train, y_test, scaler, label_encoder)
     """
     
     try:
@@ -4501,9 +4500,6 @@ def scale_and_split(X, y, test_size=0.2, random_state=42, config=None, X_augment
         )  # Output the verbose message
 
         y_series = y if isinstance(y, pd.Series) else pd.Series(y)  # Normalize target to pandas Series only when needed
-
-        le = LabelEncoder()  # Initialize a LabelEncoder
-        encoded_values: np.ndarray = np.asarray(le.fit_transform(y_series.to_numpy(copy=False)), dtype=np.int64)  # Encode target labels as integers without forcing extra target copy
 
         if isinstance(X, pd.DataFrame):  # If features are a DataFrame
             non_numeric_cols = [c for c in X.columns if not pd.api.types.is_numeric_dtype(X[c])]  # Detect non-numeric feature columns for warning and filtering
@@ -4529,69 +4525,26 @@ def scale_and_split(X, y, test_size=0.2, random_state=42, config=None, X_augment
             )  # Raise an error if X has no valid feature columns
 
         write_memory_phase_event("before_train_test_split", config=config, train_sample_count=None, test_sample_count=None, feature_count=X_values.shape[1], event_outcome="starting")  # Publish train/test split start
-        sample_indices = np.arange(encoded_values.shape[0], dtype=np.int64)  # Build sample index array for index-based stratified splitting
+        target_values = y_series.to_numpy(copy=False)  # Reuse the original target values for stratified splitting before fitting the encoder.
+        sample_indices = np.arange(target_values.shape[0], dtype=np.int64)  # Build sample index array for index-based stratified splitting
         train_idx, test_idx = train_test_split(
-            sample_indices, test_size=test_size, random_state=random_state, stratify=encoded_values
+            sample_indices, test_size=test_size, random_state=random_state, stratify=target_values
         )  # Split sample indices to avoid DataFrame duplication during train/test partitioning
 
         X_train = X_values[train_idx]  # Materialize training features from index split
         X_test = X_values[test_idx]  # Materialize test features from index split
-        y_train = encoded_values[train_idx]  # Materialize encoded training targets from index split
-        y_test = encoded_values[test_idx]  # Materialize encoded test targets from index split
+        le = LabelEncoder()  # Initialize the target encoder after isolating the original training rows.
+        y_train = np.asarray(le.fit_transform(target_values[train_idx]), dtype=np.int64)  # Fit label encoding only on original training labels.
+        y_test = np.asarray(le.transform(target_values[test_idx]), dtype=np.int64)  # Transform original testing labels without modifying the encoder.
         write_memory_phase_event("after_train_test_split", config=config, train_sample_count=len(y_train), test_sample_count=len(y_test), feature_count=X_train.shape[1], event_outcome="completed")  # Publish train/test split completion
 
         del sample_indices, train_idx, test_idx, X_values  # Release split helper arrays and base feature view before augmentation/scaling
         gc.collect()  # Force garbage collection to reclaim memory from released split helpers
 
-        if X_augmented is not None and y_augmented is not None:  # If augmented data is provided for training enhancement
-            verbose_output(
-                f"{BackgroundColors.GREEN}Merging augmented data into training set ({len(X_augmented)} augmented samples)...{Style.RESET_ALL}",
-                config=config
-            )  # Output augmentation merge message
-            
-            y_augmented_series = y_augmented if isinstance(y_augmented, pd.Series) else pd.Series(y_augmented)  # Normalize augmented target to pandas Series only when needed
-            le_augmented = LabelEncoder()  # Initialize LabelEncoder for augmented target
-            le_augmented.classes_ = le.classes_  # Use same classes as original encoder for consistency
-            encoded_augmented_values = np.asarray(le_augmented.transform(y_augmented_series.to_numpy(copy=False)), dtype=np.int64)  # Encode augmented target labels as integers
-
-            if isinstance(X_augmented, pd.DataFrame):  # If augmented features are a DataFrame
-                non_numeric_aug_cols = [c for c in X_augmented.columns if not pd.api.types.is_numeric_dtype(X_augmented[c])]  # Detect non-numeric augmented feature columns for warning and filtering
-                if non_numeric_aug_cols:  # If non-numeric augmented columns were found
-                    print(
-                        f"{BackgroundColors.YELLOW}Warning: Dropping non-numeric augmented feature columns for scaling: {BackgroundColors.CYAN}{non_numeric_aug_cols}{Style.RESET_ALL}"
-                    )  # Warn about dropped augmented columns
-                    numeric_X_augmented = X_augmented.select_dtypes(include=np.number)  # Select only numeric augmented columns when needed
-                    if numeric_X_augmented.empty:  # If no numeric augmented features remain
-                        raise ValueError(
-                            f"{BackgroundColors.RED}No numeric features found in X_augmented after filtering.{Style.RESET_ALL}"
-                        )  # Raise an error when augmented features are unusable
-                    X_augmented_values = numeric_X_augmented.to_numpy(copy=False)  # Convert numeric augmented DataFrame to numpy view when possible
-                    del numeric_X_augmented  # Release temporary augmented numeric DataFrame reference
-                else:  # If all augmented columns are already numeric
-                    X_augmented_values = X_augmented.to_numpy(copy=False)  # Convert augmented DataFrame directly to numpy view when possible
-            else:  # If augmented features are already array-like
-                X_augmented_values = np.asarray(X_augmented)  # Normalize augmented features to numpy array
-
-            if X_augmented_values.ndim != 2 or X_augmented_values.shape[1] != X_train.shape[1]:  # Verify augmented features align with training feature matrix
-                raise ValueError(
-                    f"{BackgroundColors.RED}Augmented feature shape mismatch. Expected {X_train.shape[1]} columns, got {X_augmented_values.shape[1] if X_augmented_values.ndim == 2 else 'invalid shape'}.{Style.RESET_ALL}"
-                )  # Raise error when augmented feature matrix is incompatible with training matrix
-
-            X_train = np.concatenate((X_train, X_augmented_values), axis=0)  # Concatenate augmented features into training matrix
-            y_train = np.concatenate((y_train, encoded_augmented_values), axis=0)  # Concatenate encoded augmented targets into training target array
-
-            del X_augmented_values, encoded_augmented_values, y_augmented_series  # Release augmented temporaries to reduce memory pressure before scaling
-            gc.collect()  # Force garbage collection to reclaim memory from released augmented temporaries
-            
-            verbose_output(
-                f"{BackgroundColors.GREEN}Training set expanded to {BackgroundColors.CYAN}{len(X_train)}{BackgroundColors.GREEN} samples (original + augmented){Style.RESET_ALL}",
-                config=config
-            )  # Output expanded training set size
-
         write_memory_phase_event("before_scaling", config=config, train_sample_count=len(y_train), test_sample_count=len(y_test), feature_count=X_train.shape[1], event_outcome="starting")  # Publish scaling start
         scaler = StandardScaler()  # Initialize the StandardScaler
 
-        X_train_scaled = np.asarray(scaler.fit_transform(X_train))  # Fit and transform the training features (including augmented if provided)
+        X_train_scaled = np.asarray(scaler.fit_transform(X_train))  # Fit and transform original training features only.
 
         X_test_scaled = np.asarray(scaler.transform(X_test))  # Transform the testing features (original data only)
         write_memory_phase_event("after_scaling", config=config, train_sample_count=len(y_train), test_sample_count=len(y_test), feature_count=X_train_scaled.shape[1], event_outcome="completed")  # Publish scaling completion
@@ -4610,7 +4563,8 @@ def scale_and_split(X, y, test_size=0.2, random_state=42, config=None, X_augment
             y_train,
             y_test,
             scaler,
-        )  # Return scaled features, target, and the fitted scaler
+            le,
+        )  # Return scaled features, targets, and fitted preprocessing.
     except Exception as e:
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
@@ -5415,7 +5369,7 @@ def apply_pca_transformation(X_train_scaled, X_test_scaled, pca_n_components, fi
     :param scaler: Fitted scaler that produced the scaled matrices.
     :param source_files: Ordered source files used to construct the evaluated data.
     :param cache_context: Split and experiment identity metadata for compatibility validation.
-    :return: Tuple (X_train_pca, X_test_pca) - Transformed features, or (None, None).
+    :return: Tuple (X_train_pca, X_test_pca, pca) - Transformed features and fitted transformer, or null values.
     """
     
     try:
@@ -5424,6 +5378,7 @@ def apply_pca_transformation(X_train_scaled, X_test_scaled, pca_n_components, fi
 
         X_train_pca = None  # Initialize PCA training features
         X_test_pca = None  # Initialize PCA testing features
+        pca = None  # Initialize the fitted PCA transformer returned for classifier persistence.
 
         if pca_n_components is not None and pca_n_components > 0:  # If PCA components are specified
             n_features = X_train_scaled.shape[1]  # Get the number of features in the training set
@@ -5479,7 +5434,7 @@ def apply_pca_transformation(X_train_scaled, X_test_scaled, pca_n_components, fi
 
             print(f"{BackgroundColors.GREEN}[INFO] PCA feature extraction completed. Transformed training data shape: {BackgroundColors.CYAN}{X_train_pca.shape}{BackgroundColors.GREEN}. Transformed test data shape: {BackgroundColors.CYAN}{X_test_pca.shape}{Style.RESET_ALL}")  # Report both dense transformed matrix shapes before model evaluation.
 
-        return X_train_pca, X_test_pca  # Return the transformed features
+        return X_train_pca, X_test_pca, pca  # Return transformed features and the fitted preprocessing transformer.
     except Exception as e:
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
@@ -5700,7 +5655,107 @@ def truncate_value(value):
         raise
 
 
-def export_model_and_scaler(model, scaler, dataset_name, model_name, feature_names, best_params=None, feature_set=None, dataset_csv_path=None, config=None):
+def build_stacking_model_artifact_context(dataset_csv_path: str, source_files: List[str], execution_mode_str: str, attack_types_combined: Any, target_column: str, model_name: str, model: Any, feature_set: str, input_feature_names: List[Any], model_feature_names: List[Any], label_classes: List[Any], transformer: Any, hyperparameters_enabled: bool) -> dict:
+    """
+    Build the deterministic compatibility identity for one original-trained classifier.
+
+    :param dataset_csv_path: Dataset file or directory identity.
+    :param source_files: Ordered original source files used to build the dataset.
+    :param execution_mode_str: Separate-files or combined-files execution mode.
+    :param attack_types_combined: Combined classification scope, or None.
+    :param target_column: Positional target column name.
+    :param model_name: Configured classifier name.
+    :param model: Unfitted or fitted classifier exposing its effective parameters.
+    :param feature_set: Feature-set and hyperparameter-mode identity.
+    :param input_feature_names: Ordered numeric schema before fitted preprocessing.
+    :param model_feature_names: Ordered schema presented to the classifier.
+    :param label_classes: Ordered classes represented by the fitted label encoder.
+    :param transformer: Optional fitted or equivalently configured PCA transformer.
+    :param hyperparameters_enabled: Whether optimized hyperparameters are active.
+    :return: JSON-compatible artifact compatibility context.
+    """
+
+    if not source_files:  # Require original source provenance for model reuse.
+        raise ValueError("Classifier artifact provenance requires original source files")
+    source_metadata = []  # Accumulate ordered original-file metadata.
+    for source_index, source_file in enumerate(source_files):
+        source_path = Path(str(source_file)).expanduser().resolve()
+        if not source_path.is_file():
+            raise FileNotFoundError(f"Classifier artifact source file is unavailable: {source_path}")
+        source_stat = source_path.stat()
+        source_metadata.append({"index": source_index, "path": str(source_path), "size": int(source_stat.st_size), "mtime_ns": int(source_stat.st_mtime_ns)})
+    sklearn_module = sys.modules.get("sklearn")
+    model_params = model.get_params(deep=True) if hasattr(model, "get_params") else {}
+    transformer_metadata = None
+    if transformer is not None:
+        transformer_metadata = {
+            "class": f"{transformer.__class__.__module__}.{transformer.__class__.__name__}",
+            "params": normalize_metadata_for_json(transformer.get_params(deep=False) if hasattr(transformer, "get_params") else {}),
+        }
+    return {
+        "artifact_type": "stacking_original_trained_classifier",
+        "schema_version": 1,
+        "training_data": "original_only",
+        "dataset_path": str(Path(str(dataset_csv_path)).expanduser().resolve()),
+        "source_files": source_metadata,
+        "execution_mode": str(execution_mode_str),
+        "attack_types": normalize_metadata_for_json(attack_types_combined),
+        "target_column": str(target_column),
+        "input_feature_names": [str(feature) for feature in input_feature_names],
+        "model_feature_names": [str(feature) for feature in model_feature_names],
+        "feature_set": str(feature_set),
+        "hyperparameter_mode": "optimized" if hyperparameters_enabled else "default",
+        "model_name": str(model_name),
+        "model_class": f"{model.__class__.__module__}.{model.__class__.__name__}",
+        "model_params": normalize_metadata_for_json(model_params),
+        "scaler_class": f"{StandardScaler.__module__}.{StandardScaler.__name__}",
+        "scaler_params": normalize_metadata_for_json(StandardScaler().get_params(deep=False)),
+        "label_encoder_class": f"{LabelEncoder.__module__}.{LabelEncoder.__name__}",
+        "label_classes": normalize_metadata_for_json(label_classes),
+        "transformer": transformer_metadata,
+        "pre_split_feature_removal": False,
+        "test_size": 0.2,
+        "random_state": 42,
+        "stratified": True,
+        "sklearn_version": str(getattr(sklearn_module, "__version__", "unknown")),
+        "numpy_version": str(np.__version__),
+    }
+
+
+def resolve_stacking_model_artifact_paths(dataset_name: str, dataset_csv_path: str, model_name: str, feature_set: str, artifact_context: dict, config: dict) -> dict:
+    """
+    Resolve deterministic dataset-local paths for one classifier artifact.
+
+    :param dataset_name: Existing dataset folder identity used by model exports.
+    :param dataset_csv_path: Dataset file or directory identity.
+    :param model_name: Configured classifier name.
+    :param feature_set: Feature-set and hyperparameter-mode identity.
+    :param artifact_context: Deterministic compatibility context.
+    :param config: Runtime configuration dictionary.
+    :return: Model, metadata, directory, and identity paths.
+    """
+
+    stacking_output_dir = get_stacking_output_dir(dataset_csv_path, config)
+    models_directory = (Path(stacking_output_dir) / "Models" / re.sub(r'[\\/*?:"<>|]', "_", str(dataset_name))).resolve()
+    artifact_identity = hashlib.sha256(json.dumps(artifact_context, sort_keys=True, allow_nan=False).encode("utf-8")).hexdigest()
+    safe_model_name = re.sub(r'[\\/*?:"<>|]', "_", str(model_name))
+    safe_feature_set = re.sub(r'[\\/*?:"<>|]', "_", str(feature_set))
+    artifact_base = f"{safe_model_name}__{safe_feature_set}__{artifact_identity[:16]}"
+    model_path = (models_directory / f"{artifact_base}_model.joblib").resolve()
+    metadata_path = (models_directory / f"{artifact_base}_meta.json").resolve()
+    validate_output_path(stacking_output_dir, str(models_directory))
+    validate_output_path(stacking_output_dir, str(model_path))
+    validate_output_path(stacking_output_dir, str(metadata_path))
+    return {
+        "stacking_output_dir": str(Path(stacking_output_dir).resolve()),
+        "models_directory": str(models_directory),
+        "artifact_identity": artifact_identity,
+        "model_path": str(model_path),
+        "metadata_path": str(metadata_path),
+    }
+
+
+def export_model_and_scaler(model, scaler, dataset_name, model_name, feature_set=None, dataset_csv_path=None, config=None, artifact_context=None, label_encoder=None, transformer=None):
     """
     Export model, scaler and metadata for stacking evaluations.
     
@@ -5708,57 +5763,50 @@ def export_model_and_scaler(model, scaler, dataset_name, model_name, feature_nam
     :param scaler: Fitted scaler to export
     :param dataset_name: Name of dataset
     :param model_name: Name of model
-    :param feature_names: List of feature names
-    :param best_params: Best parameters from hyperparameter optimization
     :param feature_set: Feature set name (GA, RFE, PCA, etc.)
     :param dataset_csv_path: Path to dataset CSV file
     :param config: Configuration dictionary (uses global CONFIG if None)
-    :return: None
+    :param artifact_context: Deterministic original-training compatibility context
+    :param label_encoder: Fitted original-training label encoder
+    :param transformer: Optional fitted original-training PCA transformer
+    :return: Persisted classifier artifact path
     """
     
     try:
         if config is None:  # If no config provided
             config = CONFIG  # Use global CONFIG
 
-        def safe_filename(name):
-            return re.sub(r'[\\/*?:"<>|]', "_", str(name))
-
         if not dataset_csv_path:
             raise ValueError("dataset_csv_path is required to safely export models")
-
-        file_path_obj = Path(dataset_csv_path)
-        stacking_output_dir = get_stacking_output_dir(str(file_path_obj), config)
-
-        export_dir = Path(stacking_output_dir) / "Models" / safe_filename(dataset_name)
-        os.makedirs(export_dir, exist_ok=True)
-        param_str = "_".join(f"{k}-{v}" for k, v in sorted(best_params.items())) if best_params else ""
-        param_str = safe_filename(param_str)[:64]
-        features_str = safe_filename("_".join(feature_names))[:64] if feature_names else "all_features"
-        fs = safe_filename(feature_set) if feature_set else "all"
-        base_name = f"{safe_filename(model_name)}__{fs}__{features_str}__{param_str}"
-        model_path = os.path.join(str(export_dir), f"{base_name}_model.joblib")
-        scaler_path = os.path.join(str(export_dir), f"{base_name}_scaler.joblib")
-        try:
-            validate_output_path(stacking_output_dir, model_path)
-            dump(model, model_path)
-            if scaler is not None:
-                validate_output_path(stacking_output_dir, scaler_path)
-                dump(scaler, scaler_path)
-            meta = {
-                "model_name": model_name,
-                "feature_set": feature_set,
-                "features": feature_names,
-                "params": best_params,
-            }
-            meta_path = os.path.join(str(export_dir), f"{base_name}_meta.json")
-            validate_output_path(stacking_output_dir, meta_path)
-            with open(meta_path, "w", encoding="utf-8") as f:
-                json.dump(meta, f, indent=2)
-            relative_model = os.path.relpath(model_path, stacking_output_dir)  # Make model path relative to stacking output dir
-            relative_scaler = os.path.relpath(scaler_path, stacking_output_dir)  # Make scaler path relative to stacking output dir
-            verbose_output(f"{BackgroundColors.GREEN}Exported model to {BackgroundColors.CYAN}{relative_model}{BackgroundColors.GREEN} and scaler to {BackgroundColors.CYAN}{relative_scaler}{Style.RESET_ALL}")  # Log relative export paths
-        except Exception as e:
-            print(f"{BackgroundColors.YELLOW}Warning: Failed to export model {model_name}: {e}{Style.RESET_ALL}")
+        if not isinstance(artifact_context, dict) or scaler is None or label_encoder is None:
+            raise ValueError("Complete classifier artifact context and fitted preprocessing are required")
+        artifact_paths = resolve_stacking_model_artifact_paths(dataset_name, str(dataset_csv_path), model_name, str(feature_set), artifact_context, config)
+        bundle = {
+            "model": model,
+            "scaler": scaler,
+            "label_encoder": label_encoder,
+            "transformer": transformer,
+            "input_feature_names": list(artifact_context["input_feature_names"]),
+            "model_feature_names": list(artifact_context["model_feature_names"]),
+            "artifact_identity": artifact_paths["artifact_identity"],
+        }
+        write_stacking_pca_artifact_atomically(bundle, artifact_paths["model_path"], "joblib")
+        model_size = int(os.path.getsize(artifact_paths["model_path"]))
+        scaler_state = normalize_metadata_for_json({"mean_": scaler.mean_, "scale_": scaler.scale_, "var_": scaler.var_, "n_samples_seen_": scaler.n_samples_seen_})
+        metadata = dict(artifact_context)
+        metadata.update({
+            "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "artifact_identity": artifact_paths["artifact_identity"],
+            "model_artifact": os.path.basename(artifact_paths["model_path"]),
+            "model_size_bytes": model_size,
+            "model_sha256": calculate_file_sha256(artifact_paths["model_path"]),
+            "train_sample_count": int(getattr(scaler, "n_samples_seen_", 0)),
+            "scaler_state_digest": hashlib.sha256(json.dumps(scaler_state, sort_keys=True, allow_nan=False).encode("utf-8")).hexdigest(),
+        })
+        write_stacking_pca_artifact_atomically(metadata, artifact_paths["metadata_path"], "json")
+        relative_model = os.path.relpath(artifact_paths["model_path"], artifact_paths["stacking_output_dir"])
+        verbose_output(f"{BackgroundColors.GREEN}Exported original-trained classifier and fitted preprocessing to {BackgroundColors.CYAN}{relative_model}{Style.RESET_ALL}", config=config)
+        return artifact_paths["model_path"]
     except Exception as e:
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
@@ -5806,65 +5854,90 @@ def compute_fpr_fnr(y_test, y_pred):
         raise
 
 
-def load_existing_model_if_available(model, model_name, dataset_file, feature_set, X_test, y_test, scaler, config=None):
+def load_existing_model_if_available(model_name, dataset_file, dataset_name, feature_set, artifact_context, config=None):
     """
-    Attempts to load a previously trained model from disk and evaluate it, skipping retraining.
+    Load one strictly compatible original-trained classifier and its preprocessing.
 
-    :param model: The classifier model object used as fallback when no saved model is found
-    :param model_name: Name of the classifier for file pattern matching
-    :param dataset_file: Path to the dataset file used to locate the saved models directory
-    :param feature_set: Feature set name used to narrow the saved model file search
-    :param X_test: Testing features for evaluation (numpy array)
-    :param y_test: Testing target labels for metric computation
-    :param scaler: Optional scaler object to load alongside the model from disk
+    :param model_name: Configured classifier name
+    :param dataset_file: Dataset file or directory identity
+    :param dataset_name: Existing dataset folder identity used by model exports
+    :param feature_set: Feature-set and hyperparameter-mode identity
+    :param artifact_context: Expected deterministic compatibility context
     :param config: Configuration dictionary (uses global CONFIG if None)
-    :return: Metrics tuple (acc, prec, rec, f1, fpr, fnr, 0.0) if a model was loaded, else None
+    :return: Tuple containing the loaded artifact bundle or None and a factual rejection reason
     """
 
     try:
         if config is None:  # If no config provided
             config = CONFIG  # Use global CONFIG
 
-        models_dir = Path(dataset_file).parent / "Classifiers" / "Models"  # Build models directory path from dataset file location
-        if not models_dir.exists():  # If models directory does not exist on disk
-            return None  # No saved models available, signal caller to retrain
-
-        safe_model = re.sub(r'[\\/*?:"<>|]', "_", str(model_name))  # Sanitize model name for filesystem pattern matching
-        pattern = f"*{safe_model}*"  # Build default glob pattern using sanitized model name
-
-        if feature_set:  # If feature set name was provided for narrowing the search
-            safe_fs = re.sub(r'[\\/*?:"<>|]', "_", str(feature_set))  # Sanitize feature set name for filesystem pattern
-            pattern = f"*{safe_model}*{safe_fs}*"  # Build narrowed pattern combining model and feature set names
-
-        matches = list(models_dir.glob(f"{pattern}_model.joblib"))  # Search for matching model files using the pattern
-        if not matches:  # If no matching model file found on disk
-            return None  # No saved model available, signal caller to retrain
-
-        try:  # Attempt to load the found model and evaluate it
-            loaded = load(str(matches[0]))  # Load the serialized model from the first match
-            model = loaded  # Replace in-memory model with the loaded one
-            scaler_path = str(matches[0]).replace("_model.joblib", "_scaler.joblib")  # Build expected scaler path from model path
-            if verify_filepath_exists(scaler_path):  # If scaler file exists alongside the model
-                scaler = load(scaler_path)  # Load the serialized scaler from disk
-            verbose_output(f"Loaded existing model from {matches[0]}")  # Log that an existing model was loaded
-            y_pred = model.predict(X_test)  # Predict labels using the loaded model on test features
-            elapsed_time = 0.0  # Set elapsed time to zero since retraining was skipped
-            acc = accuracy_score(y_test, y_pred)  # Calculate accuracy score on test predictions
-            prec = precision_score(y_test, y_pred, average="weighted", zero_division=cast(Any, 0))  # Calculate weighted precision score
-            rec = recall_score(y_test, y_pred, average="weighted", zero_division=cast(Any, 0))  # Calculate weighted recall score
-            f1 = f1_score(y_test, y_pred, average="weighted", zero_division=cast(Any, 0))  # Calculate weighted F1 score
-            fpr, fnr = compute_fpr_fnr(y_test, y_pred)  # Compute false positive and false negative rates
-            return (acc, prec, rec, f1, fpr, fnr, elapsed_time)  # Return the metrics tuple with zero elapsed time
-        except Exception:  # If loading or evaluation fails
-            verbose_output(f"Failed to load existing model for {model_name}; retraining.")  # Log fallback to retraining
-            return None  # Signal caller to retrain from scratch
+        artifact_paths = resolve_stacking_model_artifact_paths(dataset_name, str(dataset_file), model_name, str(feature_set), artifact_context, config)
+        metadata_path = artifact_paths["metadata_path"]
+        model_path = artifact_paths["model_path"]
+        if not os.path.isfile(metadata_path) or not os.path.isfile(model_path):
+            return None, "expected classifier artifact or metadata file is missing"
+        try:
+            with open(metadata_path, "r", encoding="utf-8") as metadata_file:
+                metadata = json.load(metadata_file)
+        except Exception as exc:
+            return None, f"classifier metadata is unreadable: {exc}"
+        if not isinstance(metadata, dict):
+            return None, "classifier metadata root is not a JSON object"
+        for field_name, expected_value in artifact_context.items():
+            if metadata.get(field_name) != expected_value:
+                return None, f"classifier metadata field '{field_name}' is incompatible"
+        if metadata.get("artifact_identity") != artifact_paths["artifact_identity"]:
+            return None, "classifier artifact identity is incompatible"
+        if metadata.get("model_artifact") != os.path.basename(model_path):
+            return None, "classifier metadata references a different model file"
+        try:
+            if int(metadata.get("model_size_bytes", -1)) != int(os.path.getsize(model_path)):
+                return None, "classifier artifact size is incompatible"
+            if metadata.get("model_sha256") != calculate_file_sha256(model_path):
+                return None, "classifier artifact SHA-256 is incompatible"
+            bundle = load(model_path)
+        except Exception as exc:
+            return None, f"classifier artifact is unreadable: {exc}"
+        if not isinstance(bundle, dict):
+            return None, "classifier artifact root is not a dictionary"
+        required_components = ("model", "scaler", "label_encoder", "transformer", "input_feature_names", "model_feature_names", "artifact_identity")
+        if any(component not in bundle for component in required_components):
+            return None, "classifier artifact is missing required inference components"
+        if bundle.get("artifact_identity") != artifact_paths["artifact_identity"]:
+            return None, "classifier bundle identity is incompatible"
+        if bundle.get("input_feature_names") != artifact_context.get("input_feature_names") or bundle.get("model_feature_names") != artifact_context.get("model_feature_names"):
+            return None, "classifier bundle feature schema is incompatible"
+        loaded_model = bundle.get("model")
+        loaded_model_class = f"{loaded_model.__class__.__module__}.{loaded_model.__class__.__name__}"
+        loaded_model_params = normalize_metadata_for_json(loaded_model.get_params(deep=True) if hasattr(loaded_model, "get_params") else {})
+        if loaded_model_class != artifact_context.get("model_class") or loaded_model_params != artifact_context.get("model_params"):
+            return None, "classifier bundle model configuration is incompatible"
+        if not isinstance(bundle.get("scaler"), StandardScaler) or not isinstance(bundle.get("label_encoder"), LabelEncoder):
+            return None, "classifier bundle preprocessing types are incompatible"
+        loaded_scaler = bundle["scaler"]
+        loaded_scaler_state = normalize_metadata_for_json({"mean_": loaded_scaler.mean_, "scale_": loaded_scaler.scale_, "var_": loaded_scaler.var_, "n_samples_seen_": loaded_scaler.n_samples_seen_})
+        loaded_scaler_digest = hashlib.sha256(json.dumps(loaded_scaler_state, sort_keys=True, allow_nan=False).encode("utf-8")).hexdigest()
+        if metadata.get("scaler_state_digest") != loaded_scaler_digest:
+            return None, "classifier bundle scaler state is incompatible"
+        if normalize_metadata_for_json(bundle["label_encoder"].classes_) != artifact_context.get("label_classes"):
+            return None, "classifier bundle label encoding is incompatible"
+        expected_transformer = artifact_context.get("transformer")
+        if (expected_transformer is None) != (bundle.get("transformer") is None):
+            return None, "classifier bundle transformer presence is incompatible"
+        if bundle.get("transformer") is not None:
+            loaded_transformer = bundle["transformer"]
+            loaded_transformer_metadata = {"class": f"{loaded_transformer.__class__.__module__}.{loaded_transformer.__class__.__name__}", "params": normalize_metadata_for_json(loaded_transformer.get_params(deep=False) if hasattr(loaded_transformer, "get_params") else {})}
+            if loaded_transformer_metadata != expected_transformer:
+                return None, "classifier bundle transformer configuration is incompatible"
+        verbose_output(f"{BackgroundColors.GREEN}Loaded compatible original-trained classifier from {BackgroundColors.CYAN}{model_path}{Style.RESET_ALL}", config=config)
+        return bundle, None
     except Exception as e:
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
         raise
 
 
-def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, y_test, dataset_file=None, scaler=None, feature_names=None, feature_set=None, config=None, phase_metadata=None, training_ram_stats=None):  # Evaluate one classifier with optional watcher metadata and RAM statistics
+def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, y_test, dataset_file=None, scaler=None, feature_names=None, feature_set=None, config=None, phase_metadata=None, training_ram_stats=None, fit_model=True):  # Evaluate one classifier with optional watcher metadata and RAM statistics
     """
     Trains an individual classifier and evaluates its performance on the test set.
 
@@ -5881,6 +5954,7 @@ def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, 
     :param config: Configuration dictionary (uses global CONFIG if None)
     :param phase_metadata: Optional compact watcher metadata for this classifier
     :param training_ram_stats: Mutable holder receiving classifier training RAM statistics
+    :param fit_model: Whether to fit on original training data before prediction
     :return: Metrics tuple (acc, prec, rec, f1, fpr, fnr, elapsed_time)
     """
     
@@ -5890,8 +5964,6 @@ def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, 
         phase_metadata = dict(phase_metadata or {})  # Normalize watcher metadata for safe reuse
         training_ram_monitor = None  # Initialize classifier RAM monitor state for exception-safe cleanup.
         
-        skip_train_if_model_exists = config.get("execution", {}).get("skip_train_if_model_exists", False)  # Get skip train flag from config
-
         try:  # Attempt to obtain only the model's own parameters for logging
             params_raw = model.get_params(deep=False) if hasattr(model, "get_params") else {}  # Get top-level estimator params only
         except Exception:  # On any error retrieving params
@@ -5916,36 +5988,29 @@ def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, 
             params_snapshot = ""  # Use empty string when formatting fails
 
         verbose_output(  # Output the verbose message including a compact classifier parameter snapshot
-            f"{BackgroundColors.GREEN}Training {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN} Params:{BackgroundColors.CYAN}{params_snapshot}{Style.RESET_ALL}",  # Message with compact params snapshot
+            f"{BackgroundColors.GREEN}{'Training' if fit_model else 'Evaluating loaded'} {BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN} Params:{BackgroundColors.CYAN}{params_snapshot}{Style.RESET_ALL}",  # Message with compact params snapshot
             config=config,  # Configuration used for verbose output routing
         )
 
         start_time = time.time()  # Record the start time
 
-        if dataset_file is not None and skip_train_if_model_exists:  # If dataset file provided and skip-train flag enabled
-            existing_metrics = load_existing_model_if_available(model, model_name, dataset_file, feature_set, X_test, y_test, scaler, config=config)  # Attempt to load a previously saved model from disk
-            if existing_metrics is not None:  # If a valid existing model was found and used
-                existing_params_digest = get_classifier_params_digest(model)  # Build loaded classifier parameter digest
-                existing_fit_metadata = dict(phase_metadata)  # Copy caller watcher metadata
-                existing_fit_metadata.update({"dataset_identity": os.path.basename(str(dataset_file)) if dataset_file is not None else existing_fit_metadata.get("dataset_identity"), "classifier_name": model_name, "classifier_params_digest": existing_params_digest, "classifier_params_reference": f"sha256:{existing_params_digest.get('digest')}", "train_sample_count": len(y_train), "test_sample_count": len(y_test), "feature_count": X_train.shape[1] if hasattr(X_train, "shape") and len(X_train.shape) > 1 else existing_fit_metadata.get("feature_count"), "n_jobs": get_classifier_n_jobs(model), "event_outcome": "loaded_existing_model"})  # Build skipped-fit watcher metadata
-                write_memory_phase_event("after_classifier_fit", config=config, **existing_fit_metadata)  # Publish skipped-fit outcome for existing model reuse
-                store_training_ram_stats(training_ram_stats, stop_training_ram_monitor(None))  # Store a one-sample RAM summary for cached classifier reuse.
-                return existing_metrics  # Return cached metrics without retraining
-
-        sys.stdout.flush()  # Flush stdout before model training to ensure logs are visible under nohup
-        training_ram_monitor = start_training_ram_monitor(TRAINING_RAM_SAMPLE_INTERVAL_SECONDS)  # Start RAM monitoring immediately before classifier fit.
-        try:  # Ensure RAM monitoring stops even when classifier fit fails.
-            model.fit(X_train, y_train)  # Fit the model on the training data using its internal n_jobs parallelism
-        finally:  # Stop RAM monitoring immediately after classifier fit exits.
-            classifier_ram_stats = stop_training_ram_monitor(training_ram_monitor)  # Summarize RAM usage across this classifier fit.
-            store_training_ram_stats(training_ram_stats, classifier_ram_stats)  # Associate RAM statistics with this classifier only.
-            training_ram_monitor = None  # Clear monitor state after stop processing.
-        if classifier_ram_stats.get("thread_alive", False):  # Verify whether sampler thread cleanup completed.
-            verbose_output(f"{BackgroundColors.YELLOW}[WARNING] RAM monitor thread remained alive after training {model_name}.{Style.RESET_ALL}", config=config)  # Log monitor cleanup anomaly without changing classifier results.
-        params_digest = get_classifier_params_digest(model)  # Build fitted classifier parameter digest
-        fit_metadata = dict(phase_metadata)  # Copy caller watcher metadata
-        fit_metadata.update({"dataset_identity": os.path.basename(str(dataset_file)) if dataset_file is not None else fit_metadata.get("dataset_identity"), "classifier_name": model_name, "classifier_params_digest": params_digest, "classifier_params_reference": f"sha256:{params_digest.get('digest')}", "train_sample_count": len(y_train), "test_sample_count": len(y_test), "feature_count": X_train.shape[1] if hasattr(X_train, "shape") and len(X_train.shape) > 1 else fit_metadata.get("feature_count"), "n_jobs": get_classifier_n_jobs(model), "event_outcome": "fit_completed"})  # Build fit completion watcher metadata
-        write_memory_phase_event("after_classifier_fit", config=config, **fit_metadata)  # Publish classifier fit completion
+        if fit_model:  # Fit only during the original-data training lifecycle.
+            sys.stdout.flush()  # Flush stdout before model training to ensure logs are visible under nohup
+            training_ram_monitor = start_training_ram_monitor(TRAINING_RAM_SAMPLE_INTERVAL_SECONDS)  # Start RAM monitoring immediately before classifier fit.
+            try:  # Ensure RAM monitoring stops even when classifier fit fails.
+                model.fit(X_train, y_train)  # Fit the model on original training data only.
+            finally:  # Stop RAM monitoring immediately after classifier fit exits.
+                classifier_ram_stats = stop_training_ram_monitor(training_ram_monitor)  # Summarize RAM usage across this classifier fit.
+                store_training_ram_stats(training_ram_stats, classifier_ram_stats)  # Associate RAM statistics with this classifier only.
+                training_ram_monitor = None  # Clear monitor state after stop processing.
+            if classifier_ram_stats.get("thread_alive", False):  # Verify whether sampler thread cleanup completed.
+                verbose_output(f"{BackgroundColors.YELLOW}[WARNING] RAM monitor thread remained alive after training {model_name}.{Style.RESET_ALL}", config=config)  # Log monitor cleanup anomaly without changing classifier results.
+            params_digest = get_classifier_params_digest(model)  # Build fitted classifier parameter digest
+            fit_metadata = dict(phase_metadata)  # Copy caller watcher metadata
+            fit_metadata.update({"dataset_identity": os.path.basename(str(dataset_file)) if dataset_file is not None else fit_metadata.get("dataset_identity"), "classifier_name": model_name, "classifier_params_digest": params_digest, "classifier_params_reference": f"sha256:{params_digest.get('digest')}", "train_sample_count": len(y_train), "test_sample_count": len(y_test), "feature_count": X_train.shape[1] if hasattr(X_train, "shape") and len(X_train.shape) > 1 else fit_metadata.get("feature_count"), "n_jobs": get_classifier_n_jobs(model), "event_outcome": "fit_completed"})  # Build fit completion watcher metadata
+            write_memory_phase_event("after_classifier_fit", config=config, **fit_metadata)  # Publish classifier fit completion
+        else:
+            store_training_ram_stats(training_ram_stats, stop_training_ram_monitor(None))  # Preserve RAM-stat shape without starting a training monitor.
 
         y_pred = model.predict(X_test)  # Predict the labels for the test set
 
@@ -5960,7 +6025,7 @@ def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, 
 
         human_time = calculate_execution_time(elapsed_time)  # Convert elapsed duration to human-readable string using helper
         total_seconds = int(round(elapsed_time))  # Reuse elapsed_time as total seconds for reporting
-        train_seconds = total_seconds  # Reuse total seconds as training time when only one timer exists
+        train_seconds = total_seconds if fit_model else 0  # Report zero training time for persisted-model evaluation.
         exec_seconds = total_seconds  # Reuse total seconds as execution time when only one timer exists
         evaluation_mode = None  # Initialize evaluation mode string from config or global CONFIG
         if config is None:  # If no config provided
@@ -5972,7 +6037,6 @@ def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, 
             evaluation_mode = "SeparateFiles"  # Default to SeparateFiles when unknown
         msg = f"{BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}: Mode {BackgroundColors.CYAN}{evaluation_mode}{BackgroundColors.GREEN} | F1-Score {BackgroundColors.CYAN}{f1}{BackgroundColors.GREEN} | Accuracy: {BackgroundColors.CYAN}{acc}{BackgroundColors.GREEN} | Precision: {BackgroundColors.CYAN}{prec}{BackgroundColors.GREEN} | Recall: {BackgroundColors.CYAN}{rec}{BackgroundColors.GREEN} | FPR: {BackgroundColors.CYAN}{fpr}{BackgroundColors.GREEN} | FNR: {BackgroundColors.CYAN}{fnr}{BackgroundColors.GREEN} | Training Time: {BackgroundColors.CYAN}{int(train_seconds)}s{BackgroundColors.GREEN} | Execution Time: {BackgroundColors.CYAN}{int(exec_seconds)}s{BackgroundColors.GREEN} | Total Time: {BackgroundColors.CYAN}{human_time}{BackgroundColors.GREEN} ({BackgroundColors.CYAN}{int(total_seconds)}s{BackgroundColors.GREEN}){Style.RESET_ALL}"  # Build final formatted classifier summary using raw floats for metrics and integer times
         print(msg)  # Print the summary message to console
-        send_telegram_message(TELEGRAM_BOT, msg)  # Send identical message to Telegram for remote monitoring of ratio experiment results
 
         return (acc, prec, rec, f1, fpr, fnr, int(round(elapsed_time)))  # Return the metrics tuple
     except MemoryError as e:  # Handle classifier memory errors with a diagnostic phase
@@ -6001,7 +6065,7 @@ def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, 
         raise
 
 
-def evaluate_stacking_classifier(model, X_train, y_train, X_test, y_test, config=None, training_ram_stats=None):
+def evaluate_stacking_classifier(model, X_train, y_train, X_test, y_test, config=None, training_ram_stats=None, fit_model=True):
     """
     Trains the StackingClassifier model and evaluates its performance on the test set.
 
@@ -6012,6 +6076,7 @@ def evaluate_stacking_classifier(model, X_train, y_train, X_test, y_test, config
     :param y_test: Testing target labels (encoded Series/array).
     :param config: Configuration dictionary (uses global CONFIG if None).
     :param training_ram_stats: Mutable holder receiving classifier training RAM statistics.
+    :param fit_model: Whether to fit on original training data before prediction.
     :return: Metrics tuple (acc, prec, rec, f1, fpr, fnr, elapsed_time)
     """
     
@@ -6020,21 +6085,24 @@ def evaluate_stacking_classifier(model, X_train, y_train, X_test, y_test, config
             config = CONFIG  # Assign global CONFIG fallback.
         training_ram_monitor = None  # Initialize stacking RAM monitor state for exception-safe cleanup.
         verbose_output(
-            f"{BackgroundColors.GREEN}Starting training and evaluation of Stacking Classifier...{Style.RESET_ALL}"
+            f"{BackgroundColors.GREEN}Starting {'training and evaluation' if fit_model else 'persisted-model evaluation'} of Stacking Classifier...{Style.RESET_ALL}"
         )  # Output the verbose message
 
         start_time = time.time()  # Record the start time for timing training and prediction
 
-        sys.stdout.flush()  # Flush stdout before stacking training to ensure logs are visible under nohup
-        training_ram_monitor = start_training_ram_monitor(TRAINING_RAM_SAMPLE_INTERVAL_SECONDS)  # Start RAM monitoring immediately before stacking fit.
-        try:  # Ensure RAM monitoring stops even when stacking fit fails.
-            model.fit(X_train, y_train)  # Fit the stacking model on the training data (accepts DataFrame or array)
-        finally:  # Stop RAM monitoring immediately after stacking fit exits.
-            stacking_ram_summary = stop_training_ram_monitor(training_ram_monitor)  # Summarize RAM usage across this stacking fit.
-            store_training_ram_stats(training_ram_stats, stacking_ram_summary)  # Associate RAM statistics with this stacking classifier only.
-            training_ram_monitor = None  # Clear monitor state after stop processing.
-        if stacking_ram_summary.get("thread_alive", False):  # Verify whether sampler thread cleanup completed.
-            verbose_output(f"{BackgroundColors.YELLOW}[WARNING] RAM monitor thread remained alive after training StackingClassifier.{Style.RESET_ALL}", config=config)  # Log monitor cleanup anomaly without changing stacking results.
+        if fit_model:  # Fit only during the original-data training lifecycle.
+            sys.stdout.flush()  # Flush stdout before stacking training to ensure logs are visible under nohup
+            training_ram_monitor = start_training_ram_monitor(TRAINING_RAM_SAMPLE_INTERVAL_SECONDS)  # Start RAM monitoring immediately before stacking fit.
+            try:  # Ensure RAM monitoring stops even when stacking fit fails.
+                model.fit(X_train, y_train)  # Fit the stacking model on original training data only.
+            finally:  # Stop RAM monitoring immediately after stacking fit exits.
+                stacking_ram_summary = stop_training_ram_monitor(training_ram_monitor)  # Summarize RAM usage across this stacking fit.
+                store_training_ram_stats(training_ram_stats, stacking_ram_summary)  # Associate RAM statistics with this stacking classifier only.
+                training_ram_monitor = None  # Clear monitor state after stop processing.
+            if stacking_ram_summary.get("thread_alive", False):  # Verify whether sampler thread cleanup completed.
+                verbose_output(f"{BackgroundColors.YELLOW}[WARNING] RAM monitor thread remained alive after training StackingClassifier.{Style.RESET_ALL}", config=config)  # Log monitor cleanup anomaly without changing stacking results.
+        else:
+            store_training_ram_stats(training_ram_stats, stop_training_ram_monitor(None))  # Preserve RAM-stat shape without starting a training monitor.
 
         y_pred = model.predict(X_test)  # Predict the labels for the test set
 
@@ -6049,7 +6117,7 @@ def evaluate_stacking_classifier(model, X_train, y_train, X_test, y_test, config
 
         human_time = calculate_execution_time(elapsed_time)  # Convert elapsed duration to human-readable string using helper
         total_seconds = int(round(elapsed_time))  # Reuse elapsed_time as total seconds for reporting
-        train_seconds = total_seconds  # Reuse total seconds as training time when only one timer exists
+        train_seconds = total_seconds if fit_model else 0  # Report zero training time for persisted-model evaluation.
         exec_seconds = total_seconds  # Reuse total seconds as execution time when only one timer exists
         evaluation_mode = None  # Initialize evaluation mode string from runtime config
         mode_raw = config.get("execution", {}).get("execution_mode")  # Obtain execution mode from runtime config if present
@@ -6059,7 +6127,6 @@ def evaluate_stacking_classifier(model, X_train, y_train, X_test, y_test, config
             evaluation_mode = "SeparateFiles"  # Default to SeparateFiles when unknown
         msg = f"{BackgroundColors.CYAN}StackingClassifier{BackgroundColors.GREEN}: Mode {BackgroundColors.CYAN}{evaluation_mode}{BackgroundColors.GREEN} | F1-Score {BackgroundColors.CYAN}{f1}{BackgroundColors.GREEN} | Accuracy: {BackgroundColors.CYAN}{acc}{BackgroundColors.GREEN} | Precision: {BackgroundColors.CYAN}{prec}{BackgroundColors.GREEN} | Recall: {BackgroundColors.CYAN}{rec}{BackgroundColors.GREEN} | FPR: {BackgroundColors.CYAN}{fpr}{BackgroundColors.GREEN} | FNR: {BackgroundColors.CYAN}{fnr}{BackgroundColors.GREEN} | Training Time: {BackgroundColors.CYAN}{int(train_seconds)}s{BackgroundColors.GREEN} | Execution Time: {BackgroundColors.CYAN}{int(exec_seconds)}s{BackgroundColors.GREEN} | Total Time: {BackgroundColors.CYAN}{human_time}{BackgroundColors.GREEN} ({BackgroundColors.CYAN}{int(total_seconds)}s{BackgroundColors.GREEN}){Style.RESET_ALL}"  # Build final formatted stacking summary with colors using raw floats and integer times
         print(msg)  # Print the summary message to console
-        send_telegram_message(TELEGRAM_BOT, msg)  # Send identical message to Telegram for remote monitoring of ratio experiment results
 
         return (acc, prec, rec, f1, fpr, fnr, int(round(elapsed_time)), y_pred)  # Return the metrics tuple and predictions
     except Exception as e:
@@ -7822,7 +7889,7 @@ def resolve_persisted_data_augmentation_enabled(experiment_mode: Any, augmentati
     if normalized_mode == "original_only":  # Detect baseline rows explicitly.
         return False  # Baseline rows do not use generated data.
 
-    if normalized_mode == "original_plus_augmented":  # Detect augmented experiment rows explicitly.
+    if normalized_mode in ("original_plus_augmented", "original_training_augmented_testing"):  # Detect legacy training augmentation and current augmented testing rows.
         return True  # Augmented rows use generated data.
 
     resolved_ratio = resolve_persisted_augmentation_ratio(experiment_mode, augmentation_ratio)  # Resolve ratio for legacy rows without explicit mode.
@@ -8049,7 +8116,6 @@ def load_cache_results(csv_path, config=None, notify_discovery: bool = True):  #
 
         if notify_discovery:  # Emit discovery notifications only for operator-facing resume loads.
             print(f"{BackgroundColors.GREEN}Resume cache file found at: {BackgroundColors.CYAN}{cache_path}{Style.RESET_ALL}")  # Print cache discovery and exact location when requested.
-            send_telegram_message(TELEGRAM_BOT, f"Resume cache file found at: {cache_path}")  # Send Telegram notification about cache discovery when requested.
 
         verbose_output(
             f"{BackgroundColors.GREEN}Loading cached results from: {BackgroundColors.CYAN}{cache_path}{Style.RESET_ALL}",
@@ -8170,8 +8236,8 @@ def build_resume_cache_key(execution_mode_str: str, data_source_label: str, expe
     Build a deterministic, collision-free resume cache key for one evaluation unit.
 
     :param execution_mode_str: Execution mode string (e.g., 'separate_files' or 'combined_files')
-    :param data_source_label: Data source label (e.g., 'Original' or 'Original+Augmented@50%')
-    :param experiment_mode: Experiment mode string (e.g., 'original_only' or 'original_plus_augmented')
+    :param data_source_label: Data source label (e.g., 'Original' or 'Augmented@50%')
+    :param experiment_mode: Experiment mode string (e.g., 'original_only' or 'original_training_augmented_testing')
     :param augmentation_ratio: Augmentation ratio float or None for original-only experiments
     :param attack_types_combined: List of attack type strings for combined files mode or None
     :param feature_set: Feature set name string (e.g., 'Full Features' or 'GA Features')
@@ -8383,7 +8449,7 @@ def validate_cache_result_payload(result_entry: dict, config: Optional[dict] = N
 
     if str(row_values.get("execution_mode", "")) == "combined_files" and not has_serialized_value(row_values.get("attack_types_combined", None)):  # Require combined attack scope when combined-files mode is active.
         raise ValueError("Cache result row missing combined attack scope")  # Raise before writing an ambiguous combined-files row.
-    if str(row_values.get("experiment_mode", "")) == "original_plus_augmented" and not has_serialized_value(row_values.get("augmentation_ratio", None)):  # Require the exact ratio for augmented rows.
+    if str(row_values.get("experiment_mode", "")) in ("original_plus_augmented", "original_training_augmented_testing") and not has_serialized_value(row_values.get("augmentation_ratio", None)):  # Require the exact ratio for augmented rows.
         raise ValueError("Cache result row missing augmentation ratio")  # Raise before writing an ambiguous augmented row.
 
 
@@ -9673,7 +9739,7 @@ def prepare_automl_training_data(df, config=None):
             )  # Output single-class error message
             return None  # Signal caller to abort the pipeline
 
-        X_train_scaled, X_test_scaled, y_train, y_test, scaler = scale_and_split(X_full, y, config=config)  # Scale features and split into train/test sets
+        X_train_scaled, X_test_scaled, y_train, y_test, scaler, _ = scale_and_split(X_full, y, config=config)  # Scale features and split into train/test sets
 
         y_train_arr = np.asarray(y_train)  # Convert training target to numpy array for model compatibility
         y_test_arr = np.asarray(y_test)  # Convert test target to numpy array for model compatibility
@@ -9827,21 +9893,19 @@ def sanitize_and_verify_feature_selections(ga_selected_features, rfe_selected_fe
         raise
 
 
-def prepare_evaluation_data_splits(df, df_augmented_for_training=None, config=None):
+def prepare_evaluation_data_splits(df, config=None):
     """
-    Prepare training/test data splits with optional augmented data merging.
+    Prepare original-only training and testing data splits.
 
     :param df: DataFrame with the original dataset
-    :param df_augmented_for_training: Optional augmented DataFrame to merge into training set only
     :param config: Configuration dictionary (uses global CONFIG if None)
-    :return: Tuple of (X_train_scaled, X_test_scaled, y_train, y_test, scaler) or None if single-class target
+    :return: Tuple of (X_train_scaled, X_test_scaled, y_train, y_test, scaler, label_encoder) or None if single-class target
     """
 
     try:
         if config is None:  # If no config provided
             config = CONFIG  # Use global CONFIG
 
-        target_col_name = df.columns[-1]  # Target is always the last column regardless of its dtype
         feature_df = df.iloc[:, :-1]  # Build feature view excluding the target column positionally to avoid drop-copy amplification
         X_full = feature_df.select_dtypes(include=np.number)  # Select only numeric feature columns from the feature view
         y = df.iloc[:, -1]  # Extract target column as the last column
@@ -9855,28 +9919,14 @@ def prepare_evaluation_data_splits(df, df_augmented_for_training=None, config=No
             )  # Output the error message
             return None  # Return None to signal classification is not possible
 
-        if df_augmented_for_training is not None:  # If augmented data provided for training enhancement
-            aug_target_col_name = df_augmented_for_training.columns[-1]  # Target is always the last column in augmented data regardless of dtype
-            X_augmented_feature_df = df_augmented_for_training.iloc[:, :-1]  # Build augmented feature view excluding target positionally to avoid drop-copy amplification
-            X_augmented = X_augmented_feature_df.select_dtypes(include=np.number)  # Select only numeric augmented feature columns from augmented feature view
-            y_augmented = df_augmented_for_training.iloc[:, -1]  # Extract augmented target
-
-            del X_augmented_feature_df  # Release temporary augmented feature DataFrame view reference before split/scaling
-            gc.collect()  # Force garbage collection to reclaim memory from released augmented feature view reference
-            X_train_scaled, X_test_scaled, y_train, y_test, scaler = scale_and_split(
-                X_full, y, config=config, X_augmented=X_augmented, y_augmented=y_augmented
-            )  # Scale and split with augmented data merged into training set only
-            del X_augmented, y_augmented  # Release augmented split inputs after scale_and_split returns
-            gc.collect()  # Force garbage collection to reclaim memory from released augmented split inputs
-        else:  # No augmented data provided
-            X_train_scaled, X_test_scaled, y_train, y_test, scaler = scale_and_split(
-                X_full, y, config=config
-            )  # Scale and split the data normally (original-only)
+        X_train_scaled, X_test_scaled, y_train, y_test, scaler, label_encoder = scale_and_split(
+            X_full, y, config=config
+        )  # Split and fit preprocessing on original training data only.
 
         del X_full, y  # Release original split inputs after scale_and_split returns
         gc.collect()  # Force garbage collection to reclaim memory from released original split inputs
 
-        return X_train_scaled, X_test_scaled, y_train, y_test, scaler  # Return the prepared data splits
+        return X_train_scaled, X_test_scaled, y_train, y_test, scaler, label_encoder  # Return the prepared original-only data splits and preprocessing.
     except Exception as e:
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
@@ -10007,7 +10057,7 @@ def assemble_feature_sets(X_train_scaled, X_test_scaled, feature_names, ga_selec
 
         if use_pca:  # Compute PCA transformation only when PCA strategy is enabled
             try:  # Apply PCA transformation while preserving the remaining feature-set modes on failure
-                X_train_pca, X_test_pca = apply_pca_transformation(
+                X_train_pca, X_test_pca, _ = apply_pca_transformation(
                     X_train_scaled, X_test_scaled, pca_n_components, file, config=config
                 )  # Apply PCA transformation if applicable
             except Exception as e:  # Skip PCA mode when transformation fails
@@ -10082,7 +10132,7 @@ def iterate_feature_sets_sequentially(feature_source_arrays: dict, feature_names
     :param source_files: Ordered source files used to build this evaluation dataset.
     :param pca_cache_context: Split and experiment identity used for PCA cache validation.
     :param pca_input_feature_names: Exact ordered numeric feature names consumed by PCA.
-    :return: Iterator yielding feature-set tuples.
+    :return: Iterator yielding feature-set matrices, names, and fitted feature transformer.
     """
 
     if config is None:  # Use global configuration when no explicit configuration is supplied.
@@ -10101,7 +10151,7 @@ def iterate_feature_sets_sequentially(feature_source_arrays: dict, feature_names
     if use_full:  # Yield full features first to preserve baseline ordering.
         full_signature = ("features", tuple(sorted(sanitize_feature_name(feature) for feature in feature_names)))  # Build full-feature identity.
         feature_signatures.add(full_signature)  # Register full-feature identity before optional modes.
-        yield "Full Features", feature_source_arrays["X_train_scaled"], feature_source_arrays["X_test_scaled"], feature_names  # Yield full-feature matrices without copying.
+        yield "Full Features", feature_source_arrays["X_train_scaled"], feature_source_arrays["X_test_scaled"], feature_names, None  # Yield full-feature matrices without copying.
         if pending_mode_count > 1:  # If later feature modes need the full source matrices, spill them before materializing subset copies.
             maybe_spill_feature_source_arrays(feature_source_arrays, file, config=config)  # Replace large in-memory full matrices with disk-backed memmaps when configured.
 
@@ -10130,7 +10180,7 @@ def iterate_feature_sets_sequentially(feature_source_arrays: dict, feature_names
                 X_test_explicit, _ = get_feature_subset(feature_source_arrays["X_test_scaled"], valid_explicit, feature_names)  # Materialize explicit test subset for this mode.
                 feature_signatures.add(explicit_signature)  # Register explicit feature identity.
                 try:
-                    yield "Explicit Features", X_train_explicit, X_test_explicit, explicit_actual_features  # Yield explicit feature matrices.
+                    yield "Explicit Features", X_train_explicit, X_test_explicit, explicit_actual_features, None  # Yield explicit feature matrices.
                 finally:
                     del X_train_explicit, X_test_explicit  # Release explicit subset arrays after caller finishes or aborts this mode.
                     gc.collect()  # Reclaim explicit subset memory before the next feature mode.
@@ -10145,7 +10195,7 @@ def iterate_feature_sets_sequentially(feature_source_arrays: dict, feature_names
             if ga_signature not in feature_signatures:  # Suppress duplicate GA mode.
                 feature_signatures.add(ga_signature)  # Register GA feature identity.
                 try:
-                    yield "GA Features", X_train_ga, X_test_ga, ga_actual_features  # Yield GA feature matrices.
+                    yield "GA Features", X_train_ga, X_test_ga, ga_actual_features, None  # Yield GA feature matrices.
                 finally:
                     del X_train_ga, X_test_ga  # Release GA subset arrays after caller finishes or aborts this mode.
                     gc.collect()  # Reclaim GA subset memory before the next feature mode.
@@ -10156,17 +10206,17 @@ def iterate_feature_sets_sequentially(feature_source_arrays: dict, feature_names
 
     if use_pca:  # Resolve PCA feature mode after GA to preserve sorted evaluation order.
         try:  # Preserve existing PCA failure tolerance.
-            X_train_pca, X_test_pca = apply_pca_transformation(feature_source_arrays["X_train_scaled"], feature_source_arrays["X_test_scaled"], pca_n_components, file, config=config, feature_names=pca_input_feature_names if pca_input_feature_names is not None else feature_names, scaler=scaler, source_files=source_files, cache_context=pca_cache_context)  # Materialize PCA matrices with strict source, scaling, and split provenance.
+            X_train_pca, X_test_pca, pca_transformer = apply_pca_transformation(feature_source_arrays["X_train_scaled"], feature_source_arrays["X_test_scaled"], pca_n_components, file, config=config, feature_names=pca_input_feature_names if pca_input_feature_names is not None else feature_names, scaler=scaler, source_files=source_files, cache_context=pca_cache_context)  # Materialize PCA matrices with strict source, scaling, and split provenance.
         except Exception as e:  # Skip PCA mode when transformation fails.
             print(f"{BackgroundColors.YELLOW}[WARNING] PCA Components skipped because transformation failed for {BackgroundColors.CYAN}{file}{BackgroundColors.YELLOW}: {e}{Style.RESET_ALL}")  # Log PCA transformation failure.
-            X_train_pca, X_test_pca = None, None  # Suppress PCA mode after failure.
+            X_train_pca, X_test_pca, pca_transformer = None, None, None  # Suppress PCA mode after failure.
         if X_train_pca is not None and X_test_pca is not None:  # Yield PCA only when both matrices exist.
             pca_signature = ("pca", int(X_train_pca.shape[1]))  # Build PCA component identity.
             if pca_signature not in feature_signatures:  # Suppress duplicate PCA mode.
                 feature_signatures.add(pca_signature)  # Register PCA component identity.
                 try:
                     print(f"{BackgroundColors.GREEN}[INFO] Starting model evaluation on PCA Components with {BackgroundColors.CYAN}{X_train_pca.shape[1]}{BackgroundColors.GREEN} features.{Style.RESET_ALL}")  # Mark the boundary between PCA transformation and classifier evaluation.
-                    yield "PCA Components", X_train_pca, X_test_pca, None  # Yield PCA matrices with synthetic names.
+                    yield "PCA Components", X_train_pca, X_test_pca, None, pca_transformer  # Yield PCA matrices with synthetic names and fitted preprocessing.
                 finally:
                     del X_train_pca, X_test_pca  # Release PCA matrices after caller finishes or aborts this mode.
                     gc.collect()  # Reclaim PCA memory before the next feature mode.
@@ -10182,7 +10232,7 @@ def iterate_feature_sets_sequentially(feature_source_arrays: dict, feature_names
             if rfe_signature not in feature_signatures:  # Suppress duplicate RFE mode.
                 feature_signatures.add(rfe_signature)  # Register RFE feature identity.
                 try:
-                    yield "RFE Features", X_train_rfe, X_test_rfe, rfe_actual_features  # Yield RFE feature matrices.
+                    yield "RFE Features", X_train_rfe, X_test_rfe, rfe_actual_features, None  # Yield RFE feature matrices.
                 finally:
                     del X_train_rfe, X_test_rfe  # Release RFE subset arrays after caller finishes or aborts this mode.
                     gc.collect()  # Reclaim RFE subset memory.
@@ -10233,7 +10283,7 @@ def build_classifier_result_entry(model_class, file, execution_mode_str, attack_
             "model_name": model_name,  # Model name for result identification
             "data_source": data_source_label,  # Data source label for experiment traceability
             "experiment_id": experiment_id,  # Unique experiment identifier
-            "experiment_mode": experiment_mode,  # Experiment mode (original_only or original_plus_augmented)
+            "experiment_mode": experiment_mode,  # Persist original-only or augmented-testing semantics.
             "augmentation_ratio": persisted_augmentation_ratio,  # Augmentation ratio with 0.0 for original-only rows
             "n_features": n_features,  # Number of features used in evaluation
             "n_samples_train": n_samples_train,  # Number of training samples
@@ -10270,7 +10320,7 @@ def build_telegram_combination_header(name, model_name, augmentation_ratio=None,
     
     feature_label = "PCA" if name == "PCA Components" else name  # Normalize PCA wording for compact progress labels
     hyperparameter_label = "Optimized Hyperparameters" if hyperparameters_enabled else "Default Hyperparameters"  # Build explicit HP mode label
-    augmentation_label = f"Data Augmentation = {augmentation_ratio:.2f}" if augmentation_ratio is not None else "No Data Augmentation"  # Build explicit DA mode label
+    augmentation_label = f"Augmented Test Ratio = {augmentation_ratio:.2f}" if augmentation_ratio is not None else "Original Test Data"  # Build the isolated testing-mode label.
     parts = [feature_label, hyperparameter_label, augmentation_label, model_name]  # Build full progress label in the expected order
     
     return " - ".join(parts)
@@ -10297,7 +10347,6 @@ def submit_classifier_evaluations_to_pool(executor, individual_models, current_c
 
     future_to_model = {}  # Map futures to (model_name, model_class, combination_index)
     for model_name, model in individual_models.items():  # Iterate over each individual model
-        send_telegram_message(TELEGRAM_BOT, f"Starting combination {current_combination}/{total_steps}: {build_telegram_combination_header(name, model_name, augmentation_ratio, hyperparameters_enabled)}")  # Notify telegram about evaluation start with full active configuration details
         artifact_feature_set = f"{name} - {'Optimized Hyperparameters' if hyperparameters_enabled else 'Default Hyperparameters'}"  # Keep exported/resumed model artifacts isolated by HP mode
         future = executor.submit(
             evaluate_individual_classifier,
@@ -10331,7 +10380,7 @@ def collect_classifier_results_from_futures(future_to_model, individual_models, 
     :param attack_types_combined: List of attack types for combined files evaluation, or None for separate files evaluation.
     :param data_source_label: Label identifying the data source for result traceability.
     :param experiment_id: Unique experiment identifier for traceability.
-    :param experiment_mode: Experiment mode string ('original_only' or 'original_plus_augmented').
+    :param experiment_mode: Experiment mode string ('original_only' or 'original_training_augmented_testing').
     :param augmentation_ratio: Augmentation ratio float, or None for original-only experiments.
     :param y_train: Training target labels used to compute training set size.
     :param y_test: Test target labels used for evaluation and size metadata.
@@ -10355,7 +10404,6 @@ def collect_classifier_results_from_futures(future_to_model, individual_models, 
             effective_hyperparameters=serialize_effective_estimator_parameters(individual_models[model_name]),
         )  # Build standardized result entry for this individual classifier
         results_dict[(name, model_name)] = result_entry  # Store result keyed by (feature_set, model_name)
-        send_telegram_message(TELEGRAM_BOT, f"Finished combination {comb_idx}/{total_steps}: {build_telegram_combination_header(name, model_name, augmentation_ratio, bool(hyperparams_map))} with F1: {metrics[3]} in {calculate_execution_time(0, metrics[6])}")  # Notify telegram about completion using full active configuration details
         progress_bar.update(1)  # Advance progress bar by one step
 
         if config.get("explainability", {}).get("enabled", False) and experiment_mode == "original_only":  # Only queue explainability on original data
@@ -10450,20 +10498,13 @@ def recover_cached_individual_classifier_result(cache_dict, execution_mode_str, 
         f"{BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}: Mode {BackgroundColors.CYAN}{evaluation_mode}{BackgroundColors.GREEN} | F1-Score {BackgroundColors.CYAN}{f1}{BackgroundColors.GREEN} | Accuracy: {BackgroundColors.CYAN}{acc}{BackgroundColors.GREEN} | Precision: {BackgroundColors.CYAN}{prec}{BackgroundColors.GREEN} | Recall: {BackgroundColors.CYAN}{rec}{BackgroundColors.GREEN} | FPR: {BackgroundColors.CYAN}{fpr}{BackgroundColors.GREEN} | FNR: {BackgroundColors.CYAN}{fnr}{BackgroundColors.GREEN} | Training Time: {BackgroundColors.CYAN}{cached_elapsed}s{BackgroundColors.GREEN} | Execution Time: {BackgroundColors.CYAN}{cached_elapsed}s{BackgroundColors.GREEN} | Total Time: {BackgroundColors.CYAN}{cached_human_time}{BackgroundColors.GREEN} ({BackgroundColors.CYAN}{cached_elapsed}s{BackgroundColors.GREEN}){Style.RESET_ALL}"
     )  # Print a full metrics summary for recovered cached classifier as if freshly evaluated
 
-    telegram_resume_header = f"[RESUME] Recovered combination {current_combination}/{total_steps}: {combination_header} from saved partial progress (no recomputation performed)."  # Build Telegram resume header matching stdout semantics
-    telegram_metrics_line = f"{model_name}: Mode {evaluation_mode} | F1-Score {f1} | Accuracy: {acc} | Precision: {prec} | Recall: {rec} | FPR: {fpr} | FNR: {fnr} | Training Time: {cached_elapsed}s | Execution Time: {cached_elapsed}s | Total Time: {cached_human_time} ({cached_elapsed}s)"  # Build Telegram metrics line with full recovered metrics
-
-    send_telegram_message(
-        TELEGRAM_BOT,
-        f"{telegram_resume_header}\n{telegram_metrics_line}",
-    )  # Notify Telegram with the same recovered metrics summary shown in stdout
     progress_bar.update(1)  # Advance progress bar even for skipped cached evaluations
     current_combination += 1  # Advance the global combination counter for skipped evaluations
 
     return (True, current_combination)  # Signal cache hit and return updated counter
 
 
-def run_individual_classifiers_for_feature_set(name, individual_models, X_train_df, y_train, X_test_df, y_test, X_test_subset, X_train_n_cols, file, execution_mode_str, attack_types_combined, data_source_label, experiment_id, experiment_mode, augmentation_ratio, hyperparams_map, scaler, subset_feature_names, total_steps, current_combination, progress_bar, config=None, cache_dict=None, cache_ref_file=None, hyperparameters_enabled=False):
+def run_individual_classifiers_for_feature_set(name, individual_models, X_train_df, y_train, X_test_df, y_test, X_test_subset, X_train_n_cols, file, execution_mode_str, attack_types_combined, data_source_label, experiment_id, experiment_mode, augmentation_ratio, hyperparams_map, scaler, label_encoder, transformer, input_feature_names, target_column, source_files, subset_feature_names, total_steps, current_combination, progress_bar, config=None, cache_dict=None, cache_ref_file=None, hyperparameters_enabled=False):
     """
     Evaluates all individual classifiers for a feature set sequentially, collects results, and runs explainability.
 
@@ -10480,10 +10521,15 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
     :param attack_types_combined: List of attack types for combined files evaluation or None for separate files evaluation
     :param data_source_label: Label identifying the data source for result traceability
     :param experiment_id: Unique experiment identifier for traceability
-    :param experiment_mode: Experiment mode string ('original_only' or 'original_plus_augmented')
+    :param experiment_mode: Experiment mode string ('original_only' or 'original_training_augmented_testing')
     :param augmentation_ratio: Augmentation ratio float or None for original-only experiments
     :param hyperparams_map: Dictionary mapping model names to their hyperparameter dicts
     :param scaler: Fitted scaler used for dataset preprocessing
+    :param label_encoder: Label encoder fitted on original training labels
+    :param transformer: Optional PCA transformer fitted on original training features
+    :param input_feature_names: Ordered numeric schema before preprocessing
+    :param target_column: Positional target column name
+    :param source_files: Ordered original source files used for model identity
     :param subset_feature_names: List of feature names for the current subset
     :param total_steps: Total number of evaluation steps for Telegram progress messages
     :param current_combination: Current combination index counter for progress messages
@@ -10512,9 +10558,10 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
                 continue  # Move to next model because this one has already been recovered
             active_model = clone(model)  # Clone the estimator prototype so fitted state is not retained across atomic classifiers
             artifact_feature_set = f"{name} - {'Optimized Hyperparameters' if hyperparameters_enabled else 'Default Hyperparameters'}"  # Resolve HP-isolated artifact feature-set label
+            dataset_name = build_filename_safe_dataset_identity(resolve_canonical_dataset_identity(str(file), True)) if execution_mode_str == "combined_files" else os.path.basename(os.path.dirname(file))  # Resolve model export dataset folder by execution mode.
+            artifact_context = build_stacking_model_artifact_context(file, source_files, execution_mode_str, attack_types_combined, target_column, model_name, active_model, artifact_feature_set, input_feature_names, subset_feature_names, list(label_encoder.classes_), transformer, hyperparameters_enabled)  # Build ratio-independent original-training artifact identity.
             combination_header = build_telegram_combination_header(name, model_name, augmentation_ratio, hyperparameters_enabled)  # Build full progress label for this classifier
             progress_bar.set_description(combination_header)  # Update progress bar with the complete active configuration
-            send_telegram_message(TELEGRAM_BOT, f"Starting combination {current_combination}/{total_steps}: {combination_header}")  # Notify Telegram about evaluation start with active configuration details
             sys.stdout.flush()  # Flush stdout before each classifier to ensure logs are visible under nohup
             phase_params_digest = get_classifier_params_digest(active_model)  # Build compact classifier parameter digest
             phase_cache_key = build_resume_cache_key(execution_mode_str, data_source_label, experiment_mode, augmentation_ratio, attack_types_combined, name, model_name, hyperparameters_enabled)  # Build cache identity source for diagnostics
@@ -10559,14 +10606,7 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
 
             results_dict[(name, model_name)] = result_entry  # Store result keyed by feature set and model only after durable cache verification
 
-            try:  # Export fitted artifacts only after durable cache persistence succeeds
-                dataset_name = build_filename_safe_dataset_identity(resolve_canonical_dataset_identity(str(file), True)) if execution_mode_str == "combined_files" else os.path.basename(os.path.dirname(file))  # Resolve model export dataset folder by execution mode.
-                if hasattr(active_model, "classes_"):  # Verify fitted classifier state using the common sklearn classes_ marker
-                    export_model_and_scaler(active_model, scaler, dataset_name, model_name, subset_feature_names or [], best_params=None, feature_set=artifact_feature_set, dataset_csv_path=file, config=config)  # Export fitted model and scaler after cache persistence
-            except Exception:  # Preserve existing best-effort export behavior
-                pass  # Continue evaluation when artifact export fails
-
-            send_telegram_message(TELEGRAM_BOT, f"Finished combination {current_combination}/{total_steps}: {combination_header} with F1: {metrics[3]} in {calculate_execution_time(0, metrics[6])}")  # Notify Telegram about completion using active configuration details and raw F1 value
+            export_model_and_scaler(active_model, scaler, dataset_name, model_name, feature_set=artifact_feature_set, dataset_csv_path=file, config=config, artifact_context=artifact_context, label_encoder=label_encoder, transformer=transformer)  # Atomically persist the original-trained classifier and fitted preprocessing.
             pass  # Verify removal of duplicate individual model accuracy print
             progress_bar.update(1)  # Advance progress bar by one step
 
@@ -10587,7 +10627,7 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
 
             current_combination += 1  # Advance the global combination counter
             write_memory_phase_event("before_memory_cleanup", config=config, **phase_metadata, event_outcome="starting")  # Publish per-classifier cleanup start
-            del active_model, metrics, training_ram_stats  # Release fitted estimator, metrics, and RAM stats before the next classifier
+            del active_model, artifact_context, metrics, training_ram_stats  # Release fitted estimator, artifact metadata, metrics, and RAM stats before the next classifier
             gc.collect()  # Reclaim estimator-owned memory before the next atomic classifier
             write_memory_phase_event("after_memory_cleanup", config=config, **phase_metadata, event_outcome="completed")  # Publish per-classifier cleanup completion
 
@@ -10613,12 +10653,12 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
         raise
 
 
-def run_stacking_evaluation_for_feature_set(name, stacking_model, X_train_df, y_train, X_test_df, y_test, X_test_subset, X_train_n_cols, file, execution_mode_str, attack_types_combined, data_source_label, experiment_id, experiment_mode, augmentation_ratio, scaler, subset_feature_names, total_steps, current_combination, progress_bar, config=None, cache_dict=None, cache_ref_file=None, hyperparameters_enabled=False):
+def run_stacking_evaluation_for_feature_set(name, stacking_model, X_train_df, y_train, X_test_df, y_test, X_test_subset, X_train_n_cols, file, execution_mode_str, attack_types_combined, data_source_label, experiment_id, experiment_mode, augmentation_ratio, scaler, label_encoder, transformer, input_feature_names, target_column, source_files, subset_feature_names, total_steps, current_combination, progress_bar, config=None, cache_dict=None, cache_ref_file=None, hyperparameters_enabled=False):
     """
     Evaluates the stacking classifier for one feature set, exports the model, generates metric plots, and returns the result entry.
 
     :param name: Name of the current feature set being evaluated
-    :param stacking_model: Fitted stacking classifier model object
+    :param stacking_model: Unfitted stacking classifier prototype
     :param X_train_df: Training feature DataFrame with named columns
     :param y_train: Training target labels
     :param X_test_df: Test feature DataFrame with named columns
@@ -10630,9 +10670,14 @@ def run_stacking_evaluation_for_feature_set(name, stacking_model, X_train_df, y_
     :param attack_types_combined: List of attack types for combined files evaluation or None for separate files evaluation
     :param data_source_label: Label identifying the data source for result traceability
     :param experiment_id: Unique experiment identifier for traceability
-    :param experiment_mode: Experiment mode string ('original_only' or 'original_plus_augmented')
+    :param experiment_mode: Experiment mode string ('original_only' or 'original_training_augmented_testing')
     :param augmentation_ratio: Augmentation ratio float or None for original-only experiments
     :param scaler: Fitted scaler used for dataset preprocessing
+    :param label_encoder: Label encoder fitted on original training labels
+    :param transformer: Optional PCA transformer fitted on original training features
+    :param input_feature_names: Ordered numeric schema before preprocessing
+    :param target_column: Positional target column name
+    :param source_files: Ordered original source files used for model identity
     :param subset_feature_names: List of feature names for the current subset
     :param total_steps: Total number of evaluation steps for Telegram progress messages
     :param current_combination: Current combination index counter for progress messages
@@ -10669,15 +10714,14 @@ def run_stacking_evaluation_for_feature_set(name, stacking_model, X_train_df, y_
                     f"{BackgroundColors.CYAN}StackingClassifier{BackgroundColors.GREEN}: Mode {BackgroundColors.CYAN}{evaluation_mode}{BackgroundColors.GREEN} | F1-Score {BackgroundColors.CYAN}{f1}{BackgroundColors.GREEN} | Accuracy: {BackgroundColors.CYAN}{acc}{BackgroundColors.GREEN} | Precision: {BackgroundColors.CYAN}{prec}{BackgroundColors.GREEN} | Recall: {BackgroundColors.CYAN}{rec}{BackgroundColors.GREEN} | FPR: {BackgroundColors.CYAN}{fpr}{BackgroundColors.GREEN} | FNR: {BackgroundColors.CYAN}{fnr}{BackgroundColors.GREEN} | Training Time: {BackgroundColors.CYAN}{cached_elapsed}s{BackgroundColors.GREEN} | Execution Time: {BackgroundColors.CYAN}{cached_elapsed}s{BackgroundColors.GREEN} | Total Time: {BackgroundColors.CYAN}{cached_human_time}{BackgroundColors.GREEN} ({BackgroundColors.CYAN}{cached_elapsed}s{BackgroundColors.GREEN}){Style.RESET_ALL}"
                 )  # Print a full metrics summary for recovered cached stacking classifier as if freshly evaluated
 
-                telegram_resume_header = f"[RESUME] Recovered combination {current_combination}/{total_steps}: {combination_header} from saved partial progress (no recomputation performed)."  # Build Telegram resume header matching stdout semantics
-                telegram_metrics_line = f"StackingClassifier: Mode {evaluation_mode} | F1-Score {f1} | Accuracy: {acc} | Precision: {prec} | Recall: {rec} | FPR: {fpr} | FNR: {fnr} | Training Time: {cached_elapsed}s | Execution Time: {cached_elapsed}s | Total Time: {cached_human_time} ({cached_elapsed}s)"  # Build Telegram metrics line with full recovered metrics
-                send_telegram_message(TELEGRAM_BOT, f"{telegram_resume_header}\n{telegram_metrics_line}")  # Notify Telegram with full recovered stacking metrics summary
                 progress_bar.update(1)  # Advance progress bar even for skipped cached evaluations
                 current_combination += 1  # Advance the global combination counter for skipped evaluations
                 return (cached_result, current_combination)  # Return the cached stacking result entry without re-running the evaluation
 
+        active_stacking_model = clone(stacking_model)  # Isolate fitted stacking state to this atomic feature-set evaluation.
+
         try:  # Attempt to obtain a compact snapshot of stacking model parameters for logging
-            params_raw = stacking_model.get_params() if hasattr(stacking_model, "get_params") else {}  # Get model parameters when available
+            params_raw = active_stacking_model.get_params() if hasattr(active_stacking_model, "get_params") else {}  # Get model parameters when available
         except Exception:  # On any error retrieving params
             params_raw = {}  # Fallback to empty dict when parameters cannot be read
 
@@ -10695,16 +10739,15 @@ def run_stacking_evaluation_for_feature_set(name, stacking_model, X_train_df, y_
         combination_header = build_telegram_combination_header(name, "StackingClassifier", augmentation_ratio, hyperparameters_enabled)  # Build full progress label for stacking classifier
         progress_bar.set_description(combination_header)  # Update progress bar with the complete active configuration
 
-        send_telegram_message(TELEGRAM_BOT, f"Starting combination {current_combination}/{total_steps}: {combination_header}")  # Notify Telegram about stacking evaluation start with active configuration details
-        phase_params_digest = get_classifier_params_digest(stacking_model)  # Build compact stacking parameter digest
+        phase_params_digest = get_classifier_params_digest(active_stacking_model)  # Build compact stacking parameter digest
         phase_cache_key = build_resume_cache_key(execution_mode_str, data_source_label, experiment_mode, augmentation_ratio, attack_types_combined, name, "StackingClassifier", hyperparameters_enabled)  # Build stacking cache identity source for diagnostics
         phase_cache_digest = hashlib.sha256(json.dumps(phase_cache_key, sort_keys=True, default=str).encode("utf-8")).hexdigest()  # Build stable stacking cache identity digest
-        phase_metadata = {"dataset_identity": os.path.basename(str(file)), "dataset_source": file, "execution_mode": execution_mode_str, "attack_scope": attack_types_combined, "data_source": data_source_label, "experiment_mode": experiment_mode, "augmentation_ratio": augmentation_ratio, "feature_set_name": name, "hyperparameter_mode": "Optimized Hyperparameters" if hyperparameters_enabled else "Default Hyperparameters", "classifier_name": "StackingClassifier", "classifier_params_digest": phase_params_digest, "classifier_params_reference": f"sha256:{phase_params_digest.get('digest')}", "train_sample_count": len(y_train), "test_sample_count": len(y_test), "feature_count": X_train_n_cols, "n_jobs": get_classifier_n_jobs(stacking_model), "cache_identity": phase_cache_digest, "cache_reference": cache_ref_file, "combination_index": current_combination, "total_combinations": total_steps}  # Build compact phase metadata for stacking
+        phase_metadata = {"dataset_identity": os.path.basename(str(file)), "dataset_source": file, "execution_mode": execution_mode_str, "attack_scope": attack_types_combined, "data_source": data_source_label, "experiment_mode": experiment_mode, "augmentation_ratio": augmentation_ratio, "feature_set_name": name, "hyperparameter_mode": "Optimized Hyperparameters" if hyperparameters_enabled else "Default Hyperparameters", "classifier_name": "StackingClassifier", "classifier_params_digest": phase_params_digest, "classifier_params_reference": f"sha256:{phase_params_digest.get('digest')}", "train_sample_count": len(y_train), "test_sample_count": len(y_test), "feature_count": X_train_n_cols, "n_jobs": get_classifier_n_jobs(active_stacking_model), "cache_identity": phase_cache_digest, "cache_reference": cache_ref_file, "combination_index": current_combination, "total_combinations": total_steps}  # Build compact phase metadata for stacking
         write_memory_phase_event("before_classifier_fit", config=config, **phase_metadata, event_outcome="starting")  # Publish stacking fit start
         stacking_ram_stats = {}  # Hold RAM statistics for this stacking fit only.
 
         stacking_metrics = evaluate_stacking_classifier(
-            stacking_model, X_train_df, y_train, X_test_df, y_test, config=config, training_ram_stats=stacking_ram_stats
+            active_stacking_model, X_train_df, y_train, X_test_df, y_test, config=config, training_ram_stats=stacking_ram_stats
         )  # Evaluate stacking model with DataFrames and retrieve metrics tuple
         write_memory_phase_event("after_classifier_fit", config=config, **phase_metadata, event_outcome="fit_and_prediction_completed")  # Publish stacking fit completion
         write_memory_phase_event("after_prediction_and_metrics", config=config, **phase_metadata, accuracy=stacking_metrics[0], precision=stacking_metrics[1], recall=stacking_metrics[2], f1_score=stacking_metrics[3], event_outcome="metrics_completed")  # Publish stacking metrics completion
@@ -10720,25 +10763,21 @@ def run_stacking_evaluation_for_feature_set(name, stacking_model, X_train_df, y_
             pass  # Continue without plotting
 
         stacking_result_entry = build_classifier_result_entry(
-            stacking_model.__class__.__name__, file, execution_mode_str, attack_types_combined, name, "Stacking",
+            active_stacking_model.__class__.__name__, file, execution_mode_str, attack_types_combined, name, "Stacking",
             "StackingClassifier", data_source_label, experiment_id, experiment_mode, augmentation_ratio,
             X_train_n_cols, len(y_train), len(y_test), stacking_metrics, subset_feature_names,
             hyperparameters_enabled=hyperparameters_enabled,
-            effective_hyperparameters=serialize_effective_estimator_parameters(stacking_model),
+            effective_hyperparameters=serialize_effective_estimator_parameters(active_stacking_model),
         )  # Build standardized result entry for the stacking classifier
 
         write_memory_phase_event("before_cache_persist", config=config, **phase_metadata, event_outcome="starting")  # Publish stacking cache persistence start
         persist_cache_result_entry(cache_ref_file, stacking_result_entry, cache_dict, config=config)  # Persist this atomic stacking result immediately and register its resume identity
         write_memory_phase_event("after_cache_persist", config=config, **phase_metadata, event_outcome="persisted")  # Publish stacking cache persistence completion
 
-        try:  # Export fitted stacking artifacts only after durable cache persistence succeeds
-            dataset_name = build_filename_safe_dataset_identity(resolve_canonical_dataset_identity(str(file), True)) if execution_mode_str == "combined_files" else os.path.basename(os.path.dirname(file))  # Resolve stacking export dataset folder by execution mode.
-            artifact_feature_set = f"{name} - {'Optimized Hyperparameters' if hyperparameters_enabled else 'Default Hyperparameters'}"  # Keep stacking artifacts isolated by HP mode
-            export_model_and_scaler(stacking_model, scaler, dataset_name, "StackingClassifier", subset_feature_names, best_params=None, feature_set=artifact_feature_set, dataset_csv_path=file, config=config)  # Export fitted stacking model and scaler after cache persistence
-        except Exception:  # If model export fails
-            pass  # Continue without exporting
-
-        send_telegram_message(TELEGRAM_BOT, f"Finished combination {current_combination}/{total_steps}: {combination_header} with F1: {stacking_metrics[3]} in {calculate_execution_time(0, stacking_metrics[6])}")  # Notify Telegram about stacking evaluation completion using active configuration details and raw F1 value
+        dataset_name = build_filename_safe_dataset_identity(resolve_canonical_dataset_identity(str(file), True)) if execution_mode_str == "combined_files" else os.path.basename(os.path.dirname(file))  # Resolve stacking export dataset folder by execution mode.
+        artifact_feature_set = f"{name} - {'Optimized Hyperparameters' if hyperparameters_enabled else 'Default Hyperparameters'}"  # Keep stacking artifacts isolated by HP mode
+        artifact_context = build_stacking_model_artifact_context(file, source_files, execution_mode_str, attack_types_combined, target_column, "StackingClassifier", active_stacking_model, artifact_feature_set, input_feature_names, subset_feature_names, list(label_encoder.classes_), transformer, hyperparameters_enabled)  # Build ratio-independent original-training artifact identity.
+        export_model_and_scaler(active_stacking_model, scaler, dataset_name, "StackingClassifier", feature_set=artifact_feature_set, dataset_csv_path=file, config=config, artifact_context=artifact_context, label_encoder=label_encoder, transformer=transformer)  # Atomically persist fitted stacking and preprocessing.
         pass  # Verify removal of duplicate stacking classifier accuracy print
         progress_bar.update(1)  # Advance progress bar after stacking evaluation
         current_combination += 1  # Advance the global combination counter
@@ -10747,7 +10786,7 @@ def run_stacking_evaluation_for_feature_set(name, stacking_model, X_train_df, y_
         explainability_outcome = "skipped"  # Track stacking explainability scheduling outcome
         if config.get("explainability", {}).get("enabled", False) and experiment_mode == "original_only":  # Only queue explainability on original data
             try:  # Attempt to dispatch explainability for stacking model.
-                explainability_dispatch = schedule_explainability_job(stacking_model, "StackingClassifier", X_test_subset, y_test, subset_feature_names, file, name, execution_mode_str, config, experiment_mode, hyperparameters_enabled, training_ram_stats=stacking_ram_stats)  # Dispatch explainability according to RAM-gated process policy.
+                explainability_dispatch = schedule_explainability_job(active_stacking_model, "StackingClassifier", X_test_subset, y_test, subset_feature_names, file, name, execution_mode_str, config, experiment_mode, hyperparameters_enabled, training_ram_stats=stacking_ram_stats)  # Dispatch explainability according to RAM-gated process policy.
                 explainability_outcome = f"scheduled:{explainability_dispatch.get('mode', 'none')}" if isinstance(explainability_dispatch, dict) else "scheduled:none"  # Track selected explainability execution mode.
             except Exception as e:  # If explainability queueing fails
                 explainability_outcome = f"failed:{e}"  # Track stacking explainability scheduling failure
@@ -10758,12 +10797,15 @@ def run_stacking_evaluation_for_feature_set(name, stacking_model, X_train_df, y_
                 raise  # Preserve explainability failure propagation.
         write_memory_phase_event("after_explainability_schedule", config=config, **phase_metadata, event_outcome=explainability_outcome)  # Publish stacking explainability scheduling completion
         write_memory_phase_event("before_memory_cleanup", config=config, **phase_metadata, event_outcome="starting")  # Publish stacking cleanup start
-        del stacking_ram_stats  # Release stacking RAM statistics before returning.
+        del active_stacking_model, artifact_context, stacking_ram_stats  # Release fitted stacking, artifact metadata, and RAM statistics before returning.
         gc.collect()  # Reclaim any released stacking temporaries before returning
         write_memory_phase_event("after_memory_cleanup", config=config, **phase_metadata, event_outcome="completed")  # Publish stacking cleanup completion
 
         return (stacking_result_entry, current_combination)  # Return result entry and updated combination counter
     except MemoryError as e:  # Handle stacking memory errors with diagnostic phase
+        if "active_stacking_model" in locals():  # Release fitted stacking state after a memory failure.
+            del active_stacking_model  # Drop the fitted model reference before error reporting.
+            gc.collect()  # Reclaim released stacking state.
         if "stacking_ram_stats" in locals():  # Release stacking RAM statistics if allocated before memory failure.
             del stacking_ram_stats  # Drop RAM statistics reference before error reporting.
         write_memory_phase_event("memory_error", config=config, classifier_name="StackingClassifier", feature_set_name=name, train_sample_count=len(y_train) if y_train is not None else None, test_sample_count=len(y_test) if y_test is not None else None, feature_count=X_train_n_cols, event_outcome=str(e))  # Publish stacking memory error
@@ -10771,6 +10813,9 @@ def run_stacking_evaluation_for_feature_set(name, stacking_model, X_train_df, y_
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send memory error via Telegram
         raise  # Preserve original MemoryError behavior
     except Exception as e:
+        if "active_stacking_model" in locals():  # Release fitted stacking state after an evaluation failure.
+            del active_stacking_model  # Drop the fitted model reference before error reporting.
+            gc.collect()  # Reclaim released stacking state.
         if "stacking_ram_stats" in locals():  # Release stacking RAM statistics if allocated before failure.
             del stacking_ram_stats  # Drop RAM statistics reference before error reporting.
         write_memory_phase_event("model_error", config=config, classifier_name="StackingClassifier", feature_set_name=name, train_sample_count=len(y_train) if y_train is not None else None, test_sample_count=len(y_test) if y_test is not None else None, feature_count=X_train_n_cols, event_outcome=str(e))  # Publish stacking model error
@@ -10810,13 +10855,13 @@ def print_dataset_evaluation_header(data_source_label, evaluation_plan, executio
 
         for combination_index, (feature_set, hyperparameters_enabled, augmentation_ratio, classifier) in enumerate(evaluation_plan, start=1):  # Print combinations in their exact execution order
             hyperparameter_label = "Optimized Hyperparameters" if hyperparameters_enabled else "Default Hyperparameters"  # Resolve the active hyperparameter label
-            augmentation_label = f"{augmentation_ratio * 100:g}%" if augmentation_ratio is not None else "No Data Augmentation"  # Resolve the active augmentation mode or ratio
-            experiment_mode_label = "Original Plus Augmented" if augmentation_ratio is not None else "Original Only"  # Resolve the experiment-mode identity
-            print(f"[{combination_index}/{total_combinations}] Feature Set: {feature_set} | Hyperparameters: {hyperparameter_label} | Data Augmentation: {augmentation_label} | Classifier: {classifier} | Experiment Mode: {experiment_mode_label}")  # Print one complete ordered combination identity
+            augmentation_label = f"{augmentation_ratio * 100:g}%" if augmentation_ratio is not None else "None"  # Resolve the augmented-test ratio.
+            testing_data_label = "Augmented Data" if augmentation_ratio is not None else "Original Data"  # Resolve the isolated testing source.
+            print(f"[{combination_index}/{total_combinations}] Feature Set: {feature_set} | Hyperparameters: {hyperparameter_label} | Training Data: Original Data | Testing Data: {testing_data_label} | Augmented Test Ratio: {augmentation_label} | Classifier: {classifier}")  # Print one complete ordered combination identity.
 
         feature_sets = list(dict.fromkeys(combination[0] for combination in evaluation_plan))  # Preserve first-occurrence feature-set order for the Telegram summary
         hyperparameter_modes = list(dict.fromkeys("Optimized Hyperparameters" if combination[1] else "Default Hyperparameters" for combination in evaluation_plan))  # Preserve first-occurrence runnable hyperparameter order
-        augmentation_modes = list(dict.fromkeys(f"{combination[2] * 100:g}%" if combination[2] is not None else "No Data Augmentation" for combination in evaluation_plan))  # Preserve first-occurrence augmentation order
+        augmentation_modes = list(dict.fromkeys(f"{combination[2] * 100:g}%" if combination[2] is not None else "None" for combination in evaluation_plan))  # Preserve first-occurrence augmented-test order.
         classifiers = list(dict.fromkeys(combination[3] for combination in evaluation_plan))  # Preserve first-occurrence enabled-classifier order
 
         telegram_summary = "\n".join([
@@ -10824,7 +10869,9 @@ def print_dataset_evaluation_header(data_source_label, evaluation_plan, executio
             f"Total combinations: {total_combinations}",
             f"Feature sets: {', '.join(feature_sets)}",
             f"Hyperparameters: {', '.join(hyperparameter_modes)}",
-            f"Data augmentation: {', '.join(augmentation_modes)}",
+            "Training data: Original Data",
+            "Testing data: Original Data and ratio-selected Augmented Data",
+            f"Augmented test ratios: {', '.join(augmentation_modes)}",
             f"Classifiers: {', '.join(classifiers)}",
             "Detailed ordered plan written to the application log.",
         ])  # Build one condensed Telegram summary from the ordered runtime plan
@@ -10946,6 +10993,11 @@ def evaluate_single_feature_set(
     augmentation_ratio,
     hyperparams_map,
     scaler,
+    label_encoder,
+    transformer,
+    input_feature_names,
+    target_column,
+    source_files,
     total_steps,
     current_combination,
     progress_bar,
@@ -10976,6 +11028,11 @@ def evaluate_single_feature_set(
     :param augmentation_ratio: Augmentation ratio float included in result entries or None for original-only.
     :param hyperparams_map: Dictionary mapping model names to best hyperparameter dicts applied before training.
     :param scaler: Fitted StandardScaler instance used to transform subsets when needed.
+    :param label_encoder: Label encoder fitted on original training labels.
+    :param transformer: Optional PCA transformer fitted on original training features.
+    :param input_feature_names: Ordered numeric schema before preprocessing.
+    :param target_column: Positional target column name.
+    :param source_files: Ordered original source files used for model identity.
     :param total_steps: Total number of evaluation steps across all feature sets used by the progress bar.
     :param current_combination: 1-based overall combination counter updated for each model evaluated.
     :param progress_bar: tqdm progress bar instance advanced after each model evaluation.
@@ -10997,7 +11054,7 @@ def evaluate_single_feature_set(
         name, individual_models, X_train_df, y_train, X_test_df, y_test,
         X_test_subset, X_train_subset.shape[1], file, execution_mode_str, attack_types_combined,
         data_source_label, experiment_id, experiment_mode, augmentation_ratio,
-        hyperparams_map, scaler, subset_feature_names, total_steps, current_combination, progress_bar, config=config,
+        hyperparams_map, scaler, label_encoder, transformer, input_feature_names, target_column, source_files, subset_feature_names, total_steps, current_combination, progress_bar, config=config,
         cache_dict=cache_dict, cache_ref_file=cache_ref_file, hyperparameters_enabled=hyperparameters_enabled,
     )  # Evaluate all individual classifiers and collect their result entries with resume support
 
@@ -11007,7 +11064,7 @@ def evaluate_single_feature_set(
             name, stacking_model, X_train_df, y_train, X_test_df, y_test,
             X_test_subset, X_train_subset.shape[1], file, execution_mode_str, attack_types_combined,
             data_source_label, experiment_id, experiment_mode, augmentation_ratio,
-            scaler, subset_feature_names, total_steps, current_combination, progress_bar, config=config,
+            scaler, label_encoder, transformer, input_feature_names, target_column, source_files, subset_feature_names, total_steps, current_combination, progress_bar, config=config,
             cache_dict=cache_dict, cache_ref_file=cache_ref_file, hyperparameters_enabled=hyperparameters_enabled,
         )  # Evaluate stacking classifier, export model artifacts, generate metric plots, and collect result entry with resume support
 
@@ -11029,15 +11086,16 @@ def evaluate_on_dataset(
     augmentation_ratio=None,
     execution_mode_str="separate_files",
     attack_types_combined=None,
-    df_augmented_for_training=None,
+    df_augmented_for_testing=None,
     config=None,
     cache_ref_file=None,
     hyperparameters_enabled=None,
     grid_progress=None,
     source_files=None,  # Preserve ordered dataset provenance for PCA cache validation.
+    artifact_recovery_target=None,
 ):
     """
-    Evaluate classifiers on a single dataset with optional training-only augmentation.
+    Train on original data or evaluate persisted original-trained models on augmented data.
     :param file: Path to the dataset file
     :param df: DataFrame with the original dataset (used for test set)
     :param feature_names: List of feature column names
@@ -11045,18 +11103,19 @@ def evaluate_on_dataset(
     :param pca_n_components: Number of PCA components
     :param rfe_selected_features: RFE selected features
     :param base_models: Dictionary of base models to evaluate
-    :param data_source_label: Label for data source ("Original", "Original+Augmented@50%", etc.)
+    :param data_source_label: Label for the original or augmented testing source
     :param hyperparams_map: Dictionary mapping model names to hyperparameter dicts
     :param experiment_id: Unique experiment identifier for traceability
-    :param experiment_mode: Experiment mode string ('original_only' or 'original_plus_augmented')
+    :param experiment_mode: Experiment mode string ('original_only' or 'original_training_augmented_testing')
     :param augmentation_ratio: Augmentation ratio float (e.g., 0.50) or None for original-only
     :param execution_mode_str: Execution mode string ('separate_files' or 'combined_files')
     :param attack_types_combined: List of attack types for combined files evaluation or None for separate files evaluation
-    :param df_augmented_for_training: Optional augmented DataFrame to merge into training set only (test set remains original-only)
+    :param df_augmented_for_testing: Optional sampled augmented DataFrame used only for persisted-model testing
     :param config: Configuration dictionary (uses global CONFIG if None)
     :param cache_ref_file: Override file path to use when computing the cache file location (required when file is 'combined_files_combined')
     :param hyperparameters_enabled: Explicit hyperparameter mode flag for progress labels and result flow
-    :param source_files: Ordered original and augmented source files used to construct this evaluation dataset.
+    :param source_files: Ordered original source files used to construct the training dataset.
+    :param artifact_recovery_target: Optional feature-set and classifier identity for original-only artifact recovery.
     :return: Dictionary mapping (feature_set, model_name) to results
     """
 
@@ -11070,6 +11129,8 @@ def evaluate_on_dataset(
             hyperparameters_enabled = bool(hyperparams_map)  # Preserve legacy inference for older callers
 
         stacking_enabled = config.get("stacking", {}).get("methods", {}).get("stacking", True)  # Resolve stacking toggle from config
+        if artifact_recovery_target is not None:
+            stacking_enabled = artifact_recovery_target[1] == "StackingClassifier"  # Restrict recovery to the missing classifier identity.
 
         ga_selected_features, rfe_selected_features = sanitize_and_verify_feature_selections(
             ga_selected_features, rfe_selected_features, feature_names, config=config
@@ -11081,79 +11142,152 @@ def evaluate_on_dataset(
         else:  # Feature selection disabled: only the full-feature baseline may be generated
             feature_sets_config = {"use_full": True, "use_pca": False, "use_rfe": False, "use_ga": False, "explicit_features": []}  # Suppress every selection strategy without mutating CLI/config state
 
-        feature_mode_names = list_grid_feature_modes(ga_selected_features, pca_n_components, rfe_selected_features, feature_names, config=config)  # Resolve feature modes without materializing every feature matrix
+        feature_mode_names = [artifact_recovery_target[0]] if artifact_recovery_target is not None else list_grid_feature_modes(ga_selected_features, pca_n_components, rfe_selected_features, feature_names, config=config)  # Resolve the full plan or one missing artifact mode.
+        planned_models = base_models if artifact_recovery_target is None else ({artifact_recovery_target[1]: base_models[artifact_recovery_target[1]]} if artifact_recovery_target[1] != "StackingClassifier" else {})  # Keep recovery progress limited to the missing artifact.
         if grid_progress is None:  # Build the exact standalone plan for the current data and HP slice
-            evaluation_plan = build_evaluation_plan([(bool(hyperparameters_enabled), base_models, hyperparams_map or {})], [augmentation_ratio], feature_mode_names, stacking_enabled)  # Build the standalone ordered runtime combinations
+            evaluation_plan = build_evaluation_plan([(bool(hyperparameters_enabled), planned_models, hyperparams_map or {})], [augmentation_ratio], feature_mode_names, stacking_enabled)  # Build the standalone ordered runtime combinations
         else:  # Reuse the complete ordered plan that created the shared full-grid progress bar
             evaluation_plan = grid_progress["evaluation_plan"]  # Reuse the authoritative full-grid plan source
 
-        print_dataset_evaluation_header(data_source_label, evaluation_plan, execution_mode_str, attack_types_combined)  # Print the evaluation header and exact ordered plan before any combination runs or recovers
+        if artifact_recovery_target is None and (grid_progress is None or not grid_progress.get("plan_printed", False)):
+            print_dataset_evaluation_header(data_source_label, evaluation_plan, execution_mode_str, attack_types_combined)  # Print the detailed local plan and one condensed Telegram summary.
+            if grid_progress is not None:
+                grid_progress["plan_printed"] = True  # Prevent per-ratio plan messages for the shared grid.
 
         pca_input_feature_names = [str(column) for column in df.iloc[:, :-1].select_dtypes(include=np.number).columns]  # Capture the exact ordered numeric columns consumed by scaling and PCA.
         target_column_name = str(df.columns[-1])  # Capture the positional target column used by the split flow.
-        original_sample_count = int(len(df))  # Record the original sample population before split and augmentation merging.
-        augmented_sample_count = int(len(df_augmented_for_training)) if df_augmented_for_training is not None else 0  # Record the exact sampled augmentation population merged into training.
+        original_sample_count = int(len(df))  # Record the original sample population before splitting.
         if source_files is not None:  # Use caller-supplied provenance for combined or explicitly sourced evaluation data.
             pca_source_files = [str(source_file) for source_file in source_files]  # Preserve the caller's source order for deterministic combined-row provenance.
-        elif df_augmented_for_training is None and not resolve_path_represents_directory(str(file)):  # Infer only the unambiguous original-only single-file source.
+        elif not resolve_path_represents_directory(str(file)):  # Infer the unambiguous original single-file source.
             pca_source_files = [str(file)]  # Use the evaluated file itself as complete source provenance.
-        else:  # Refuse inference for combined directories or augmented data with undisclosed source files.
+        else:  # Refuse inference for combined directories with undisclosed original source files.
             pca_source_files = []  # Disable persistent PCA reuse when source provenance cannot be proven.
         pca_cache_context = {  # Record the exact split and data-variant semantics that determine PCA fitting input.
             "execution_mode": str(execution_mode_str),  # Store separate-file or combined-file execution semantics.
-            "data_source": str(data_source_label),  # Store the active original or augmented data variant label.
-            "experiment_mode": str(experiment_mode),  # Store original-only or training-augmentation semantics.
-            "augmentation_ratio": normalize_metadata_for_json(augmentation_ratio),  # Store the active sampled augmentation ratio.
+            "data_source": "Original",  # PCA is always fitted for the original-data training identity.
+            "experiment_mode": "original_only",  # PCA never receives augmented samples.
+            "augmentation_ratio": None,  # Exclude evaluation-only augmentation ratios from fitted preprocessing identity.
             "target_column": target_column_name,  # Store the positional target column identity.
             "original_sample_count": original_sample_count,  # Store the original population size before splitting.
-            "augmented_sample_count": augmented_sample_count,  # Store the sampled population merged into training.
+            "augmented_sample_count": 0,  # Record that fitted preprocessing receives no augmented samples.
             "test_size": 0.2,  # Store the fixed split ratio used by prepare_evaluation_data_splits.
             "random_state": 42,  # Store the fixed split seed used by prepare_evaluation_data_splits.
             "stratified": True,  # Store the stratified split semantics used by scale_and_split.
-            "augmentation_merged_into_training_after_split": df_augmented_for_training is not None,  # Store train-only augmentation placement.
+            "augmentation_merged_into_training_after_split": False,  # Record original-only fitted preprocessing semantics.
             "attack_types": normalize_metadata_for_json(attack_types_combined),  # Store combined-mode label scope when available.
         }  # Complete the split and evaluation identity payload.
 
-        data_splits = prepare_evaluation_data_splits(df, df_augmented_for_training, config=config)  # Prepare training/test data splits with optional augmentation
+        effective_cache_ref = None if artifact_recovery_target is not None else (cache_ref_file if cache_ref_file is not None else (file if file != "combined_files_combined" else None))  # Keep internal artifact recovery out of result-cache persistence.
+        cache_dict = {}  # Initialize empty cache dictionary as fallback when no cache file exists
+        if effective_cache_ref is not None and artifact_recovery_target is None:
+            try:
+                cache_dict = load_cache_results(effective_cache_ref, config=config)  # Load results keyed by the complete semantic identity.
+                if cache_dict:
+                    print(f"{BackgroundColors.GREEN}Resume: loaded {BackgroundColors.CYAN}{len(cache_dict)}{BackgroundColors.GREEN} cached result(s) from previous run.{Style.RESET_ALL}")
+            except Exception:
+                cache_dict = {}
+
+        stacking_model = build_evaluation_stacking_model(base_models, config=config) if stacking_enabled else None  # Build only an unfitted stacking prototype.
+        individual_models = {key: value for key, value in base_models.items() if artifact_recovery_target is None or (artifact_recovery_target[1] != "StackingClassifier" and key == artifact_recovery_target[1])}  # Restrict recovery without retaining fitted estimators.
+        if grid_progress is None:
+            total_steps = len(evaluation_plan)
+            progress_bar = tqdm(total=total_steps, desc=f"{data_source_label} Data", file=sys.stdout)
+            all_results = {}
+            current_combination = 1
+        else:
+            total_steps = grid_progress["total_steps"]
+            progress_bar = grid_progress["progress_bar"]
+            all_results = {}
+            current_combination = grid_progress["current_combination"]
+
+        if experiment_mode == "original_training_augmented_testing":
+            if df_augmented_for_testing is None or augmentation_ratio is None:
+                raise ValueError("Augmented testing requires sampled augmented data and an augmentation ratio")
+            augmented_features = df_augmented_for_testing.iloc[:, :-1].select_dtypes(include=np.number)
+            missing_augmented_features = [feature for feature in pca_input_feature_names if feature not in augmented_features.columns]
+            if missing_augmented_features:
+                raise ValueError(f"Augmented testing data is missing original feature columns: {missing_augmented_features}")
+            X_augmented_original_schema = augmented_features[pca_input_feature_names].to_numpy(copy=False)
+            y_augmented_raw = df_augmented_for_testing.iloc[:, -1].to_numpy(copy=False)
+            expected_label_classes = np.unique(df.iloc[:, -1].to_numpy(copy=False)).tolist()
+            original_train_count = int(original_sample_count - math.ceil(original_sample_count * 0.2))
+            feature_lookup = {sanitize_feature_name(feature): str(feature) for feature in pca_input_feature_names}
+            explicit_features = feature_sets_config.get("explicit_features", []) or []
+            selected_features_by_mode = {
+                "Full Features": list(pca_input_feature_names),
+                "Explicit Features": list(dict.fromkeys(feature_lookup[sanitize_feature_name(feature)] for feature in explicit_features if sanitize_feature_name(feature) in feature_lookup)),
+                "GA Features": [feature_lookup[sanitize_feature_name(feature)] for feature in (ga_selected_features or []) if sanitize_feature_name(feature) in feature_lookup],
+                "PCA Components": [f"PC{index + 1}" for index in range(min(int(pca_n_components or 0), len(pca_input_feature_names)))],
+                "RFE Features": [feature_lookup[sanitize_feature_name(feature)] for feature in (rfe_selected_features or []) if sanitize_feature_name(feature) in feature_lookup],
+            }
+            dataset_name = build_filename_safe_dataset_identity(resolve_canonical_dataset_identity(str(file), True)) if execution_mode_str == "combined_files" else os.path.basename(os.path.dirname(file))
+            evaluation_models = list(individual_models.items()) + ([('StackingClassifier', stacking_model)] if stacking_enabled else [])
+            for name in feature_mode_names:
+                subset_feature_names = selected_features_by_mode[name]
+                expected_transformer = PCA(n_components=len(subset_feature_names)) if name == "PCA Components" else None
+                for model_name, model_prototype in evaluation_models:
+                    recovered, current_combination = recover_cached_individual_classifier_result(cache_dict, execution_mode_str, data_source_label, experiment_mode, augmentation_ratio, attack_types_combined, name, model_name, all_results, current_combination, total_steps, progress_bar, hyperparameters_enabled=hyperparameters_enabled, expected_n_features=len(subset_feature_names), expected_feature_names=subset_feature_names, expected_n_samples_train=original_train_count, expected_n_samples_test=len(y_augmented_raw))
+                    if recovered:
+                        continue
+                    progress_bar.set_description(build_telegram_combination_header(name, model_name, augmentation_ratio, hyperparameters_enabled))  # Display the exact augmented-test combination being evaluated.
+                    artifact_feature_set = f"{name} - {'Optimized Hyperparameters' if hyperparameters_enabled else 'Default Hyperparameters'}"
+                    artifact_context = build_stacking_model_artifact_context(file, pca_source_files, execution_mode_str, attack_types_combined, target_column_name, model_name, model_prototype, artifact_feature_set, pca_input_feature_names, subset_feature_names, expected_label_classes, expected_transformer, hyperparameters_enabled)
+                    artifact_bundle, rejection_reason = load_existing_model_if_available(model_name, file, dataset_name, artifact_feature_set, artifact_context, config=config)
+                    if artifact_bundle is None:
+                        print(f"{BackgroundColors.YELLOW}[WARNING] Retraining {BackgroundColors.CYAN}{model_name}{BackgroundColors.YELLOW} on original data only because {rejection_reason}.{Style.RESET_ALL}")
+                        recovery_results = evaluate_on_dataset(file, df, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, base_models, data_source_label="Original", hyperparams_map=hyperparams_map, experiment_id=generate_experiment_id(file, "original_only"), experiment_mode="original_only", augmentation_ratio=None, execution_mode_str=execution_mode_str, attack_types_combined=attack_types_combined, config=config, cache_ref_file=cache_ref_file, hyperparameters_enabled=hyperparameters_enabled, source_files=pca_source_files, artifact_recovery_target=(name, model_name))
+                        del recovery_results
+                        gc.collect()
+                        artifact_bundle, rejection_reason = load_existing_model_if_available(model_name, file, dataset_name, artifact_feature_set, artifact_context, config=config)
+                        if artifact_bundle is None:
+                            raise RuntimeError(f"Original-only artifact recovery failed for {name} - {model_name}: {rejection_reason}")
+                    loaded_model = artifact_bundle["model"]
+                    X_augmented_scaled = np.asarray(artifact_bundle["scaler"].transform(X_augmented_original_schema))
+                    if artifact_bundle["transformer"] is not None:
+                        X_augmented_model = np.asarray(artifact_bundle["transformer"].transform(X_augmented_scaled))
+                    else:
+                        model_feature_indices = [artifact_bundle["input_feature_names"].index(feature) for feature in artifact_bundle["model_feature_names"]]
+                        X_augmented_model = X_augmented_scaled[:, model_feature_indices]
+                    y_augmented = np.asarray(artifact_bundle["label_encoder"].transform(y_augmented_raw), dtype=np.int64)
+                    X_augmented_df = pd.DataFrame(X_augmented_model, columns=subset_feature_names)
+                    training_ram_stats = {}
+                    if model_name == "StackingClassifier":
+                        metrics = evaluate_stacking_classifier(loaded_model, None, None, X_augmented_df, y_augmented, config=config, training_ram_stats=training_ram_stats, fit_model=False)
+                        classifier_type = "Stacking"
+                    else:
+                        metrics = evaluate_individual_classifier(loaded_model, model_name, None, None, X_augmented_model, y_augmented, file, artifact_bundle["scaler"], subset_feature_names, artifact_feature_set, config=config, training_ram_stats=training_ram_stats, fit_model=False)
+                        classifier_type = "Individual"
+                    result_entry = build_classifier_result_entry(loaded_model.__class__.__name__, file, execution_mode_str, attack_types_combined, name, classifier_type, model_name, data_source_label, experiment_id, experiment_mode, augmentation_ratio, len(subset_feature_names), original_train_count, len(y_augmented), metrics, subset_feature_names, hyperparams_map=hyperparams_map, hyperparameters_enabled=hyperparameters_enabled, effective_hyperparameters=serialize_effective_estimator_parameters(loaded_model))
+                    persist_cache_result_entry(effective_cache_ref, result_entry, cache_dict, config=config)
+                    all_results[(name, model_name)] = result_entry
+                    progress_bar.update(1)
+                    current_combination += 1
+                    del loaded_model, artifact_bundle, artifact_context, X_augmented_scaled, X_augmented_model, X_augmented_df, y_augmented, metrics, training_ram_stats
+                    gc.collect()
+            if grid_progress is None:
+                progress_bar.close()
+            else:
+                grid_progress["current_combination"] = current_combination
+            del X_augmented_original_schema, y_augmented_raw, augmented_features, df_augmented_for_testing
+            gc.collect()
+            return all_results
+
+        data_splits = prepare_evaluation_data_splits(df, config=config)  # Prepare original-only training and testing data splits.
 
         if data_splits is None:  # If data preparation failed (single-class target)
             return {}  # Return empty dictionary
 
-        X_train_scaled, X_test_scaled, y_train, y_test, scaler = data_splits  # Unpack the data splits tuple
+        X_train_scaled, X_test_scaled, y_train, y_test, scaler, label_encoder = data_splits  # Unpack original-only splits and fitted preprocessing.
         feature_source_arrays = {"X_train_scaled": X_train_scaled, "X_test_scaled": X_test_scaled, "spilled_to_memmap": False}  # Transfer full source matrices into a mutable lifecycle holder.
         del data_splits, X_train_scaled, X_test_scaled  # Remove duplicate local references so the holder can truly release or spill the full matrices.
         del df  # Release the original dataframe after split and scaling before classifier fitting.
-        if df_augmented_for_training is not None:  # Verify whether augmented training dataframe input exists.
-            del df_augmented_for_training  # Release augmented dataframe input after split and scaling before classifier fitting.
         gc.collect()  # Reclaim released dataframe memory before feature-set materialization.
 
-        effective_cache_ref = cache_ref_file if cache_ref_file is not None else (file if file != "combined_files_combined" else None)  # Determine which file to use for cache path computation
-        cache_dict = {}  # Initialize empty cache dictionary as fallback when no cache file exists
-        if effective_cache_ref is not None:  # Only attempt cache loading when a valid file path is available
-            try:  # Attempt to load cached results from a previous interrupted run
-                cache_dict = load_cache_results(effective_cache_ref, config=config)  # Load previously persisted results keyed by full resume cache key
-                if cache_dict:  # Report cache hit count to the operator if any cached entries were found
-                    print(f"{BackgroundColors.GREEN}Resume: loaded {BackgroundColors.CYAN}{len(cache_dict)}{BackgroundColors.GREEN} cached result(s) from previous run.{Style.RESET_ALL}")  # Inform operator of resume state
-            except Exception:  # If cache loading raises any exception
-                cache_dict = {}  # Fall back to empty cache to proceed with a fresh evaluation
-
-        stacking_model = build_evaluation_stacking_model(base_models, config=config) if stacking_enabled else None  # Build stacking classifier only when enabled
-
-        if grid_progress is None:  # Standalone evaluation owns its progress bar and local combination counter
-            individual_models = {key: value for key, value in base_models.items()}  # Preserve classifier prototypes for sequential cloning
-            total_steps = len(evaluation_plan)  # Use the exact ordered standalone plan as the progress denominator
-            progress_bar = tqdm(total=total_steps, desc=f"{data_source_label} Data", file=sys.stdout)  # Create local progress bar for standalone evaluation
-            all_results = {}  # Initialize standalone result dictionary
-            current_combination = 1  # Initialize standalone combination counter
-        else:  # Full-grid orchestration supplies one shared denominator and counter across HP and augmentation modes
-            individual_models = {k: v for k, v in base_models.items()}  # Preserve the current HP mode's independent model objects
-            total_steps = grid_progress["total_steps"]  # Use the exact generated-grid denominator
-            progress_bar = grid_progress["progress_bar"]  # Reuse the single grid progress bar
-            all_results = {}  # Initialize results for this data/HP slice
-            current_combination = grid_progress["current_combination"]  # Continue from the previous grid slice
-
         feature_sets_iter = iterate_feature_sets_sequentially(feature_source_arrays, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, file, feature_sets_config, config, scaler=scaler, source_files=pca_source_files, pca_cache_context=pca_cache_context, pca_input_feature_names=pca_input_feature_names)  # Create the lazy feature-set iterator with exact PCA source, feature, scaler, and split provenance.
-        for idx, (name, X_train_subset, X_test_subset, subset_feature_names_list) in enumerate(feature_sets_iter, start=1):  # Evaluate one materialized feature set at a time
+        for idx, (name, X_train_subset, X_test_subset, subset_feature_names_list, transformer) in enumerate(feature_sets_iter, start=1):  # Evaluate one materialized feature set at a time
+            if artifact_recovery_target is not None and name != artifact_recovery_target[0]:
+                continue  # Materialize only as needed until the missing feature-set artifact is reached.
             if X_train_subset.shape[1] == 0:  # Verify if the subset is empty
                 print(
                     f"{BackgroundColors.YELLOW}Warning: Skipping {name}. No features selected.{Style.RESET_ALL}"
@@ -11174,7 +11308,7 @@ def evaluate_on_dataset(
                 individual_models, stacking_model, y_train, y_test,
                 file, execution_mode_str, attack_types_combined,
                 data_source_label, experiment_id, experiment_mode, augmentation_ratio,
-                hyperparams_map, scaler, total_steps, current_combination, progress_bar, stacking_enabled=stacking_enabled, config=config,
+                hyperparams_map, scaler, label_encoder, transformer, pca_input_feature_names, target_column_name, pca_source_files, total_steps, current_combination, progress_bar, stacking_enabled=stacking_enabled, config=config,
                 cache_dict=cache_dict, cache_ref_file=effective_cache_ref, hyperparameters_enabled=hyperparameters_enabled,
             )  # Evaluate all individual classifiers and stacking model on this non-empty feature subset with resume support
             write_memory_phase_event("after_feature_set_evaluation", config=config, **feature_phase_metadata, event_outcome="completed")  # Publish feature-set evaluation completion
@@ -11182,7 +11316,7 @@ def evaluate_on_dataset(
             all_results.update(individual_results)  # Merge this feature set's results into the global results dict
             if stacking_result_entry is not None:  # Store stacking result only when stacking evaluation was enabled
                 all_results[(name, "StackingClassifier")] = stacking_result_entry  # Store stacking result with key
-            del X_train_subset, X_test_subset, subset_feature_names_list, individual_results, stacking_result_entry  # Release feature-set arrays and transient result references after this mode
+            del X_train_subset, X_test_subset, subset_feature_names_list, transformer, individual_results, stacking_result_entry  # Release feature-set arrays, transformer reference, and transient results after this mode
             gc.collect()  # Reclaim feature-set memory before constructing the next mode
 
         if grid_progress is None:  # Close only progress bars created by this standalone evaluation
@@ -11193,7 +11327,7 @@ def evaluate_on_dataset(
             feature_sets_iter.close()  # Trigger generator-side subset cleanup if not already exhausted
         cleanup_feature_source_arrays(feature_source_arrays, config=config)  # Release full source arrays or temporary memmaps before returning result metadata
         feature_source_arrays = None  # Prevent duplicate cleanup in the outer finally
-        del y_train, y_test, scaler  # Release labels and scaler before returning result metadata
+        del y_train, y_test, scaler, label_encoder  # Release labels and fitted preprocessing before returning result metadata
         gc.collect()  # Reclaim split/scaled arrays after all feature modes complete
         return all_results  # Return dictionary of results
     except Exception as e:
@@ -11325,9 +11459,7 @@ def load_and_preprocess_dataset(file, combined_df, config=None):
             )  # Output the failure message
             return (None, None)  # Return None tuple
         
-        remove_zero_variance = config.get("dataset", {}).get("remove_zero_variance", True)  # Get remove zero variance flag from config
-
-        df_cleaned = preprocess_dataframe(df_original, remove_zero_variance=remove_zero_variance, config=config)  # Preprocess the DataFrame
+        df_cleaned = preprocess_dataframe(df_original, remove_zero_variance=False, config=config)  # Avoid learning a feature-removal state before the original train/test split.
 
         if df_cleaned is None or df_cleaned.empty:  # If the DataFrame is None or empty after preprocessing
             print(
@@ -11335,7 +11467,7 @@ def load_and_preprocess_dataset(file, combined_df, config=None):
             )  # Output error message
             return (None, None)  # Return None tuple
 
-        feature_names = df_cleaned.select_dtypes(include=np.number).iloc[:, :-1].columns.tolist()  # Get numeric feature names excluding target
+        feature_names = df_cleaned.iloc[:, :-1].select_dtypes(include=np.number).columns.tolist()  # Preserve every ordered numeric feature regardless of target dtype.
 
         return (df_cleaned, feature_names)  # Return cleaned dataframe and feature names
     except Exception as e:
@@ -11537,52 +11669,38 @@ def print_model_comparison(feature_set, model_name, orig_metrics, aug_metrics, m
 
         acc_label = f"  {BackgroundColors.YELLOW}Accuracy:{Style.RESET_ALL}"  # Build accuracy label
         print(acc_label)  # Print accuracy label
-        send_telegram_message(TELEGRAM_BOT, acc_label)  # Send accuracy label to Telegram to replicate console output
         acc_values = f"    {BackgroundColors.GREEN}Original:{BackgroundColors.CYAN} {orig_metrics[0]} | {BackgroundColors.YELLOW}Augmented:{BackgroundColors.CYAN} {aug_metrics[0]} | {BackgroundColors.BOLD}Original+Augmented:{BackgroundColors.CYAN} {merged_metrics[0]} | {BackgroundColors.CYAN}Improvement: {improvements['accuracy']}%{Style.RESET_ALL}"  # Build accuracy comparison line using raw floats
         print(acc_values)  # Print accuracy comparison
-        send_telegram_message(TELEGRAM_BOT, acc_values)  # Send accuracy comparison to Telegram
 
         prec_label = f"  {BackgroundColors.YELLOW}Precision:{Style.RESET_ALL}"  # Build precision label
         print(prec_label)  # Print precision label
-        send_telegram_message(TELEGRAM_BOT, prec_label)  # Send precision label to Telegram
         prec_values = f"    {BackgroundColors.GREEN}Original:{BackgroundColors.CYAN} {orig_metrics[1]} | {BackgroundColors.YELLOW}Augmented:{BackgroundColors.CYAN} {aug_metrics[1]} | {BackgroundColors.BOLD}Original+Augmented:{BackgroundColors.CYAN} {merged_metrics[1]} | {BackgroundColors.CYAN}Improvement: {improvements['precision']}%{Style.RESET_ALL}"  # Build precision comparison line using raw floats
         print(prec_values)  # Print precision comparison
-        send_telegram_message(TELEGRAM_BOT, prec_values)  # Send precision comparison to Telegram
 
         recall_label = f"  {BackgroundColors.YELLOW}Recall:{Style.RESET_ALL}"  # Build recall label
         print(recall_label)  # Print recall label
-        send_telegram_message(TELEGRAM_BOT, recall_label)  # Send recall label to Telegram
         recall_values = f"    {BackgroundColors.GREEN}Original:{BackgroundColors.CYAN} {orig_metrics[2]} | {BackgroundColors.YELLOW}Augmented:{BackgroundColors.CYAN} {aug_metrics[2]} | {BackgroundColors.BOLD}Original+Augmented:{BackgroundColors.CYAN} {merged_metrics[2]} | {BackgroundColors.CYAN}Improvement: {improvements['recall']}%{Style.RESET_ALL}"  # Build recall comparison line using raw floats
         print(recall_values)  # Print recall comparison
-        send_telegram_message(TELEGRAM_BOT, recall_values)  # Send recall comparison to Telegram
 
         f1_label = f"  {BackgroundColors.YELLOW}F1-Score:{Style.RESET_ALL}"  # Build F1 score label
         print(f1_label)  # Print F1 score label
-        send_telegram_message(TELEGRAM_BOT, f1_label)  # Send F1 score label to Telegram
         f1_values = f"    {BackgroundColors.GREEN}Original:{BackgroundColors.CYAN} {orig_metrics[3]} | {BackgroundColors.YELLOW}Augmented:{BackgroundColors.CYAN} {aug_metrics[3]} | {BackgroundColors.BOLD}Original+Augmented:{BackgroundColors.CYAN} {merged_metrics[3]} | {BackgroundColors.CYAN}Improvement: {improvements['f1_score']}%{Style.RESET_ALL}"  # Build F1 score comparison using raw floats
         print(f1_values)  # Print F1 score comparison
-        send_telegram_message(TELEGRAM_BOT, f1_values)  # Send F1 score comparison to Telegram
 
         fpr_label = f"  {BackgroundColors.YELLOW}FPR (lower is better):{Style.RESET_ALL}"  # Build FPR label
         print(fpr_label)  # Print FPR label
-        send_telegram_message(TELEGRAM_BOT, fpr_label)  # Send FPR label to Telegram
         fpr_values = f"    {BackgroundColors.GREEN}Original:{BackgroundColors.CYAN} {orig_metrics[4]} | {BackgroundColors.YELLOW}Augmented:{BackgroundColors.CYAN} {aug_metrics[4]} | {BackgroundColors.BOLD}Original+Augmented:{BackgroundColors.CYAN} {merged_metrics[4]} | {BackgroundColors.CYAN}Change: {improvements['fpr']}%{Style.RESET_ALL}"  # Build FPR comparison using raw floats
         print(fpr_values)  # Print FPR comparison
-        send_telegram_message(TELEGRAM_BOT, fpr_values)  # Send FPR comparison to Telegram
 
         fnr_label = f"  {BackgroundColors.YELLOW}FNR (lower is better):{Style.RESET_ALL}"  # Build FNR label
         print(fnr_label)  # Print FNR label
-        send_telegram_message(TELEGRAM_BOT, fnr_label)  # Send FNR label to Telegram
         fnr_values = f"    {BackgroundColors.GREEN}Original:{BackgroundColors.CYAN} {orig_metrics[5]} | {BackgroundColors.YELLOW}Augmented:{BackgroundColors.CYAN} {aug_metrics[5]} | {BackgroundColors.BOLD}Original+Augmented:{BackgroundColors.CYAN} {merged_metrics[5]} | {BackgroundColors.CYAN}Change: {improvements['fnr']}%{Style.RESET_ALL}"  # Build FNR comparison using raw floats
         print(fnr_values)  # Print FNR comparison
-        send_telegram_message(TELEGRAM_BOT, fnr_values)  # Send FNR comparison to Telegram
 
         time_label = f"  {BackgroundColors.YELLOW}Training Time (seconds, lower is better):{Style.RESET_ALL}"  # Build training time label
         print(time_label)  # Print training time label
-        send_telegram_message(TELEGRAM_BOT, time_label)  # Send training time label to Telegram
         time_values = f"    {BackgroundColors.GREEN}Original:{BackgroundColors.CYAN} {int(orig_metrics[6])}s | {BackgroundColors.YELLOW}Augmented:{BackgroundColors.CYAN} {int(aug_metrics[6])}s | {BackgroundColors.BOLD}Original+Augmented:{BackgroundColors.CYAN} {int(merged_metrics[6])}s | {BackgroundColors.CYAN}Change: {improvements['training_time']}%{Style.RESET_ALL}\n"  # Build training time comparison line using integer seconds
         print(time_values)  # Print training time comparison
-        send_telegram_message(TELEGRAM_BOT, time_values)  # Send training time comparison to Telegram
     except Exception as e:
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
@@ -11597,14 +11715,14 @@ def build_comparison_result_entry(orig_result, feature_set, classifier_type, mod
     :param feature_set: Name of the feature set
     :param classifier_type: Type of classifier (e.g., 'Individual' or 'Stacking')
     :param model_name: Name of the model
-    :param data_source: Data source label (e.g., 'Original', 'Original+Augmented@50%')
+    :param data_source: Data source label (e.g., 'Original', 'Augmented@50%')
     :param metrics: List of metrics [accuracy, precision, recall, f1, fpr, fnr, time]
     :param improvements: Dictionary of improvement percentages
     :param n_features_override: Override for n_features (optional)
     :param n_samples_train_override: Override for n_samples_train (optional)
     :param n_samples_test_override: Override for n_samples_test (optional)
     :param experiment_id: Unique experiment identifier for traceability
-    :param experiment_mode: Experiment mode string ('original_only' or 'original_plus_augmented')
+    :param experiment_mode: Experiment mode string ('original_only' or 'original_training_augmented_testing')
     :param augmentation_ratio: Augmentation ratio float or None
     :return: Dictionary containing comparison result entry
     """
@@ -11621,7 +11739,7 @@ def build_comparison_result_entry(orig_result, feature_set, classifier_type, mod
             "model_name": model_name,  # Model name
             "data_source": data_source,  # Data source label
             "experiment_id": experiment_id,  # Unique experiment identifier for traceability
-            "experiment_mode": experiment_mode,  # Experiment mode (original_only or original_plus_augmented)
+            "experiment_mode": experiment_mode,  # Persist original-only or augmented-testing semantics.
             "augmentation_ratio": resolve_persisted_augmentation_ratio(experiment_mode, augmentation_ratio),  # Augmentation ratio with 0.0 for original-only rows
             "n_features": n_features_override if n_features_override is not None else orig_result["n_features"],  # Number of features
             "n_samples_train": n_samples_train_override if n_samples_train_override is not None else orig_result["n_samples_train"],  # Training samples count
@@ -11695,7 +11813,6 @@ def generate_ratio_comparison_report(results_original, all_ratio_results, config
 
             header_msg = f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Feature Set: {BackgroundColors.CYAN}{feature_set}{BackgroundColors.GREEN} | Model: {BackgroundColors.CYAN}{model_name}{Style.RESET_ALL}"  # Build header with feature set and model name
             print(header_msg)  # Print header with feature set and model name
-            send_telegram_message(TELEGRAM_BOT, header_msg)  # Send header to Telegram to replicate console output
             cfg = config if config is not None else CONFIG  # Resolve config or fallback to global CONFIG
             mode_raw = cfg.get("execution", {}).get("execution_mode")  # Obtain execution mode from config if present
             evaluation_mode = mode_raw.replace("_", " ").title().replace(" ", "") if mode_raw else "SeparateFiles"  # Normalize or default
@@ -11703,7 +11820,6 @@ def generate_ratio_comparison_report(results_original, all_ratio_results, config
             human_time_orig = calculate_execution_time(0, total_seconds_orig)  # Human-readable original elapsed time
             msg = f"{BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}: Mode {BackgroundColors.YELLOW}{evaluation_mode}{BackgroundColors.GREEN} | F1-Score {BackgroundColors.CYAN}{orig_metrics[3]}{BackgroundColors.GREEN} | Accuracy: {BackgroundColors.CYAN}{orig_metrics[0]}{BackgroundColors.GREEN} | Precision: {BackgroundColors.CYAN}{orig_metrics[1]}{BackgroundColors.GREEN} | Recall: {BackgroundColors.CYAN}{orig_metrics[2]}{BackgroundColors.GREEN} | FPR: {BackgroundColors.CYAN}{orig_metrics[4]}{BackgroundColors.GREEN} | FNR: {BackgroundColors.CYAN}{orig_metrics[5]}{BackgroundColors.GREEN} | Training Time: {BackgroundColors.CYAN}{int(total_seconds_orig)}s{BackgroundColors.GREEN} | Execution Time: {BackgroundColors.CYAN}{int(total_seconds_orig)}s{BackgroundColors.GREEN} | Total Time: {BackgroundColors.CYAN}{human_time_orig} ({total_seconds_orig}s){Style.RESET_ALL}"  # Build colored original baseline summary using raw floats and integer times
             print(msg)  # Print original baseline metrics summary
-            send_telegram_message(TELEGRAM_BOT, msg)  # Send identical message to Telegram for remote monitoring of ratio experiment results
 
             for ratio in sorted(all_ratio_results.keys()):  # Iterate over each ratio in sorted order
                 ratio_results = all_ratio_results[ratio]  # Get results dict for this ratio
@@ -11720,11 +11836,11 @@ def generate_ratio_comparison_report(results_original, all_ratio_results, config
                 comparison_results.append(
                     build_comparison_result_entry(
                         orig_result, feature_set, classifier_type, model_name,
-                        f"Original+Augmented@{ratio_pct}%", ratio_metrics, improvements,
+                        f"Augmented@{ratio_pct}%", ratio_metrics, improvements,
                         n_features_override=ratio_result.get("n_features"),
                         n_samples_train_override=ratio_result.get("n_samples_train"),
                         n_samples_test_override=ratio_result.get("n_samples_test"),
-                        experiment_id=ratio_experiment_id, experiment_mode="original_plus_augmented",
+                        experiment_id=ratio_experiment_id, experiment_mode="original_training_augmented_testing",
                         augmentation_ratio=ratio,
                     )
                 )  # Add ratio experiment entry with improvements to comparison results
@@ -11735,7 +11851,6 @@ def generate_ratio_comparison_report(results_original, all_ratio_results, config
                 human_time_ratio = calculate_execution_time(0, total_seconds_ratio)  # Human-readable ratio elapsed time
                 msg = f"{BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}: Mode {BackgroundColors.YELLOW}{evaluation_mode}{BackgroundColors.GREEN} | F1-Score {BackgroundColors.CYAN}{ratio_metrics[3]}{BackgroundColors.GREEN} | Accuracy: {BackgroundColors.CYAN}{ratio_metrics[0]}{BackgroundColors.GREEN} | Precision: {BackgroundColors.CYAN}{ratio_metrics[1]}{BackgroundColors.GREEN} | Recall: {BackgroundColors.CYAN}{ratio_metrics[2]}{BackgroundColors.GREEN} | FPR: {BackgroundColors.CYAN}{ratio_metrics[4]}{BackgroundColors.GREEN} | FNR: {BackgroundColors.CYAN}{ratio_metrics[5]}{BackgroundColors.GREEN} | Training Time: {BackgroundColors.CYAN}{int(total_seconds_ratio)}s{BackgroundColors.GREEN} | Execution Time: {BackgroundColors.CYAN}{int(total_seconds_ratio)}s{BackgroundColors.GREEN} | Total Time: {BackgroundColors.CYAN}{human_time_ratio} ({total_seconds_ratio}s){Style.RESET_ALL}"  # Build colored ratio summary using raw floats and integer times
                 print(msg)  # Print ratio result metrics with F1 improvement indicator
-                send_telegram_message(TELEGRAM_BOT, msg)  # Send identical message to Telegram for remote monitoring of ratio experiment results
 
         return comparison_results  # Return list of all comparison result entries for CSV export
     except Exception as e:
@@ -11774,7 +11889,7 @@ def load_and_validate_augmented_data(file, df_original_cleaned, config=None):
             )  # Print warning message about load failure
             return None  # Signal caller that loading failed
 
-        df_augmented_cleaned = preprocess_dataframe(df_augmented)  # Preprocess the augmented dataframe with same pipeline as original
+        df_augmented_cleaned = preprocess_dataframe(df_augmented, remove_zero_variance=False, config=config)  # Preserve the original fitted feature schema for inference-only augmentation.
 
         if not validate_augmented_dataframe(df_original_cleaned, df_augmented_cleaned, file):  # Validate augmented data is compatible with original
             return None  # Signal caller that validation failed
@@ -11811,13 +11926,11 @@ def run_single_ratio_experiment(file, df_original_cleaned, df_augmented_cleaned,
             config = CONFIG  # Use global CONFIG
 
         ratio_pct = int(ratio * 100)  # Convert float ratio to integer percentage for display
-        experiment_id = generate_experiment_id(file, "original_plus_augmented", ratio)  # Generate unique experiment ID for this ratio
+        experiment_id = generate_experiment_id(file, "original_training_augmented_testing", ratio)  # Generate unique experiment ID for this ratio
 
         print(
-            f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}[{ratio_idx}/{total_ratios}] Evaluating Original + Augmented@{ratio_pct}%{Style.RESET_ALL}"
+            f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}[{ratio_idx}/{total_ratios}] Evaluating persisted original-trained models on Augmented@{ratio_pct}%{Style.RESET_ALL}"
         )  # Print progress indicator for current ratio experiment
-        send_telegram_message(TELEGRAM_BOT, [f"[{ratio_idx}/{total_ratios}] Augmentation experiment: Original + Augmented@{ratio_pct}% | file: {os.path.basename(file)}"])  # Notify Telegram about per-ratio augmentation experiment progress
-
         df_sampled = sample_augmented_by_ratio(df_augmented_cleaned, df_original_cleaned, ratio)  # Sample augmented rows at the current ratio
 
         if df_sampled is None or df_sampled.empty:  # If sampling returned no valid data
@@ -11826,28 +11939,24 @@ def run_single_ratio_experiment(file, df_original_cleaned, df_augmented_cleaned,
             )  # Print warning about sampling failure
             return None  # Signal caller to skip this ratio
 
-        data_source_label = f"Original+Augmented@{ratio_pct}%"  # Build descriptive data source label for CSV traceability
+        data_source_label = f"Augmented@{ratio_pct}%"  # Build descriptive augmented-testing label for CSV traceability
 
         print(
-            f"{BackgroundColors.GREEN}Sampled augmented dataset: {BackgroundColors.CYAN}{len(df_sampled)} augmented samples at {ratio_pct}% ratio (will be merged into training set only){Style.RESET_ALL}"
+            f"{BackgroundColors.GREEN}Sampled augmented test dataset: {BackgroundColors.CYAN}{len(df_sampled)} samples at {ratio_pct}% ratio{Style.RESET_ALL}"
         )  # Print sampled dataset size for transparency
 
         generate_augmentation_tsne_visualization(
-            file, df_original_cleaned, df_sampled, ratio, "original_plus_augmented"
+            file, df_original_cleaned, df_sampled, ratio, "original_training_augmented_testing"
         )  # Generate t-SNE visualization for this augmentation ratio
 
         results_ratio = evaluate_on_dataset(
             file, df_original_cleaned, feature_names, ga_selected_features, pca_n_components,
             rfe_selected_features, base_models, data_source_label=data_source_label,
             hyperparams_map=hp_params_map, experiment_id=experiment_id,
-            experiment_mode="original_plus_augmented", augmentation_ratio=ratio,
+            experiment_mode="original_training_augmented_testing", augmentation_ratio=ratio,
             execution_mode_str="separate_files", attack_types_combined=None,
-            df_augmented_for_training=df_sampled, config=config,
-        )  # Evaluate all classifiers with augmented data in training only (test remains original-only) with explicit config propagation
-
-        send_telegram_message(
-            TELEGRAM_BOT, f"Completed augmentation ratio {ratio_pct}% for {os.path.basename(file)}"
-        )  # Send Telegram notification for ratio completion
+            df_augmented_for_testing=df_sampled, config=config,
+        )  # Evaluate persisted original-trained classifiers on augmented samples only.
 
         del df_sampled  # Release sampled augmented data to free memory after evaluation
         gc.collect()  # Force garbage collection to reclaim memory from sampled data
@@ -12053,33 +12162,25 @@ def run_combined_files_augmentation_ratio_experiment(reference_file, combined_fi
             )  # Print warning about sampling failure
             return None  # Signal caller to skip this ratio
 
-        data_source_label = f"Original+Augmented@{ratio_pct}%_CombinedFiles"  # Build data source label for result traceability
-        experiment_id = generate_experiment_id(reference_file, "combined_files_original_plus_augmented", ratio)  # Generate unique experiment ID for this run
+        data_source_label = f"Augmented@{ratio_pct}%_CombinedFiles"  # Build data source label for result traceability
+        experiment_id = generate_experiment_id(reference_file, "combined_files_original_training_augmented_testing", ratio)  # Generate unique experiment ID for this run
 
         print(
-            f"{BackgroundColors.GREEN}Sampled augmented dataset: {BackgroundColors.CYAN}{len(df_sampled)} augmented samples at {ratio_pct}% ratio (will be merged into training set only){Style.RESET_ALL}"
+            f"{BackgroundColors.GREEN}Sampled augmented test dataset: {BackgroundColors.CYAN}{len(df_sampled)} samples at {ratio_pct}% ratio{Style.RESET_ALL}"
         )  # Print sampled dataset size for transparency
 
         generate_augmentation_tsne_visualization(
-            reference_file, combined_files_df, df_sampled, ratio, "original_plus_augmented"
+            reference_file, combined_files_df, df_sampled, ratio, "original_training_augmented_testing"
         )  # Generate t-SNE visualization comparing original and augmented distributions
-
-        send_telegram_message(
-            TELEGRAM_BOT, f"Starting combined files evaluation augmentation ratio {ratio_pct}% for {dataset_name}"
-        )  # Send Telegram notification for ratio experiment start
 
         results_ratio = evaluate_on_dataset(
             reference_file, combined_files_df, feature_names, ga_selected_features, pca_n_components,
             rfe_selected_features, base_models, data_source_label=data_source_label,
             hyperparams_map=hp_params_map, experiment_id=experiment_id,
-            experiment_mode="original_plus_augmented", augmentation_ratio=ratio,
+            experiment_mode="original_training_augmented_testing", augmentation_ratio=ratio,
             execution_mode_str="combined_files", attack_types_combined=attack_types_list,
-            df_augmented_for_training=df_sampled, config=config,
-        )  # Evaluate all classifiers with augmented training data using original-only test set with explicit config propagation
-
-        send_telegram_message(
-            TELEGRAM_BOT, f"Completed combined files evaluation augmentation ratio {ratio_pct}% for {dataset_name}"
-        )  # Send Telegram notification for ratio experiment completion
+            df_augmented_for_testing=df_sampled, config=config,
+        )  # Evaluate persisted original-trained classifiers on augmented samples only.
 
         return results_ratio  # Return evaluation results for this ratio
     except Exception as e:
@@ -12136,7 +12237,7 @@ def load_and_combine_augmented_combined_files(original_files_list, config=None):
             )  # Print warning about missing augmented files
             return None  # Signal caller to exit early
 
-        combined_augmented_df, augmented_attack_types, augmented_target_col = combine_files_for_combined_evaluation(augmented_files_list, config=config)  # Combine all augmented files into a single DataFrame
+        combined_augmented_df, augmented_attack_types, augmented_target_col = combine_files_for_combined_evaluation(augmented_files_list, config=config, remove_zero_variance=False)  # Preserve the original fitted schema in augmented testing data.
 
         if combined_augmented_df is None:  # If augmented file combination failed
             print(
@@ -12363,7 +12464,7 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
 
                 ratio_results = {}  # Collect this HP mode's ratio results for comparison reporting
                 for ratio in augmentation_ratios:  # Evaluate each configured augmentation ratio separately
-                    combined_augmented_df, _, _ = combine_files_for_combined_evaluation(augmentation_file_paths, config=config)  # Combine augmented files only for the active ratio.
+                    combined_augmented_df, _, _ = combine_files_for_combined_evaluation(augmentation_file_paths, config=config, remove_zero_variance=False)  # Combine augmented testing files without learning a feature-removal state.
                     if combined_augmented_df is None:  # Skip this ratio when augmented recombination fails.
                         print(f"{BackgroundColors.YELLOW}Failed to combine augmented files for combined files evaluation ratio {ratio}. Skipping augmentation ratio for {hp_label}.{Style.RESET_ALL}")  # Report skipped augmentation ratio.
                         continue  # Move to the next configured ratio.
@@ -12387,12 +12488,12 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
                     gc.collect()  # Reclaim direct ratio dataframe references before fitting starts.
                     results_ratio = evaluate_on_dataset(
                         combined_dataset_reference, ratio_original_df_holder.pop(), feature_names, ga_selected_features, pca_n_components,  # Use directory identity for augmented combined evaluation.
-                        rfe_selected_features, base_models, data_source_label=f"Original+Augmented@{int(ratio * 100)}%_CombinedFiles", hyperparams_map=hp_params_map,
-                        experiment_id=generate_experiment_id(combined_dataset_reference, "combined_files_original_plus_augmented", ratio), experiment_mode="original_plus_augmented", augmentation_ratio=ratio,  # Build augmented experiment identity from combined directory.
-                        execution_mode_str="combined_files", attack_types_combined=attack_types_list, df_augmented_for_training=df_sampled_holder.pop(),
+                        rfe_selected_features, base_models, data_source_label=f"Augmented@{int(ratio * 100)}%_CombinedFiles", hyperparams_map=hp_params_map,
+                        experiment_id=generate_experiment_id(combined_dataset_reference, "combined_files_original_training_augmented_testing", ratio), experiment_mode="original_training_augmented_testing", augmentation_ratio=ratio,  # Build augmented-testing experiment identity from combined directory.
+                        execution_mode_str="combined_files", attack_types_combined=attack_types_list, df_augmented_for_testing=df_sampled_holder.pop(),
                         config=config, hyperparameters_enabled=hyperparameters_enabled, grid_progress=grid_progress,
-                        source_files=list(original_files_list) + list(augmentation_file_paths),  # Preserve ordered original and augmented CSV provenance for this ratio.
-                    )  # Evaluate the same feature/classifier grid for this ratio
+                        source_files=original_files_list,  # Preserve only original training-source provenance in model identity.
+                    )  # Evaluate persisted models on this augmented-only test ratio.
                     del ratio_original_df_holder, df_sampled_holder  # Release empty transfer holders after ratio evaluation returns.
                     gc.collect()  # Reclaim released ratio holder references before result aggregation.
                     ratio_results_list = list(results_ratio.values())  # Convert ratio results for annotation and export
@@ -12746,7 +12847,7 @@ def orchestrate_binary_combination(file, ga_sel, pca_n, rfe_sel, base_models, hp
                 experiment_id=generate_experiment_id(file, "original_only"),
                 experiment_mode="original_only", augmentation_ratio=None,
                 execution_mode_str="separate_files", attack_types_combined=None,
-                df_augmented_for_training=None, config=config, hyperparameters_enabled=hyperparameters_enabled,
+                df_augmented_for_testing=None, config=config, hyperparameters_enabled=hyperparameters_enabled,
             )  # Evaluate original-only separate files evaluation with explicit config propagation
         except Exception as e:  # If evaluation fails
             print(f"{BackgroundColors.RED}Evaluation failed for {file} combo {suffix}: {e}{Style.RESET_ALL}")  # Log error
@@ -12826,7 +12927,7 @@ def execute_original_combined_files_evaluation(files_to_process, ga_sel, pca_n, 
             experiment_id=generate_experiment_id(combined_dataset_reference, "combined_files_original_only"),  # Build legacy experiment identity from combined directory.
             experiment_mode="original_only", augmentation_ratio=None,
             execution_mode_str="combined_files", attack_types_combined=attack_types,
-            df_augmented_for_training=None,
+            df_augmented_for_testing=None,
             cache_ref_file=combined_dataset_reference, config=config, hyperparameters_enabled=hyperparameters_enabled,  # Use directory identity for cache resume.
             source_files=files_to_process,  # Preserve ordered original CSV provenance for legacy combined evaluation.
         )  # Evaluate combined files evaluation original dataset with directory cache reference and explicit config propagation
@@ -12871,7 +12972,7 @@ def execute_combined_files_augmentation(files_to_process, combined_df, attack_ty
         if not augmented_files_list:  # If none found
             print(f"{BackgroundColors.YELLOW}No augmented files found for combined files evaluation combo {suffix}. Skipping augmentation.{Style.RESET_ALL}")  # Warn
         else:  # Have augmented files to process
-            combined_aug_df, _, _ = combine_files_for_combined_evaluation(augmented_files_list, config=config)  # Combine augmented files
+            combined_aug_df, _, _ = combine_files_for_combined_evaluation(augmented_files_list, config=config, remove_zero_variance=False)  # Combine augmented testing files without learning a feature-removal state.
             if combined_aug_df is None:  # If combine failed
                 print(f"{BackgroundColors.YELLOW}Failed to combine augmented files for combined files evaluation combo {suffix}. Skipping.{Style.RESET_ALL}")  # Warn
             else:  # Proceed with ratio experiments
@@ -12880,18 +12981,18 @@ def execute_combined_files_augmentation(files_to_process, combined_df, attack_ty
                     if df_sampled is None:  # If sampling failed
                         print(f"{BackgroundColors.YELLOW}Sampling failed for ratio {ratio} in combo {suffix}. Skipping ratio.{Style.RESET_ALL}")  # Warn
                         continue  # Next ratio
-                    try:  # Evaluate with augmented training data
+                    try:  # Evaluate one augmented-only testing ratio.
                         res = evaluate_on_dataset(
                             combined_dataset_reference, combined_df, feature_names, ga_sel, pca_n, rfe_sel, base_models,  # Use directory identity for legacy augmented evaluation.
-                            data_source_label=f"Original+Augmented@{int(ratio*100)}%_CombinedFiles",
+                            data_source_label=f"Augmented@{int(ratio*100)}%_CombinedFiles",
                             hyperparams_map=hp_params_map if hyperparameters_enabled else {},
-                            experiment_id=generate_experiment_id(combined_dataset_reference, "combined_files_original_plus_augmented", ratio),  # Build legacy augmented experiment identity from combined directory.
-                            experiment_mode="original_plus_augmented", augmentation_ratio=ratio,
+                            experiment_id=generate_experiment_id(combined_dataset_reference, "combined_files_original_training_augmented_testing", ratio),  # Build legacy augmented-testing experiment identity from combined directory.
+                            experiment_mode="original_training_augmented_testing", augmentation_ratio=ratio,
                             execution_mode_str="combined_files", attack_types_combined=attack_types,
-                            df_augmented_for_training=df_sampled,
+                            df_augmented_for_testing=df_sampled,
                             cache_ref_file=combined_dataset_reference, config=config, hyperparameters_enabled=hyperparameters_enabled,  # Use directory identity for cache resume.
-                            source_files=list(files_to_process) + [str(augmented_file) for augmented_file in augmented_files_list],  # Preserve ordered original and augmented CSV provenance for legacy ratio evaluation.
-                        )  # Evaluate augmented combined files evaluation combination with directory cache reference and explicit config propagation
+                            source_files=list(files_to_process),  # Preserve only original training-source provenance.
+                        )  # Evaluate persisted original-trained models on augmented samples.
                     except Exception as e:  # If evaluation failed
                         print(f"{BackgroundColors.YELLOW}Augmented evaluation failed for ratio {ratio} combo {suffix}: {e}{Style.RESET_ALL}")  # Warn
                         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send exception
@@ -13034,13 +13135,13 @@ def orchestrate_all_combinations(input_path, dataset_name=None, config=None):
                 ratio_results = {}  # Collect ratio results for the existing comparison export
                 for ratio in augmentation_ratios:  # Evaluate each configured augmentation ratio as its own grid mode
                     df_sampled = sample_augmented_by_ratio(df_augmented, df_original, ratio)  # Sample the active augmentation ratio
-                    if df_sampled is None or df_sampled.empty:  # Skip ratios that cannot produce training data
+                    if df_sampled is None or df_sampled.empty:  # Skip ratios that cannot produce augmented test data.
                         continue  # Move to the next configured ratio
                     results_ratio = evaluate_on_dataset(
                         file, df_original, feature_names, ga_sel, pca_n, rfe_sel, base_models,
-                        data_source_label=f"Original+Augmented@{int(ratio * 100)}%", hyperparams_map=hp_params_map,
-                        experiment_id=generate_experiment_id(file, "original_plus_augmented", ratio), experiment_mode="original_plus_augmented", augmentation_ratio=ratio,
-                        execution_mode_str="separate_files", attack_types_combined=None, df_augmented_for_training=df_sampled,
+                        data_source_label=f"Augmented@{int(ratio * 100)}%", hyperparams_map=hp_params_map,
+                        experiment_id=generate_experiment_id(file, "original_training_augmented_testing", ratio), experiment_mode="original_training_augmented_testing", augmentation_ratio=ratio,
+                        execution_mode_str="separate_files", attack_types_combined=None, df_augmented_for_testing=df_sampled,
                         config=config, hyperparameters_enabled=hyperparameters_enabled, grid_progress=grid_progress,
                     )  # Evaluate the same feature/classifier grid for this augmentation mode
                     ratio_list = list(results_ratio.values())  # Convert ratio results for annotation and export
@@ -13701,7 +13802,7 @@ def main(config=None):
                 f"{BackgroundColors.BOLD}{BackgroundColors.YELLOW}Data Augmentation Testing: {BackgroundColors.CYAN}ENABLED{Style.RESET_ALL}"
             )  # Print augmentation enabled message
             print(
-                f"{BackgroundColors.GREEN}Will evaluate Original vs Original+Augmented at ratios: {BackgroundColors.CYAN}{[f'{int(r*100)}%' for r in augmentation_ratios]}{Style.RESET_ALL}\n"
+                f"{BackgroundColors.GREEN}Will train on Original and evaluate Original vs Augmented tests at ratios: {BackgroundColors.CYAN}{[f'{int(r*100)}%' for r in augmentation_ratios]}{Style.RESET_ALL}\n"
             )  # Print augmentation ratios to be evaluated
 
         start_time = datetime.datetime.now()  # Get the start time of the program
