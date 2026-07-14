@@ -1800,13 +1800,12 @@ def detect_label_column(columns):
         raise  # Preserve original failure behavior
 
 
-def process_single_file(f, config=None, remove_zero_variance=None):
+def process_single_file(f, config=None):
     """
     Process a single dataset file: load, preprocess, and extract target and features.
 
     :param f: Path to the dataset CSV file
     :param config: Configuration dictionary (uses global CONFIG if None)
-    :param remove_zero_variance: Whether to remove zero-variance columns before returning.
     :return: Tuple (df_clean, target_col, feat_cols) or None if invalid
     """
 
@@ -1827,9 +1826,7 @@ def process_single_file(f, config=None, remove_zero_variance=None):
             write_memory_phase_event("after_each_source_file_load", config=config, dataset_source=f, dataset_identity=os.path.basename(str(f)), event_outcome="load_failed")  # Publish failed source-file load
             return None  # Return None
         
-        if remove_zero_variance is None:
-            remove_zero_variance = config.get("dataset", {}).get("remove_zero_variance", True)  # Preserve configured behavior outside the stacking split flow.
-        df_clean = preprocess_dataframe(df, remove_zero_variance=remove_zero_variance, config=config)  # Preprocess the dataframe
+        df_clean = preprocess_dataframe(df, remove_zero_variance=True, config=config)  # Always remove zero-variance features before stacking evaluation.
 
         del df  # Release raw dataframe to free memory after preprocessing
         gc.collect()  # Force garbage collection to reclaim memory from deleted raw dataframe
@@ -2209,13 +2206,12 @@ def compute_common_features_across_files(processed_files_with_labels, config):
     return common_features_list, target_col_name  # Return common features and target column name
 
 
-def process_files_and_extract_labels(files_list, config, remove_zero_variance=False):
+def process_files_and_extract_labels(files_list, config):
     """
     Process each dataset file, extract its attack type label, and accumulate results into a list suitable for combined files evaluation.
 
     :param files_list: List of dataset CSV file paths to process.
     :param config: Configuration dictionary passed through to processing helpers.
-    :param remove_zero_variance: Whether to remove zero-variance columns while loading each source.
     :return: Tuple of (processed_files_with_labels, attack_types_set) on success, or None when no files could be processed.
     """
 
@@ -2229,7 +2225,7 @@ def process_files_and_extract_labels(files_list, config, remove_zero_variance=Fa
         exec_cfg["progress_index"] = idx  # Set current file index in execution config
         exec_cfg["progress_total"] = total_files  # Set total files count in execution config
         cfg["execution"] = exec_cfg  # Assign modified execution config back into config copy
-        result = process_single_file(f, config=cfg, remove_zero_variance=remove_zero_variance)  # Preserve original training schema when loading augmented testing sources.
+        result = process_single_file(f, config=cfg)  # Process every source with mandatory zero-variance removal.
         if result is not None:  # If processing succeeded
             df_clean, target_col, feat_cols = result  # Unpack the result
             attack_label = extract_attack_label_from_path(f)  # Extract attack type from filename for tuple reference
@@ -2253,14 +2249,13 @@ def process_files_and_extract_labels(files_list, config, remove_zero_variance=Fa
     return processed_files_with_labels, attack_types_set  # Return processed data and attack types set
 
 
-def combine_files_for_combined_evaluation(files_list, config=None, remove_zero_variance=False):
+def combine_files_for_combined_evaluation(files_list, config=None):
     """
     Combine multiple dataset files into a single combined files evaluation dataset.
     Each file represents a different attack type and becomes a unique class label.
     
     :param files_list: List of dataset CSV file paths to combine for combined files evaluation
     :param config: Configuration dictionary (uses global CONFIG if None)
-    :param remove_zero_variance: Whether to remove zero-variance columns while loading each source.
     :return: Tuple (combined_df, attack_types_list, target_col_name) or (None, None, None) if failed
     """
 
@@ -2277,7 +2272,7 @@ def combine_files_for_combined_evaluation(files_list, config=None, remove_zero_v
             print(f"{BackgroundColors.RED}No files provided for combined files evaluation combination.{Style.RESET_ALL}")  # Print error message
             return (None, None, None)  # Return None tuple
         
-        process_result = process_files_and_extract_labels(files_list, config, remove_zero_variance=remove_zero_variance)  # Process files while preserving the requested feature schema.
+        process_result = process_files_and_extract_labels(files_list, config)  # Process files with mandatory zero-variance removal before combination.
         if process_result is None:  # If processing failed
             return (None, None, None)  # Return failure tuple
         processed_files_with_labels, attack_types_set = process_result  # Unpack processed data and attack types set
@@ -11453,7 +11448,7 @@ def load_and_preprocess_dataset(file, combined_df, config=None):
             )  # Output the failure message
             return (None, None)  # Return None tuple
         
-        df_cleaned = preprocess_dataframe(df_original, remove_zero_variance=False, config=config)  # Avoid learning a feature-removal state before the original train/test split.
+        df_cleaned = preprocess_dataframe(df_original, remove_zero_variance=True, config=config)  # Always remove zero-variance features before separate-file evaluation.
 
         if df_cleaned is None or df_cleaned.empty:  # If the DataFrame is None or empty after preprocessing
             print(
@@ -11883,7 +11878,7 @@ def load_and_validate_augmented_data(file, df_original_cleaned, config=None):
             )  # Print warning message about load failure
             return None  # Signal caller that loading failed
 
-        df_augmented_cleaned = preprocess_dataframe(df_augmented, remove_zero_variance=False, config=config)  # Preserve the original fitted feature schema for inference-only augmentation.
+        df_augmented_cleaned = preprocess_dataframe(df_augmented, remove_zero_variance=True, config=config)  # Always remove zero-variance features before augmented testing.
 
         if not validate_augmented_dataframe(df_original_cleaned, df_augmented_cleaned, file):  # Validate augmented data is compatible with original
             return None  # Signal caller that validation failed
@@ -12231,7 +12226,7 @@ def load_and_combine_augmented_combined_files(original_files_list, config=None):
             )  # Print warning about missing augmented files
             return None  # Signal caller to exit early
 
-        combined_augmented_df, augmented_attack_types, augmented_target_col = combine_files_for_combined_evaluation(augmented_files_list, config=config, remove_zero_variance=False)  # Preserve the original fitted schema in augmented testing data.
+        combined_augmented_df, augmented_attack_types, augmented_target_col = combine_files_for_combined_evaluation(augmented_files_list, config=config)  # Combine augmented sources after mandatory zero-variance removal.
 
         if combined_augmented_df is None:  # If augmented file combination failed
             print(
@@ -12458,7 +12453,7 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
 
                 ratio_results = {}  # Collect this HP mode's ratio results for comparison reporting
                 for ratio in augmentation_ratios:  # Evaluate each configured augmentation ratio separately
-                    combined_augmented_df, _, _ = combine_files_for_combined_evaluation(augmentation_file_paths, config=config, remove_zero_variance=False)  # Combine augmented testing files without learning a feature-removal state.
+                    combined_augmented_df, _, _ = combine_files_for_combined_evaluation(augmentation_file_paths, config=config)  # Combine augmented testing files after mandatory zero-variance removal.
                     if combined_augmented_df is None:  # Skip this ratio when augmented recombination fails.
                         print(f"{BackgroundColors.YELLOW}Failed to combine augmented files for combined files evaluation ratio {ratio}. Skipping augmentation ratio for {hp_label}.{Style.RESET_ALL}")  # Report skipped augmentation ratio.
                         continue  # Move to the next configured ratio.
@@ -12966,7 +12961,7 @@ def execute_combined_files_augmentation(files_to_process, combined_df, attack_ty
         if not augmented_files_list:  # If none found
             print(f"{BackgroundColors.YELLOW}No augmented files found for combined files evaluation combo {suffix}. Skipping augmentation.{Style.RESET_ALL}")  # Warn
         else:  # Have augmented files to process
-            combined_aug_df, _, _ = combine_files_for_combined_evaluation(augmented_files_list, config=config, remove_zero_variance=False)  # Combine augmented testing files without learning a feature-removal state.
+            combined_aug_df, _, _ = combine_files_for_combined_evaluation(augmented_files_list, config=config)  # Combine augmented testing files after mandatory zero-variance removal.
             if combined_aug_df is None:  # If combine failed
                 print(f"{BackgroundColors.YELLOW}Failed to combine augmented files for combined files evaluation combo {suffix}. Skipping.{Style.RESET_ALL}")  # Warn
             else:  # Proceed with ratio experiments
