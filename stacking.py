@@ -10096,7 +10096,7 @@ def iterate_feature_sets_sequentially(feature_source_arrays: dict, feature_names
     use_pca = feature_sets_config.get("use_pca", True)  # Resolve PCA strategy toggle.
     use_rfe = feature_sets_config.get("use_rfe", True)  # Resolve RFE strategy toggle.
     feature_signatures: set[Tuple[str, Any]] = set()  # Track semantic feature-set identities for duplicate suppression.
-    pending_mode_count = count_grid_feature_modes(ga_selected_features, pca_n_components, rfe_selected_features, feature_names, config=config)  # Count modes to decide whether source matrices are still needed after Full Features.
+    pending_mode_count = len(list_grid_feature_modes(ga_selected_features, pca_n_components, rfe_selected_features, feature_names, config=config))  # Count modes to decide whether source matrices are still needed after Full Features.
 
     if use_full:  # Yield full features first to preserve baseline ordering.
         full_signature = ("features", tuple(sorted(sanitize_feature_name(feature) for feature in feature_names)))  # Build full-feature identity.
@@ -10779,11 +10779,14 @@ def run_stacking_evaluation_for_feature_set(name, stacking_model, X_train_df, y_
         raise
 
 
-def print_dataset_evaluation_header(data_source_label):
+def print_dataset_evaluation_header(data_source_label, evaluation_plan, execution_mode_str, attack_types_combined):
     """
     Prints the formatted header block for a dataset evaluation run.
 
     :param data_source_label: Label identifying the data source being evaluated
+    :param evaluation_plan: Ordered runtime combinations represented by the progress bar
+    :param execution_mode_str: Execution mode shared by every listed combination
+    :param attack_types_combined: Attack types shared by combined-files combinations
     :return: None
     """
 
@@ -10797,6 +10800,35 @@ def print_dataset_evaluation_header(data_source_label):
         print(
             f"{BackgroundColors.BOLD}{BackgroundColors.CYAN}{'='*80}{Style.RESET_ALL}\n"
         )  # Print bottom separator line for evaluation section
+
+        total_combinations = len(evaluation_plan)  # Use the exact ordered plan length displayed by the progress bar
+        print(f"Evaluation plan: {total_combinations} combinations\n")  # Print the exact full-grid combination count
+        print(f"Execution Mode: {execution_mode_str}")  # Print the execution-mode identity shared by the plan
+        if attack_types_combined:  # Print the combined attack scope when it participates in cache identity
+            print(f"Attack Types: {', '.join(str(attack_type) for attack_type in attack_types_combined)}")  # Print the ordered attack-type scope once for the full plan
+        print()  # Separate shared identity fields from ordered combinations
+
+        for combination_index, (feature_set, hyperparameters_enabled, augmentation_ratio, classifier) in enumerate(evaluation_plan, start=1):  # Print combinations in their exact execution order
+            hyperparameter_label = "Optimized Hyperparameters" if hyperparameters_enabled else "Default Hyperparameters"  # Resolve the active hyperparameter label
+            augmentation_label = f"{augmentation_ratio * 100:g}%" if augmentation_ratio is not None else "No Data Augmentation"  # Resolve the active augmentation mode or ratio
+            experiment_mode_label = "Original Plus Augmented" if augmentation_ratio is not None else "Original Only"  # Resolve the experiment-mode identity
+            print(f"[{combination_index}/{total_combinations}] Feature Set: {feature_set} | Hyperparameters: {hyperparameter_label} | Data Augmentation: {augmentation_label} | Classifier: {classifier} | Experiment Mode: {experiment_mode_label}")  # Print one complete ordered combination identity
+
+        feature_sets = list(dict.fromkeys(combination[0] for combination in evaluation_plan))  # Preserve first-occurrence feature-set order for the Telegram summary
+        hyperparameter_modes = list(dict.fromkeys("Optimized Hyperparameters" if combination[1] else "Default Hyperparameters" for combination in evaluation_plan))  # Preserve first-occurrence runnable hyperparameter order
+        augmentation_modes = list(dict.fromkeys(f"{combination[2] * 100:g}%" if combination[2] is not None else "No Data Augmentation" for combination in evaluation_plan))  # Preserve first-occurrence augmentation order
+        classifiers = list(dict.fromkeys(combination[3] for combination in evaluation_plan))  # Preserve first-occurrence enabled-classifier order
+
+        telegram_summary = "\n".join([
+            f"Evaluation plan: {data_source_label} Data",
+            f"Total combinations: {total_combinations}",
+            f"Feature sets: {', '.join(feature_sets)}",
+            f"Hyperparameters: {', '.join(hyperparameter_modes)}",
+            f"Data augmentation: {', '.join(augmentation_modes)}",
+            f"Classifiers: {', '.join(classifiers)}",
+            "Detailed ordered plan written to the application log.",
+        ])  # Build one condensed Telegram summary from the ordered runtime plan
+        send_telegram_message(TELEGRAM_BOT, telegram_summary)  # Send one guarded, length-protected summary for this evaluation section
     except Exception as e:
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
@@ -11043,7 +11075,19 @@ def evaluate_on_dataset(
             ga_selected_features, rfe_selected_features, feature_names, config=config
         )  # Sanitize and verify GA/RFE feature selections against available features
 
-        print_dataset_evaluation_header(data_source_label)  # Print formatted evaluation header for the current data source
+        feature_sets_config = dict(config.get("stacking", {}).get("feature_sets_config", {}))  # Copy feature strategy config so grid-specific enforcement cannot mutate global configuration
+        if config.get("stacking", {}).get("methods", {}).get("feature_selection", True):  # Feature selection enabled: full features remain the required baseline alongside configured methods
+            feature_sets_config["use_full"] = True  # Always include the full-feature baseline in the evaluation grid
+        else:  # Feature selection disabled: only the full-feature baseline may be generated
+            feature_sets_config = {"use_full": True, "use_pca": False, "use_rfe": False, "use_ga": False, "explicit_features": []}  # Suppress every selection strategy without mutating CLI/config state
+
+        feature_mode_names = list_grid_feature_modes(ga_selected_features, pca_n_components, rfe_selected_features, feature_names, config=config)  # Resolve feature modes without materializing every feature matrix
+        if grid_progress is None:  # Build the exact standalone plan for the current data and HP slice
+            evaluation_plan = build_evaluation_plan([(bool(hyperparameters_enabled), base_models, hyperparams_map or {})], [augmentation_ratio], feature_mode_names, stacking_enabled)  # Build the standalone ordered runtime combinations
+        else:  # Reuse the complete ordered plan that created the shared full-grid progress bar
+            evaluation_plan = grid_progress["evaluation_plan"]  # Reuse the authoritative full-grid plan source
+
+        print_dataset_evaluation_header(data_source_label, evaluation_plan, execution_mode_str, attack_types_combined)  # Print the evaluation header and exact ordered plan before any combination runs or recovers
 
         pca_input_feature_names = [str(column) for column in df.iloc[:, :-1].select_dtypes(include=np.number).columns]  # Capture the exact ordered numeric columns consumed by scaling and PCA.
         target_column_name = str(df.columns[-1])  # Capture the positional target column used by the split flow.
@@ -11095,19 +11139,9 @@ def evaluate_on_dataset(
 
         stacking_model = build_evaluation_stacking_model(base_models, config=config) if stacking_enabled else None  # Build stacking classifier only when enabled
 
-        feature_sets_config = dict(config.get("stacking", {}).get("feature_sets_config", {}))  # Copy feature strategy config so grid-specific enforcement cannot mutate global configuration
-        if config.get("stacking", {}).get("methods", {}).get("feature_selection", True):  # Feature selection enabled: full features remain the required baseline alongside configured methods
-            feature_sets_config["use_full"] = True  # Always include the full-feature baseline in the evaluation grid
-        else:  # Feature selection disabled: only the full-feature baseline may be generated
-            feature_sets_config = {"use_full": True, "use_pca": False, "use_rfe": False, "use_ga": False, "explicit_features": []}  # Suppress every selection strategy without mutating CLI/config state
-
-        feature_set_count = count_grid_feature_modes(ga_selected_features, pca_n_components, rfe_selected_features, feature_names, config=config)  # Count feature modes without materializing every feature matrix
-
         if grid_progress is None:  # Standalone evaluation owns its progress bar and local combination counter
             individual_models = {key: value for key, value in base_models.items()}  # Preserve classifier prototypes for sequential cloning
-            total_steps = feature_set_count * len(individual_models)  # Count individual classifier steps for every feature mode
-            if stacking_enabled:  # Add stacking steps only when stacking is enabled
-                total_steps += feature_set_count  # Count one stacking step per feature mode
+            total_steps = len(evaluation_plan)  # Use the exact ordered standalone plan as the progress denominator
             progress_bar = tqdm(total=total_steps, desc=f"{data_source_label} Data", file=sys.stdout)  # Create local progress bar for standalone evaluation
             all_results = {}  # Initialize standalone result dictionary
             current_combination = 1  # Initialize standalone combination counter
@@ -12292,11 +12326,11 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
         augmented_files_list = load_augmented_files_for_combined_evaluation(original_files_list, config=config) if augmentation_enabled else []  # Resolve augmented file paths without loading their dataframes
         augmentation_file_paths = [path for path in augmented_files_list if path is not None]  # Filter missing augmented-file placeholders before deferred loading
         augmentation_ratios = config.get("stacking", {}).get("augmentation_ratios", [0.25, 0.50, 0.75, 1.00]) if augmentation_file_paths else []  # Generate ratio modes only when augmentation files exist
-        feature_mode_count = count_grid_feature_modes(ga_selected_features, pca_n_components, rfe_selected_features, feature_names, config=config)  # Count actual feature modes
-        data_variant_count = 1 + len(augmentation_ratios)  # Count original plus each valid configured augmentation ratio
-        classifier_mode_count = sum(len(models_map) + (1 if methods_cfg.get("stacking", True) else 0) for _, models_map, _ in hp_runs)  # Count enabled classifiers per valid HP mode
-        total_steps = data_variant_count * feature_mode_count * classifier_mode_count  # Exact full-grid denominator
+        feature_mode_names = list_grid_feature_modes(ga_selected_features, pca_n_components, rfe_selected_features, feature_names, config=config)  # Resolve actual feature modes in evaluation order
+        evaluation_plan = build_evaluation_plan(hp_runs, [None] + list(augmentation_ratios), feature_mode_names, methods_cfg.get("stacking", True))  # Build the exact default-first, original-first full-grid order
+        total_steps = len(evaluation_plan)  # Use the ordered runtime plan as the exact full-grid denominator
         grid_progress = create_grid_progress(total_steps, f"{dataset_name} Combined Grid")  # Share one counter across HP and augmentation modes
+        grid_progress["evaluation_plan"] = evaluation_plan  # Reuse the authoritative plan in every evaluation section sharing this progress bar
         all_grid_results = []  # Accumulate every result row for a single consolidated export
         all_comparison_results = []  # Accumulate augmentation comparisons across both HP modes
 
@@ -12539,16 +12573,16 @@ def annotate_results_with_combination_flags(results_list, feature_selection_enab
         raise
 
 
-def count_grid_feature_modes(ga_selected_features, pca_n_components, rfe_selected_features, feature_names, config=None):
+def list_grid_feature_modes(ga_selected_features: Optional[List[Any]], pca_n_components: Optional[int], rfe_selected_features: Optional[List[Any]], feature_names: List[Any], config: Optional[dict] = None) -> List[str]:
     """
-    Count the feature modes that assemble_feature_sets will actually generate for grid progress accounting.
+    List the feature modes that the sequential evaluation iterator will generate.
 
     :param ga_selected_features: Selected feature names produced by GA, if available
     :param pca_n_components: Number of PCA components to use, if available
     :param rfe_selected_features: Selected feature names produced by RFE, if available
     :param feature_names: List of available feature names in the dataset
     :param config: Optional configuration dictionary; uses global CONFIG when None
-    :return: Number of feature modes that will be generated
+    :return: Ordered feature mode names that will be generated
     """
 
     if config is None:  # If no config provided
@@ -12556,13 +12590,13 @@ def count_grid_feature_modes(ga_selected_features, pca_n_components, rfe_selecte
 
     methods_cfg = config.get("stacking", {}).get("methods", {})  # Read feature-selection method toggle
     if not methods_cfg.get("feature_selection", True):  # Disabled feature selection always produces only the required full-feature baseline
-        return 1  # Full Features only
+        return ["Full Features"]  # Return only the full-feature baseline
 
     feature_sets_config = config.get("stacking", {}).get("feature_sets_config", {})  # Read enabled feature strategies
-    feature_signatures = set()  # Track semantic feature-set identities to mirror assembly behavior
+    feature_signatures: set[Tuple[str, Any]] = set()  # Track semantic feature-set identities to mirror assembly behavior
     full_signature = ("features", tuple(sorted(sanitize_feature_name(name) for name in feature_names)))  # Build full-feature identity
     feature_signatures.add(full_signature)  # Register full-feature baseline identity
-    count = 1  # Full Features is always the baseline grid mode
+    feature_modes = ["Full Features"]  # Full Features is always the baseline grid mode
 
     explicit_features = feature_sets_config.get("explicit_features", []) or []  # Read optional explicit feature strategy
     sanitized_col_map = {sanitize_feature_name(name): name for name in feature_names}  # Build normalized feature lookup
@@ -12571,27 +12605,49 @@ def count_grid_feature_modes(ga_selected_features, pca_n_components, rfe_selecte
         explicit_signature = ("features", tuple(sorted(sanitize_feature_name(name) for name in valid_explicit)))  # Build explicit feature identity
         if explicit_signature not in feature_signatures:  # Count explicit only when semantically distinct
             feature_signatures.add(explicit_signature)  # Register explicit feature identity
-            count += 1  # Increment for distinct explicit feature mode
+            feature_modes.append("Explicit Features")  # Add the distinct explicit feature mode
 
     if feature_sets_config.get("use_ga", True) and ga_selected_features:  # Count GA only when enabled and backed by a non-empty artifact
         ga_signature = ("features", tuple(sorted(sanitize_feature_name(name) for name in ga_selected_features)))  # Build GA feature identity
         if ga_signature not in feature_signatures:  # Count GA only when semantically distinct
             feature_signatures.add(ga_signature)  # Register GA feature identity
-            count += 1  # Increment for distinct GA feature mode
+            feature_modes.append("GA Features")  # Add the distinct GA feature mode
 
     if feature_sets_config.get("use_pca", True) and pca_n_components:  # Count PCA only when enabled and backed by a valid component count
         pca_signature = ("pca", int(min(pca_n_components, len(feature_names))))  # Build PCA component-space identity
         if pca_signature not in feature_signatures:  # Count PCA only when distinct from existing modes
             feature_signatures.add(pca_signature)  # Register PCA component identity
-            count += 1  # Increment for PCA feature mode
+            feature_modes.append("PCA Components")  # Add the PCA feature mode
 
     if feature_sets_config.get("use_rfe", True) and rfe_selected_features:  # Count RFE only when enabled and backed by a non-empty artifact
         rfe_signature = ("features", tuple(sorted(sanitize_feature_name(name) for name in rfe_selected_features)))  # Build RFE feature identity
         if rfe_signature not in feature_signatures:  # Count RFE only when semantically distinct
             feature_signatures.add(rfe_signature)  # Register RFE feature identity
-            count += 1  # Increment for distinct RFE feature mode
+            feature_modes.append("RFE Features")  # Add the distinct RFE feature mode
 
-    return count  # Return the exact number of feature modes expected from assembly
+    return feature_modes  # Return the exact ordered feature modes expected from sequential evaluation
+
+
+def build_evaluation_plan(hp_runs: List[Tuple[bool, dict, dict]], augmentation_modes: List[Optional[float]], feature_mode_names: List[str], stacking_enabled: bool) -> List[Tuple[str, bool, Optional[float], str]]:
+    """
+    Build the exact ordered combinations represented by one evaluation progress bar.
+
+    :param hp_runs: Ordered runnable hyperparameter modes and their model mappings.
+    :param augmentation_modes: Ordered augmentation ratios with None representing original-only data.
+    :param feature_mode_names: Ordered feature modes produced by the evaluation iterator.
+    :param stacking_enabled: Whether the stacking classifier runs after individual classifiers.
+    :return: Ordered tuples of feature set, hyperparameter mode, augmentation ratio, and classifier.
+    """
+
+    evaluation_plan = []  # Accumulate combinations in the existing nested-loop execution order
+    for hyperparameters_enabled, models_map, _ in hp_runs:  # Preserve default-first runnable hyperparameter order
+        classifier_names = list(models_map.keys()) + (["StackingClassifier"] if stacking_enabled else [])  # Preserve enabled individual-classifier order followed by stacking
+        for augmentation_ratio in augmentation_modes:  # Preserve original-first configured augmentation order
+            for feature_mode_name in feature_mode_names:  # Preserve the sequential feature-mode iterator order
+                for classifier_name in classifier_names:  # Preserve individual-classifier order followed by stacking
+                    evaluation_plan.append((feature_mode_name, hyperparameters_enabled, augmentation_ratio, classifier_name))  # Store one existing runtime combination identity
+
+    return evaluation_plan  # Return the authoritative ordered progress plan
 
 
 def create_grid_progress(total_steps, description):
@@ -12950,11 +13006,11 @@ def orchestrate_all_combinations(input_path, dataset_name=None, config=None):
 
             df_augmented = load_and_validate_augmented_data(file, df_original, config=config) if augmentation_requested and artifacts.get("augmented_file") else None  # Load compatible augmentation data only when enabled
             augmentation_ratios = config.get("stacking", {}).get("augmentation_ratios", [0.25, 0.50, 0.75, 1.00]) if df_augmented is not None else []  # Generate ratio modes only when augmentation is usable
-            feature_mode_count = count_grid_feature_modes(ga_sel, pca_n, rfe_sel, feature_names, config=config)  # Count actual feature modes represented by the grid
-            data_variant_count = 1 + len(augmentation_ratios)  # Count original plus each valid configured augmentation ratio
-            classifier_mode_count = sum(len(models_map) + (1 if stacking_enabled else 0) for _, models_map, _ in hp_runs)  # Count enabled classifiers per valid HP mode
-            total_steps = data_variant_count * feature_mode_count * classifier_mode_count  # Exact full-grid combination denominator
+            feature_mode_names = list_grid_feature_modes(ga_sel, pca_n, rfe_sel, feature_names, config=config)  # Resolve actual feature modes in evaluation order
+            evaluation_plan = build_evaluation_plan(hp_runs, [None] + list(augmentation_ratios), feature_mode_names, stacking_enabled)  # Build the exact default-first, original-first full-grid order
+            total_steps = len(evaluation_plan)  # Use the ordered runtime plan as the exact full-grid denominator
             grid_progress = create_grid_progress(total_steps, f"{os.path.basename(file)} Grid")  # Share one counter across every HP and augmentation mode
+            grid_progress["evaluation_plan"] = evaluation_plan  # Reuse the authoritative plan in every evaluation section sharing this progress bar
             all_grid_results = []  # Accumulate every grid result for one consolidated export
             all_comparison_results = []  # Accumulate augmentation comparisons across both HP modes
 
