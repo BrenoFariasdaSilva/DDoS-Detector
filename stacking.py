@@ -66,6 +66,7 @@ import atexit  # For playing a sound when the program finishes
 import concurrent.futures  # For parallel execution
 import dataframe_image as dfi  # For exporting DataFrame styled tables as PNG images
 import datetime  # For getting the current date and time
+import fcntl  # For coordinating stacking artifact loads and atomic replacements on Linux
 import gc  # For explicit garbage collection to reclaim memory from deleted objects
 import glob  # For file pattern matching
 import hashlib  # Build stable digests for compact classifier metadata
@@ -168,6 +169,7 @@ MEMORY_WATCHER_PHASE_STATE_PATH: Optional[str] = None  # Holds the atomic phase-
 MEMORY_WATCHER_EVENT_COUNTER = 0  # Counts emitted phase-state events for watcher ordering
 MEMORY_WATCHER_TRACEMALLOC_PREVIOUS: Optional[tracemalloc.Snapshot] = None  # Holds previous tracemalloc snapshot for concise diffs
 MEMORY_WATCHER_FINALIZED = False  # Prevents duplicate terminal watcher events
+FEATURE_SOURCE_TEMP_DIRS: set = set()  # Tracks temporary feature-source directories created by this process
 
 
 # Functions Definitions:
@@ -5162,7 +5164,7 @@ def write_stacking_pca_artifact_atomically(value: Any, destination_path: str, ar
     try:  # Ensure temporary files are removed after success or failure.
         if artifact_format == "joblib":  # Serialize fitted estimators with the existing joblib dependency.
             with open(temporary_path, "wb") as file_obj:  # Open the temporary artifact for binary serialization.
-                dump(value, file_obj)  # Serialize the fitted PCA transformer into the temporary file.
+                dump(value, file_obj, compress=3)  # Serialize the fitted artifact with lossless Joblib compression.
                 file_obj.flush()  # Flush Python buffers before publishing the artifact.
                 os.fsync(file_obj.fileno())  # Flush artifact bytes to the filesystem before replacement.
         elif artifact_format == "json":  # Serialize provenance metadata as readable JSON.
@@ -5176,6 +5178,27 @@ def write_stacking_pca_artifact_atomically(value: Any, destination_path: str, ar
     finally:  # Remove only an unpublished temporary file.
         if os.path.exists(temporary_path):  # Verify whether a temporary artifact remains after replacement or failure.
             os.unlink(temporary_path)  # Remove the incomplete temporary artifact.
+
+
+def acquire_stacking_artifact_lock(lock_path: str, exclusive: bool) -> Any:
+    """
+    Acquire a process-safe lock for one dataset's stacking model artifacts.
+
+    :param lock_path: Dataset-local lock file path.
+    :param exclusive: Whether the caller will write or delete artifacts.
+    :return: Open lock file that releases the lock when closed.
+    """
+
+    lock_file = None  # Track the file so acquisition failures do not leak a descriptor
+    try:
+        Path(lock_path).parent.mkdir(parents=True, exist_ok=True)  # Ensure the existing model directory is available
+        lock_file = open(lock_path, "a+", encoding="utf-8")  # Open the persistent coordination file without truncation
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH)  # Serialize writers while allowing concurrent complete loads
+        return lock_file  # Keep the descriptor open for the caller's critical section
+    except Exception:
+        if lock_file is not None:  # Close a descriptor when lock acquisition fails
+            lock_file.close()  # Release any partially acquired lock
+        raise
 
 
 def validate_stacking_pca_cache_metadata(metadata: Any, expected_context: dict, artifact_paths: dict) -> Optional[str]:  # Validate provenance metadata before any transformer deserialization.
@@ -5520,7 +5543,69 @@ def resolve_feature_source_spill_base_directory(file: str, config: Optional[dict
     else:  # Use the dataset's stacking output area by default
         base_directory = Path(get_stacking_output_dir(str(file), config)) / "Array_Cache"  # Build dataset-local temporary array cache directory
     base_directory.mkdir(parents=True, exist_ok=True)  # Ensure base directory exists
+    cleanup_stale_feature_source_directories(base_directory, config=config)  # Remove only ownership-proven leftovers from terminated local processes
     return base_directory  # Return base directory path
+
+
+def cleanup_stale_feature_source_directories(base_directory: Path, config: Optional[dict] = None) -> None:
+    """
+    Remove ownership-marked feature-source directories whose creating process is no longer active.
+
+    :param base_directory: Array_Cache directory to inspect.
+    :param config: Runtime configuration dictionary.
+    :return: None.
+    """
+
+    host_identity = hashlib.sha256(platform.node().encode("utf-8")).hexdigest()[:12]  # Identify only directories created on this host
+    owned_name_pattern = re.compile(r"^FeatureSource_([0-9a-f]{12})_([0-9]+)_([0-9]+)_[a-z0-9_]+$")  # Match only the ownership-bearing directory format
+    try:
+        candidates = list(base_directory.iterdir())  # Snapshot candidates so individual removals do not disturb iteration
+    except Exception as exc:
+        print(f"{BackgroundColors.YELLOW}[WARNING] Failed to inspect stale feature-source directories at {base_directory}: {exc}{Style.RESET_ALL}")  # Log inspection failure without stopping evaluation
+        return
+    for candidate in candidates:  # Inspect only direct children of Array_Cache
+        match = owned_name_pattern.fullmatch(candidate.name)  # Reject legacy and unrelated names conservatively
+        if match is None or match.group(1) != host_identity or candidate.is_symlink() or not candidate.is_dir():
+            continue  # Preserve directories without exact local ownership proof
+        owner_pid = int(match.group(2))  # Read the creator PID from the directory name
+        owner_create_time = int(match.group(3))  # Read the creator process birth time to detect PID reuse
+        try:
+            process_is_active = int(psutil.Process(owner_pid).create_time() * 1000000) == owner_create_time  # Prove the exact owner process is still active
+        except psutil.NoSuchProcess:
+            process_is_active = False  # A missing exact owner proves the directory is stale
+        except (psutil.AccessDenied, psutil.ZombieProcess):
+            process_is_active = True  # Preserve candidates when owner status cannot be proven safely
+        if process_is_active:
+            continue  # Never delete an active directory owned by this or another running process
+        try:
+            shutil.rmtree(str(candidate))  # Delete only the exact ownership-proven stale directory
+            FEATURE_SOURCE_TEMP_DIRS.discard(str(candidate.resolve()))  # Remove any matching local tracking entry
+            verbose_output(f"{BackgroundColors.GREEN}[MEMORY] Removed stale feature-source spill directory: {BackgroundColors.CYAN}{candidate}{Style.RESET_ALL}", config=config)  # Log stale cleanup when verbose
+        except Exception as exc:
+            print(f"{BackgroundColors.YELLOW}[WARNING] Failed to clean stale feature-source spill directory at {candidate}: {exc}{Style.RESET_ALL}")  # Keep stale cleanup best-effort
+
+
+def close_feature_source_memmap(array: Any, array_name: str) -> None:
+    """
+    Flush and close one feature-source memmap explicitly.
+
+    :param array: Array or memmap reference to release.
+    :param array_name: Logical array name used in cleanup warnings.
+    :return: None.
+    """
+
+    if not isinstance(array, np.memmap):  # Regular in-memory arrays do not own file handles
+        return
+    try:
+        array.flush()  # Flush pending bytes before closing the mapping
+    except Exception as exc:
+        print(f"{BackgroundColors.YELLOW}[WARNING] Failed to flush feature-source memmap {array_name}: {exc}{Style.RESET_ALL}")  # Log without hiding the caller's error
+    try:
+        mmap_object = getattr(array, "_mmap", None)  # Resolve the NumPy-owned mmap handle
+        if mmap_object is not None and not mmap_object.closed:  # Close only an open mapping
+            mmap_object.close()  # Release the operating-system file mapping explicitly
+    except Exception as exc:
+        print(f"{BackgroundColors.YELLOW}[WARNING] Failed to close feature-source memmap {array_name}: {exc}{Style.RESET_ALL}")  # Log without hiding the caller's error
 
 
 def spill_array_to_memmap(array: Any, temp_dir: str, name: str) -> Tuple[np.memmap, str]:
@@ -5537,10 +5622,20 @@ def spill_array_to_memmap(array: Any, temp_dir: str, name: str) -> Tuple[np.memm
     if source.ndim != 2:  # Feature-source arrays must be two-dimensional matrices
         raise ValueError(f"Feature source array {name} must be 2D, got shape {source.shape}")  # Raise explicit shape error
     file_path = os.path.join(temp_dir, f"{name}_{uuid.uuid4().hex}.dat")  # Build collision-resistant backing file path
-    memmap_array = np.memmap(file_path, dtype=source.dtype, mode="w+", shape=source.shape, order="C")  # Allocate disk-backed C-contiguous matrix
-    memmap_array[:] = source  # Copy exact source values into the memmap without dtype conversion
-    memmap_array.flush()  # Flush backing bytes before releasing the source array
-    return memmap_array, file_path  # Return memmap and backing file path
+    memmap_array = None  # Track a partial mapping for explicit failure cleanup
+    try:
+        memmap_array = np.memmap(file_path, dtype=source.dtype, mode="w+", shape=source.shape, order="C")  # Allocate disk-backed C-contiguous matrix
+        memmap_array[:] = source  # Copy exact source values into the memmap without dtype conversion
+        memmap_array.flush()  # Flush backing bytes before releasing the source array
+        return memmap_array, file_path  # Return memmap and backing file path
+    except Exception:
+        close_feature_source_memmap(memmap_array, name)  # Release a partially created mapping before removing its file
+        if os.path.exists(file_path):  # Remove only this failed spill file
+            try:
+                os.unlink(file_path)  # Prevent a handled spill failure from leaving an orphan file
+            except Exception as cleanup_exc:
+                print(f"{BackgroundColors.YELLOW}[WARNING] Failed to remove partial feature-source memmap {file_path}: {cleanup_exc}{Style.RESET_ALL}")  # Do not hide the original spill error
+        raise
 
 
 def cleanup_feature_source_arrays(feature_source_arrays: Optional[dict], config: Optional[dict] = None) -> None:
@@ -5556,11 +5651,15 @@ def cleanup_feature_source_arrays(feature_source_arrays: Optional[dict], config:
         return  # Exit early
     spill_temp_dir = feature_source_arrays.get("spill_temp_dir")  # Resolve temporary spill directory if one was created
     try:
+        close_feature_source_memmap(feature_source_arrays.get("X_train_scaled"), "X_train_scaled")  # Flush and close the train mapping before deletion
+        close_feature_source_memmap(feature_source_arrays.get("X_test_scaled"), "X_test_scaled")  # Flush and close the test mapping before deletion
         feature_source_arrays["X_train_scaled"] = None  # Drop train source reference before deleting memmap files
         feature_source_arrays["X_test_scaled"] = None  # Drop test source reference before deleting memmap files
         gc.collect()  # Reclaim ndarray or memmap objects before filesystem cleanup
         if spill_temp_dir and os.path.isdir(spill_temp_dir):  # Remove only this run's unique temporary directory
-            shutil.rmtree(spill_temp_dir, ignore_errors=True)  # Delete temporary memmap files best-effort
+            shutil.rmtree(spill_temp_dir)  # Delete temporary memmap files after handles are explicitly closed
+        if spill_temp_dir and not os.path.exists(spill_temp_dir):  # Stop tracking only after confirmed removal
+            FEATURE_SOURCE_TEMP_DIRS.discard(str(Path(spill_temp_dir).resolve()))  # Remove this exact directory from the current-run tracker
     except Exception as exc:  # Keep cleanup best-effort
         print(f"{BackgroundColors.YELLOW}[WARNING] Failed to clean feature-source spill files at {spill_temp_dir}: {exc}{Style.RESET_ALL}")  # Log cleanup failure
     finally:
@@ -5595,16 +5694,23 @@ def maybe_spill_feature_source_arrays(feature_source_arrays: dict, file: str, co
         return  # Leave arrays in memory
 
     temp_dir = None  # Track temp dir for failure cleanup
+    X_train_memmap = None  # Track train mapping for explicit failure cleanup
+    X_test_memmap = None  # Track test mapping for explicit failure cleanup
+    spill_completed = False  # Distinguish spill failures from non-critical completion-reporting failures
     try:
         base_directory = resolve_feature_source_spill_base_directory(file, config=config)  # Resolve spill base directory
-        temp_dir = tempfile.mkdtemp(prefix="FeatureSource_", dir=str(base_directory))  # Create unique spill directory for this evaluation slice
+        host_identity = hashlib.sha256(platform.node().encode("utf-8")).hexdigest()[:12]  # Identify the host that owns this temporary directory
+        process_create_time = int(psutil.Process(os.getpid()).create_time() * 1000000)  # Pair PID with process birth time so reuse cannot mark a stale directory active
+        temp_dir = str(Path(tempfile.mkdtemp(prefix=f"FeatureSource_{host_identity}_{os.getpid()}_{process_create_time}_", dir=str(base_directory))).resolve())  # Create an ownership-bearing unique spill directory
+        FEATURE_SOURCE_TEMP_DIRS.add(temp_dir)  # Track the directory immediately so partial spills are covered
+        feature_source_arrays["spill_temp_dir"] = temp_dir  # Expose the directory to every evaluation cleanup path before writing files
         X_train_memmap, train_path = spill_array_to_memmap(X_train_source, temp_dir, "X_train_scaled")  # Spill train source matrix
         X_test_memmap, test_path = spill_array_to_memmap(X_test_source, temp_dir, "X_test_scaled")  # Spill test source matrix
         feature_source_arrays["X_train_scaled"] = X_train_memmap  # Replace in-memory train matrix with memmap-backed matrix
         feature_source_arrays["X_test_scaled"] = X_test_memmap  # Replace in-memory test matrix with memmap-backed matrix
         feature_source_arrays["spilled_to_memmap"] = True  # Mark holder as spilled
-        feature_source_arrays["spill_temp_dir"] = temp_dir  # Store unique spill directory for cleanup
         feature_source_arrays["spill_paths"] = [train_path, test_path]  # Store backing paths for diagnostics
+        spill_completed = True  # Preserve the usable mappings if later diagnostics fail
         del X_train_source, X_test_source  # Release old in-memory source references held by this helper
         gc.collect()  # Reclaim old in-memory full matrices before the next feature subset is materialized
 
@@ -5615,10 +5721,39 @@ def maybe_spill_feature_source_arrays(feature_source_arrays: dict, file: str, co
         write_memory_phase_event("after_feature_source_spill", config=config, **event_metadata)  # Publish spill completion event
         verbose_output(f"{BackgroundColors.GREEN}[MEMORY] Spilled full feature source matrices ({total_nbytes / (1024 ** 3):.2f} GiB) to temporary memmaps at {BackgroundColors.CYAN}{temp_dir}{Style.RESET_ALL}", config=config)  # Log spill path when verbose
     except Exception as exc:  # Keep spill failure non-fatal so experiments preserve behavior
+        if spill_completed:
+            print(f"{BackgroundColors.YELLOW}[WARNING] Feature-source memmap spill completed, but completion reporting failed: {exc}{Style.RESET_ALL}")  # Preserve valid mappings after non-critical diagnostics fail
+            return
+        close_feature_source_memmap(X_train_memmap, "X_train_scaled")  # Release a completed train mapping after a later spill failure
+        close_feature_source_memmap(X_test_memmap, "X_test_scaled")  # Release any completed test mapping after a later spill failure
         if temp_dir and os.path.isdir(temp_dir):  # Clean failed partial spill directory
-            shutil.rmtree(temp_dir, ignore_errors=True)  # Remove partial memmap files best-effort
+            try:
+                shutil.rmtree(temp_dir)  # Remove partial memmap files after explicitly closing mappings
+            except Exception as cleanup_exc:
+                print(f"{BackgroundColors.YELLOW}[WARNING] Failed to clean partial feature-source spill directory at {temp_dir}: {cleanup_exc}{Style.RESET_ALL}")  # Log cleanup failure without hiding the spill error
+        if temp_dir and not os.path.exists(temp_dir):  # Stop tracking only after confirmed removal
+            FEATURE_SOURCE_TEMP_DIRS.discard(str(Path(temp_dir).resolve()))  # Remove the exact failed directory from current-run tracking
+        feature_source_arrays.pop("spill_temp_dir", None)  # Restore the in-memory holder after failed spilling
         write_memory_phase_event("after_feature_source_spill", config=config, dataset_source=file, spilled_total_nbytes=total_nbytes, event_outcome=f"failed:{exc}")  # Publish failed spill event when watcher is active
         print(f"{BackgroundColors.YELLOW}[WARNING] Feature-source memmap spill failed; continuing with in-memory arrays: {exc}{Style.RESET_ALL}")  # Warn operator that memory-saving spill is unavailable
+
+
+def cleanup_tracked_feature_source_directories(config: Optional[dict] = None) -> None:
+    """
+    Retry removal of temporary feature-source directories created by this process.
+
+    :param config: Runtime configuration dictionary.
+    :return: None.
+    """
+
+    for temp_dir in list(FEATURE_SOURCE_TEMP_DIRS):  # Snapshot current-run ownership entries for safe removal
+        try:
+            if os.path.isdir(temp_dir):  # Remove only an exact directory created and tracked by this process
+                shutil.rmtree(temp_dir)  # Retry cleanup after evaluation-level handles have been released
+            if not os.path.exists(temp_dir):  # Confirm removal before clearing ownership tracking
+                FEATURE_SOURCE_TEMP_DIRS.discard(temp_dir)  # Mark this exact directory cleaned
+        except Exception as exc:
+            print(f"{BackgroundColors.YELLOW}[WARNING] Failed to clean tracked feature-source spill directory at {temp_dir}: {exc}{Style.RESET_ALL}")  # Keep final cleanup best-effort
 
 
 def truncate_value(value):
@@ -5732,16 +5867,153 @@ def resolve_stacking_model_artifact_paths(dataset_name: str, dataset_csv_path: s
     artifact_base = f"{safe_model_name}__{safe_feature_set}__{artifact_identity[:16]}"
     model_path = (models_directory / f"{artifact_base}_model.joblib").resolve()
     metadata_path = (models_directory / f"{artifact_base}_meta.json").resolve()
+    lock_path = (models_directory / ".artifacts.lock").resolve()
     validate_output_path(stacking_output_dir, str(models_directory))
     validate_output_path(stacking_output_dir, str(model_path))
     validate_output_path(stacking_output_dir, str(metadata_path))
+    validate_output_path(stacking_output_dir, str(lock_path))
     return {
         "stacking_output_dir": str(Path(stacking_output_dir).resolve()),
         "models_directory": str(models_directory),
         "artifact_identity": artifact_identity,
         "model_path": str(model_path),
         "metadata_path": str(metadata_path),
+        "lock_path": str(lock_path),
     }
+
+
+def stacking_model_artifact_pair_is_valid(artifact_paths: dict, artifact_context: dict) -> bool:
+    """
+    Verify that one classifier model and metadata pair is complete and synchronized.
+
+    :param artifact_paths: Resolved classifier artifact paths.
+    :param artifact_context: Expected deterministic compatibility context.
+    :return: True when the existing pair can be retained without rewriting.
+    """
+
+    metadata_path = str(artifact_paths["metadata_path"])  # Resolve the expected metadata file
+    model_path = str(artifact_paths["model_path"])  # Resolve the expected model file
+    if not os.path.isfile(metadata_path) or not os.path.isfile(model_path):
+        return False  # Require both synchronized files
+    try:
+        with open(metadata_path, "r", encoding="utf-8") as metadata_file:
+            metadata = json.load(metadata_file)  # Parse existing provenance before retaining the artifact
+        if not isinstance(metadata, dict):
+            return False  # Reject malformed metadata roots
+        if any(metadata.get(field_name) != expected_value for field_name, expected_value in artifact_context.items()):
+            return False  # Reject any compatibility difference
+        if metadata.get("artifact_identity") != artifact_paths["artifact_identity"]:
+            return False  # Require the complete current identity
+        if metadata.get("model_artifact") != os.path.basename(model_path):
+            return False  # Require metadata to reference this exact model
+        if int(metadata.get("model_size_bytes", -1)) != int(os.path.getsize(model_path)):
+            return False  # Reject truncated or replaced model content
+        return metadata.get("model_sha256") == calculate_file_sha256(model_path)  # Require byte-level synchronization
+    except Exception:
+        return False  # Treat unreadable pairs as incomplete so they can be safely replaced
+
+
+def cleanup_superseded_stacking_model_artifacts(artifact_paths: dict, artifact_context: dict, config: Optional[dict] = None) -> None:
+    """
+    Remove superseded classifier pairs for the exact current model-retention slot.
+
+    :param artifact_paths: Resolved current classifier artifact paths.
+    :param artifact_context: Current deterministic compatibility context.
+    :param config: Runtime configuration dictionary.
+    :return: None.
+    """
+
+    models_directory = Path(str(artifact_paths["models_directory"]))  # Restrict cleanup to the current dataset model directory
+    current_metadata_path = Path(str(artifact_paths["metadata_path"]))  # Preserve the newly validated metadata
+    slot_fields = ("artifact_type", "dataset_path", "execution_mode", "attack_types", "target_column", "feature_set", "hyperparameter_mode", "model_name")  # Define the exact semantic retention slot
+    for metadata_candidate in models_directory.glob("*_meta.json"):  # Inspect only classifier-style companion metadata files
+        if metadata_candidate == current_metadata_path:
+            continue  # Preserve the current valid pair
+        try:
+            with open(metadata_candidate, "r", encoding="utf-8") as metadata_file:
+                metadata = json.load(metadata_file)  # Use provenance rather than sanitized filename guesses
+        except Exception:
+            continue  # Preserve unreadable or legacy metadata conservatively
+        if not isinstance(metadata, dict) or any(metadata.get(field_name) != artifact_context.get(field_name) for field_name in slot_fields):
+            continue  # Preserve artifacts from different datasets, modes, classifiers, feature sets, or HP modes
+        model_artifact = metadata.get("model_artifact")  # Read the exact companion model basename
+        if not isinstance(model_artifact, str) or os.path.basename(model_artifact) != model_artifact or not model_artifact.endswith("_model.joblib"):
+            continue  # Preserve malformed references rather than risking unrelated deletion
+        expected_metadata_name = f"{model_artifact[:-len('_model.joblib')]}_meta.json"  # Derive the only valid companion metadata name
+        if metadata_candidate.name != expected_metadata_name:
+            continue  # Require a synchronized naming pair before deletion
+        model_candidate = models_directory / model_artifact  # Resolve the proven companion inside the locked model directory
+        try:
+            if model_candidate.is_file():
+                model_candidate.unlink()  # Remove the superseded model only after the new pair is fully published
+            metadata_candidate.unlink()  # Remove companion metadata after its model is gone
+            verbose_output(f"{BackgroundColors.GREEN}Removed superseded stacking classifier artifact pair: {BackgroundColors.CYAN}{model_artifact}{Style.RESET_ALL}", config=config)  # Log retention cleanup when verbose
+        except Exception as exc:
+            print(f"{BackgroundColors.YELLOW}[WARNING] Failed to remove superseded stacking classifier artifacts for {metadata_candidate}: {exc}{Style.RESET_ALL}")  # Keep cleanup failure non-fatal
+    for current_path in (Path(str(artifact_paths["model_path"])), current_metadata_path):  # Remove only temporary files for the exact current identity
+        for temporary_candidate in models_directory.glob(f".{current_path.name}.*.tmp"):
+            try:
+                temporary_candidate.unlink()  # Remove an incomplete atomic-write file after exclusive lock acquisition
+            except Exception as exc:
+                print(f"{BackgroundColors.YELLOW}[WARNING] Failed to remove incomplete stacking artifact {temporary_candidate}: {exc}{Style.RESET_ALL}")  # Keep temporary cleanup non-fatal
+
+
+def cleanup_incomplete_stacking_model_transactions(models_directory: str, config: Optional[dict] = None) -> None:
+    """
+    Recover classifier writes interrupted after publishing their ownership marker.
+
+    :param models_directory: Locked dataset model directory to inspect.
+    :param config: Runtime configuration dictionary.
+    :return: None.
+    """
+
+    directory = Path(models_directory)  # Restrict recovery to the locked dataset model directory
+    for marker_path in directory.glob(".*_model.joblib.pending.json"):  # Inspect only explicit classifier transaction markers
+        try:
+            with open(marker_path, "r", encoding="utf-8") as marker_file:
+                marker = json.load(marker_file)  # Parse ownership and compatibility proof
+        except Exception:
+            continue  # Preserve malformed markers and unknown files conservatively
+        artifact_context = marker.get("artifact_context") if isinstance(marker, dict) else None  # Read the exact pending compatibility context
+        artifact_identity = marker.get("artifact_identity") if isinstance(marker, dict) else None  # Read the pending deterministic identity
+        model_artifact = marker.get("model_artifact") if isinstance(marker, dict) else None  # Read the pending model basename
+        metadata_artifact = marker.get("metadata_artifact") if isinstance(marker, dict) else None  # Read the pending metadata basename
+        if not isinstance(artifact_context, dict) or not isinstance(artifact_identity, str) or re.fullmatch(r"[0-9a-f]{64}", artifact_identity) is None:
+            continue  # Require complete deterministic ownership proof
+        if not isinstance(model_artifact, str) or os.path.basename(model_artifact) != model_artifact or not model_artifact.endswith(f"__{artifact_identity[:16]}_model.joblib"):
+            continue  # Reject unsafe or mismatched model references
+        expected_metadata_artifact = f"{model_artifact[:-len('_model.joblib')]}_meta.json"  # Derive the synchronized metadata basename
+        if metadata_artifact != expected_metadata_artifact or os.path.basename(str(metadata_artifact)) != metadata_artifact:
+            continue  # Require the exact companion metadata reference
+        pending_paths = {"artifact_identity": artifact_identity, "model_path": str(directory / model_artifact), "metadata_path": str(directory / metadata_artifact)}  # Assemble paths for pair validation
+        pair_is_valid = stacking_model_artifact_pair_is_valid(pending_paths, artifact_context)  # Preserve a pair completed immediately before termination
+        cleanup_failed = False  # Retain the marker whenever any required removal fails
+        if not pair_is_valid:  # Remove only an incomplete pair proven by its transaction marker
+            for artifact_path in (Path(pending_paths["model_path"]), Path(pending_paths["metadata_path"])):
+                try:
+                    if artifact_path.is_file():
+                        artifact_path.unlink()  # Remove the exact incomplete final artifact
+                except Exception as exc:
+                    cleanup_failed = True  # Keep ownership proof for a later retry
+                    print(f"{BackgroundColors.YELLOW}[WARNING] Failed to remove incomplete stacking artifact {artifact_path}: {exc}{Style.RESET_ALL}")  # Log without hiding another error
+        for final_artifact in (model_artifact, metadata_artifact):  # Remove atomic temporary files tied to this proven transaction
+            for temporary_path in directory.glob(f".{final_artifact}.*.tmp"):
+                try:
+                    temporary_path.unlink()  # Remove the exact interrupted atomic-write temporary file
+                except Exception as exc:
+                    cleanup_failed = True  # Keep the marker for a later retry
+                    print(f"{BackgroundColors.YELLOW}[WARNING] Failed to remove incomplete stacking artifact {temporary_path}: {exc}{Style.RESET_ALL}")  # Log cleanup failure
+        if not cleanup_failed:
+            try:
+                marker_path.unlink()  # Clear transaction ownership proof only after recovery is complete
+                verbose_output(f"{BackgroundColors.GREEN}Recovered interrupted stacking classifier artifact transaction: {BackgroundColors.CYAN}{marker_path.name}{Style.RESET_ALL}", config=config)  # Log recovery when verbose
+            except Exception as exc:
+                print(f"{BackgroundColors.YELLOW}[WARNING] Failed to remove stacking artifact transaction marker {marker_path}: {exc}{Style.RESET_ALL}")  # Preserve completed artifacts when marker cleanup fails
+    for temporary_marker in directory.glob(".*_model.joblib.pending.json.*.tmp"):  # Marker temp files cannot precede any large model publication
+        try:
+            temporary_marker.unlink()  # Remove an interrupted marker write while the dataset artifact lock is exclusive
+        except Exception as exc:
+            print(f"{BackgroundColors.YELLOW}[WARNING] Failed to remove incomplete stacking transaction marker {temporary_marker}: {exc}{Style.RESET_ALL}")  # Keep recovery best-effort
 
 
 def export_model_and_scaler(model, scaler, dataset_name, model_name, feature_set=None, dataset_csv_path=None, config=None, artifact_context=None, label_encoder=None, transformer=None):
@@ -5761,6 +6033,8 @@ def export_model_and_scaler(model, scaler, dataset_name, model_name, feature_set
     :return: Persisted classifier artifact path
     """
     
+    artifact_lock = None  # Track the dataset artifact lock for exception-safe release
+    artifact_paths = None  # Track resolved paths for interrupted-write recovery
     try:
         if config is None:  # If no config provided
             config = CONFIG  # Use global CONFIG
@@ -5770,6 +6044,11 @@ def export_model_and_scaler(model, scaler, dataset_name, model_name, feature_set
         if not isinstance(artifact_context, dict) or scaler is None or label_encoder is None:
             raise ValueError("Complete classifier artifact context and fitted preprocessing are required")
         artifact_paths = resolve_stacking_model_artifact_paths(dataset_name, str(dataset_csv_path), model_name, str(feature_set), artifact_context, config)
+        artifact_lock = acquire_stacking_artifact_lock(artifact_paths["lock_path"], exclusive=True)  # Prevent concurrent loads, writes, or cleanup in this dataset directory
+        cleanup_incomplete_stacking_model_transactions(artifact_paths["models_directory"], config=config)  # Recover only ownership-proven interrupted writes
+        if stacking_model_artifact_pair_is_valid(artifact_paths, artifact_context):  # Reuse an identical complete artifact instead of rewriting it
+            cleanup_superseded_stacking_model_artifacts(artifact_paths, artifact_context, config=config)  # Retain only this valid semantic slot version
+            return artifact_paths["model_path"]  # Preserve the existing artifact bytes and timestamp
         bundle = {
             "model": model,
             "scaler": scaler,
@@ -5779,6 +6058,9 @@ def export_model_and_scaler(model, scaler, dataset_name, model_name, feature_set
             "model_feature_names": list(artifact_context["model_feature_names"]),
             "artifact_identity": artifact_paths["artifact_identity"],
         }
+        transaction_path = str(Path(artifact_paths["models_directory"]) / f".{os.path.basename(artifact_paths['model_path'])}.pending.json")  # Publish ownership proof before any large final artifact
+        transaction_marker = {"artifact_type": "stacking_classifier_write_transaction", "artifact_context": artifact_context, "artifact_identity": artifact_paths["artifact_identity"], "model_artifact": os.path.basename(artifact_paths["model_path"]), "metadata_artifact": os.path.basename(artifact_paths["metadata_path"])}  # Record exact recovery paths and compatibility identity
+        write_stacking_pca_artifact_atomically(transaction_marker, transaction_path, "json")  # Make interrupted model publication safely recoverable
         write_stacking_pca_artifact_atomically(bundle, artifact_paths["model_path"], "joblib")
         model_size = int(os.path.getsize(artifact_paths["model_path"]))
         scaler_state = normalize_metadata_for_json({"mean_": scaler.mean_, "scale_": scaler.scale_, "var_": scaler.var_, "n_samples_seen_": scaler.n_samples_seen_})
@@ -5793,13 +6075,28 @@ def export_model_and_scaler(model, scaler, dataset_name, model_name, feature_set
             "scaler_state_digest": hashlib.sha256(json.dumps(scaler_state, sort_keys=True, allow_nan=False).encode("utf-8")).hexdigest(),
         })
         write_stacking_pca_artifact_atomically(metadata, artifact_paths["metadata_path"], "json")
+        try:
+            os.unlink(transaction_path)  # Remove ownership marker after the synchronized pair is completely published
+        except FileNotFoundError:
+            pass  # Treat an already absent marker as complete cleanup
+        except Exception as cleanup_exc:
+            print(f"{BackgroundColors.YELLOW}[WARNING] Failed to remove completed stacking artifact transaction marker {transaction_path}: {cleanup_exc}{Style.RESET_ALL}")  # Preserve the valid pair and allow the next locked run to retry
+        cleanup_superseded_stacking_model_artifacts(artifact_paths, artifact_context, config=config)  # Remove only older proven versions after the new pair is valid
         relative_model = os.path.relpath(artifact_paths["model_path"], artifact_paths["stacking_output_dir"])
         verbose_output(f"{BackgroundColors.GREEN}Exported original-trained classifier and fitted preprocessing to {BackgroundColors.CYAN}{relative_model}{Style.RESET_ALL}", config=config)
         return artifact_paths["model_path"]
     except Exception as e:
+        if artifact_lock is not None and artifact_paths is not None:  # Recover this handled write failure while the exclusive lock is still held
+            try:
+                cleanup_incomplete_stacking_model_transactions(artifact_paths["models_directory"], config=config)  # Remove only marker-proven incomplete files and preserve prior valid versions
+            except Exception as cleanup_exc:
+                print(f"{BackgroundColors.YELLOW}[WARNING] Failed to recover interrupted stacking artifact write: {cleanup_exc}{Style.RESET_ALL}")  # Do not hide the original export error
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
         raise
+    finally:
+        if artifact_lock is not None:  # Release the process-safe dataset artifact lock on every return or error
+            artifact_lock.close()  # Closing the descriptor releases flock automatically
 
 
 def compute_fpr_fnr(y_test, y_pred):
@@ -5856,11 +6153,14 @@ def load_existing_model_if_available(model_name, dataset_file, dataset_name, fea
     :return: Tuple containing the loaded artifact bundle or None and a factual rejection reason
     """
 
+    artifact_lock = None  # Track the dataset artifact lock for every return path
     try:
         if config is None:  # If no config provided
             config = CONFIG  # Use global CONFIG
 
         artifact_paths = resolve_stacking_model_artifact_paths(dataset_name, str(dataset_file), model_name, str(feature_set), artifact_context, config)
+        artifact_lock = acquire_stacking_artifact_lock(artifact_paths["lock_path"], exclusive=True)  # Prevent replacement and allow safe post-validation retention cleanup
+        cleanup_incomplete_stacking_model_transactions(artifact_paths["models_directory"], config=config)  # Recover marker-proven interrupted writes before checking availability
         metadata_path = artifact_paths["metadata_path"]
         model_path = artifact_paths["model_path"]
         if not os.path.isfile(metadata_path) or not os.path.isfile(model_path):
@@ -5918,12 +6218,16 @@ def load_existing_model_if_available(model_name, dataset_file, dataset_name, fea
             loaded_transformer_metadata = {"class": f"{loaded_transformer.__class__.__module__}.{loaded_transformer.__class__.__name__}", "params": normalize_metadata_for_json(loaded_transformer.get_params(deep=False) if hasattr(loaded_transformer, "get_params") else {})}
             if loaded_transformer_metadata != expected_transformer:
                 return None, "classifier bundle transformer configuration is incompatible"
+        cleanup_superseded_stacking_model_artifacts(artifact_paths, artifact_context, config=config)  # Retire only proven older slot versions while the dataset lock is exclusive
         verbose_output(f"{BackgroundColors.GREEN}Loaded compatible original-trained classifier from {BackgroundColors.CYAN}{model_path}{Style.RESET_ALL}", config=config)
         return bundle, None
     except Exception as e:
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
         raise
+    finally:
+        if artifact_lock is not None:  # Release the lock on cache misses, rejections, successful loads, and errors
+            artifact_lock.close()  # Closing the descriptor releases flock automatically
 
 
 def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, y_test, dataset_file=None, scaler=None, feature_names=None, feature_set=None, config=None, phase_metadata=None, training_ram_stats=None, fit_model=True):  # Evaluate one classifier with optional watcher metadata and RAM statistics
@@ -13855,8 +14159,11 @@ def main(config=None):
         send_exception_via_telegram(type(e), e, e.__traceback__)
         raise
     finally:  # Always finalize queued explainability work before leaving main
-        finalize_memory_watcher(config=config, phase="abnormal_completion", event_outcome="leaving_main_without_normal_completion")  # Publish abnormal terminal phase if no earlier terminal event exists
-        finalize_pending_explainability_jobs(config=config, terminate=not normal_completion)  # Finalize or terminate asynchronous explainability work before main exits
+        try:
+            finalize_memory_watcher(config=config, phase="abnormal_completion", event_outcome="leaving_main_without_normal_completion")  # Publish abnormal terminal phase if no earlier terminal event exists
+            finalize_pending_explainability_jobs(config=config, terminate=not normal_completion)  # Finalize or terminate asynchronous explainability work before main exits
+        finally:
+            cleanup_tracked_feature_source_directories(config=config)  # Retry exact current-run spill cleanup after every normal, failed, or interrupted execution
 
 
 if __name__ == "__main__":
