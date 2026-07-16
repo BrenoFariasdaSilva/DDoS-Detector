@@ -5640,9 +5640,9 @@ def spill_array_to_memmap(array: Any, temp_dir: str, name: str) -> Tuple[np.memm
 
 def cleanup_feature_source_arrays(feature_source_arrays: Optional[dict], config: Optional[dict] = None) -> None:
     """
-    Release feature-source arrays and remove any temporary spill files.
+    Release feature evaluation arrays and remove any temporary spill files.
 
-    :param feature_source_arrays: Mutable holder created by evaluate_on_dataset.
+    :param feature_source_arrays: Mutable holder owning train and test evaluation matrices.
     :param config: Runtime configuration dictionary.
     :return: None.
     """
@@ -5668,9 +5668,9 @@ def cleanup_feature_source_arrays(feature_source_arrays: Optional[dict], config:
 
 def maybe_spill_feature_source_arrays(feature_source_arrays: dict, file: str, config: Optional[dict] = None) -> None:
     """
-    Spill full scaled source matrices to disk-backed memmaps after Full Features.
+    Spill large feature evaluation matrices to disk-backed memmaps.
 
-    :param feature_source_arrays: Mutable holder containing X_train_scaled and X_test_scaled.
+    :param feature_source_arrays: Mutable holder containing train and test evaluation matrices.
     :param file: Dataset file or directory identity for resolving spill location.
     :param config: Runtime configuration dictionary.
     :return: None.
@@ -5719,7 +5719,7 @@ def maybe_spill_feature_source_arrays(feature_source_arrays: dict, file: str, co
             event_metadata.update(build_array_memory_metadata("feature_source_train", feature_source_arrays["X_train_scaled"]))  # Add train memmap metadata
             event_metadata.update(build_array_memory_metadata("feature_source_test", feature_source_arrays["X_test_scaled"]))  # Add test memmap metadata
         write_memory_phase_event("after_feature_source_spill", config=config, **event_metadata)  # Publish spill completion event
-        verbose_output(f"{BackgroundColors.GREEN}[MEMORY] Spilled full feature source matrices ({total_nbytes / (1024 ** 3):.2f} GiB) to temporary memmaps at {BackgroundColors.CYAN}{temp_dir}{Style.RESET_ALL}", config=config)  # Log spill path when verbose
+        verbose_output(f"{BackgroundColors.GREEN}[MEMORY] Spilled feature evaluation matrices ({total_nbytes / (1024 ** 3):.2f} GiB) to temporary memmaps at {BackgroundColors.CYAN}{temp_dir}{Style.RESET_ALL}", config=config)  # Log spill path when verbose
     except Exception as exc:  # Keep spill failure non-fatal so experiments preserve behavior
         if spill_completed:
             print(f"{BackgroundColors.YELLOW}[WARNING] Feature-source memmap spill completed, but completion reporting failed: {exc}{Style.RESET_ALL}")  # Preserve valid mappings after non-critical diagnostics fail
@@ -10440,6 +10440,11 @@ def iterate_feature_sets_sequentially(feature_source_arrays: dict, feature_names
     use_rfe = feature_sets_config.get("use_rfe", True)  # Resolve RFE strategy toggle.
     feature_signatures: set[Tuple[str, Any]] = set()  # Track semantic feature-set identities for duplicate suppression.
     pending_mode_count = len(list_grid_feature_modes(ga_selected_features, pca_n_components, rfe_selected_features, feature_names, config=config))  # Count modes to decide whether source matrices are still needed after Full Features.
+    X_train_rfe = None  # Reserve the RFE training subset for use after PCA evaluation.
+    X_test_rfe = None  # Reserve the RFE testing subset for use after PCA evaluation.
+    rfe_actual_features = []  # Preserve the resolved RFE feature order beside the staged matrices.
+    rfe_materialized = False  # Record whether RFE no longer depends on the full source matrices.
+    pca_evaluation_arrays = None  # Track PCA memmap ownership through classifier evaluation.
 
     if use_full:  # Yield full features first to preserve baseline ordering.
         full_signature = ("features", tuple(sorted(sanitize_feature_name(feature) for feature in feature_names)))  # Build full-feature identity.
@@ -10497,12 +10502,23 @@ def iterate_feature_sets_sequentially(feature_source_arrays: dict, feature_names
                 del X_train_ga, X_test_ga  # Release duplicate GA subset arrays immediately.
                 gc.collect()  # Reclaim duplicate GA subset memory.
 
+    if use_pca and use_rfe:  # Materialize the final source-dependent mode before PCA releases the full matrices.
+        X_train_rfe, rfe_actual_features = get_feature_subset(feature_source_arrays["X_train_scaled"], rfe_selected_features, feature_names)  # Stage the exact RFE training columns before releasing the source matrix.
+        X_test_rfe, _ = get_feature_subset(feature_source_arrays["X_test_scaled"], rfe_selected_features, feature_names)  # Stage the exact RFE testing columns before releasing the source matrix.
+        rfe_materialized = True  # Mark RFE as independent from the full source matrices.
+
     if use_pca:  # Resolve PCA feature mode after GA to preserve sorted evaluation order.
         try:  # Preserve existing PCA failure tolerance.
             X_train_pca, X_test_pca, pca_transformer = apply_pca_transformation(feature_source_arrays["X_train_scaled"], feature_source_arrays["X_test_scaled"], pca_n_components, file, config=config, feature_names=pca_input_feature_names if pca_input_feature_names is not None else feature_names, scaler=scaler, source_files=source_files, cache_context=pca_cache_context)  # Materialize PCA matrices with strict source, scaling, and split provenance.
         except Exception as e:  # Skip PCA mode when transformation fails.
             print(f"{BackgroundColors.YELLOW}[WARNING] PCA Components skipped because transformation failed for {BackgroundColors.CYAN}{file}{BackgroundColors.YELLOW}: {e}{Style.RESET_ALL}")  # Log PCA transformation failure.
             X_train_pca, X_test_pca, pca_transformer = None, None, None  # Suppress PCA mode after failure.
+        cleanup_feature_source_arrays(feature_source_arrays, config=config)  # Release full matrices before persisting or evaluating the transformed arrays.
+        if X_train_pca is not None and X_test_pca is not None:  # Reuse the existing spill lifecycle for large dense PCA outputs.
+            pca_evaluation_arrays = {"X_train_scaled": X_train_pca, "X_test_scaled": X_test_pca, "spilled_to_memmap": False}  # Transfer PCA matrix ownership into an independently cleaned holder.
+            maybe_spill_feature_source_arrays(pca_evaluation_arrays, file, config=config)  # Replace oversized PCA outputs with exact disk-backed matrices when configured.
+            X_train_pca = pca_evaluation_arrays["X_train_scaled"]  # Evaluate classifiers on the retained PCA training matrix.
+            X_test_pca = pca_evaluation_arrays["X_test_scaled"]  # Evaluate classifiers on the retained PCA testing matrix.
         if X_train_pca is not None and X_test_pca is not None:  # Yield PCA only when both matrices exist.
             pca_signature = ("pca", int(X_train_pca.shape[1]))  # Build PCA component identity.
             if pca_signature not in feature_signatures:  # Suppress duplicate PCA mode.
@@ -10511,15 +10527,20 @@ def iterate_feature_sets_sequentially(feature_source_arrays: dict, feature_names
                     print(f"{BackgroundColors.GREEN}[INFO] Starting model evaluation on PCA Components with {BackgroundColors.CYAN}{X_train_pca.shape[1]}{BackgroundColors.GREEN} features.{Style.RESET_ALL}")  # Mark the boundary between PCA transformation and classifier evaluation.
                     yield "PCA Components", X_train_pca, X_test_pca, None, pca_transformer  # Yield PCA matrices with synthetic names and fitted preprocessing.
                 finally:
+                    cleanup_feature_source_arrays(pca_evaluation_arrays, config=config)  # Close and remove PCA memmaps after this feature mode finishes.
+                    pca_evaluation_arrays = None  # Prevent repeated cleanup after PCA evaluation.
                     del X_train_pca, X_test_pca  # Release PCA matrices after caller finishes or aborts this mode.
                     gc.collect()  # Reclaim PCA memory before the next feature mode.
             else:
+                cleanup_feature_source_arrays(pca_evaluation_arrays, config=config)  # Close and remove duplicate PCA memmaps immediately.
+                pca_evaluation_arrays = None  # Prevent repeated cleanup after duplicate suppression.
                 del X_train_pca, X_test_pca  # Release duplicate PCA matrices immediately.
                 gc.collect()  # Reclaim duplicate PCA memory.
 
     if use_rfe:  # Resolve RFE feature mode last to preserve sorted evaluation order.
-        X_train_rfe, rfe_actual_features = get_feature_subset(feature_source_arrays["X_train_scaled"], rfe_selected_features, feature_names)  # Materialize RFE training subset for this mode.
-        X_test_rfe, _ = get_feature_subset(feature_source_arrays["X_test_scaled"], rfe_selected_features, feature_names)  # Materialize RFE test subset for this mode.
+        if not rfe_materialized:  # Materialize RFE normally when PCA did not require early source release.
+            X_train_rfe, rfe_actual_features = get_feature_subset(feature_source_arrays["X_train_scaled"], rfe_selected_features, feature_names)  # Materialize RFE training subset for this mode.
+            X_test_rfe, _ = get_feature_subset(feature_source_arrays["X_test_scaled"], rfe_selected_features, feature_names)  # Materialize RFE test subset for this mode.
         if X_train_rfe is not None and X_train_rfe.shape[1] > 0:  # Yield RFE only when at least one feature exists.
             rfe_signature = ("features", tuple(sorted(sanitize_feature_name(feature) for feature in rfe_actual_features)))  # Build RFE feature identity.
             if rfe_signature not in feature_signatures:  # Suppress duplicate RFE mode.
