@@ -802,6 +802,10 @@ def parse_cli_args():
         parser.add_argument("--disable-hyperparameters", dest="enable_hyperparameters", action="store_false", help="Disable hyperparameter optimization method toggle")
         parser.add_argument("--enable-stacking", dest="enable_stacking", action="store_true", default=None, help="Enable stacking classifier evaluation")
         parser.add_argument("--disable-stacking", dest="enable_stacking", action="store_false", help="Disable stacking classifier evaluation")
+        explainability_group = parser.add_mutually_exclusive_group()  # Prevent contradictory explainability overrides in one invocation.
+        explainability_group.add_argument("--enable-explainability", dest="enable_explainability", action="store_true", help="Enable model explainability (overrides config)")  # Force the explainability pipeline on from the CLI.
+        explainability_group.add_argument("--disable-explainability", dest="enable_explainability", action="store_false", help="Disable model explainability (overrides config)")  # Force the explainability pipeline off from the CLI.
+        parser.set_defaults(enable_explainability=None)  # Preserve the YAML/default setting when neither explainability flag is provided.
         parser.add_argument("--n-jobs", dest="n_jobs", type=int, default=None, help="Override evaluation.n_jobs for estimators that support parallel fitting (-1 uses all processors; 1 is memory-safe)",)
         parser.add_argument("--feature-extraction-n-jobs", dest="feature_extraction_n_jobs", type=int, default=None, help="Override evaluation.feature_extraction_n_jobs for feature extraction/transformation stages such as PCA, not classifier training (-1 uses available CPUs; 1 is memory-safe)")  # Add the independent feature extraction thread override
         parser.add_argument("--low-memory", dest="low_memory", action="store_true", default=False, help="Enable low memory mode for pandas operations")  # Add low memory mode CLI argument
@@ -1192,6 +1196,9 @@ def merge_configs(defaults, file_config, cli_args):
 
         if hasattr(cli_args, "enable_stacking") and cli_args.enable_stacking is not None:  # Stacking classifier evaluation toggle CLI override
             config.setdefault("stacking", {}).setdefault("methods", {})["stacking"] = cli_args.enable_stacking  # Apply stacking toggle override
+
+        if hasattr(cli_args, "enable_explainability") and cli_args.enable_explainability is not None:  # Explainability pipeline CLI override
+            config.setdefault("explainability", {})["enabled"] = cli_args.enable_explainability  # Apply explainability toggle without changing method-level settings
 
         if hasattr(cli_args, "n_jobs") and cli_args.n_jobs is not None:  # Evaluation n_jobs CLI override
             if cli_args.n_jobs == 0:  # scikit-learn/joblib do not accept zero workers
