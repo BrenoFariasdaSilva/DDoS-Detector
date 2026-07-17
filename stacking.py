@@ -10445,6 +10445,7 @@ def iterate_feature_sets_sequentially(feature_source_arrays: dict, feature_names
     rfe_actual_features = []  # Preserve the resolved RFE feature order beside the staged matrices.
     rfe_materialized = False  # Record whether RFE no longer depends on the full source matrices.
     pca_evaluation_arrays = None  # Track PCA memmap ownership through classifier evaluation.
+    rfe_evaluation_arrays = None  # Track RFE memmap ownership through classifier evaluation.
 
     if use_full:  # Yield full features first to preserve baseline ordering.
         full_signature = ("features", tuple(sorted(sanitize_feature_name(feature) for feature in feature_names)))  # Build full-feature identity.
@@ -10503,6 +10504,8 @@ def iterate_feature_sets_sequentially(feature_source_arrays: dict, feature_names
                 gc.collect()  # Reclaim duplicate GA subset memory.
 
     if use_pca and use_rfe:  # Materialize the final source-dependent mode before PCA releases the full matrices.
+        source_total_nbytes = get_array_nbytes(feature_source_arrays["X_train_scaled"]) + get_array_nbytes(feature_source_arrays["X_test_scaled"])  # Calculate the shared source footprint before selecting RFE columns.
+        verbose_output(f"{BackgroundColors.GREEN}[MEMORY] Preparing RFE matrices from source train shape={feature_source_arrays['X_train_scaled'].shape}, dtype={feature_source_arrays['X_train_scaled'].dtype}; test shape={feature_source_arrays['X_test_scaled'].shape}, dtype={feature_source_arrays['X_test_scaled'].dtype}; expected size={source_total_nbytes / (1024 ** 3):.2f} GiB.{Style.RESET_ALL}", config=config)  # Log the exact staged RFE source layout once.
         X_train_rfe, rfe_actual_features = get_feature_subset(feature_source_arrays["X_train_scaled"], rfe_selected_features, feature_names)  # Stage the exact RFE training columns before releasing the source matrix.
         X_test_rfe, _ = get_feature_subset(feature_source_arrays["X_test_scaled"], rfe_selected_features, feature_names)  # Stage the exact RFE testing columns before releasing the source matrix.
         rfe_materialized = True  # Mark RFE as independent from the full source matrices.
@@ -10538,22 +10541,36 @@ def iterate_feature_sets_sequentially(feature_source_arrays: dict, feature_names
                 gc.collect()  # Reclaim duplicate PCA memory.
 
     if use_rfe:  # Resolve RFE feature mode last to preserve sorted evaluation order.
-        if not rfe_materialized:  # Materialize RFE normally when PCA did not require early source release.
-            X_train_rfe, rfe_actual_features = get_feature_subset(feature_source_arrays["X_train_scaled"], rfe_selected_features, feature_names)  # Materialize RFE training subset for this mode.
-            X_test_rfe, _ = get_feature_subset(feature_source_arrays["X_test_scaled"], rfe_selected_features, feature_names)  # Materialize RFE test subset for this mode.
-        if X_train_rfe is not None and X_train_rfe.shape[1] > 0:  # Yield RFE only when at least one feature exists.
-            rfe_signature = ("features", tuple(sorted(sanitize_feature_name(feature) for feature in rfe_actual_features)))  # Build RFE feature identity.
-            if rfe_signature not in feature_signatures:  # Suppress duplicate RFE mode.
-                feature_signatures.add(rfe_signature)  # Register RFE feature identity.
-                try:
-                    yield "RFE Features", X_train_rfe, X_test_rfe, rfe_actual_features, None  # Yield RFE feature matrices.
-                finally:
-                    del X_train_rfe, X_test_rfe  # Release RFE subset arrays after caller finishes or aborts this mode.
-                    gc.collect()  # Reclaim RFE subset memory.
-            else:  # Report duplicate RFE mode suppression.
-                print(f"{BackgroundColors.YELLOW}[WARNING] RFE Features skipped because it is equivalent to an existing feature-set mode.{Style.RESET_ALL}")  # Log duplicate RFE mode.
-                del X_train_rfe, X_test_rfe  # Release duplicate RFE subset arrays immediately.
-                gc.collect()  # Reclaim duplicate RFE subset memory.
+        try:  # Keep owned RFE matrices valid until every classifier and explainability consumer finishes.
+            if not rfe_materialized:  # Materialize RFE normally when PCA did not require early source release.
+                source_total_nbytes = get_array_nbytes(feature_source_arrays["X_train_scaled"]) + get_array_nbytes(feature_source_arrays["X_test_scaled"])  # Calculate the source footprint before selecting RFE columns.
+                verbose_output(f"{BackgroundColors.GREEN}[MEMORY] Preparing RFE matrices from source train shape={feature_source_arrays['X_train_scaled'].shape}, dtype={feature_source_arrays['X_train_scaled'].dtype}; test shape={feature_source_arrays['X_test_scaled'].shape}, dtype={feature_source_arrays['X_test_scaled'].dtype}; expected size={source_total_nbytes / (1024 ** 3):.2f} GiB.{Style.RESET_ALL}", config=config)  # Log the exact RFE source layout once.
+                X_train_rfe, rfe_actual_features = get_feature_subset(feature_source_arrays["X_train_scaled"], rfe_selected_features, feature_names)  # Materialize RFE training columns once in their selected order.
+                X_test_rfe, _ = get_feature_subset(feature_source_arrays["X_test_scaled"], rfe_selected_features, feature_names)  # Materialize RFE testing columns once in their selected order.
+                rfe_materialized = True  # Mark RFE as independent from the full source matrices.
+            if X_train_rfe is not None and X_train_rfe.shape[1] > 0:  # Yield RFE only when at least one feature exists.
+                rfe_signature = ("features", tuple(sorted(sanitize_feature_name(feature) for feature in rfe_actual_features)))  # Build RFE feature identity.
+                if rfe_signature not in feature_signatures:  # Suppress duplicate RFE mode.
+                    feature_signatures.add(rfe_signature)  # Register RFE feature identity.
+                    cleanup_feature_source_arrays(feature_source_arrays, config=config)  # Release the final full source references before RFE classifiers run.
+                    verbose_output(f"{BackgroundColors.GREEN}[MEMORY] Released previous feature-set source matrices before RFE evaluation.{Style.RESET_ALL}", config=config)  # Confirm the source lifecycle boundary.
+                    rfe_total_nbytes = get_array_nbytes(X_train_rfe) + get_array_nbytes(X_test_rfe)  # Calculate the complete RFE matrix footprint.
+                    rfe_evaluation_arrays = {"X_train_scaled": X_train_rfe, "X_test_scaled": X_test_rfe, "spilled_to_memmap": False}  # Transfer RFE matrix ownership into an independently cleaned holder.
+                    maybe_spill_feature_source_arrays(rfe_evaluation_arrays, file, config=config)  # Spill oversized RFE outputs through the existing exact-value memmap lifecycle.
+                    X_train_rfe = rfe_evaluation_arrays["X_train_scaled"]  # Evaluate classifiers on the retained RFE training matrix.
+                    X_test_rfe = rfe_evaluation_arrays["X_test_scaled"]  # Evaluate classifiers on the retained RFE testing matrix.
+                    rfe_storage = "memmap" if rfe_evaluation_arrays.get("spilled_to_memmap", False) else "RAM"  # Resolve the active RFE storage type for diagnostics.
+                    verbose_output(f"{BackgroundColors.GREEN}[MEMORY] RFE matrices ready: train shape={X_train_rfe.shape}, dtype={X_train_rfe.dtype}; test shape={X_test_rfe.shape}, dtype={X_test_rfe.dtype}; expected size={rfe_total_nbytes / (1024 ** 3):.2f} GiB; storage={rfe_storage}; spill directory={rfe_evaluation_arrays.get('spill_temp_dir')}.{Style.RESET_ALL}", config=config)  # Log the exact RFE output layout and ownership once.
+                    yield "RFE Features", X_train_rfe, X_test_rfe, rfe_actual_features, None  # Yield RFE matrices for the complete classifier lifecycle.
+                else:  # Report duplicate RFE mode suppression.
+                    print(f"{BackgroundColors.YELLOW}[WARNING] RFE Features skipped because it is equivalent to an existing feature-set mode.{Style.RESET_ALL}")  # Log duplicate RFE mode.
+        finally:  # Release RFE resources on completion, cache recovery, exceptions, or interruption.
+            rfe_spill_temp_dir = rfe_evaluation_arrays.get("spill_temp_dir") if rfe_evaluation_arrays is not None else None  # Preserve the owned path for cleanup confirmation.
+            cleanup_feature_source_arrays(rfe_evaluation_arrays, config=config)  # Close mappings, remove spill files, and clear RFE ownership.
+            rfe_evaluation_arrays = None  # Prevent repeated cleanup after the RFE lifecycle ends.
+            if rfe_spill_temp_dir is not None:  # Report removal only when this RFE mode created spill files.
+                verbose_output(f"{BackgroundColors.GREEN}[MEMORY] Removed RFE spill directory: {BackgroundColors.CYAN}{rfe_spill_temp_dir}{Style.RESET_ALL}", config=config)  # Confirm RFE spill cleanup.
+            gc.collect()  # Reclaim released RFE arrays before generator completion.
 
 
 def build_classifier_result_entry(model_class, file, execution_mode_str, attack_types_combined, feature_set_name, classifier_type, model_name, data_source_label, experiment_id, experiment_mode, augmentation_ratio, n_features, n_samples_train, n_samples_test, metrics_tuple, subset_feature_names, hyperparams_map=None, hyperparameters_enabled=False, effective_hyperparameters=None):  # Build a standardized classifier result entry.
@@ -11451,9 +11468,7 @@ def evaluate_on_dataset(
         )  # Sanitize and verify GA/RFE feature selections against available features
 
         feature_sets_config = dict(config.get("stacking", {}).get("feature_sets_config", {}))  # Copy feature strategy config so grid-specific enforcement cannot mutate global configuration
-        if config.get("stacking", {}).get("methods", {}).get("feature_selection", True):  # Feature selection enabled: full features remain the required baseline alongside configured methods
-            feature_sets_config["use_full"] = True  # Always include the full-feature baseline in the evaluation grid
-        else:  # Feature selection disabled: only the full-feature baseline may be generated
+        if not config.get("stacking", {}).get("methods", {}).get("feature_selection", True):  # Feature selection disabled: only the full-feature baseline may be generated
             feature_sets_config = {"use_full": True, "use_pca": False, "use_rfe": False, "use_ga": False, "explicit_features": []}  # Suppress every selection strategy without mutating CLI/config state
 
         feature_mode_names = [artifact_recovery_target[0]] if artifact_recovery_target is not None else list_grid_feature_modes(ga_selected_features, pca_n_components, rfe_selected_features, feature_names, config=config)  # Resolve the full plan or one missing artifact mode.
@@ -13009,9 +13024,11 @@ def list_grid_feature_modes(ga_selected_features: Optional[List[Any]], pca_n_com
 
     feature_sets_config = config.get("stacking", {}).get("feature_sets_config", {})  # Read enabled feature strategies
     feature_signatures: set[Tuple[str, Any]] = set()  # Track semantic feature-set identities to mirror assembly behavior
-    full_signature = ("features", tuple(sorted(sanitize_feature_name(name) for name in feature_names)))  # Build full-feature identity
-    feature_signatures.add(full_signature)  # Register full-feature baseline identity
-    feature_modes = ["Full Features"]  # Full Features is always the baseline grid mode
+    feature_modes = []  # Accumulate only feature modes enabled by the resolved configuration
+    if feature_sets_config.get("use_full", True):  # Include Full Features only when its config or CLI strategy is enabled
+        full_signature = ("features", tuple(sorted(sanitize_feature_name(name) for name in feature_names)))  # Build full-feature identity
+        feature_signatures.add(full_signature)  # Register full-feature identity for duplicate suppression
+        feature_modes.append("Full Features")  # Add the enabled full-feature mode first
 
     explicit_features = feature_sets_config.get("explicit_features", []) or []  # Read optional explicit feature strategy
     sanitized_col_map = {sanitize_feature_name(name): name for name in feature_names}  # Build normalized feature lookup
