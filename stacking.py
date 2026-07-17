@@ -135,7 +135,15 @@ from sklearn.tree import DecisionTreeClassifier  # For Decision Tree classifier 
 from telegram_bot import TelegramBot, send_exception_via_telegram, send_telegram_message, setup_global_exception_hook  # For sending progress messages to Telegram
 from threadpoolctl import threadpool_limits  # For narrowly limiting BLAS and OpenMP threads during feature extraction
 from tqdm import tqdm  # For progress bars
-from typing import Any, Callable, Optional, List, Tuple, cast  # For optional and collection typing hints
+from typing import (  # Import optional, collection, and validated worker mapping hints.
+    Any,
+    Callable,
+    Dict,
+    Optional,
+    List,
+    Tuple,
+    cast,
+)
 from xgboost import XGBClassifier  # For XGBoost classifier
 
 
@@ -807,6 +815,16 @@ def parse_cli_args():
         explainability_group.add_argument("--disable-explainability", dest="enable_explainability", action="store_false", help="Disable model explainability (overrides config)")  # Force the explainability pipeline off from the CLI.
         parser.set_defaults(enable_explainability=None)  # Preserve the YAML/default setting when neither explainability flag is provided.
         parser.add_argument("--n-jobs", dest="n_jobs", type=int, default=None, help="Override evaluation.n_jobs for estimators that support parallel fitting (-1 uses all processors; 1 is memory-safe)",)
+        parser.add_argument(  # Register the per-feature-set estimator worker override.
+            "--feature-set-n-jobs",
+            dest="feature_set_n_jobs",
+            type=str,
+            default=None,
+            help=(
+                "Comma-separated feature-set worker overrides using name=value entries, for example "
+                "ga=-1,rfe=4; unspecified feature sets use evaluation.n_jobs"
+            ),
+        )
         parser.add_argument("--feature-extraction-n-jobs", dest="feature_extraction_n_jobs", type=int, default=None, help="Override evaluation.feature_extraction_n_jobs for feature extraction/transformation stages such as PCA, not classifier training (-1 uses available CPUs; 1 is memory-safe)")  # Add the independent feature extraction thread override
         parser.add_argument("--low-memory", dest="low_memory", action="store_true", default=False, help="Enable low memory mode for pandas operations")  # Add low memory mode CLI argument
         parser.add_argument("--dataset-file-format", type=str, default=None, dest="dataset_file_format", help="File format for dataset files: arff, csv, parquet, txt")  # Dataset file format CLI override
@@ -993,6 +1011,7 @@ def get_default_config():
         "stacking": get_default_stacking_config(),  # Stacking pipeline configuration section
         "evaluation": {
             "n_jobs": 1,
+            "feature_set_n_jobs": {},  # Leave every feature set on the global estimator worker behavior by default.
             "feature_extraction_n_jobs": 1,  # Use one thread for feature extraction by default without changing classifier training parallelism
             "threads_limit": 2,
             "cv_folds": 10,
@@ -1060,6 +1079,72 @@ def get_default_config():
         raise  # Re-raise to preserve original failure semantics
 
 
+def verify_feature_set_n_jobs_yaml_duplicates(  # Define targeted duplicate validation.
+    yaml_text: str, source: str
+) -> None:  # Define targeted source-level duplicate validation for the worker mapping.
+    """
+    Reject duplicate feature-set worker keys before YAML mapping construction.
+
+    :param yaml_text: Raw YAML configuration text.
+    :param source: User-facing configuration source path.
+    :return: None.
+    """
+
+    root_node = yaml.compose(yaml_text)  # Compose the YAML node tree without collapsing duplicate mapping entries.
+    if root_node is None or not isinstance(  # Accept empty documents before typed loading.
+        getattr(root_node, "value", None), list
+    ):  # Accept empty documents while deferring other shape validation to the existing loader.
+        return  # Finish when no root mapping entries exist.
+
+    evaluation_nodes = []  # Hold every evaluation mapping node so repeated sections cannot hide worker conflicts.
+    for key_node, value_node in root_node.value:  # Traverse top-level YAML mapping entries in source order.
+        if (  # Locate the evaluation configuration section.
+            str(getattr(key_node, "value", "")).strip() == "evaluation"
+        ):  # Locate the evaluation configuration section exactly.
+            evaluation_nodes.append(value_node)  # Preserve every evaluation node for targeted conflict validation.
+
+    if not evaluation_nodes:  # Defer a missing evaluation section to effective configuration validation.
+        return  # Finish when no traversable evaluation mapping exists.
+
+    feature_set_nodes = []  # Hold every feature-set worker mapping node across repeated evaluation sections.
+    for evaluation_node in evaluation_nodes:  # Traverse every source-level evaluation section.
+        if not isinstance(  # Defer malformed sections to typed validation.
+            getattr(evaluation_node, "value", None), list
+        ):  # Defer malformed evaluation sections to the typed configuration path.
+            continue  # Skip nodes that cannot contain mapping entries.
+        for key_node, value_node in evaluation_node.value:  # Traverse evaluation mapping entries in source order.
+            if (  # Locate each worker mapping occurrence.
+                str(getattr(key_node, "value", "")).strip() == "feature_set_n_jobs"
+            ):  # Locate each per-feature-set worker mapping occurrence.
+                feature_set_nodes.append(  # Preserve every source-level occurrence.
+                    value_node
+                )  # Preserve every occurrence so repeated mapping keys cannot collapse silently.
+
+    if not feature_set_nodes:  # Defer a missing worker mapping to default configuration behavior.
+        return  # Finish when no traversable worker mapping exists.
+    if len(feature_set_nodes) > 1:  # Reject repeated worker mappings within or across evaluation sections.
+        raise ValueError(  # Report the conflicting mapping path.
+            f"Duplicate evaluation.feature_set_n_jobs mapping in {source}"
+        )  # Report the conflicting configuration path before YAML construction.
+
+    feature_set_node = feature_set_nodes[0]  # Resolve the single unambiguous feature-set worker mapping.
+    if not isinstance(  # Defer malformed worker shapes to typed validation.
+        getattr(feature_set_node, "value", None), list
+    ):  # Defer malformed worker mapping shapes to typed validation.
+        return  # Finish when the worker value is not a mapping node.
+
+    normalized_keys = set()  # Track normalized feature-set keys without discarding source duplicates.
+    for key_node, _ in feature_set_node.value:  # Traverse every configured feature-set worker entry.
+        normalized_key = (  # Normalize keys using effective configuration rules.
+            str(getattr(key_node, "value", "")).strip().lower()
+        )  # Normalize keys using the same rules as effective configuration validation.
+        if normalized_key in normalized_keys:  # Reject repeated keys including case or whitespace variants.
+            raise ValueError(  # Report the exact ambiguous feature-set key.
+                f"Duplicate evaluation.feature_set_n_jobs key '{normalized_key}' in {source}"
+            )  # Report the exact ambiguous feature-set key.
+        normalized_keys.add(normalized_key)  # Register the normalized key for subsequent duplicate detection.
+
+
 def load_config_file(config_path=None):
     """
     Load configuration from YAML file.
@@ -1079,8 +1164,14 @@ def load_config_file(config_path=None):
         
         try:  # Try to load YAML file
             with open(config_path, "r", encoding="utf-8") as f:  # Open config file
-                config = yaml.safe_load(f)  # Load YAML safely
+                yaml_text = f.read()  # Retain duplicate worker entries before construction.
+            verify_feature_set_n_jobs_yaml_duplicates(  # Reject ambiguous worker mappings before loading.
+                yaml_text, str(config_path)
+            )
+            config = yaml.safe_load(yaml_text)  # Load YAML safely after targeted duplicate validation.
             return config or {}  # Return loaded config or empty dict
+        except ValueError:  # Preserve actionable per-feature-set configuration failures.
+            raise  # Propagate validation failures instead of silently replacing configuration with defaults.
         except Exception as e:  # If loading fails
             print(f"{BackgroundColors.YELLOW}Warning: Failed to load config file {config_path}: {e}{Style.RESET_ALL}")
             return {}  # Return empty dict on error
@@ -1126,6 +1217,113 @@ def validate_feature_extraction_n_jobs(value: Any, source: str = "evaluation.fea
     return value  # Return the validated independent feature extraction setting.
 
 
+def validate_feature_set_n_jobs_map(  # Define shared worker map validation.
+    value: Any, source: str = "evaluation.feature_set_n_jobs"
+) -> Dict[str, int]:  # Define shared normalization and validation for worker mappings.
+    """
+    Validate and normalize per-feature-set estimator worker overrides.
+
+    :param value: Mapping of feature-set identifiers to estimator worker counts.
+    :param source: User-facing setting name used in validation errors.
+    :return: Normalized feature-set worker mapping.
+    """
+
+    if not isinstance(value, dict):  # Require the map-like YAML and internal representation requested by the interface.
+        raise ValueError(  # Reject scalar, sequence, and null values.
+            f"{source} must be a mapping of feature-set names to non-zero integers"
+        )  # Reject scalar, sequence, and null values.
+
+    allowed_feature_sets = {  # Match every feature-set identity emitted by the iterator.
+        "full",
+        "explicit",
+        "ga",
+        "pca",
+        "rfe",
+    }  # Match every feature-set identity emitted by the sequential iterator.
+    normalized_mapping: Dict[str, int] = {}  # Accumulate normalized entries while retaining duplicate visibility.
+    for feature_set_name, n_jobs in value.items():  # Validate every configured feature-set override independently.
+        if (  # Require a non-empty textual feature-set identity.
+            not isinstance(feature_set_name, str) or not feature_set_name.strip()
+        ):  # Require non-empty textual feature-set identifiers.
+            raise ValueError(  # Reject non-text and empty mapping keys.
+                f"{source} keys must be non-empty feature-set names"
+            )  # Reject non-text and empty mapping keys.
+        normalized_name = feature_set_name.strip().lower()  # Normalize CLI and YAML identifiers consistently.
+        if (  # Reject worker settings that cannot reach an emitted feature set.
+            normalized_name not in allowed_feature_sets
+        ):  # Reject worker settings that cannot reach an emitted feature set.
+            raise ValueError(  # Report deterministic supported identifiers.
+                f"Unsupported {source} key '{feature_set_name}'. Valid options are: {sorted(allowed_feature_sets)}"
+            )  # Report deterministic supported identifiers.
+        if normalized_name in normalized_mapping:  # Reject case or whitespace variants of an existing key.
+            raise ValueError(  # Report the ambiguous normalized feature-set key.
+                f"Duplicate {source} key '{normalized_name}'"
+            )  # Report the ambiguous normalized feature-set key.
+        if (  # Preserve existing non-zero global worker semantics.
+            isinstance(n_jobs, bool) or not isinstance(n_jobs, int) or n_jobs == 0
+        ):  # Preserve the existing global non-zero integer semantics, including negative joblib values.
+            raise ValueError(  # Reject invalid workers with existing terminology.
+                f"{source}.{normalized_name} must be a non-zero integer; "
+                "use -1 for all processors or 1 for memory-safe execution"
+            )
+        normalized_mapping[normalized_name] = (  # Store the canonical worker value.
+            n_jobs  # Store the validated worker count under its canonical feature-set key.
+        )
+
+    return normalized_mapping  # Return the normalized mapping for merging and runtime resolution.
+
+
+def parse_feature_set_n_jobs_cli(value: str) -> Dict[str, int]:  # Define the public CLI map parser.
+    """
+    Parse comma-separated CLI feature-set worker overrides.
+
+    :param value: Comma-separated feature-set name and worker count assignments.
+    :return: Validated normalized feature-set worker mapping.
+    """
+
+    if not isinstance(value, str) or not value.strip():  # Require at least one CLI assignment.
+        raise ValueError(  # Reject missing or empty CLI assignment text.
+            "--feature-set-n-jobs must provide at least one name=value entry"
+        )  # Reject missing or empty override text.
+
+    parsed_mapping: Dict[str, int] = {}  # Accumulate raw CLI assignments before shared validation.
+    for entry in value.split(","):  # Parse entries using the established comma-separated CLI convention.
+        normalized_entry = entry.strip()  # Remove surrounding whitespace without accepting empty entries.
+        if (  # Require exactly one assignment separator per entry.
+            not normalized_entry or normalized_entry.count("=") != 1
+        ):  # Require exactly one assignment separator per entry.
+            raise ValueError(  # Report malformed and trailing-comma entries.
+                f"Malformed --feature-set-n-jobs entry '{entry}'; expected name=value"
+            )  # Report malformed and trailing-comma entries precisely.
+        feature_set_name, n_jobs_text = (  # Separate and normalize the assignment.
+            part.strip() for part in normalized_entry.split("=", 1)
+        )  # Separate and normalize the feature-set name and worker text.
+        if not feature_set_name or not n_jobs_text:  # Require both sides of the assignment.
+            raise ValueError(  # Reject missing feature-set names or worker values.
+                f"Malformed --feature-set-n-jobs entry '{entry}'; expected name=value"
+            )  # Reject missing feature-set names or worker values.
+        normalized_name = feature_set_name.lower()  # Normalize feature-set identifiers before duplicate detection.
+        if (  # Reject repeated CLI entries after normalization.
+            normalized_name in parsed_mapping
+        ):  # Reject repeated CLI entries even when they specify the same worker count.
+            raise ValueError(  # Report the repeated CLI feature-set key.
+                f"Duplicate --feature-set-n-jobs key '{normalized_name}'"
+            )  # Report the repeated CLI feature-set key.
+        try:  # Parse the worker count using strict integer conversion.
+            parsed_mapping[normalized_name] = int(  # Parse the worker as a strict integer.
+                n_jobs_text
+            )  # Store the integer worker value for shared semantic validation.
+        except ValueError as exc:  # Convert integer parsing failures into interface-specific errors.
+            raise ValueError(  # Preserve the invalid token in the error.
+                f"Invalid --feature-set-n-jobs value '{n_jobs_text}' for "
+                f"'{feature_set_name}'; expected a non-zero integer"
+            ) from exc
+
+    return validate_feature_set_n_jobs_map(  # Apply shared feature and worker semantics.
+        parsed_mapping, "--feature-set-n-jobs"
+    )  # Apply shared feature-name and worker-value semantics.
+
+
 def merge_configs(defaults, file_config, cli_args):
     """
     Merge configurations with priority: CLI > file > defaults.
@@ -1138,6 +1336,12 @@ def merge_configs(defaults, file_config, cli_args):
 
     try:
         config = deep_merge_dicts(defaults, file_config)  # Merge file config into defaults
+        configured_feature_set_n_jobs = validate_feature_set_n_jobs_map(  # Normalize YAML workers before precedence.
+            config.get("evaluation", {}).get("feature_set_n_jobs", {})
+        )
+        config.setdefault("evaluation", {})[  # Persist canonical worker keys.
+            "feature_set_n_jobs"
+        ] = configured_feature_set_n_jobs
         
         classification_mode = config.get("execution", {}).get("classification_mode", None)  # Read classification_mode from config if present
         if classification_mode is not None:  # If classification_mode was explicitly set in config
@@ -1207,6 +1411,22 @@ def merge_configs(defaults, file_config, cli_args):
                 )  # Raise explicit validation error
             config.setdefault("evaluation", {})["n_jobs"] = cli_args.n_jobs  # Apply n_jobs override to estimator construction config
 
+        if (  # Apply a supplied per-feature-set CLI override.
+            hasattr(cli_args, "feature_set_n_jobs") and cli_args.feature_set_n_jobs is not None
+        ):
+            cli_feature_set_n_jobs = parse_feature_set_n_jobs_cli(  # Validate every supplied CLI entry.
+                cli_args.feature_set_n_jobs
+            )
+            merged_feature_set_n_jobs = dict(  # Preserve YAML entries absent from the CLI.
+                config.get("evaluation", {}).get("feature_set_n_jobs", {})
+            )
+            merged_feature_set_n_jobs.update(  # Apply CLI precedence per feature set.
+                cli_feature_set_n_jobs
+            )
+            config.setdefault("evaluation", {})[  # Store the effective worker mapping.
+                "feature_set_n_jobs"
+            ] = merged_feature_set_n_jobs
+
         if hasattr(cli_args, "feature_extraction_n_jobs") and cli_args.feature_extraction_n_jobs is not None:  # Feature extraction n_jobs CLI override.
             validated_feature_extraction_n_jobs = validate_feature_extraction_n_jobs(cli_args.feature_extraction_n_jobs, "--feature-extraction-n-jobs")  # Validate the independent CLI value.
             config.setdefault("evaluation", {})["feature_extraction_n_jobs"] = validated_feature_extraction_n_jobs  # Apply the feature extraction override without changing classifier n_jobs.
@@ -1251,6 +1471,9 @@ def merge_configs(defaults, file_config, cli_args):
             config.setdefault("memory_watcher", {})["capture_tracemalloc"] = True  # Enable optional Python allocation reports
 
         validate_feature_extraction_n_jobs(config.get("evaluation", {}).get("feature_extraction_n_jobs", 1))  # Validate the effective feature extraction setting after CLI precedence is applied.
+        validate_feature_set_n_jobs_map(  # Validate effective workers after CLI precedence.
+            config.get("evaluation", {}).get("feature_set_n_jobs", {})
+        )
         return config  # Return final merged configuration
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
@@ -1440,11 +1663,37 @@ def set_threads_limit_based_on_ram(config=None):
         current_n_jobs = config.get("evaluation", {}).get("n_jobs", 1)  # Read the currently configured n_jobs value before any override
         effective_n_jobs = 1 if (threads_limit == 1 or low_memory) else current_n_jobs  # Force n_jobs to 1 when RAM-constrained or low_memory is active to prevent OOM during parallel model fitting
         config.setdefault("evaluation", {})["n_jobs"] = effective_n_jobs  # Write effective n_jobs back into config so all downstream model instantiation respects the safe value
+        current_feature_set_n_jobs = validate_feature_set_n_jobs_map(  # Read workers before resource enforcement.
+            config.get("evaluation", {}).get("feature_set_n_jobs", {})
+        )
+        effective_feature_set_n_jobs = (  # Apply the global memory ceiling to every explicit override.
+            {feature_set: 1 for feature_set in current_feature_set_n_jobs}
+            if threads_limit == 1 or low_memory
+            else current_feature_set_n_jobs
+        )
+        config.setdefault("evaluation", {})[  # Persist RAM-safe feature-set workers.
+            "feature_set_n_jobs"
+        ] = effective_feature_set_n_jobs
 
         if effective_n_jobs != current_n_jobs:  # Verify if n_jobs was actually changed to issue a visible diagnostic
             reason = "low_memory=True" if low_memory else f"ram_gb={ram_gb:.1f}GB (<={ram_threshold}GB)"  # Determine the specific reason that triggered the n_jobs override
             print(f"{BackgroundColors.YELLOW}[RESOURCE GUARD] n_jobs overridden: {BackgroundColors.CYAN}{current_n_jobs}{BackgroundColors.YELLOW} -> {BackgroundColors.CYAN}{effective_n_jobs}{BackgroundColors.YELLOW} (reason: {reason}). Prevents OOM during parallel model fitting.{Style.RESET_ALL}")  # Inform operator that n_jobs was limited for OOM safety
             send_telegram_message(TELEGRAM_BOT, f"[RESOURCE GUARD] n_jobs overridden: {current_n_jobs} -> {effective_n_jobs} (reason: {reason}). Prevents OOM during parallel model fitting.")  # Notify Telegram about the resource guard activation for remote monitoring
+
+        if (  # Report only when explicit worker values were reduced.
+            effective_feature_set_n_jobs != current_feature_set_n_jobs
+        ):
+            reason = (  # Reuse the global resource-guard reason.
+                "low_memory=True" if low_memory else f"ram_gb={ram_gb:.1f}GB (<={ram_threshold}GB)"
+            )
+            guard_message = (  # Build one consistent local and remote diagnostic.
+                f"[RESOURCE GUARD] feature_set_n_jobs overridden: {current_feature_set_n_jobs} -> "
+                f"{effective_feature_set_n_jobs} (reason: {reason}). Prevents OOM during parallel model fitting."
+            )
+            print(  # Inform the operator about the explicit worker reduction.
+                f"{BackgroundColors.YELLOW}{guard_message}{Style.RESET_ALL}"
+            )
+            send_telegram_message(TELEGRAM_BOT, guard_message)  # Notify remote monitoring about the reduction.
 
         return threads_limit  # Return the threads limit value
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
@@ -10450,6 +10699,111 @@ def build_evaluation_stacking_model(base_models, config=None):
         raise
 
 
+def configure_estimator_n_jobs(estimator: Any, n_jobs: int) -> Any:  # Define isolated estimator worker propagation.
+    """
+    Clone an estimator and assign every exposed worker parameter.
+
+    :param estimator: Unfitted estimator prototype to clone and configure.
+    :param n_jobs: Non-zero estimator worker value to assign.
+    :return: Cloned estimator with supported worker parameters configured.
+    """
+
+    configured_estimator = clone(  # Clone the prototype to isolate feature-set workers.
+        estimator
+    )  # Clone the prototype so feature-set overrides cannot mutate shared model objects.
+    estimator_parameters = (  # Read direct and nested public estimator parameters.
+        configured_estimator.get_params(deep=True) if hasattr(configured_estimator, "get_params") else {}
+    )  # Read supported direct and nested estimator parameters.
+    worker_parameters = {  # Target every exposed worker parameter.
+        parameter_name: n_jobs
+        for parameter_name in estimator_parameters
+        if parameter_name == "n_jobs" or parameter_name.endswith("__n_jobs")
+    }  # Target every worker parameter exposed through the estimator API.
+    if worker_parameters:  # Apply worker values only to estimators that explicitly support them.
+        configured_estimator.set_params(  # Assign workers through the public estimator interface.
+            **worker_parameters
+        )  # Assign the requested worker value through the public estimator interface.
+    return configured_estimator  # Return an isolated estimator prototype for this feature-set execution.
+
+
+def build_feature_set_execution_models(  # Define feature-specific execution construction.
+    feature_set_name: str,
+    base_models: dict,
+    fallback_stacking_model: Any,
+    stacking_enabled: bool,
+    config: Optional[dict] = None,
+) -> Tuple[dict, dict, Any]:  # Define feature-specific execution context construction.
+    """
+    Resolve isolated estimator prototypes for one feature-set execution.
+
+    :param feature_set_name: Display name emitted by the sequential feature-set iterator.
+    :param base_models: Existing individual estimator prototypes for the active hyperparameter mode.
+    :param fallback_stacking_model: Existing stacking prototype used when no feature-set override applies.
+    :param stacking_enabled: Whether the stacking classifier is active for this execution.
+    :param config: Configuration dictionary, or None to use the global configuration.
+    :return: Tuple of feature-set configuration, individual models, and stacking model.
+    """
+
+    if config is None:  # Use global configuration when the caller does not supply one.
+        config = CONFIG  # Preserve the existing programmatic fallback behavior.
+
+    feature_set_keys = {  # Map iterator display names to configuration identifiers.
+        "Full Features": "full",
+        "Explicit Features": "explicit",
+        "GA Features": "ga",
+        "PCA Components": "pca",
+        "RFE Features": "rfe",
+    }  # Map every iterator display name to its configuration identifier.
+    if (  # Reject internal feature-set identities that cannot resolve safely.
+        feature_set_name not in feature_set_keys
+    ):  # Reject internal feature-set identities that cannot resolve a worker setting safely.
+        raise ValueError(  # Fail before fitting with an unresolvable identity.
+            f"Unsupported feature-set execution name '{feature_set_name}'"
+        )  # Fail before fitting with an unresolvable execution identity.
+
+    feature_set_n_jobs = validate_feature_set_n_jobs_map(  # Validate runtime worker overrides.
+        config.get("evaluation", {}).get("feature_set_n_jobs", {})
+    )  # Validate runtime configuration including programmatic overrides.
+    feature_set_key = feature_set_keys[  # Resolve the canonical feature-set identifier.
+        feature_set_name
+    ]  # Resolve the canonical configuration identifier for this execution.
+    if (  # Preserve exact legacy behavior without an explicit override.
+        feature_set_key not in feature_set_n_jobs
+    ):  # Preserve exact legacy model objects and global worker behavior when no explicit override exists.
+        return (  # Return the unchanged legacy execution context.
+            config,
+            base_models,
+            fallback_stacking_model,
+        )  # Return the unchanged execution context for backward compatibility.
+
+    effective_n_jobs = feature_set_n_jobs[feature_set_key]  # Read the explicit worker value for this feature set.
+    feature_set_config = deep_merge_dicts(  # Isolate the effective worker configuration.
+        config, {"evaluation": {"n_jobs": effective_n_jobs}}
+    )  # Isolate the effective worker value without mutating shared runtime configuration.
+    individual_models = {  # Build isolated individual estimator prototypes.
+        model_name: configure_estimator_n_jobs(model, effective_n_jobs) for model_name, model in base_models.items()
+    }  # Build isolated individual prototypes with explicit worker propagation.
+    stacking_model = None  # Default to no stacking prototype when the method is disabled.
+    if stacking_enabled:  # Build a feature-specific stacking prototype only when stacking evaluation is active.
+        stacking_base_models = {  # Keep nested stacking estimators sequential.
+            model_name: configure_estimator_n_jobs(model, 1) for model_name, model in base_models.items()
+        }  # Keep nested base estimators sequential while the stacking scheduler owns the requested workers.
+        stacking_model = build_evaluation_stacking_model(  # Build a worker-specific stacking prototype.
+            stacking_base_models, config=feature_set_config
+        )  # Assign the requested workers to stacking CV and its final estimator.
+
+    override_message = (  # Build the effective allocation diagnostic.
+        f"{BackgroundColors.GREEN}[INFO] Feature-set n_jobs override — {feature_set_name}: "
+        f"{BackgroundColors.CYAN}{effective_n_jobs}{Style.RESET_ALL}"
+    )
+    print(override_message)  # Log the allocation at the execution boundary.
+    return (  # Return isolated models and configuration for this feature set.
+        feature_set_config,
+        individual_models,
+        stacking_model,
+    )  # Return isolated models and configuration for this feature set only.
+
+
 def assemble_feature_sets(X_train_scaled, X_test_scaled, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, file, feature_sets_config=None, config=None):
     """
     Build feature sets dictionary from configurable feature selection strategies.
@@ -11832,11 +12186,25 @@ def evaluate_on_dataset(
                 "RFE Features": [feature_lookup[sanitize_feature_name(feature)] for feature in (rfe_selected_features or []) if sanitize_feature_name(feature) in feature_lookup],
             }
             dataset_name = build_filename_safe_dataset_identity(resolve_canonical_dataset_identity(str(file), True)) if execution_mode_str == "combined_files" else os.path.basename(os.path.dirname(file))
-            evaluation_models = list(individual_models.items()) + ([('StackingClassifier', stacking_model)] if stacking_enabled else [])
-            for name in feature_mode_names:
-                subset_feature_names = selected_features_by_mode[name]
-                expected_transformer = PCA(n_components=len(subset_feature_names)) if name == "PCA Components" else None
-                for model_name, model_prototype in evaluation_models:
+            for name in feature_mode_names:  # Resolve and evaluate augmented artifacts one feature-set mode at a time.
+                feature_set_context = build_feature_set_execution_models(  # Resolve worker-isolated prototypes.
+                    name, base_models, stacking_model, stacking_enabled, config=config
+                )
+                feature_set_config, feature_set_all_individual_models, feature_set_stacking_model = (  # Unpack context.
+                    feature_set_context
+                )
+                feature_set_individual_models = {  # Preserve artifact-recovery classifier filtering.
+                    key: feature_set_all_individual_models[key] for key in individual_models
+                }
+                evaluation_models = (  # Build the active artifact evaluation order.
+                    list(feature_set_individual_models.items())
+                    + ([("StackingClassifier", feature_set_stacking_model)] if stacking_enabled else [])
+                )
+                subset_feature_names = selected_features_by_mode[name]  # Resolve the persisted model schema.
+                expected_transformer = (  # Build the expected PCA identity when applicable.
+                    PCA(n_components=len(subset_feature_names)) if name == "PCA Components" else None
+                )
+                for model_name, model_prototype in evaluation_models:  # Evaluate persisted classifiers sequentially.
                     recovered, current_combination = recover_cached_individual_classifier_result(cache_dict, execution_mode_str, data_source_label, experiment_mode, augmentation_ratio, attack_types_combined, name, model_name, all_results, current_combination, total_steps, progress_bar, hyperparameters_enabled=hyperparameters_enabled, expected_n_features=len(subset_feature_names), expected_feature_names=subset_feature_names, expected_n_samples_train=original_train_count, expected_n_samples_test=len(y_augmented_raw))
                     if recovered:
                         continue
@@ -11844,13 +12212,47 @@ def evaluate_on_dataset(
                     progress_bar.set_description(combination_header)  # Display the exact augmented-test combination being evaluated.
                     artifact_feature_set = f"{name} - {'Optimized Hyperparameters' if hyperparameters_enabled else 'Default Hyperparameters'}"
                     artifact_context = build_stacking_model_artifact_context(file, pca_source_files, execution_mode_str, attack_types_combined, target_column_name, model_name, model_prototype, artifact_feature_set, pca_input_feature_names, subset_feature_names, expected_label_classes, expected_transformer, hyperparameters_enabled)
-                    artifact_bundle, rejection_reason = load_existing_model_if_available(model_name, file, dataset_name, artifact_feature_set, artifact_context, config=config)
+                    artifact_bundle, rejection_reason = load_existing_model_if_available(  # Load a compatible artifact.
+                        model_name,
+                        file,
+                        dataset_name,
+                        artifact_feature_set,
+                        artifact_context,
+                        config=feature_set_config,
+                    )
                     if artifact_bundle is None:
                         print(f"{BackgroundColors.YELLOW}[WARNING] Retraining {BackgroundColors.CYAN}{model_name}{BackgroundColors.YELLOW} on original data only because {rejection_reason}.{Style.RESET_ALL}")
-                        recovery_results = evaluate_on_dataset(file, df, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, base_models, data_source_label="Original", hyperparams_map=hyperparams_map, experiment_id=generate_experiment_id(file, "original_only"), experiment_mode="original_only", augmentation_ratio=None, execution_mode_str=execution_mode_str, attack_types_combined=attack_types_combined, config=config, cache_ref_file=cache_ref_file, hyperparameters_enabled=hyperparameters_enabled, source_files=pca_source_files, artifact_recovery_target=(name, model_name))
-                        del recovery_results
+                        recovery_results = evaluate_on_dataset(  # Retrain with feature-specific workers.
+                            file,
+                            df,
+                            feature_names,
+                            ga_selected_features,
+                            pca_n_components,
+                            rfe_selected_features,
+                            base_models,
+                            data_source_label="Original",
+                            hyperparams_map=hyperparams_map,
+                            experiment_id=generate_experiment_id(file, "original_only"),
+                            experiment_mode="original_only",
+                            augmentation_ratio=None,
+                            execution_mode_str=execution_mode_str,
+                            attack_types_combined=attack_types_combined,
+                            config=feature_set_config,
+                            cache_ref_file=cache_ref_file,
+                            hyperparameters_enabled=hyperparameters_enabled,
+                            source_files=pca_source_files,
+                            artifact_recovery_target=(name, model_name),
+                        )
+                        del recovery_results  # Release the transient recovery result mapping.
                         gc.collect()
-                        artifact_bundle, rejection_reason = load_existing_model_if_available(model_name, file, dataset_name, artifact_feature_set, artifact_context, config=config)
+                        artifact_bundle, rejection_reason = load_existing_model_if_available(  # Reload after recovery.
+                            model_name,
+                            file,
+                            dataset_name,
+                            artifact_feature_set,
+                            artifact_context,
+                            config=feature_set_config,
+                        )
                         if artifact_bundle is None:
                             raise RuntimeError(f"Original-only artifact recovery failed for {name} - {model_name}: {rejection_reason}")
                     loaded_model = artifact_bundle["model"]
@@ -11864,18 +12266,49 @@ def evaluate_on_dataset(
                     X_augmented_df = pd.DataFrame(X_augmented_model, columns=subset_feature_names)
                     training_ram_stats = {}
                     if model_name == "StackingClassifier":
-                        metrics = evaluate_stacking_classifier(loaded_model, None, None, X_augmented_df, y_augmented, config=config, training_ram_stats=training_ram_stats, fit_model=False, notification_context=combination_header)  # Report persisted stacking-model evaluation provenance
+                        metrics = evaluate_stacking_classifier(  # Evaluate with feature-specific configuration.
+                            loaded_model,
+                            None,
+                            None,
+                            X_augmented_df,
+                            y_augmented,
+                            config=feature_set_config,
+                            training_ram_stats=training_ram_stats,
+                            fit_model=False,
+                            notification_context=combination_header,
+                        )
                         classifier_type = "Stacking"
                     else:
-                        metrics = evaluate_individual_classifier(loaded_model, model_name, None, None, X_augmented_model, y_augmented, file, artifact_bundle["scaler"], subset_feature_names, artifact_feature_set, config=config, training_ram_stats=training_ram_stats, fit_model=False, notification_context=combination_header)  # Report persisted individual-model evaluation provenance
+                        metrics = evaluate_individual_classifier(  # Evaluate with feature-specific configuration.
+                            loaded_model,
+                            model_name,
+                            None,
+                            None,
+                            X_augmented_model,
+                            y_augmented,
+                            file,
+                            artifact_bundle["scaler"],
+                            subset_feature_names,
+                            artifact_feature_set,
+                            config=feature_set_config,
+                            training_ram_stats=training_ram_stats,
+                            fit_model=False,
+                            notification_context=combination_header,
+                        )
                         classifier_type = "Individual"
                     result_entry = build_classifier_result_entry(loaded_model.__class__.__name__, file, execution_mode_str, attack_types_combined, name, classifier_type, model_name, data_source_label, experiment_id, experiment_mode, augmentation_ratio, len(subset_feature_names), original_train_count, len(y_augmented), metrics, subset_feature_names, hyperparams_map=hyperparams_map, hyperparameters_enabled=hyperparameters_enabled, effective_hyperparameters=serialize_effective_estimator_parameters(loaded_model))
-                    persist_cache_result_entry(effective_cache_ref, result_entry, cache_dict, config=config)
+                    persist_cache_result_entry(  # Persist through the unchanged sequential cache path.
+                        effective_cache_ref, result_entry, cache_dict, config=feature_set_config
+                    )
                     all_results[(name, model_name)] = result_entry
                     progress_bar.update(1)
                     current_combination += 1
                     del loaded_model, artifact_bundle, artifact_context, X_augmented_scaled, X_augmented_model, X_augmented_df, y_augmented, metrics, training_ram_stats
                     gc.collect()
+                del feature_set_all_individual_models, feature_set_individual_models  # Release individual prototypes.
+                del feature_set_stacking_model, evaluation_models  # Release stacking evaluation prototypes.
+                del feature_set_config, feature_set_context  # Release the isolated configuration context.
+                gc.collect()  # Reclaim isolated model prototypes before resolving the next feature set.
             if grid_progress is None:
                 progress_bar.close()
             else:
@@ -11909,25 +12342,90 @@ def evaluate_on_dataset(
                 current_combination += len(individual_models) + (1 if stacking_enabled else 0)  # Keep shared combination numbering aligned with skipped steps
                 continue  # Skip to the next set
 
-            feature_phase_metadata = {"dataset_identity": os.path.basename(str(file)), "dataset_source": file, "execution_mode": execution_mode_str, "attack_scope": attack_types_combined, "data_source": data_source_label, "experiment_mode": experiment_mode, "augmentation_ratio": augmentation_ratio, "feature_set_name": name, "hyperparameter_mode": "Optimized Hyperparameters" if hyperparameters_enabled else "Default Hyperparameters", "train_sample_count": len(y_train), "test_sample_count": len(y_test), "feature_count": X_train_subset.shape[1]}  # Build reusable feature-set metadata
-            if memory_watcher_enabled(config):  # Add exact matrix layout only when watcher diagnostics are active
+            feature_set_context = build_feature_set_execution_models(  # Resolve isolated execution prototypes.
+                name, base_models, stacking_model, stacking_enabled, config=config
+            )
+            feature_set_config, feature_set_all_individual_models, feature_set_stacking_model = (  # Unpack context.
+                feature_set_context
+            )
+            feature_set_individual_models = {  # Preserve any artifact-recovery classifier restriction.
+                key: feature_set_all_individual_models[key] for key in individual_models
+            }
+            feature_phase_metadata = {  # Build reusable feature-set execution metadata.
+                "dataset_identity": os.path.basename(str(file)),
+                "dataset_source": file,
+                "execution_mode": execution_mode_str,
+                "attack_scope": attack_types_combined,
+                "data_source": data_source_label,
+                "experiment_mode": experiment_mode,
+                "augmentation_ratio": augmentation_ratio,
+                "feature_set_name": name,
+                "hyperparameter_mode": (
+                    "Optimized Hyperparameters" if hyperparameters_enabled else "Default Hyperparameters"
+                ),
+                "train_sample_count": len(y_train),
+                "test_sample_count": len(y_test),
+                "feature_count": X_train_subset.shape[1],
+                "n_jobs": feature_set_config.get("evaluation", {}).get("n_jobs", 1),
+            }
+            if memory_watcher_enabled(feature_set_config):  # Add matrix layouts when watcher diagnostics are active.
                 feature_phase_metadata.update(build_array_memory_metadata("X_train_subset", X_train_subset))  # Add train subset memory metadata
                 feature_phase_metadata.update(build_array_memory_metadata("X_test_subset", X_test_subset))  # Add test subset memory metadata
-            write_memory_phase_event("before_feature_set_evaluation", config=config, **feature_phase_metadata, event_outcome="starting")  # Publish feature-set evaluation start
-            individual_results, stacking_result_entry, current_combination = evaluate_single_feature_set(
-                idx, name, X_train_subset, X_test_subset, subset_feature_names_list,
-                individual_models, stacking_model, y_train, y_test,
-                file, execution_mode_str, attack_types_combined,
-                data_source_label, experiment_id, experiment_mode, augmentation_ratio,
-                hyperparams_map, scaler, label_encoder, transformer, pca_input_feature_names, target_column_name, pca_source_files, total_steps, current_combination, progress_bar, stacking_enabled=stacking_enabled, config=config,
-                cache_dict=cache_dict, cache_ref_file=effective_cache_ref, hyperparameters_enabled=hyperparameters_enabled,
-            )  # Evaluate all individual classifiers and stacking model on this non-empty feature subset with resume support
-            write_memory_phase_event("after_feature_set_evaluation", config=config, **feature_phase_metadata, event_outcome="completed")  # Publish feature-set evaluation completion
+            write_memory_phase_event(  # Publish feature-set evaluation start.
+                "before_feature_set_evaluation",
+                config=feature_set_config,
+                **feature_phase_metadata,
+                event_outcome="starting",
+            )
+            feature_set_results = evaluate_single_feature_set(  # Evaluate the feature set sequentially.
+                idx,
+                name,
+                X_train_subset,
+                X_test_subset,
+                subset_feature_names_list,
+                feature_set_individual_models,
+                feature_set_stacking_model,
+                y_train,
+                y_test,
+                file,
+                execution_mode_str,
+                attack_types_combined,
+                data_source_label,
+                experiment_id,
+                experiment_mode,
+                augmentation_ratio,
+                hyperparams_map,
+                scaler,
+                label_encoder,
+                transformer,
+                pca_input_feature_names,
+                target_column_name,
+                pca_source_files,
+                total_steps,
+                current_combination,
+                progress_bar,
+                stacking_enabled=stacking_enabled,
+                config=feature_set_config,
+                cache_dict=cache_dict,
+                cache_ref_file=effective_cache_ref,
+                hyperparameters_enabled=hyperparameters_enabled,
+            )
+            individual_results, stacking_result_entry, current_combination = feature_set_results  # Unpack results.
+            write_memory_phase_event(  # Publish feature-set evaluation completion.
+                "after_feature_set_evaluation",
+                config=feature_set_config,
+                **feature_phase_metadata,
+                event_outcome="completed",
+            )
 
             all_results.update(individual_results)  # Merge this feature set's results into the global results dict
             if stacking_result_entry is not None:  # Store stacking result only when stacking evaluation was enabled
                 all_results[(name, "StackingClassifier")] = stacking_result_entry  # Store stacking result with key
-            del X_train_subset, X_test_subset, subset_feature_names_list, transformer, individual_results, stacking_result_entry  # Release feature-set arrays, transformer reference, and transient results after this mode
+            del X_train_subset, X_test_subset, subset_feature_names_list, transformer  # Release feature-set matrices.
+            del individual_results, stacking_result_entry, feature_set_results  # Release transient results.
+            del feature_set_all_individual_models  # Release the complete isolated model mapping.
+            del feature_set_individual_models, feature_set_stacking_model  # Release isolated model prototypes.
+            del feature_set_config, feature_set_context  # Release the isolated configuration context.
             gc.collect()  # Reclaim feature-set memory before constructing the next mode
 
         if grid_progress is None:  # Close only progress bars created by this standalone evaluation
@@ -14064,6 +14562,12 @@ def run_stacking_pipeline(config_path=None, **config_overrides):
             config[key] = deep_merge_dicts(config[key], value)  # Deep merge override
         else:  # Direct override
             config[key] = value  # Set value directly
+
+    config.setdefault("evaluation", {})[  # Validate programmatic workers before execution.
+        "feature_set_n_jobs"
+    ] = validate_feature_set_n_jobs_map(
+        config.get("evaluation", {}).get("feature_set_n_jobs", {})
+    )
     
     initialize_logger(config=config)  # Setup logging
     
@@ -14274,6 +14778,19 @@ def log_resolved_configuration(config: dict) -> None:
         else:  # If explicit features list is empty or not provided
             print(f"{BackgroundColors.GREEN}[INFO] Feature set — Explicit Features: Disabled{Style.RESET_ALL}")  # Log explicit features disabled
 
+        global_n_jobs = config.get("evaluation", {}).get("n_jobs", 1)  # Resolve the global estimator worker.
+        feature_set_n_jobs = validate_feature_set_n_jobs_map(  # Resolve canonical feature-set workers.
+            config.get("evaluation", {}).get("feature_set_n_jobs", {})
+        )
+        print(  # Log the worker fallback for feature sets without overrides.
+            f"{BackgroundColors.GREEN}[INFO] Evaluation n_jobs — Global fallback: "
+            f"{BackgroundColors.CYAN}{global_n_jobs}{Style.RESET_ALL}"
+        )
+        print(  # Log every explicit feature-set worker allocation.
+            f"{BackgroundColors.GREEN}[INFO] Evaluation n_jobs — Feature-set overrides: "
+            f"{BackgroundColors.CYAN}{feature_set_n_jobs if feature_set_n_jobs else 'None'}{Style.RESET_ALL}"
+        )
+
         overrides = []  # Initialize list for override source tracking
 
         if dataset_path_cli is not None:  # Verify if dataset path came from CLI
@@ -14337,6 +14854,10 @@ def build_telegram_pipeline_summary(config: Optional[dict], dataset_path: Option
         stacking_enabled = methods_cfg.get("stacking", True)
         test_data_augmentation = execution_cfg.get("test_data_augmentation", True)
         augmentation_ratios = stacking_cfg.get("augmentation_ratios", [0.25, 0.50, 0.75, 1.00])
+        global_n_jobs = config.get("evaluation", {}).get("n_jobs", 1)  # Resolve the global worker for reporting.
+        feature_set_n_jobs = validate_feature_set_n_jobs_map(  # Resolve feature-set workers for reporting.
+            config.get("evaluation", {}).get("feature_set_n_jobs", {})
+        )
 
         dataset_display = dataset_path if dataset_path else "config.yaml (default)"  # Resolve the effective dataset source for the consolidated notification
         resolved_mode = classification_mode or execution_cfg.get("execution_mode", "both")  # Resolve one authoritative execution mode label
@@ -14348,6 +14869,10 @@ def build_telegram_pipeline_summary(config: Optional[dict], dataset_path: Option
             f"Enabled classifiers: {', '.join(enabled_classifiers) if enabled_classifiers else 'None'}",  # Report classifiers instantiated by the model factory
             f"Disabled classifiers: {', '.join(disabled_classifiers) if disabled_classifiers else 'None'}",  # Report classifiers excluded from the model factory
             f"Feature selection methods: {', '.join(feature_methods) if feature_methods else 'None'}",  # Report the configured feature-set strategies
+            (  # Report the global fallback and explicit feature-set allocations together.
+                f"Estimator workers: global={global_n_jobs}; feature-set overrides="
+                f"{feature_set_n_jobs if feature_set_n_jobs else 'None'}"
+            ),
             f"Test data augmentation: {'ON' if test_data_augmentation else 'OFF'}",  # Report the independent augmented-test toggle
         ]
 
