@@ -6230,7 +6230,7 @@ def load_existing_model_if_available(model_name, dataset_file, dataset_name, fea
             artifact_lock.close()  # Closing the descriptor releases flock automatically
 
 
-def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, y_test, dataset_file=None, scaler=None, feature_names=None, feature_set=None, config=None, phase_metadata=None, training_ram_stats=None, fit_model=True):  # Evaluate one classifier with optional watcher metadata and RAM statistics
+def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, y_test, dataset_file=None, scaler=None, feature_names=None, feature_set=None, config=None, phase_metadata=None, training_ram_stats=None, fit_model=True, notification_context=None):  # Evaluate one classifier with watcher metadata, RAM statistics, and notification context
     """
     Trains an individual classifier and evaluates its performance on the test set.
 
@@ -6248,6 +6248,7 @@ def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, 
     :param phase_metadata: Optional compact watcher metadata for this classifier
     :param training_ram_stats: Mutable holder receiving classifier training RAM statistics
     :param fit_model: Whether to fit on original training data before prediction
+    :param notification_context: Exact evaluation combination label for remote notifications
     :return: Metrics tuple (acc, prec, rec, f1, fpr, fnr, elapsed_time)
     """
     
@@ -6330,7 +6331,10 @@ def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, 
             evaluation_mode = "SeparateFiles"  # Default to SeparateFiles when unknown
         msg = f"{BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}: Mode {BackgroundColors.CYAN}{evaluation_mode}{BackgroundColors.GREEN} | F1-Score {BackgroundColors.CYAN}{f1}{BackgroundColors.GREEN} | Accuracy: {BackgroundColors.CYAN}{acc}{BackgroundColors.GREEN} | Precision: {BackgroundColors.CYAN}{prec}{BackgroundColors.GREEN} | Recall: {BackgroundColors.CYAN}{rec}{BackgroundColors.GREEN} | FPR: {BackgroundColors.CYAN}{fpr}{BackgroundColors.GREEN} | FNR: {BackgroundColors.CYAN}{fnr}{BackgroundColors.GREEN} | Training Time: {BackgroundColors.CYAN}{int(train_seconds)}s{BackgroundColors.GREEN} | Execution Time: {BackgroundColors.CYAN}{int(exec_seconds)}s{BackgroundColors.GREEN} | Total Time: {BackgroundColors.CYAN}{human_time}{BackgroundColors.GREEN} ({BackgroundColors.CYAN}{int(total_seconds)}s{BackgroundColors.GREEN}){Style.RESET_ALL}"  # Build final formatted classifier summary using raw floats for metrics and integer times
         print(msg)  # Print the summary message to console
-        send_telegram_message(TELEGRAM_BOT, msg)  # Send every completed individual-classifier result through the shared Telegram path
+        notification_origin = "[COMPUTED] Model fitted and evaluated in this run" if fit_model else "[LOADED MODEL] Persisted model evaluated without fitting in this run"  # Distinguish fitting from persisted-model evaluation
+        notification_label = notification_context or feature_set or model_name  # Preserve the most specific available evaluation identity
+        telegram_msg = f"{notification_origin} | {notification_label}\n{msg}"  # Combine provenance, evaluation identity, and metrics
+        send_telegram_message(TELEGRAM_BOT, telegram_msg)  # Send the provenance-aware individual-classifier result
 
         return (acc, prec, rec, f1, fpr, fnr, int(round(elapsed_time)))  # Return the metrics tuple
     except MemoryError as e:  # Handle classifier memory errors with a diagnostic phase
@@ -6359,7 +6363,7 @@ def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, 
         raise
 
 
-def evaluate_stacking_classifier(model, X_train, y_train, X_test, y_test, config=None, training_ram_stats=None, fit_model=True):
+def evaluate_stacking_classifier(model, X_train, y_train, X_test, y_test, config=None, training_ram_stats=None, fit_model=True, notification_context=None):  # Evaluate stacking with RAM statistics and notification context
     """
     Trains the StackingClassifier model and evaluates its performance on the test set.
 
@@ -6371,6 +6375,7 @@ def evaluate_stacking_classifier(model, X_train, y_train, X_test, y_test, config
     :param config: Configuration dictionary (uses global CONFIG if None).
     :param training_ram_stats: Mutable holder receiving classifier training RAM statistics.
     :param fit_model: Whether to fit on original training data before prediction.
+    :param notification_context: Exact evaluation combination label for remote notifications.
     :return: Metrics tuple (acc, prec, rec, f1, fpr, fnr, elapsed_time)
     """
     
@@ -6421,7 +6426,10 @@ def evaluate_stacking_classifier(model, X_train, y_train, X_test, y_test, config
             evaluation_mode = "SeparateFiles"  # Default to SeparateFiles when unknown
         msg = f"{BackgroundColors.CYAN}StackingClassifier{BackgroundColors.GREEN}: Mode {BackgroundColors.CYAN}{evaluation_mode}{BackgroundColors.GREEN} | F1-Score {BackgroundColors.CYAN}{f1}{BackgroundColors.GREEN} | Accuracy: {BackgroundColors.CYAN}{acc}{BackgroundColors.GREEN} | Precision: {BackgroundColors.CYAN}{prec}{BackgroundColors.GREEN} | Recall: {BackgroundColors.CYAN}{rec}{BackgroundColors.GREEN} | FPR: {BackgroundColors.CYAN}{fpr}{BackgroundColors.GREEN} | FNR: {BackgroundColors.CYAN}{fnr}{BackgroundColors.GREEN} | Training Time: {BackgroundColors.CYAN}{int(train_seconds)}s{BackgroundColors.GREEN} | Execution Time: {BackgroundColors.CYAN}{int(exec_seconds)}s{BackgroundColors.GREEN} | Total Time: {BackgroundColors.CYAN}{human_time}{BackgroundColors.GREEN} ({BackgroundColors.CYAN}{int(total_seconds)}s{BackgroundColors.GREEN}){Style.RESET_ALL}"  # Build final formatted stacking summary with colors using raw floats and integer times
         print(msg)  # Print the summary message to console
-        send_telegram_message(TELEGRAM_BOT, msg)  # Send every completed stacking-classifier result through the shared Telegram path
+        notification_origin = "[COMPUTED] Model fitted and evaluated in this run" if fit_model else "[LOADED MODEL] Persisted model evaluated without fitting in this run"  # Distinguish fitting from persisted-model evaluation
+        notification_label = notification_context or "StackingClassifier"  # Preserve the exact evaluation identity when supplied
+        telegram_msg = f"{notification_origin} | {notification_label}\n{msg}"  # Combine provenance, evaluation identity, and metrics
+        send_telegram_message(TELEGRAM_BOT, telegram_msg)  # Send the provenance-aware stacking-classifier result
 
         return (acc, prec, rec, f1, fpr, fnr, int(round(elapsed_time)), y_pred)  # Return the metrics tuple and predictions
     except Exception as e:
@@ -10829,7 +10837,8 @@ def recover_cached_individual_classifier_result(cache_dict, execution_mode_str, 
     cached_human_time = calculate_execution_time(cached_elapsed)  # Format elapsed seconds to human-readable duration string
     cached_msg = f"{BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}: Mode {BackgroundColors.CYAN}{evaluation_mode}{BackgroundColors.GREEN} | F1-Score {BackgroundColors.CYAN}{f1}{BackgroundColors.GREEN} | Accuracy: {BackgroundColors.CYAN}{acc}{BackgroundColors.GREEN} | Precision: {BackgroundColors.CYAN}{prec}{BackgroundColors.GREEN} | Recall: {BackgroundColors.CYAN}{rec}{BackgroundColors.GREEN} | FPR: {BackgroundColors.CYAN}{fpr}{BackgroundColors.GREEN} | FNR: {BackgroundColors.CYAN}{fnr}{BackgroundColors.GREEN} | Training Time: {BackgroundColors.CYAN}{cached_elapsed}s{BackgroundColors.GREEN} | Execution Time: {BackgroundColors.CYAN}{cached_elapsed}s{BackgroundColors.GREEN} | Total Time: {BackgroundColors.CYAN}{cached_human_time}{BackgroundColors.GREEN} ({BackgroundColors.CYAN}{cached_elapsed}s{BackgroundColors.GREEN}){Style.RESET_ALL}"  # Build the recovered classifier summary once for console and Telegram parity
     print(cached_msg)  # Print a full metrics summary for the recovered cached classifier
-    send_telegram_message(TELEGRAM_BOT, cached_msg)  # Send every recovered individual-classifier result through the shared Telegram path
+    telegram_msg = f"[CACHE] Recovered saved result without fit, prediction, or metric recomputation | {combination_header}\n{cached_msg}"  # Combine cache provenance, evaluation identity, and recovered metrics
+    send_telegram_message(TELEGRAM_BOT, telegram_msg)  # Send the provenance-aware recovered individual-classifier result
 
     progress_bar.update(1)  # Advance progress bar even for skipped cached evaluations
     current_combination += 1  # Advance the global combination counter for skipped evaluations
@@ -10920,6 +10929,7 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
                 config=config,
                 phase_metadata=phase_metadata,  # Pass compact watcher context into fit completion and error events
                 training_ram_stats=training_ram_stats,  # Capture per-classifier RAM statistics for explainability scheduling.
+                notification_context=combination_header,  # Include the exact active combination in Telegram output
             )  # Evaluate individual classifier sequentially using HP-isolated model artifact names
             write_memory_phase_event("after_prediction_and_metrics", config=config, **phase_metadata, accuracy=metrics[0], precision=metrics[1], recall=metrics[2], f1_score=metrics[3], event_outcome="metrics_completed")  # Publish prediction and metrics completion
 
@@ -11045,7 +11055,8 @@ def run_stacking_evaluation_for_feature_set(name, stacking_model, X_train_df, y_
                 cached_human_time = calculate_execution_time(cached_elapsed)  # Format elapsed seconds to human-readable duration string
                 cached_msg = f"{BackgroundColors.CYAN}StackingClassifier{BackgroundColors.GREEN}: Mode {BackgroundColors.CYAN}{evaluation_mode}{BackgroundColors.GREEN} | F1-Score {BackgroundColors.CYAN}{f1}{BackgroundColors.GREEN} | Accuracy: {BackgroundColors.CYAN}{acc}{BackgroundColors.GREEN} | Precision: {BackgroundColors.CYAN}{prec}{BackgroundColors.GREEN} | Recall: {BackgroundColors.CYAN}{rec}{BackgroundColors.GREEN} | FPR: {BackgroundColors.CYAN}{fpr}{BackgroundColors.GREEN} | FNR: {BackgroundColors.CYAN}{fnr}{BackgroundColors.GREEN} | Training Time: {BackgroundColors.CYAN}{cached_elapsed}s{BackgroundColors.GREEN} | Execution Time: {BackgroundColors.CYAN}{cached_elapsed}s{BackgroundColors.GREEN} | Total Time: {BackgroundColors.CYAN}{cached_human_time}{BackgroundColors.GREEN} ({BackgroundColors.CYAN}{cached_elapsed}s{BackgroundColors.GREEN}){Style.RESET_ALL}"  # Build the recovered stacking summary once for console and Telegram parity
                 print(cached_msg)  # Print a full metrics summary for the recovered cached stacking classifier
-                send_telegram_message(TELEGRAM_BOT, cached_msg)  # Send every recovered stacking-classifier result through the shared Telegram path
+                telegram_msg = f"[CACHE] Recovered saved result without fit, prediction, or metric recomputation | {combination_header}\n{cached_msg}"  # Combine cache provenance, evaluation identity, and recovered metrics
+                send_telegram_message(TELEGRAM_BOT, telegram_msg)  # Send the provenance-aware recovered stacking-classifier result
 
                 progress_bar.update(1)  # Advance progress bar even for skipped cached evaluations
                 current_combination += 1  # Advance the global combination counter for skipped evaluations
@@ -11080,7 +11091,7 @@ def run_stacking_evaluation_for_feature_set(name, stacking_model, X_train_df, y_
         stacking_ram_stats = {}  # Hold RAM statistics for this stacking fit only.
 
         stacking_metrics = evaluate_stacking_classifier(
-            active_stacking_model, X_train_df, y_train, X_test_df, y_test, config=config, training_ram_stats=stacking_ram_stats
+            active_stacking_model, X_train_df, y_train, X_test_df, y_test, config=config, training_ram_stats=stacking_ram_stats, notification_context=combination_header  # Include the exact active combination in Telegram output
         )  # Evaluate stacking model with DataFrames and retrieve metrics tuple
         write_memory_phase_event("after_classifier_fit", config=config, **phase_metadata, event_outcome="fit_and_prediction_completed")  # Publish stacking fit completion
         write_memory_phase_event("after_prediction_and_metrics", config=config, **phase_metadata, accuracy=stacking_metrics[0], precision=stacking_metrics[1], recall=stacking_metrics[2], f1_score=stacking_metrics[3], event_outcome="metrics_completed")  # Publish stacking metrics completion
@@ -11561,7 +11572,8 @@ def evaluate_on_dataset(
                     recovered, current_combination = recover_cached_individual_classifier_result(cache_dict, execution_mode_str, data_source_label, experiment_mode, augmentation_ratio, attack_types_combined, name, model_name, all_results, current_combination, total_steps, progress_bar, hyperparameters_enabled=hyperparameters_enabled, expected_n_features=len(subset_feature_names), expected_feature_names=subset_feature_names, expected_n_samples_train=original_train_count, expected_n_samples_test=len(y_augmented_raw))
                     if recovered:
                         continue
-                    progress_bar.set_description(build_telegram_combination_header(name, model_name, augmentation_ratio, hyperparameters_enabled))  # Display the exact augmented-test combination being evaluated.
+                    combination_header = build_telegram_combination_header(name, model_name, augmentation_ratio, hyperparameters_enabled)  # Build the exact augmented-test combination label
+                    progress_bar.set_description(combination_header)  # Display the exact augmented-test combination being evaluated.
                     artifact_feature_set = f"{name} - {'Optimized Hyperparameters' if hyperparameters_enabled else 'Default Hyperparameters'}"
                     artifact_context = build_stacking_model_artifact_context(file, pca_source_files, execution_mode_str, attack_types_combined, target_column_name, model_name, model_prototype, artifact_feature_set, pca_input_feature_names, subset_feature_names, expected_label_classes, expected_transformer, hyperparameters_enabled)
                     artifact_bundle, rejection_reason = load_existing_model_if_available(model_name, file, dataset_name, artifact_feature_set, artifact_context, config=config)
@@ -11584,10 +11596,10 @@ def evaluate_on_dataset(
                     X_augmented_df = pd.DataFrame(X_augmented_model, columns=subset_feature_names)
                     training_ram_stats = {}
                     if model_name == "StackingClassifier":
-                        metrics = evaluate_stacking_classifier(loaded_model, None, None, X_augmented_df, y_augmented, config=config, training_ram_stats=training_ram_stats, fit_model=False)
+                        metrics = evaluate_stacking_classifier(loaded_model, None, None, X_augmented_df, y_augmented, config=config, training_ram_stats=training_ram_stats, fit_model=False, notification_context=combination_header)  # Report persisted stacking-model evaluation provenance
                         classifier_type = "Stacking"
                     else:
-                        metrics = evaluate_individual_classifier(loaded_model, model_name, None, None, X_augmented_model, y_augmented, file, artifact_bundle["scaler"], subset_feature_names, artifact_feature_set, config=config, training_ram_stats=training_ram_stats, fit_model=False)
+                        metrics = evaluate_individual_classifier(loaded_model, model_name, None, None, X_augmented_model, y_augmented, file, artifact_bundle["scaler"], subset_feature_names, artifact_feature_set, config=config, training_ram_stats=training_ram_stats, fit_model=False, notification_context=combination_header)  # Report persisted individual-model evaluation provenance
                         classifier_type = "Individual"
                     result_entry = build_classifier_result_entry(loaded_model.__class__.__name__, file, execution_mode_str, attack_types_combined, name, classifier_type, model_name, data_source_label, experiment_id, experiment_mode, augmentation_ratio, len(subset_feature_names), original_train_count, len(y_augmented), metrics, subset_feature_names, hyperparams_map=hyperparams_map, hyperparameters_enabled=hyperparameters_enabled, effective_hyperparameters=serialize_effective_estimator_parameters(loaded_model))
                     persist_cache_result_entry(effective_cache_ref, result_entry, cache_dict, config=config)
