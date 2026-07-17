@@ -12639,14 +12639,7 @@ def process_combined_files_augmentation_testing(reference_file, original_files_l
             return  # Exit function early as signaled by the loading function
 
         print_combined_files_augmentation_header(augmentation_ratios)  # Print the section header for ratio-based combined files evaluation augmentation experiments
-        send_telegram_message(
-            TELEGRAM_BOT,
-            build_telegram_pipeline_summary(
-                config,
-                dataset_name=dataset_name,
-                classification_mode="combined_files",
-            ) + [f"[COMBINED_FILES] Starting ratio-based augmentation experiments | Dataset: {dataset_name} | ratios: {[f'{int(r * 100)}%' for r in augmentation_ratios]}"]
-        )  # Notify Telegram about combined files evaluation augmentation ratio experiments start with full pipeline summary
+        send_telegram_message(TELEGRAM_BOT, f"[COMBINED_FILES] Starting ratio-based augmentation experiments | Dataset: {dataset_name} | Ratios: {', '.join(f'{int(r * 100)}%' for r in augmentation_ratios)}")  # Send only the augmentation-stage transition after the startup configuration
 
         all_ratio_results = {}  # Dictionary to store results for each ratio: {ratio: results_dict}
 
@@ -12725,16 +12718,7 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
         for label, count, percentage in distribution:  # Iterate over distribution entries sorted by count
             print(f"- {BackgroundColors.CYAN}{label}{BackgroundColors.GREEN}: {BackgroundColors.CYAN}{count:,}{BackgroundColors.GREEN} ({percentage:.2f}% of total){Style.RESET_ALL}")  # Print each class name, sample count, and percentage
         print(f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}\n")  # Print closing separator
-        send_telegram_message(
-            TELEGRAM_BOT,
-            build_telegram_pipeline_summary(
-                config,
-                dataset_name=dataset_name,
-                classification_mode="combined_files",
-                attack_types_list=attack_types_list,
-                include_attack_types=True,
-            ) + [f"Starting combined files evaluation | Dataset: {dataset_name}"]
-        )  # Notify Telegram about combined files evaluation start with full pipeline summary
+        send_telegram_message(TELEGRAM_BOT, f"Starting combined files evaluation | Dataset: {dataset_name} | Attack types: {len(attack_types_list)}")  # Send only the combined-files stage transition after the startup configuration
 
         ga_selected_features, pca_n_components, rfe_selected_features = load_feature_selection_results(
             reference_file, config=config
@@ -13734,15 +13718,6 @@ def process_files_in_path(input_path, dataset_name, config=None):
         execution_mode = config.get("execution", {}).get("execution_mode", "both")  # Get execution mode from config (separate_files/combined_files/both, default: both)
 
         print(f"{BackgroundColors.BOLD}{BackgroundColors.CYAN}[DEBUG] Classification mode: {execution_mode}{Style.RESET_ALL}")  # Log the resolved classification mode
-        send_telegram_message(
-            TELEGRAM_BOT,
-            build_telegram_pipeline_summary(
-                config,
-                dataset_path=os.path.relpath(input_path),
-                dataset_name=dataset_name,
-                classification_mode=execution_mode,
-            ),
-        )  # Notify Telegram about the full pipeline for this path
 
         write_memory_phase_event("before_combined_file_discovery", config=config, dataset_source=input_path, dataset_identity=dataset_name, event_outcome="starting")  # Publish file discovery start
         files_to_process = determine_files_to_process(csv_file, input_path, config=config)  # Determine which files to process
@@ -13782,10 +13757,6 @@ def process_dataset_paths(dataset_name, paths, config=None):
         print(
             f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Processing dataset: {BackgroundColors.CYAN}{dataset_name}{Style.RESET_ALL}"
         )  # Print dataset name
-        send_telegram_message(
-            TELEGRAM_BOT,
-            [f"Processing dataset: {dataset_name} ({len(paths)} path(s))"] + build_telegram_pipeline_summary(config, dataset_name=dataset_name),
-        )  # Notify Telegram about dataset processing start with full pipeline summary
 
         for input_path in paths:  # For each path in the dataset's paths list
             process_files_in_path(input_path, dataset_name, config=config)  # Process all files in  this path
@@ -14073,7 +14044,10 @@ def build_telegram_pipeline_summary(config: Optional[dict], dataset_path: Option
         methods_cfg = stacking_cfg.get("methods", {})
         feature_sets_cfg = stacking_cfg.get("feature_sets_config", {})
 
-        enabled_classifiers = stacking_cfg.get("enabled_classifiers", []) or []
+        available_classifiers = ["Random Forest", "SVM", "XGBoost", "Logistic Regression", "KNN", "Nearest Centroid", "Gradient Boosting", "LightGBM", "MLP (Neural Net)"]  # Mirror the classifier identities and order exposed by the model factory
+        configured_classifiers = stacking_cfg.get("enabled_classifiers", None)  # Read the optional classifier filter with model-factory fallback semantics
+        enabled_classifiers = list(available_classifiers) if configured_classifiers is None else [name for name in available_classifiers if name in list(dict.fromkeys(configured_classifiers))]  # Resolve classifiers that the model factory will instantiate
+        disabled_classifiers = [name for name in available_classifiers if name not in enabled_classifiers]  # Resolve classifiers excluded from this execution
         feature_methods = []
         if feature_sets_cfg.get("use_full", True):
             feature_methods.append("Full")
@@ -14096,18 +14070,21 @@ def build_telegram_pipeline_summary(config: Optional[dict], dataset_path: Option
         test_data_augmentation = execution_cfg.get("test_data_augmentation", True)
         augmentation_ratios = stacking_cfg.get("augmentation_ratios", [0.25, 0.50, 0.75, 1.00])
 
-        dataset_display = dataset_path if dataset_path else "config.yaml (default)"
-        lines = [
-            f"Execution mode: {execution_cfg.get('execution_mode', 'both')} | Dataset: {dataset_display}",
-            f"Dataset name: {dataset_name}" if dataset_name else None,
-            f"Classification mode: {classification_mode}" if classification_mode else None,
-            f"Methods: Feature Selection: {'ON' if feature_selection_enabled else 'OFF'}, Hyperparameters: {'ON' if hyperparameters_enabled else 'OFF'}, Data Augmentation: {'ON' if augmentation_enabled else 'OFF'}, AutoML: {'ON' if automl_enabled else 'OFF'}, Stacking: {'ON' if stacking_enabled else 'OFF'}",
-            f"Classifiers: {', '.join(enabled_classifiers) if enabled_classifiers else 'None'}",
-            f"Feature extraction methods: {', '.join(feature_methods) if feature_methods else 'None'}",
+        dataset_display = dataset_path if dataset_path else "config.yaml (default)"  # Resolve the effective dataset source for the consolidated notification
+        resolved_mode = classification_mode or execution_cfg.get("execution_mode", "both")  # Resolve one authoritative execution mode label
+        lines = [  # Assemble the complete startup configuration in display order
+            f"Dataset: {dataset_display}",  # Report every resolved dataset path
+            f"Dataset name: {dataset_name}" if dataset_name else None,  # Report every resolved dataset identity when available
+            f"Execution mode: {resolved_mode}",  # Report the authoritative classification mode once
+            f"Methods: Feature Selection: {'ON' if feature_selection_enabled else 'OFF'}, Hyperparameters: {'ON' if hyperparameters_enabled else 'OFF'}, Data Augmentation: {'ON' if augmentation_enabled else 'OFF'}, AutoML: {'ON' if automl_enabled else 'OFF'}, Stacking: {'ON' if stacking_enabled else 'OFF'}",  # Report all pipeline method toggles
+            f"Enabled classifiers: {', '.join(enabled_classifiers) if enabled_classifiers else 'None'}",  # Report classifiers instantiated by the model factory
+            f"Disabled classifiers: {', '.join(disabled_classifiers) if disabled_classifiers else 'None'}",  # Report classifiers excluded from the model factory
+            f"Feature selection methods: {', '.join(feature_methods) if feature_methods else 'None'}",  # Report the configured feature-set strategies
+            f"Test data augmentation: {'ON' if test_data_augmentation else 'OFF'}",  # Report the independent augmented-test toggle
         ]
 
         if augmentation_enabled and test_data_augmentation:
-            lines.append(f"Data augmentation ratios: {[f'{int(r * 100)}%' for r in augmentation_ratios]}")
+            lines.append(f"Data augmentation ratios: {', '.join(f'{int(r * 100)}%' for r in augmentation_ratios)}")  # Report configured ratios without Python list formatting
 
         if include_attack_types and attack_types_list:
             lines.append(f"Attack types: {len(attack_types_list)} attack types: {', '.join(str(a) for a in attack_types_list)}")
@@ -14153,29 +14130,24 @@ def main(config=None):
         start_time = datetime.datetime.now()  # Get the start time of the program
 
         setup_telegram_bot(config=config)  # Setup Telegram bot if configured
+        start_message = f"Starting Classifiers Stacking at {start_time.strftime('%Y-%m-%d %H:%M:%S')}"  # Build the isolated startup timestamp notification
+        send_telegram_message(TELEGRAM_BOT, start_message)  # Send the startup timestamp as exactly one Telegram message
 
         _exec_mode = config.get("execution", {}).get("execution_mode", "both")  # Retrieve execution mode from config
-        _dataset_path_cli = config.get("execution", {}).get("dataset_path", None)  # Retrieve CLI dataset path override
-        _methods_cfg = config.get("stacking", {}).get("methods", {})  # Retrieve method toggles from config
-        _start_lines = [f"Starting Classifiers Stacking at {start_time.strftime('%Y-%m-%d %H:%M:%S')}"]
-        _start_lines.extend(
-            build_telegram_pipeline_summary(
-                config,
-                dataset_path=_dataset_path_cli,
-                classification_mode=_exec_mode,
-            )
-        )
-        
-        send_telegram_message(TELEGRAM_BOT, _start_lines)  # Send detailed start message with full execution configuration
-
-        threads_limit = set_threads_limit_based_on_ram(config=config)  # Adjust config.get("evaluation", {}).get("threads_limit", 2) based on system RAM
-        
         dataset_path_override = config.get("execution", {}).get("dataset_path", None)  # Retrieve CLI --dataset-path override
 
         if dataset_path_override is not None:  # Verify if CLI dataset path was provided
             datasets = validate_and_resolve_dataset_path(dataset_path_override, config=config)  # Validate and resolve CLI dataset path into datasets dict
         else:  # No CLI override, use config.yaml datasets
             datasets = config.get("dataset", {}).get("datasets", {})  # Get datasets from config
+
+        dataset_names = ", ".join(str(name) for name in datasets.keys())  # Consolidate every resolved dataset name for one startup configuration message
+        dataset_paths = [path for paths in datasets.values() for path in (paths if isinstance(paths, list) else [paths])]  # Flatten resolved dataset paths without changing processing inputs
+        dataset_paths_display = ", ".join(os.path.relpath(str(path)) for path in dataset_paths)  # Format resolved paths consistently with existing startup output
+        configuration_lines = build_telegram_pipeline_summary(config, dataset_path=dataset_paths_display, dataset_name=dataset_names, classification_mode=_exec_mode)  # Build the complete resolved pipeline configuration once
+        configuration_message = "\n".join(configuration_lines)  # Consolidate configuration lines under one device and script prefix
+        send_telegram_message(TELEGRAM_BOT, configuration_message)  # Send all startup configuration as exactly one Telegram message
+        threads_limit = set_threads_limit_based_on_ram(config=config)  # Apply resource limits only after both consolidated startup notifications
 
         for dataset_name, paths in datasets.items():  # For each dataset in the datasets dictionary
             dataset_name = str(dataset_name).strip()  # Normalize dataset name by removing leading and trailing spaces
