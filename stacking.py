@@ -64,6 +64,7 @@ import argparse  # For parsing command-line arguments
 import ast  # For safely evaluating Python literals
 import atexit  # For playing a sound when the program finishes
 import concurrent.futures  # For parallel execution
+from contextlib import contextmanager  # For scoped cache file locking across threads and processes
 import dataframe_image as dfi  # For exporting DataFrame styled tables as PNG images
 import datetime  # For getting the current date and time
 import fcntl  # For coordinating stacking artifact loads and atomic replacements on Linux
@@ -170,6 +171,8 @@ MEMORY_WATCHER_EVENT_COUNTER = 0  # Counts emitted phase-state events for watche
 MEMORY_WATCHER_TRACEMALLOC_PREVIOUS: Optional[tracemalloc.Snapshot] = None  # Holds previous tracemalloc snapshot for concise diffs
 MEMORY_WATCHER_FINALIZED = False  # Prevents duplicate terminal watcher events
 FEATURE_SOURCE_TEMP_DIRS: set = set()  # Tracks temporary feature-source directories created by this process
+CACHE_THREAD_LOCKS: dict = {}  # Stores process-local cache locks by normalized destination path
+CACHE_THREAD_LOCKS_GUARD = threading.Lock()  # Serializes process-local cache lock creation
 
 
 # Functions Definitions:
@@ -8576,8 +8579,180 @@ def safe_load_json(val):
             return val  # Return the original value if it's a string but not valid JSON
     
     return val  # For non-string values, return as is
-            
-                
+
+
+def get_cache_backup_path(cache_path: str) -> str:
+    """
+    Resolve the sibling backup path for one cache file.
+
+    :param cache_path: Primary cache CSV path.
+    :return: Sibling backup cache path.
+    """
+
+    return f"{cache_path}.bak"  # Append the conventional backup suffix without changing the primary filename.
+
+
+def get_cache_lock_path(cache_path: str) -> str:
+    """
+    Resolve the sibling synchronization path for one cache file.
+
+    :param cache_path: Primary cache CSV path.
+    :return: Sibling file-lock path.
+    """
+
+    return f"{cache_path}.lock"  # Append the lock suffix beside the primary and backup files.
+
+
+def get_cache_thread_lock(cache_path: str) -> Any:
+    """
+    Resolve the process-local reentrant lock for one cache destination.
+
+    :param cache_path: Primary cache CSV path.
+    :return: Reentrant lock dedicated to the normalized cache path.
+    """
+
+    normalized_path = os.path.abspath(cache_path)  # Normalize equivalent path spellings to one lock identity.
+    with CACHE_THREAD_LOCKS_GUARD:  # Serialize lock lookup and creation across local threads.
+        cache_lock = CACHE_THREAD_LOCKS.get(normalized_path)  # Read an existing destination lock when available.
+        if cache_lock is None:  # Create the destination lock only once per process.
+            cache_lock = threading.RLock()  # Allow nested production cache operations in the owning thread.
+            CACHE_THREAD_LOCKS[normalized_path] = cache_lock  # Register the new destination lock for later callers.
+
+    return cache_lock  # Return the stable process-local destination lock.
+
+
+@contextmanager  # Provide deterministic lock release for every cache operation.
+def cache_file_lock(cache_path: str, exclusive: bool = True) -> Any:
+    """
+    Coordinate one cache operation across local threads and independent processes.
+
+    :param cache_path: Primary cache CSV path.
+    :param exclusive: Whether the operation requires an exclusive operating-system lock.
+    :return: Context manager yielding the opened lock file.
+    """
+
+    thread_lock = get_cache_thread_lock(cache_path)  # Resolve the process-local lock before opening the shared lock file.
+    thread_lock.acquire()  # Prevent local threads from relying on process-level lock semantics alone.
+    lock_file = None  # Track the lock file object for reliable release.
+    file_lock_acquired = False  # Track successful operating-system lock acquisition separately from file opening.
+
+    try:  # Acquire the operating-system lock and yield protected access.
+        lock_path = get_cache_lock_path(cache_path)  # Resolve the sibling synchronization file.
+        os.makedirs(os.path.dirname(os.path.abspath(lock_path)), exist_ok=True)  # Ensure the destination directory exists before locking.
+        lock_file = open(lock_path, "a+b")  # Open a stable sibling inode shared by independent program instances.
+        lock_mode = fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH  # Select writer or reader synchronization semantics.
+        fcntl.flock(lock_file.fileno(), lock_mode)  # Hold the process-safe lock for the complete protected operation.
+        file_lock_acquired = True  # Record successful acquisition before transferring control to the caller.
+        yield lock_file  # Transfer protected execution to the caller.
+    finally:  # Release both synchronization layers even when the operation fails.
+        if lock_file is not None:  # Release the operating-system resource only when opening succeeded.
+            try:  # Preserve the caller's original exception during lock release.
+                if file_lock_acquired:  # Avoid unlocking a descriptor whose acquisition failed.
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)  # Release the process-safe file lock.
+            except OSError:  # Preserve the original cache-operation failure when explicit unlock is unavailable.
+                pass  # Rely on descriptor closure to release the operating-system lock.
+            finally:  # Close the descriptor even when unlocking reports an error.
+                lock_file.close()  # Close the sibling lock file descriptor.
+        thread_lock.release()  # Release the process-local lock after the file lock is no longer held.
+
+
+def deserialize_cache_dataframe(df_cache: pd.DataFrame) -> dict:
+    """
+    Deserialize prepared cache rows into the production resume dictionary.
+
+    :param df_cache: Prepared cache DataFrame using the canonical schema.
+    :return: Dictionary mapping full resume identities to result entries.
+    """
+
+    cache_dict = {}  # Initialize the resume dictionary returned to production callers.
+
+    for _, row in df_cache.iterrows():  # Deserialize every validated cache row.
+        def cache_row_value(column_name: str, default: Any = None) -> Any:
+            value = row.get(column_name, default)  # Retrieve one scalar value from the cache row.
+            return default if value is None or bool(cast(Any, pd.isna(value))) else value  # Normalize missing pandas scalars to the provided default.
+
+        feature_set = str(cache_row_value("feature_set", ""))  # Read the feature-set identity.
+        model_name = str(cache_row_value("model_name", ""))  # Read the classifier identity.
+        if not feature_set.strip() or not model_name.strip():  # Reject rows that cannot form a meaningful resume identity.
+            raise ValueError("Cache row has an empty feature-set or model identity")  # Surface invalid cache content to recovery logic.
+        execution_mode_row = str(cache_row_value("execution_mode", "separate_files"))  # Read the execution mode.
+        data_source_row = str(cache_row_value("data_source", "Original"))  # Read the data-source label.
+        experiment_mode_row = str(cache_row_value("experiment_mode", "original_only"))  # Read the experiment mode.
+        aug_ratio_value = cache_row_value("augmentation_ratio", None)  # Read augmentation ratio metadata when present.
+        aug_ratio_row = resolve_persisted_augmentation_ratio(experiment_mode_row, aug_ratio_value)  # Normalize augmentation ratio metadata.
+        attack_types_raw_row = safe_load_json(cache_row_value("attack_types_combined", None))  # Deserialize combined attack metadata.
+        attack_types_list_row = attack_types_raw_row if isinstance(attack_types_raw_row, list) else None  # Normalize combined attack metadata.
+        hyperparameter_mode_row = str(cache_row_value("hyperparameter_mode", "Default Hyperparameters"))  # Read explicit hyperparameter mode metadata.
+        hyperparameters_enabled_row = resolve_boolean_value(cache_row_value("hyperparameters_enabled", False), hyperparameter_mode_row == "Optimized Hyperparameters")  # Normalize the hyperparameter identity dimension.
+        cache_key = build_resume_cache_key(execution_mode_row, data_source_row, experiment_mode_row, aug_ratio_row, attack_types_list_row, feature_set, model_name, hyperparameters_enabled_row)  # Build the complete production resume identity.
+
+        result_entry = {  # Reconstruct the production result entry without changing its established structure.
+            "model": cache_row_value("model", ""),  # Restore concrete estimator metadata.
+            "dataset": cache_row_value("dataset", ""),  # Restore dataset identity metadata.
+            "execution_mode": execution_mode_row,  # Restore execution-mode metadata.
+            "attack_types_combined": cache_row_value("attack_types_combined", None),  # Restore serialized combined attack metadata.
+            "feature_set": feature_set,  # Restore feature-set metadata.
+            "hyperparameter_mode": hyperparameter_mode_row,  # Restore explicit hyperparameter-mode metadata.
+            "classifier_type": cache_row_value("classifier_type", ""),  # Restore classifier grouping metadata.
+            "model_name": model_name,  # Restore configured classifier identity.
+            "data_source": data_source_row,  # Restore data-source metadata.
+            "experiment_id": cache_row_value("experiment_id", None),  # Restore experiment identity metadata.
+            "experiment_mode": experiment_mode_row,  # Restore experiment-mode metadata.
+            "augmentation_ratio": aug_ratio_row,  # Restore normalized augmentation ratio metadata.
+            "feature_selection_enabled": resolve_persisted_feature_selection_enabled(feature_set, cache_row_value("feature_selection_enabled", False)),  # Restore normalized feature-selection metadata.
+            "hyperparameters_enabled": hyperparameters_enabled_row,  # Restore normalized hyperparameter metadata.
+            "data_augmentation_enabled": resolve_persisted_data_augmentation_enabled(experiment_mode_row, aug_ratio_row, cache_row_value("data_augmentation_enabled", False)),  # Restore normalized augmentation metadata.
+            "n_features": int(n_features_value) if (n_features_value := cache_row_value("n_features", None)) is not None else None,  # Restore feature-count metadata.
+            "n_samples_train": int(n_samples_train_value) if (n_samples_train_value := cache_row_value("n_samples_train", None)) is not None else None,  # Restore training sample count.
+            "n_samples_test": int(n_samples_test_value) if (n_samples_test_value := cache_row_value("n_samples_test", None)) is not None else None,  # Restore test sample count.
+            "accuracy": float(accuracy_value) if (accuracy_value := cache_row_value("accuracy", None)) is not None else None,  # Restore accuracy.
+            "precision": float(precision_value) if (precision_value := cache_row_value("precision", None)) is not None else None,  # Restore precision.
+            "recall": float(recall_value) if (recall_value := cache_row_value("recall", None)) is not None else None,  # Restore recall.
+            "f1_score": float(f1_score_value) if (f1_score_value := cache_row_value("f1_score", None)) is not None else None,  # Restore F1 score.
+            "fpr": float(fpr_value) if (fpr_value := cache_row_value("fpr", None)) is not None else None,  # Restore false-positive rate.
+            "fnr": float(fnr_value) if (fnr_value := cache_row_value("fnr", None)) is not None else None,  # Restore false-negative rate.
+            "elapsed_time_s": float(elapsed_time_value) if (elapsed_time_value := cache_row_value("elapsed_time_s", None)) is not None else None,  # Restore elapsed-time metadata.
+            "cv_method": cache_row_value("cv_method", None),  # Restore evaluation-method metadata.
+            "top_features": safe_load_json(cache_row_value("features_list", None)),  # Rebuild the duplicate final-export field from canonical feature metadata.
+            "rfe_ranking": safe_load_json(cache_row_value("rfe_ranking", None)),  # Restore RFE ranking metadata.
+            "hyperparameters": safe_load_json(cache_row_value("hyperparameters", None)),  # Restore effective hyperparameter metadata.
+            "features_list": safe_load_json(cache_row_value("features_list", None)),  # Restore canonical feature metadata.
+            "Hardware": cache_row_value("Hardware", None),  # Restore optional hardware metadata.
+        }  # Complete the compatible production result entry.
+
+        cache_dict[cache_key] = result_entry  # Register the latest row for this resume identity.
+
+    return cache_dict  # Return all validated and deserialized cache entries.
+
+
+def read_validated_cache_file(cache_path: str, config: Optional[dict] = None) -> Tuple[pd.DataFrame, dict]:
+    """
+    Read, normalize, and deserialize one cache file before it is trusted.
+
+    :param cache_path: Cache CSV path to validate.
+    :param config: Configuration dictionary, or None to use the global configuration.
+    :return: Prepared DataFrame and production resume dictionary.
+    """
+
+    if config is None:  # Use global configuration when no configuration is provided.
+        config = CONFIG  # Assign the global configuration reference.
+
+    low_memory = config.get("execution", {}).get("low_memory", False)  # Read the configured pandas memory mode.
+    raw_df = pd.read_csv(cache_path, low_memory=low_memory)  # Parse the complete CSV before trusting its contents.
+    if raw_df.empty:  # Reject header-only or truncated cache files without recoverable entries.
+        raise ValueError("Cache file contains no result rows")  # Surface empty cache content to recovery logic.
+    source_columns = {str(column).strip() for column in raw_df.columns}  # Normalize source column names for compatibility validation.
+    missing_identity_columns = {"feature_set", "model_name"} - source_columns  # Require the established minimum resume identity fields.
+    if missing_identity_columns:  # Reject unrelated or structurally invalid CSV files.
+        raise ValueError(f"Cache file is missing identity columns: {sorted(missing_identity_columns)}")  # Surface exact structural damage.
+    prepared_df = prepare_cache_dataframe(raw_df, config=config)  # Normalize legacy and current schemas through the production path.
+    cache_dict = deserialize_cache_dataframe(prepared_df)  # Prove every normalized row can be deserialized by resume logic.
+    if not cache_dict:  # Reject content that produced no recoverable resume entries.
+        raise ValueError("Cache file produced no recoverable result entries")  # Surface invalid deserialization to recovery logic.
+
+    return prepared_df, cache_dict  # Return the validated canonical rows and their resume representation.
+
+
 def load_cache_results(csv_path, config=None, notify_discovery: bool = True):  # Load cache rows with optional operator discovery notification.
     """
     Load cached results from the cache file if it exists.
@@ -8591,91 +8766,49 @@ def load_cache_results(csv_path, config=None, notify_discovery: bool = True):  #
         if config is None:  # If no config provided
             config = CONFIG  # Use global CONFIG
 
-        cache_path = get_cache_file_path(csv_path, config=config)  # Get the cache file path
+        cache_path = get_cache_file_path(csv_path, config=config)  # Get the primary cache file path.
+        backup_path = get_cache_backup_path(cache_path)  # Resolve the sibling known-good backup path.
 
-        if not verify_filepath_exists(cache_path):  # If cache file doesn't exist
-            verbose_output(
-                f"{BackgroundColors.YELLOW}No cache file found at: {BackgroundColors.CYAN}{cache_path}{Style.RESET_ALL}",
-                config=config
-            )  # Output the verbose message
-            return {}  # Return empty dictionary
+        with cache_file_lock(cache_path, exclusive=False):  # Hold a shared process-safe lock across primary and backup validation.
+            primary_exists = os.path.isfile(cache_path)  # Record whether the primary cache is available.
+            backup_exists = os.path.isfile(backup_path)  # Record whether the backup cache is available.
 
-        if notify_discovery:  # Emit discovery notifications only for operator-facing resume loads.
-            print(f"{BackgroundColors.GREEN}Resume cache file found at: {BackgroundColors.CYAN}{cache_path}{Style.RESET_ALL}")  # Print cache discovery and exact location when requested.
+            if not primary_exists and not backup_exists:  # Follow the established cache-miss behavior when neither file exists.
+                verbose_output(
+                    f"{BackgroundColors.YELLOW}No cache file found at: {BackgroundColors.CYAN}{cache_path}{Style.RESET_ALL}",
+                    config=config,
+                )  # Output the verbose cache-miss message.
+                return {}  # Return an empty dictionary for a genuine cache miss.
 
-        verbose_output(
-            f"{BackgroundColors.GREEN}Loading cached results from: {BackgroundColors.CYAN}{cache_path}{Style.RESET_ALL}",
-            config=config
-        )  # Output the verbose message
+            if notify_discovery and primary_exists:  # Emit primary discovery only for operator-facing resume loads.
+                print(f"{BackgroundColors.GREEN}Resume cache file found at: {BackgroundColors.CYAN}{cache_path}{Style.RESET_ALL}")  # Print the exact primary cache location.
 
-        try:  # Try to load the cache file
-            low_memory = config.get("execution", {}).get("low_memory", False)  # Read low memory flag from config
-            df_cache = pd.read_csv(cache_path, low_memory=low_memory)  # Read the cache file
-            df_cache = prepare_cache_dataframe(df_cache, config=config)  # Normalize legacy and current cache schemas before resume use
-            cache_dict = {}  # Initialize cache dictionary
+            primary_error = None  # Preserve the primary validation failure for accurate recovery reporting.
+            if primary_exists:  # Attempt the primary cache before considering its backup.
+                try:  # Read and deserialize the complete primary cache.
+                    _, cache_dict = read_validated_cache_file(cache_path, config=config)  # Validate the primary through production schema and resume logic.
+                    print(f"{BackgroundColors.GREEN}Loaded cached results from: {BackgroundColors.CYAN}{cache_path}{Style.RESET_ALL}")  # Confirm successful primary recovery.
+                    return cache_dict  # Return all primary cache entries.
+                except Exception as exc:  # Preserve corruption, truncation, permission, and schema failures for fallback reporting.
+                    primary_error = exc  # Store the exact primary error without discarding it silently.
+                    print(f"{BackgroundColors.YELLOW}Warning: Primary cache is unavailable or invalid at {BackgroundColors.CYAN}{cache_path}{BackgroundColors.YELLOW}: {exc}{Style.RESET_ALL}")  # Report why backup recovery is being attempted.
+            else:  # Report a missing primary before backup recovery.
+                primary_error = FileNotFoundError(cache_path)  # Represent the missing primary accurately in terminal diagnostics.
+                print(f"{BackgroundColors.YELLOW}Warning: Primary cache is missing at {BackgroundColors.CYAN}{cache_path}{BackgroundColors.YELLOW}; attempting backup recovery.{Style.RESET_ALL}")  # Announce the fallback path.
 
-            for _, row in df_cache.iterrows():  # Iterate through each row
-                def cache_row_value(column_name, default=None):
-                    value = row.get(column_name, default)  # Retrieve a scalar value from the cache row
-                    return default if value is None or bool(cast(Any, pd.isna(value))) else value  # Normalize missing pandas scalars to the provided default
+            backup_error = None  # Preserve the backup validation failure when recovery is impossible.
+            if backup_exists:  # Attempt recovery only when the sibling backup exists.
+                try:  # Read and deserialize the complete backup cache.
+                    _, cache_dict = read_validated_cache_file(backup_path, config=config)  # Validate the backup through the same production path.
+                    print(f"{BackgroundColors.GREEN}[CACHE RECOVERY] Loaded {BackgroundColors.CYAN}{len(cache_dict)}{BackgroundColors.GREEN} cached result(s) from valid backup: {BackgroundColors.CYAN}{backup_path}{Style.RESET_ALL}")  # Clearly report successful backup recovery.
+                    return cache_dict  # Preserve every valid recovered entry without rewriting the primary during a read.
+                except Exception as exc:  # Preserve the exact backup failure for accurate cache-miss reporting.
+                    backup_error = exc  # Store the exact backup validation failure.
+            else:  # Represent an absent backup accurately.
+                backup_error = FileNotFoundError(backup_path)  # Store the missing backup condition.
 
-                feature_set = str(cache_row_value("feature_set", ""))  # Get feature set name
-                model_name = str(cache_row_value("model_name", ""))  # Get model name
-                execution_mode_row = str(cache_row_value("execution_mode", "separate_files"))  # Get execution mode from cached row
-                data_source_row = str(cache_row_value("data_source", "Original"))  # Get data source label from cached row
-                experiment_mode_row = str(cache_row_value("experiment_mode", "original_only"))  # Get experiment mode from cached row
-                aug_ratio_value = cache_row_value("augmentation_ratio", None)  # Retrieve augmentation ratio when present
-                aug_ratio_row = resolve_persisted_augmentation_ratio(experiment_mode_row, aug_ratio_value)  # Normalize augmentation ratio from cached row
-                attack_types_raw_row = safe_load_json(cache_row_value("attack_types_combined", None))  # Load attack types from cached row
-                attack_types_list_row = attack_types_raw_row if isinstance(attack_types_raw_row, list) else None  # Normalize attack types to list or None
-                hyperparameter_mode_row = str(cache_row_value("hyperparameter_mode", "Default Hyperparameters"))  # Recover explicit hyperparameter mode
-                hyperparameters_enabled_row = resolve_boolean_value(cache_row_value("hyperparameters_enabled", False), hyperparameter_mode_row == "Optimized Hyperparameters")  # Normalize cached hyperparameter mode to the boolean used by resume keys
-                cache_key = build_resume_cache_key(execution_mode_row, data_source_row, experiment_mode_row, aug_ratio_row, attack_types_list_row, feature_set, model_name, hyperparameters_enabled_row)  # Build full resume cache key from all distinguishing dimensions
-
-                result_entry = {
-                    "model": cache_row_value("model", ""),
-                    "dataset": cache_row_value("dataset", ""),
-                    "execution_mode": execution_mode_row,
-                    "attack_types_combined": cache_row_value("attack_types_combined", None),
-                    "feature_set": feature_set,
-                    "hyperparameter_mode": hyperparameter_mode_row,
-                    "classifier_type": cache_row_value("classifier_type", ""),
-                    "model_name": model_name,
-                    "data_source": data_source_row,
-                    "experiment_id": cache_row_value("experiment_id", None),
-                    "experiment_mode": experiment_mode_row,
-                    "augmentation_ratio": aug_ratio_row,
-                    "feature_selection_enabled": resolve_persisted_feature_selection_enabled(feature_set, cache_row_value("feature_selection_enabled", False)),  # Recover normalized FS flag from cache metadata
-                    "hyperparameters_enabled": hyperparameters_enabled_row,  # Recover normalized HP flag from cache metadata
-                    "data_augmentation_enabled": resolve_persisted_data_augmentation_enabled(experiment_mode_row, aug_ratio_row, cache_row_value("data_augmentation_enabled", False)),  # Recover normalized DA flag from cache metadata
-                    "n_features": int(n_features_value) if (n_features_value := cache_row_value("n_features", None)) is not None else None,
-                    "n_samples_train": int(n_samples_train_value) if (n_samples_train_value := cache_row_value("n_samples_train", None)) is not None else None,
-                    "n_samples_test": int(n_samples_test_value) if (n_samples_test_value := cache_row_value("n_samples_test", None)) is not None else None,
-                    "accuracy": float(accuracy_value) if (accuracy_value := cache_row_value("accuracy", None)) is not None else None,
-                    "precision": float(precision_value) if (precision_value := cache_row_value("precision", None)) is not None else None,
-                    "recall": float(recall_value) if (recall_value := cache_row_value("recall", None)) is not None else None,
-                    "f1_score": float(f1_score_value) if (f1_score_value := cache_row_value("f1_score", None)) is not None else None,
-                    "fpr": float(fpr_value) if (fpr_value := cache_row_value("fpr", None)) is not None else None,
-                    "fnr": float(fnr_value) if (fnr_value := cache_row_value("fnr", None)) is not None else None,
-                    "elapsed_time_s": float(elapsed_time_value) if (elapsed_time_value := cache_row_value("elapsed_time_s", None)) is not None else None,
-                    "cv_method": cache_row_value("cv_method", None),
-                    "top_features": safe_load_json(cache_row_value("features_list", None)),  # Rebuild duplicate final-export field from canonical cache feature metadata
-                    "rfe_ranking": safe_load_json(cache_row_value("rfe_ranking", None)),
-                    "hyperparameters": safe_load_json(cache_row_value("hyperparameters", None)),
-                    "features_list": safe_load_json(cache_row_value("features_list", None)),
-                    "Hardware": cache_row_value("Hardware", None),
-                }
-
-                cache_dict[cache_key] = result_entry
-
-            print(f"{BackgroundColors.GREEN}Loaded cached results from: {BackgroundColors.CYAN}{cache_path}{Style.RESET_ALL}")
-            return cache_dict
-
-        except Exception as e:  # Catch any errors reading the cache file
-            print(
-                f"{BackgroundColors.YELLOW}Warning: Failed to load from cache {BackgroundColors.CYAN}{cache_path}{BackgroundColors.YELLOW}: {e}{Style.RESET_ALL}"
-            )  # Print warning message about cache read failure
-            return {}  # Return empty dict to signal no cached results are available
+            print(f"{BackgroundColors.YELLOW}Warning: No valid cache data could be recovered. Primary error: {primary_error}. Backup error: {backup_error}.{Style.RESET_ALL}")  # Report that both recovery sources failed.
+            return {}  # Follow the established cache-miss behavior without claiming recovery.
     except Exception as e:
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
@@ -8695,22 +8828,28 @@ def remove_cache_file(csv_path, config=None):
         if config is None:  # If no config provided
             config = CONFIG  # Use global CONFIG
 
-        cache_path = get_cache_file_path(csv_path, config=config)  # Get the cache file path
+        cache_path = get_cache_file_path(csv_path, config=config)  # Get the primary cache file path.
+        backup_path = get_cache_backup_path(cache_path)  # Resolve the sibling backup that belongs to the same completed run.
 
-        if verify_filepath_exists(cache_path):  # If cache file exists
-            try:  # Try to remove the cache file
-                os.remove(cache_path)  # Delete the cache file
-                print(
-                    f"{BackgroundColors.GREEN}Cache file removed: {BackgroundColors.CYAN}{cache_path}{Style.RESET_ALL}"
-                )  # Print success message
-            except Exception as e:  # Catch any errors
-                print(
-                    f"{BackgroundColors.YELLOW}Warning: Failed to remove cache file {BackgroundColors.CYAN}{cache_path}{BackgroundColors.YELLOW}: {e}{Style.RESET_ALL}"
-                )  # Print warning message
-        else:  # If cache file doesn't exist
-            verbose_output(
-                f"{BackgroundColors.YELLOW}No cache file to remove at: {BackgroundColors.CYAN}{cache_path}{Style.RESET_ALL}"
-            )  # Output verbose message
+        with cache_file_lock(cache_path, exclusive=True):  # Prevent readers or writers from observing partial cache cleanup.
+            removed_paths = []  # Track removed cache artifacts for accurate reporting.
+            removal_errors = []  # Track cleanup failures without skipping the other cache artifact.
+            for artifact_path in (cache_path, backup_path):  # Remove primary and backup together after confirmed final export.
+                if not os.path.isfile(artifact_path):  # Ignore cache artifacts that are already absent.
+                    continue  # Move to the remaining cache artifact.
+                try:  # Remove one completed-run cache artifact.
+                    os.remove(artifact_path)  # Delete the stale resume artifact.
+                    removed_paths.append(artifact_path)  # Record successful removal.
+                except Exception as exc:  # Preserve cleanup failures for operator visibility.
+                    removal_errors.append((artifact_path, exc))  # Record the exact artifact and failure.
+
+            if removed_paths:  # Report every cache artifact removed after final persistence.
+                print(f"{BackgroundColors.GREEN}Cache file(s) removed: {BackgroundColors.CYAN}{', '.join(removed_paths)}{Style.RESET_ALL}")  # Print successful cleanup paths.
+            else:  # Preserve the established verbose cache-miss behavior.
+                verbose_output(f"{BackgroundColors.YELLOW}No cache file to remove at: {BackgroundColors.CYAN}{cache_path}{Style.RESET_ALL}", config=config)  # Report that no primary or backup existed.
+
+            for artifact_path, removal_error in removal_errors:  # Report every cleanup failure after attempting both artifacts.
+                print(f"{BackgroundColors.YELLOW}Warning: Failed to remove cache file {BackgroundColors.CYAN}{artifact_path}{BackgroundColors.YELLOW}: {removal_error}{Style.RESET_ALL}")  # Preserve nonfatal cleanup semantics.
     except Exception as e:
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
@@ -8977,6 +9116,132 @@ def sync_cache_parent_directory(cache_path: str) -> None:  # Synchronize rename 
             os.close(directory_fd)  # Close the parent directory descriptor.
 
 
+def remove_cache_temporary_file(temporary_path: Optional[str]) -> None:
+    """
+    Remove one incomplete cache transaction file without masking an earlier failure.
+
+    :param temporary_path: Temporary cache path, or None when no file was staged.
+    :return: None.
+    """
+
+    if temporary_path is None or not os.path.exists(temporary_path):  # Ignore absent or already-published temporary paths.
+        return  # Return without altering the transaction outcome.
+
+    try:  # Remove the incomplete same-directory transaction file.
+        os.unlink(temporary_path)  # Delete the temporary cache artifact.
+    except OSError:  # Preserve the original persistence failure when cleanup is unavailable.
+        pass  # Leave cleanup best-effort without masking the transaction error.
+
+
+def write_cache_dataframe_temporary(cache_path: str, cache_df: pd.DataFrame, config: Optional[dict], purpose: str) -> str:
+    """
+    Serialize and validate one cache DataFrame in a same-directory temporary file.
+
+    :param cache_path: Final cache path whose directory owns the temporary file.
+    :param cache_df: Complete cache DataFrame to serialize.
+    :param config: Configuration dictionary, or None to use the global configuration.
+    :param purpose: Short transaction purpose used in the temporary filename.
+    :return: Validated temporary cache path.
+    """
+
+    if config is None:  # Use global configuration when no configuration is provided.
+        config = CONFIG  # Assign the global configuration reference.
+
+    cache_dir = os.path.dirname(os.path.abspath(cache_path))  # Resolve the destination directory for same-filesystem replacement.
+    os.makedirs(cache_dir, exist_ok=True)  # Ensure the cache directory exists before staging data.
+    prepared_df = prepare_cache_dataframe(cache_df, config=config)  # Canonicalize the complete transaction snapshot before serialization.
+    temporary_fd, temporary_path = tempfile.mkstemp(dir=cache_dir, prefix=f".{os.path.basename(cache_path)}.{purpose}.", suffix=".tmp")  # Allocate a unique same-directory transaction file.
+    temporary_file = None  # Track descriptor ownership during serialization failure handling.
+
+    try:  # Serialize, synchronize, and deserialize the temporary cache before publication.
+        temporary_file = os.fdopen(temporary_fd, "w", encoding="utf-8", newline="")  # Transfer the raw descriptor into a text file object.
+        temporary_fd = -1  # Mark the raw descriptor as owned by the text file object.
+        with temporary_file:  # Close the temporary file deterministically after synchronization.
+            temporary_file.write(prepared_df.to_csv(index=False, header=True))  # Serialize the complete canonical cache snapshot.
+            sync_cache_file_data(temporary_file)  # Flush and synchronize every staged byte before validation.
+        validated_df, validated_cache = read_validated_cache_file(temporary_path, config=config)  # Prove the staged file can be parsed and deserialized.
+        expected_identities = [build_cache_identity_from_row(row) for _, row in prepared_df.iterrows()]  # Build deterministic identities from the authoritative snapshot.
+        validated_identities = [build_cache_identity_from_row(row) for _, row in validated_df.iterrows()]  # Build deterministic identities from the deserialized temporary file.
+        if expected_identities != validated_identities or len(validated_cache) != len(set(expected_identities)):  # Reject truncation, reordering, duplication, or identity loss.
+            raise ValueError("Temporary cache validation did not preserve every resume identity")  # Prevent publication of an inconsistent snapshot.
+        return temporary_path  # Return the fully synchronized and validated staging path.
+    except Exception:  # Preserve the original staging or validation error.
+        if temporary_fd >= 0:  # Close the raw descriptor only when ownership was not transferred.
+            try:  # Avoid masking the original persistence error during descriptor cleanup.
+                os.close(temporary_fd)  # Close the raw temporary descriptor.
+            except OSError:  # Ignore an already-closed descriptor.
+                pass  # Preserve the original transaction failure.
+        remove_cache_temporary_file(temporary_path)  # Remove incomplete staged content safely.
+        raise  # Surface the original staging or validation error.
+
+
+def replace_cache_file_atomically(temporary_path: str, destination_path: str) -> None:
+    """
+    Publish one validated cache transaction file through atomic replacement.
+
+    :param temporary_path: Validated same-directory temporary cache path.
+    :param destination_path: Primary or backup cache destination path.
+    :return: None.
+    """
+
+    os.replace(temporary_path, destination_path)  # Atomically publish the validated cache file on the same filesystem.
+    sync_cache_parent_directory(destination_path)  # Synchronize the updated directory entry where supported.
+
+
+def persist_cache_dataframe_atomically(cache_path: str, cache_df: pd.DataFrame, primary_df: Optional[pd.DataFrame], backup_df: Optional[pd.DataFrame], config: Optional[dict] = None) -> None:
+    """
+    Persist one authoritative cache snapshot with transactional backup preservation.
+
+    :param cache_path: Primary cache CSV path.
+    :param cache_df: Complete authoritative cache snapshot to publish.
+    :param primary_df: Existing validated primary snapshot, or None when unavailable.
+    :param backup_df: Existing validated backup snapshot, or None when unavailable.
+    :param config: Configuration dictionary, or None to use the global configuration.
+    :return: None.
+    """
+
+    if config is None:  # Use global configuration when no configuration is provided.
+        config = CONFIG  # Assign the global configuration reference.
+
+    backup_path = get_cache_backup_path(cache_path)  # Resolve the sibling known-good backup destination.
+    backup_existed = os.path.isfile(backup_path)  # Record whether rollback must preserve a pre-existing backup inode.
+    primary_temporary = None  # Track the staged authoritative primary snapshot.
+    backup_temporary = None  # Track the staged replacement backup snapshot.
+    rollback_temporary = None  # Track the staged original backup used for rollback.
+    backup_published = False  # Record whether this transaction changed the backup destination.
+
+    try:  # Stage every required file before changing a recoverable destination.
+        primary_temporary = write_cache_dataframe_temporary(cache_path, cache_df, config, "primary")  # Stage and validate the new authoritative snapshot.
+        backup_candidate = primary_df if primary_df is not None else (cache_df if backup_df is None else None)  # Preserve a valid prior primary, or seed the first known-good backup.
+
+        if backup_candidate is not None:  # Update the backup only from content already proven valid.
+            if backup_df is not None:  # Stage the current known-good backup before replacing it.
+                rollback_temporary = write_cache_dataframe_temporary(cache_path, backup_df, config, "rollback")  # Preserve the exact recoverable backup state for rollback.
+            backup_temporary = write_cache_dataframe_temporary(cache_path, backup_candidate, config, "backup")  # Stage and validate the intended backup content.
+            replace_cache_file_atomically(backup_temporary, backup_path)  # Atomically publish the known-good backup before replacing the primary.
+            backup_temporary = None  # Mark the backup staging path as consumed by atomic replacement.
+            backup_published = True  # Record that primary failure now requires backup rollback.
+
+        replace_cache_file_atomically(primary_temporary, cache_path)  # Atomically publish the fully validated authoritative cache snapshot.
+        primary_temporary = None  # Mark the primary staging path as consumed by atomic replacement.
+    except Exception:  # Roll back any backup publication and surface the original transaction failure.
+        if backup_published:  # Restore the prior backup state only when this transaction changed it.
+            try:  # Keep rollback failure from masking the original persistence error.
+                if rollback_temporary is not None:  # Restore the previously validated known-good backup atomically.
+                    replace_cache_file_atomically(rollback_temporary, backup_path)  # Publish the saved pre-transaction backup state.
+                    rollback_temporary = None  # Mark the rollback staging path as consumed.
+                elif not backup_existed and os.path.isfile(backup_path):  # Restore first-write absence when primary publication failed.
+                    os.unlink(backup_path)  # Remove the backup created by the failed first-write transaction.
+                    sync_cache_parent_directory(backup_path)  # Synchronize removal metadata where supported.
+            except Exception as rollback_error:  # Preserve the original transaction exception while reporting rollback degradation.
+                print(f"{BackgroundColors.YELLOW}Warning: Cache backup rollback could not restore the pre-transaction state at {BackgroundColors.CYAN}{backup_path}{BackgroundColors.YELLOW}: {rollback_error}{Style.RESET_ALL}")  # Report recoverability degradation explicitly.
+        raise  # Surface the original write, synchronization, validation, backup, or replacement error.
+    finally:  # Remove every unconsumed transaction file after success or failure.
+        remove_cache_temporary_file(primary_temporary)  # Remove an unpublished primary staging file.
+        remove_cache_temporary_file(backup_temporary)  # Remove an unpublished backup staging file.
+        remove_cache_temporary_file(rollback_temporary)  # Remove an unused rollback staging file.
+
+
 def verify_cache_result_persisted(cache_ref_file: str, resume_key: tuple, config: Optional[dict] = None) -> None:  # Verify the real resume loader can discover the written identity.
     """
     Reload the cache through the production resume path and verify the written identity.
@@ -9037,11 +9302,7 @@ def persist_cache_result_entry(cache_ref_file: Optional[str], result_entry: dict
 
 def save_cache_result_entry(csv_path: str, result_entry: dict, config=None) -> None:
     """
-    Atomically append a single result entry to the cache CSV file.
-
-    Uses a temp-file and rename strategy for atomicity on POSIX systems. If the
-    cache file does not exist, a new file with a header row is created. If it
-    already exists, the entry is appended as a new row without repeating the header.
+    Atomically merge one result entry into the primary and backup cache files.
 
     :param csv_path: Path to the dataset CSV file used to derive the cache file path
     :param result_entry: Dictionary containing the classifier evaluation result to persist
@@ -9062,30 +9323,39 @@ def save_cache_result_entry(csv_path: str, result_entry: dict, config=None) -> N
         row_dict = flat_rows[0]  # Extract the single flattened row dictionary
         row_df = prepare_cache_dataframe(pd.DataFrame([row_dict]), config=config)  # Normalize the new row to the canonical cache schema
 
-        try:  # Attempt atomic write to cache file
-            cache_dir = os.path.dirname(cache_path)  # Get directory containing the cache file
-            os.makedirs(cache_dir, exist_ok=True)  # Ensure cache directory exists before writing
-            cache_file_exists = os.path.isfile(cache_path)  # Verify if cache file already exists to decide whether to write header
-            if cache_file_exists:  # Read and normalize existing cache rows before appending
-                low_memory = config.get("execution", {}).get("low_memory", False)  # Read low memory flag from config
-                existing_df = pd.read_csv(cache_path, low_memory=low_memory)  # Load existing cache rows for schema migration
-                combined_df = pd.concat([existing_df, row_df], ignore_index=True)  # Append the new atomic result to existing cache rows
-            else:  # Initialize a new cache DataFrame when no cache file exists
-                combined_df = row_df.copy()  # Use the normalized row as the complete cache content
-            combined_df = prepare_cache_dataframe(combined_df, config=config)  # Normalize, deduplicate, and order the complete cache content
-            tmp_fd, tmp_path = tempfile.mkstemp(dir=cache_dir, suffix=".tmp")  # Create temp file in same directory for atomic rename
-            try:  # Write to temp file before atomic rename
-                with os.fdopen(tmp_fd, "w", encoding="utf-8", newline="") as tmp_f:  # Open temp file descriptor for writing
-                    tmp_f.write(combined_df.to_csv(index=False, header=True))  # Write canonical cache content with a single header row
-                    sync_cache_file_data(tmp_f)  # Flush and synchronize temp-file bytes before replacement
-                os.replace(tmp_path, cache_path)  # Atomically replace the cache file after the temp file is complete
-                sync_cache_parent_directory(cache_path)  # Synchronize parent-directory metadata where supported
-            except Exception:  # If write or rename fails
-                try:  # Attempt to clean up temp file
-                    os.unlink(tmp_path)  # Remove temp file to avoid leftover artifacts
-                except Exception:  # If temp file cleanup fails
-                    pass  # Ignore cleanup failure to avoid masking the original error
-                raise  # Re-raise original write failure
+        try:  # Merge and persist under one lock spanning the complete read-modify-write transaction.
+            with cache_file_lock(cache_path, exclusive=True):  # Prevent stale snapshots and concurrent replacement across threads and processes.
+                backup_path = get_cache_backup_path(cache_path)  # Resolve the sibling known-good backup path.
+                primary_df = None  # Track validated primary content separately from backup content.
+                backup_df = None  # Track validated backup content separately from primary content.
+                primary_error = None  # Preserve primary validation failure for accurate write recovery logging.
+                backup_error = None  # Preserve backup validation failure for accurate write recovery logging.
+
+                if os.path.isfile(cache_path):  # Validate the existing primary before it can influence the backup.
+                    try:  # Read and deserialize the existing primary cache.
+                        primary_df, _ = read_validated_cache_file(cache_path, config=config)  # Accept only fully validated primary content.
+                    except Exception as exc:  # Exclude corrupt, truncated, unreadable, or invalid primary content.
+                        primary_error = exc  # Preserve the exact primary validation failure.
+
+                if os.path.isfile(backup_path):  # Validate the existing backup independently from the primary.
+                    try:  # Read and deserialize the existing backup cache.
+                        backup_df, _ = read_validated_cache_file(backup_path, config=config)  # Accept only fully validated backup content.
+                    except Exception as exc:  # Exclude invalid backup content from authoritative merging and rollback.
+                        backup_error = exc  # Preserve the exact backup validation failure.
+
+                if primary_df is not None:  # Prefer the current valid primary as the authoritative merge base.
+                    existing_df = primary_df  # Preserve every validated primary entry before adding the new result.
+                elif backup_df is not None:  # Recover the authoritative merge base from a valid backup.
+                    existing_df = backup_df  # Preserve every recovered entry without trusting the invalid primary.
+                    print(f"{BackgroundColors.GREEN}[CACHE RECOVERY] Merging new result with valid backup after primary failure: {BackgroundColors.CYAN}{backup_path}{Style.RESET_ALL}")  # Report writer-side backup recovery clearly.
+                else:  # Follow cache-miss behavior when neither source is valid.
+                    existing_df = pd.DataFrame(columns=get_cache_results_csv_columns(config))  # Start a new canonical cache snapshot.
+                    if primary_error is not None or backup_error is not None:  # Report invalid existing artifacts without claiming successful recovery.
+                        print(f"{BackgroundColors.YELLOW}Warning: Starting a new cache because no valid existing cache could be recovered. Primary error: {primary_error}. Backup error: {backup_error}.{Style.RESET_ALL}")  # Log both validation outcomes accurately.
+
+                combined_df = row_df.copy() if existing_df.empty else pd.concat([existing_df, row_df], ignore_index=True)  # Merge the new atomic result with the latest locked authoritative snapshot.
+                combined_df = prepare_cache_dataframe(combined_df, config=config)  # Normalize, deduplicate, and order the complete merged cache.
+                persist_cache_dataframe_atomically(cache_path, combined_df, primary_df, backup_df, config=config)  # Publish primary and backup through the centralized transaction path.
         except Exception as e:  # If any cache write operation fails
             verbose_output(
                 f"{BackgroundColors.YELLOW}Warning: Failed to save result to cache {BackgroundColors.CYAN}{cache_path}{BackgroundColors.YELLOW}: {e}{Style.RESET_ALL}",
