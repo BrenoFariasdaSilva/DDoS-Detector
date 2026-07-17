@@ -6471,6 +6471,139 @@ def sample_shap_test_data(X_test, y_test, max_samples, random_state):
         raise  # Re-raise the exception to preserve original behavior
 
 
+def describe_raw_shap_result(shap_values):
+    """
+    Describe a raw SHAP result without changing its values.
+
+    :param shap_values: Raw value returned by a SHAP explainer.
+    :return: Tuple containing the qualified result type and shape metadata.
+    """
+
+    raw_type = f"{type(shap_values).__module__}.{type(shap_values).__name__}"  # Preserve the concrete SHAP return representation in diagnostics.
+    if isinstance(shap_values, list):  # Historical SHAP versions return one samples-by-features array per output.
+        item_shapes = []  # Preserve every per-output shape instead of coercing a heterogeneous list to object dtype.
+        for item in shap_values:  # Inspect each output independently.
+            item_value = item.values if isinstance(item, shap.Explanation) else item  # Extract numeric values from Explanation list items when present.
+            item_shapes.append(tuple(np.asarray(item_value).shape))  # Record this output's exact array shape.
+        return raw_type, item_shapes  # Return list-aware shape metadata.
+    raw_value = shap_values.values if isinstance(shap_values, shap.Explanation) else shap_values  # Extract the numeric payload from modern Explanation results.
+    return raw_type, tuple(np.asarray(raw_value).shape)  # Return the raw numeric shape for ndarray-like results.
+
+
+def resolve_model_class_count(model):
+    """
+    Resolve the fitted classifier class count when the estimator exposes one.
+
+    :param model: Fitted classifier being explained.
+    :return: Number of fitted classes, or None when the estimator does not expose a single class axis.
+    """
+
+    classes = getattr(model, "classes_", None)  # Prefer the fitted class ordering used by classifier output columns.
+    if classes is not None:  # Resolve ordinary single-target classifiers first.
+        classes_array = np.asarray(classes)  # Normalize sklearn and third-party class containers.
+        if classes_array.ndim == 1:  # A one-dimensional classes_ value maps directly to classifier outputs.
+            return int(classes_array.shape[0])  # Return the exact fitted class count.
+    n_classes = getattr(model, "n_classes_", None)  # Fall back to estimators such as XGBoost that expose n_classes_.
+    if n_classes is not None and np.isscalar(n_classes):  # Accept only a single unambiguous class count.
+        return int(n_classes)  # Return the estimator-provided class count.
+    return None  # Leave multi-target or opaque estimator output counts unresolved.
+
+
+def normalize_shap_output(shap_values, n_samples, n_features, n_model_outputs=None):
+    """
+    Normalize supported SHAP return representations for scientifically consistent plotting.
+
+    The lossless internal representation is ``(outputs, samples, features)``. A
+    single output keeps its signed SHAP values for plotting. Multiple outputs are
+    reduced to ``(samples, features)`` with an equal-weight mean of absolute SHAP
+    magnitudes across every output. This macro aggregation preserves every class
+    or output without mixing sample and feature axes or privileging class support.
+
+    :param shap_values: ndarray, list of arrays, or shap.Explanation returned by SHAP.
+    :param n_samples: Expected number of sampled rows.
+    :param n_features: Expected number of model input features.
+    :param n_model_outputs: Optional fitted class/output count used only to disambiguate equal-sized axes.
+    :return: Dictionary containing lossless output values, normalized plot values, and shape metadata.
+    """
+
+    expected_samples = int(n_samples)  # Normalize expected dimensions for exact comparisons.
+    expected_features = int(n_features)  # Normalize expected dimensions for exact comparisons.
+    if expected_samples <= 0 or expected_features <= 0:  # Reject empty matrices before any SHAP plotting path.
+        raise ValueError(f"SHAP normalization requires positive sample and feature counts; received samples={expected_samples}, features={expected_features}")
+
+    raw_type, raw_shape = describe_raw_shap_result(shap_values)  # Capture untouched representation metadata for mandatory diagnostics.
+    if isinstance(shap_values, list):  # Normalize legacy list-of-output arrays.
+        if not shap_values:  # An empty output list cannot be aligned scientifically.
+            raise ValueError("SHAP normalization received an empty list of output arrays")
+        output_arrays = []  # Accumulate one exact samples-by-features matrix per output.
+        for output_index, item in enumerate(shap_values):  # Validate every class/output independently.
+            item_value = item.values if isinstance(item, shap.Explanation) else item  # Support Explanation objects inside legacy-style lists.
+            item_array = np.asarray(item_value)  # Normalize numeric array access without flattening axes.
+            if item_array.ndim != 2 or item_array.shape != (expected_samples, expected_features):  # Require documented list item layout.
+                raise ValueError(
+                    f"SHAP output list item {output_index} has shape {item_array.shape}; expected ({expected_samples}, {expected_features}) as (samples, features)"
+                )
+            output_arrays.append(item_array)  # Preserve output order exactly as returned by the explainer.
+        values_by_output = np.stack(output_arrays, axis=0)  # Build canonical (outputs, samples, features) representation.
+    else:  # Normalize ndarray and modern Explanation payloads.
+        raw_value = shap_values.values if isinstance(shap_values, shap.Explanation) else shap_values  # Read Explanation values without discarding metadata from the caller's raw result.
+        raw_array = np.asarray(raw_value)  # Normalize array access while preserving dimensionality.
+        if raw_array.ndim == 2:  # Single-output SHAP representation.
+            if raw_array.shape != (expected_samples, expected_features):  # Never guess or transpose an undocumented two-dimensional layout.
+                raise ValueError(
+                    f"Two-dimensional SHAP values have shape {raw_array.shape}; expected ({expected_samples}, {expected_features}) as (samples, features)"
+                )
+            values_by_output = raw_array[np.newaxis, :, :]  # Add a lossless one-output axis.
+        elif raw_array.ndim == 3:  # Multi-output SHAP representations vary by SHAP version and explainer.
+            axis_candidates = []  # Accumulate every axis assignment consistent with sampled rows and features.
+            for sample_axis in range(3):  # Consider every possible sample axis.
+                if raw_array.shape[sample_axis] != expected_samples:  # Require exact sampled-row alignment.
+                    continue
+                for feature_axis in range(3):  # Consider every remaining feature axis.
+                    if feature_axis == sample_axis or raw_array.shape[feature_axis] != expected_features:  # Require a distinct exact feature axis.
+                        continue
+                    output_axis = next(axis for axis in range(3) if axis not in (sample_axis, feature_axis))  # The remaining axis is the output axis.
+                    axis_candidates.append((output_axis, sample_axis, feature_axis))  # Store canonical transpose order.
+            axis_candidates = list(dict.fromkeys(axis_candidates))  # Remove duplicate assignments without changing deterministic order.
+            if n_model_outputs is not None:  # Use fitted class count only when it can resolve an otherwise ambiguous layout.
+                class_matched_candidates = [candidate for candidate in axis_candidates if raw_array.shape[candidate[0]] == int(n_model_outputs)]  # Find candidates whose output axis matches model classes.
+                if class_matched_candidates:  # Prefer class-consistent candidates but allow one-output model APIs when no class-sized axis exists.
+                    axis_candidates = class_matched_candidates  # Narrow candidates using estimator evidence.
+            if len(axis_candidates) != 1:  # Refuse ambiguous or incompatible layouts instead of silently selecting an axis.
+                raise ValueError(
+                    f"Cannot unambiguously align three-dimensional SHAP shape {raw_array.shape} to samples={expected_samples}, features={expected_features}, model_outputs={n_model_outputs}; candidates={axis_candidates}"
+                )
+            values_by_output = np.transpose(raw_array, axis_candidates[0])  # Reorder axes losslessly to (outputs, samples, features).
+        else:  # Current repository explainers do not produce scientifically plottable values with other ranks.
+            raise ValueError(
+                f"Unsupported SHAP value rank {raw_array.ndim} for shape {raw_array.shape}; expected a 2D single-output or 3D multi-output result"
+            )
+
+    if values_by_output.ndim != 3 or values_by_output.shape[1:] != (expected_samples, expected_features):  # Assert the canonical contract before aggregation.
+        raise ValueError(
+            f"Canonical SHAP alignment failed: shape={values_by_output.shape}, expected=(outputs, {expected_samples}, {expected_features})"
+        )
+    if values_by_output.shape[0] == 1:  # Preserve signed direction for genuine single-output explanations.
+        normalized_values = values_by_output[0]  # Remove only the singleton output axis.
+        aggregation = "single_output_signed"  # Document the exact plotting behavior.
+    else:  # Build one class-agnostic global view without dropping any output.
+        normalized_values = np.mean(np.abs(values_by_output), axis=0)  # Macro-average absolute magnitude over every class/output.
+        aggregation = "macro_mean_absolute_across_all_outputs"  # Document equal-weight scientific aggregation.
+    if normalized_values.shape != (expected_samples, expected_features):  # Enforce the public plot invariant after aggregation.
+        raise ValueError(
+            f"Normalized SHAP values have shape {normalized_values.shape}; expected ({expected_samples}, {expected_features})"
+        )
+    return {  # Return both lossless and plot-specific representations with auditable metadata.
+        "raw_type": raw_type,
+        "raw_shape": raw_shape,
+        "values_by_output": values_by_output,
+        "normalized_values": normalized_values,
+        "normalized_shape": tuple(normalized_values.shape),
+        "output_count": int(values_by_output.shape[0]),
+        "aggregation": aggregation,
+    }
+
+
 def aggregate_mean_shap_importance(shap_values_summary, feature_names):
     """
     Computes mean absolute SHAP values and maps them to feature names.
@@ -6481,13 +6614,15 @@ def aggregate_mean_shap_importance(shap_values_summary, feature_names):
     """
 
     try:
-        shap_array = np.array(shap_values_summary)  # Convert SHAP values to numpy array for consistent operations
+        shap_array = np.asarray(shap_values_summary)  # Convert normalized SHAP values to numpy array for consistent operations
+        if shap_array.ndim != 2:  # Downstream importance requires the same samples-by-features contract as plotting.
+            raise ValueError(f"SHAP importance requires a 2D (samples, features) array; received shape {shap_array.shape}")
+        if not isinstance(feature_names, (list, tuple)) or shap_array.shape[1] != len(feature_names):  # Refuse index-based fallback that would lose feature identity.
+            names_count = len(feature_names) if hasattr(feature_names, "__len__") else None  # Preserve mismatch evidence in the technical error.
+            raise ValueError(f"SHAP importance feature mismatch: values have {shap_array.shape[1]} columns but feature names have {names_count} entries")
         mean_shap_values = np.mean(np.abs(shap_array), axis=0)  # Compute mean absolute SHAP value per feature across samples
         mean_shap_list = mean_shap_values.tolist() if hasattr(mean_shap_values, 'tolist') else list(mean_shap_values)  # Convert numpy array to plain Python list
-        if isinstance(feature_names, (list, tuple)) and len(feature_names) == len(mean_shap_list):  # Verify feature name length matches SHAP values
-            shap_importance = dict(zip(feature_names, mean_shap_list))  # Map feature names exactly to their mean absolute importance values
-        else:  # If mismatch detected
-            shap_importance = {f"f{idx}": val for idx, val in enumerate(mean_shap_list)}  # Fall back to index-based feature keys preserving values
+        shap_importance = dict(zip(feature_names, mean_shap_list))  # Map the already-proven feature axis to its exact ordered names.
         return shap_importance  # Return importance dictionary for downstream use
     except Exception as e:  # Handle unexpected errors
         print(str(e))  # Print the exception string for diagnostics
@@ -6495,7 +6630,7 @@ def aggregate_mean_shap_importance(shap_values_summary, feature_names):
         raise  # Re-raise the exception to preserve original behavior
 
 
-def save_shap_summary_and_bar_plots(shap_values_summary, X_test_sampled, feature_names, output_dir, dataset_name, model_name, max_display):
+def save_shap_summary_and_bar_plots(shap_values_summary, X_test_sampled, feature_names, output_dir, dataset_name, model_name, max_display, feature_set=None, explainer_name=None, shape_metadata=None, model_class_count=None, config=None):
     """
     Saves SHAP summary and bar plots to the output directory.
 
@@ -6510,44 +6645,59 @@ def save_shap_summary_and_bar_plots(shap_values_summary, X_test_sampled, feature
     """
 
     try:
-        # Validate that X_test_sampled is non-empty and shaped correctly before plotting
-        if X_test_sampled is None or (hasattr(X_test_sampled, '__len__') and len(X_test_sampled) == 0):  # Verify sampled data is present
-            return  # Exit early if there is no data to plot
+        shap_array = np.asarray(shap_values_summary)  # Normalize the already-aggregated plot input without changing its axes.
+        sampled_array = np.asarray(X_test_sampled)  # Normalize sampled features for exact invariant checks and SHAP plotting.
+        feature_names_to_use = list(feature_names) if feature_names is not None else []  # Snapshot ordered feature labels without truncation or synthesis.
+        if shap_array.ndim != 2 or sampled_array.ndim != 2:  # Both plotting inputs must use samples-by-features layout.
+            raise ValueError(f"SHAP plotting requires 2D arrays; normalized_shap={shap_array.shape}, sampled_features={sampled_array.shape}")
+        if shap_array.shape[0] != sampled_array.shape[0]:  # Preserve sample order and count between explanations and feature values.
+            raise ValueError(f"SHAP plotting sample mismatch: normalized_shap={shap_array.shape}, sampled_features={sampled_array.shape}")
+        invariant_counts = (int(shap_array.shape[1]), int(sampled_array.shape[1]), len(feature_names_to_use))  # Capture the mandatory feature-axis invariant.
+        if invariant_counts[0] != invariant_counts[1] or invariant_counts[1] != invariant_counts[2]:  # Never call SHAP plotting with misaligned inputs.
+            raise ValueError(
+                f"SHAP plotting feature invariant failed: normalized_shap_features={invariant_counts[0]}, sampled_feature_columns={invariant_counts[1]}, feature_names={invariant_counts[2]}"
+            )
+        metadata = shape_metadata or {}  # Use normalization metadata when supplied by the SHAP generation path.
+        aggregation = metadata.get("aggregation", "unknown")  # Resolve selected output handling for logs and plot labels.
+        output_count = metadata.get("output_count", "unknown")  # Resolve normalized output count for diagnostics.
 
-        # Ensure feature_names matches X_test_sampled column count exactly when possible
-        if hasattr(X_test_sampled, 'shape') and hasattr(X_test_sampled, 'ndim'):
-            ncols = X_test_sampled.shape[1] if X_test_sampled.ndim == 2 else (len(feature_names) if hasattr(feature_names, '__len__') else None)  # Determine number of feature columns
-        else:
-            ncols = len(feature_names) if hasattr(feature_names, '__len__') else None  # Fallback to provided feature_names length
-
-        if ncols is not None and hasattr(feature_names, '__len__') and ncols != len(feature_names):  # If mismatch detected
-            feature_names_to_use = list(feature_names)[:ncols]  # Truncate or expand feature names defensively to match column count
-        else:
-            feature_names_to_use = feature_names  # Use feature names as provided when consistent
+        def log_plot_invariant(plot_name):  # Emit concise proof immediately before each SHAP plotting call.
+            shape_message = f"[SHAP SHAPE] classifier={model_name} | feature_set={feature_set or 'unknown'} | plot={plot_name} | explainer={explainer_name or 'unknown'} | raw_type={metadata.get('raw_type', 'unknown')} | raw_shape={metadata.get('raw_shape', 'unknown')} | canonical_shape={getattr(metadata.get('values_by_output'), 'shape', 'unknown')} | normalized_shape={shap_array.shape} | sampled_features_shape={sampled_array.shape} | feature_names={len(feature_names_to_use)} | model_classes={model_class_count if model_class_count is not None else 'unknown'} | shap_outputs={output_count} | aggregation={aggregation} | invariant={invariant_counts[0]}=={invariant_counts[1]}=={invariant_counts[2]}"  # Build the complete invariant proof once.
+            verbose_output(
+                shape_message,
+                shape_message,
+                config=config,
+            )  # Log all required shape and output-selection evidence in one line regardless of verbosity mode.
 
         try:  # Attempt to create SHAP summary plot
             plt.figure()  # Create new figure for summary plot
-            shap.summary_plot(shap_values_summary, X_test_sampled, feature_names=feature_names_to_use, max_display=max_display, show=False)  # Create summary plot with explicit feature names
+            log_plot_invariant("summary")  # Prove exact alignment immediately before invoking SHAP.
+            shap.summary_plot(shap_array, sampled_array, feature_names=feature_names_to_use, max_display=max_display, show=False)  # Create summary plot with strictly aligned feature names
+            if aggregation == "macro_mean_absolute_across_all_outputs":  # Make the non-directional multiclass aggregation explicit in the artifact itself.
+                plt.title(f"Mean absolute SHAP magnitude across {output_count} outputs")  # Document macro output aggregation on the summary plot.
             summary_plot_path = os.path.join(output_dir, f"{dataset_name}_{model_name}_shap_summary.png")  # Build summary plot file path
             plt.tight_layout()  # Adjust layout for tight fit
             ensure_playwright_chromium()  # Ensure Playwright Chromium is installed before saving PNG
             ensure_figure_min_4k_and_save(fig=plt.gcf(), path=summary_plot_path, dpi=300, bbox_inches='tight')  # Save with minimum 4K resolution
             plt.close()  # Close summary figure
-        except Exception as e:  # If summary plot generation fails
+        except Exception:  # If summary plot generation fails
             plt.close()  # Close figure to avoid resource leak
-            raise e  # Re-raise so outer handler can notify via Telegram
+            raise  # Re-raise with the original traceback so the outer handler can notify via Telegram
 
         try:  # Attempt to create SHAP bar plot
             plt.figure()  # Create new figure for bar plot
-            shap.summary_plot(shap_values_summary, X_test_sampled, feature_names=feature_names_to_use, max_display=max_display, plot_type="bar", show=False)  # Create bar plot with explicit feature names
+            log_plot_invariant("bar")  # Prove exact alignment immediately before invoking SHAP.
+            shap.summary_plot(shap_array, sampled_array, feature_names=feature_names_to_use, max_display=max_display, plot_type="bar", show=False)  # Create bar plot with strictly aligned feature names
+            if aggregation == "macro_mean_absolute_across_all_outputs":  # Keep multiclass semantics visible on the bar artifact.
+                plt.title(f"Mean absolute SHAP magnitude across {output_count} outputs")  # Document macro output aggregation on the bar plot.
             bar_plot_path = os.path.join(output_dir, f"{dataset_name}_{model_name}_shap_bar.png")  # Build bar plot file path
             plt.tight_layout()  # Adjust layout for tight fit
             ensure_playwright_chromium()  # Ensure Playwright Chromium is installed before saving PNG
             ensure_figure_min_4k_and_save(fig=plt.gcf(), path=bar_plot_path, dpi=300, bbox_inches='tight')  # Save with minimum 4K resolution
             plt.close()  # Close bar figure
-        except Exception as e:  # If bar plot generation fails
+        except Exception:  # If bar plot generation fails
             plt.close()  # Close figure to avoid resource leak
-            raise e  # Re-raise so outer handler can notify via Telegram
+            raise  # Re-raise with the original traceback so the outer handler can notify via Telegram
     except Exception as e:  # Handle unexpected errors
         print(str(e))  # Print the exception string for diagnostics
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send exception details via Telegram if configured
@@ -6733,7 +6883,7 @@ def compute_shap_values_with_context(explainer, X_test_for_shap, progress_desc, 
         raise  # Re-raise the exception to preserve original behavior.
 
 
-def generate_shap_explanations(model, X_test, y_test, feature_names, output_dir, model_name, dataset_name, execution_mode, config=None):
+def generate_shap_explanations(model, X_test, y_test, feature_names, output_dir, model_name, dataset_name, execution_mode, config=None, feature_set=None):
     """
     Generate SHAP explanations for a trained model.
 
@@ -6768,12 +6918,20 @@ def generate_shap_explanations(model, X_test, y_test, feature_names, output_dir,
 
             X_test_sampled, y_test_sampled = sample_shap_test_data(X_test, y_test, max_samples, random_state)  # Sample test data for SHAP computation
 
+            provided_feature_names = list(feature_names) if feature_names is not None else []  # Snapshot caller metadata before resolving DataFrame labels.
             if hasattr(X_test_sampled, 'columns'):  # If sampled data is a pandas DataFrame
                 sampled_feature_names = list(X_test_sampled.columns)  # Extract feature names from DataFrame columns to ensure exact ordering
-                X_test_for_shap = X_test_sampled.values  # Convert DataFrame to numpy array for SHAP where required
+                if provided_feature_names and provided_feature_names != sampled_feature_names:  # Reject stale metadata instead of overriding ordered DataFrame columns silently.
+                    raise ValueError(f"SHAP feature order mismatch between provided names and sampled DataFrame columns: provided={provided_feature_names}, sampled={sampled_feature_names}")
+                X_test_for_shap = X_test_sampled.to_numpy(copy=False)  # Convert DataFrame to a no-copy numpy view for SHAP where possible
             else:  # If sampled data is numpy array-like
-                X_test_for_shap = X_test_sampled  # Use numpy array directly for SHAP computations
-                sampled_feature_names = feature_names if hasattr(feature_names, '__len__') else [f"f{i}" for i in range(X_test_for_shap.shape[1])]  # Build feature name list defensively
+                X_test_for_shap = np.asarray(X_test_sampled)  # Use a dimension-preserving numpy representation for SHAP computations
+                sampled_feature_names = provided_feature_names if provided_feature_names else ([f"f{i}" for i in range(X_test_for_shap.shape[1])] if X_test_for_shap.ndim == 2 else [])  # Generate names only when caller metadata is genuinely unavailable.
+
+            if X_test_for_shap.ndim != 2:  # SHAP explainers in this repository require samples-by-features input.
+                raise ValueError(f"SHAP sampled feature data must be 2D; received shape {X_test_for_shap.shape}")
+            if len(sampled_feature_names) != X_test_for_shap.shape[1]:  # Preserve exact feature identity rather than truncating or extending names.
+                raise ValueError(f"SHAP sampled feature mismatch: data has {X_test_for_shap.shape[1]} columns but feature names have {len(sampled_feature_names)} entries")
 
             if hasattr(X_test_for_shap, 'size') and X_test_for_shap.size == 0:  # Verify sampled data is not empty
                 verbose_output(f"{BackgroundColors.YELLOW}No data available for SHAP explanations for {model_name}.{Style.RESET_ALL}", config=config)  # Log empty data situation
@@ -6796,12 +6954,24 @@ def generate_shap_explanations(model, X_test, y_test, feature_names, output_dir,
 
             shap_values = compute_shap_values_with_context(explainer, X_test_for_shap, progress_desc, progress_phase)  # Compute SHAP values using the prepared numpy input while preserving SHAP math and improving progress context.
 
-            if isinstance(shap_values, list):  # Combined files evaluation case for multi-class classifiers
-                shap_values_summary = shap_values[0] if len(shap_values) > 0 else shap_values  # Use first class for summary to preserve existing behavior
-            else:  # Separate files evaluation or regression case
-                shap_values_summary = shap_values  # Use SHAP values directly for single-output explainers
+            model_class_count = resolve_model_class_count(model)  # Resolve fitted class count for shape disambiguation and plot diagnostics.
+            shap_normalization = normalize_shap_output(shap_values, X_test_for_shap.shape[0], X_test_for_shap.shape[1], n_model_outputs=model_class_count)  # Normalize every supported SHAP representation without model-specific transposes.
+            shap_values_summary = shap_normalization["normalized_values"]  # Use the strict samples-by-features plotting representation.
 
-            save_shap_summary_and_bar_plots(shap_values_summary, X_test_for_shap, sampled_feature_names, output_dir, dataset_name, model_name, max_display)  # Save both SHAP summary and bar plots to disk
+            save_shap_summary_and_bar_plots(
+                shap_values_summary,
+                X_test_for_shap,
+                sampled_feature_names,
+                output_dir,
+                dataset_name,
+                model_name,
+                max_display,
+                feature_set=feature_set,
+                explainer_name=explainer_name,
+                shape_metadata=shap_normalization,
+                model_class_count=model_class_count,
+                config=config,
+            )  # Save both SHAP plots only after proving the feature-axis invariant.
 
             shap_importance = aggregate_mean_shap_importance(shap_values_summary, sampled_feature_names)  # Aggregate mean absolute SHAP values into a feature importance dictionary
 
@@ -6811,7 +6981,13 @@ def generate_shap_explanations(model, X_test, y_test, feature_names, output_dir,
             )  # Log SHAP completion
             send_telegram_message(TELEGRAM_BOT, f"Finished SHAP explanations for {dataset_name} - {model_name} using {explainer_name}; outputs saved to {output_dir}")  # Notify Telegram that SHAP computation finished successfully with available execution context.
 
-            return {"shap_importance": shap_importance, "shap_values": shap_values}  # Return SHAP results
+            return {
+                "shap_importance": shap_importance,
+                "shap_values": shap_values,
+                "shap_values_by_output": shap_normalization["values_by_output"],
+                "normalized_shap_values": shap_values_summary,
+                "shap_output_aggregation": shap_normalization["aggregation"],
+            }  # Return raw, lossless canonical, and plot-normalized SHAP results.
 
         except ImportError:  # If SHAP not installed
             print(f"{BackgroundColors.YELLOW}SHAP library not installed. Skipping SHAP explanations. Install with: pip install shap{Style.RESET_ALL}")  # Warn user about missing dependency
@@ -7355,7 +7531,7 @@ def run_explainability_pipeline(model, model_name, X_test, y_test, feature_names
 
         if explainability_config.get("shap", True):  # If SHAP is enabled
             shap_result = generate_shap_explanations(
-                model, X_test, y_test, feature_names, output_dir, model_name, dataset_label, execution_mode, config
+                model, X_test, y_test, feature_names, output_dir, model_name, dataset_label, execution_mode, config, feature_set=feature_set
             )  # Generate SHAP explanations
             if shap_result:  # If SHAP results available
                 all_results.update(shap_result)  # Add SHAP results to all results
@@ -10846,6 +11022,89 @@ def recover_cached_individual_classifier_result(cache_dict, execution_mode_str, 
     return (True, current_combination)  # Signal cache hit and return updated counter
 
 
+def schedule_cached_classifier_explainability(model_prototype, model_name, X_test, y_test, subset_feature_names, file, feature_set_name, execution_mode_str, attack_types_combined, experiment_mode, hyperparameters_enabled, config, source_files, target_column, input_feature_names, label_encoder, transformer):
+    """
+    Run explainability for a cache-recovered result when its exact persisted model artifact is available.
+
+    Metric cache rows do not contain fitted estimators. This helper validates and
+    loads the corresponding model/preprocessing artifact through the same strict
+    compatibility context used by fresh exports, then uses the ordinary
+    synchronous/asynchronous explainability scheduler. Missing artifacts leave the
+    recovered metrics intact and produce a factual skip warning.
+
+    :param model_prototype: Configured estimator prototype used to validate persisted parameters.
+    :param model_name: Classifier display name.
+    :param X_test: Current original-test feature matrix in model feature order.
+    :param y_test: Current original-test labels.
+    :param subset_feature_names: Ordered model feature names.
+    :param file: Dataset source path.
+    :param feature_set_name: Active feature-set name without hyperparameter suffix.
+    :param execution_mode_str: Separate-files or combined-files execution mode.
+    :param attack_types_combined: Combined class scope when applicable.
+    :param experiment_mode: Original-only or augmentation experiment mode.
+    :param hyperparameters_enabled: Whether optimized parameters are active.
+    :param config: Runtime configuration dictionary.
+    :param source_files: Ordered original source files for artifact provenance.
+    :param target_column: Positional target column name.
+    :param input_feature_names: Ordered numeric schema before feature selection.
+    :param label_encoder: Fitted label encoder for exact class ordering.
+    :param transformer: Optional fitted PCA transformer.
+    :return: Explainability dispatch dictionary, or a skipped outcome.
+    """
+
+    if not config.get("explainability", {}).get("enabled", False) or experiment_mode != "original_only":  # Preserve the original-only explainability policy.
+        return {"mode": "skipped", "reason": "explainability_disabled_or_non_original_experiment"}  # Return without touching persisted artifacts.
+    artifact_feature_set = f"{feature_set_name} - {'Optimized Hyperparameters' if hyperparameters_enabled else 'Default Hyperparameters'}"  # Resolve the same model-export identity used by fresh results.
+    dataset_name = build_filename_safe_dataset_identity(resolve_canonical_dataset_identity(str(file), True)) if execution_mode_str == "combined_files" else os.path.basename(os.path.dirname(file))  # Resolve the existing model artifact dataset directory.
+    try:  # Keep a metrics-cache recovery usable when its optional fitted artifact cannot be validated.
+        artifact_context = build_stacking_model_artifact_context(
+            file,
+            source_files,
+            execution_mode_str,
+            attack_types_combined,
+            target_column,
+            model_name,
+            model_prototype,
+            artifact_feature_set,
+            input_feature_names,
+            subset_feature_names,
+            list(label_encoder.classes_),
+            transformer,
+            hyperparameters_enabled,
+        )  # Rebuild the exact compatibility identity before loading executable model state.
+        artifact_bundle, rejection_reason = load_existing_model_if_available(model_name, file, dataset_name, artifact_feature_set, artifact_context, config=config)  # Load only a fully compatible model/preprocessing bundle.
+    except Exception as artifact_error:  # An explainability artifact lookup must not invalidate already-recovered metrics.
+        warning_message = f"{BackgroundColors.YELLOW}[RESUME] Explainability skipped for cached {model_name} - {artifact_feature_set}: classifier artifact validation failed: {artifact_error}.{Style.RESET_ALL}"  # Build one factual cache-artifact warning.
+        verbose_output(
+            warning_message,
+            warning_message,
+            config=config,
+        )  # Report the exact optional-artifact failure regardless of verbosity without retraining or changing cache identity.
+        return {"mode": "skipped", "reason": f"classifier artifact validation failed: {artifact_error}"}  # Preserve the recovered classifier result.
+    if artifact_bundle is None:  # A metrics-only cache hit cannot be explained without fitted model state.
+        warning_message = f"{BackgroundColors.YELLOW}[RESUME] Explainability skipped for cached {model_name} - {artifact_feature_set}: {rejection_reason}.{Style.RESET_ALL}"  # Build one factual missing-artifact warning.
+        verbose_output(
+            warning_message,
+            warning_message,
+            config=config,
+        )  # Preserve cached metrics while reporting the exact missing-artifact limitation regardless of verbosity.
+        return {"mode": "skipped", "reason": rejection_reason}  # Return a structured non-failure outcome.
+    return schedule_explainability_job(
+        artifact_bundle["model"],
+        model_name,
+        X_test,
+        y_test,
+        subset_feature_names,
+        file,
+        feature_set_name,
+        execution_mode_str,
+        config,
+        experiment_mode,
+        hyperparameters_enabled,
+        training_ram_stats=None,
+    )  # Reuse the ordinary scheduler; unavailable training RAM selects the safe synchronous path.
+
+
 def run_individual_classifiers_for_feature_set(name, individual_models, X_train_df, y_train, X_test_df, y_test, X_test_subset, X_train_n_cols, file, execution_mode_str, attack_types_combined, data_source_label, experiment_id, experiment_mode, augmentation_ratio, hyperparams_map, scaler, label_encoder, transformer, input_feature_names, target_column, source_files, subset_feature_names, total_steps, current_combination, progress_bar, config=None, cache_dict=None, cache_ref_file=None, hyperparameters_enabled=False):
     """
     Evaluates all individual classifiers for a feature set sequentially, collects results, and runs explainability.
@@ -10897,6 +11156,7 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
         for model_name, model in individual_models.items():  # Iterate over each individual model sequentially to prevent loky deadlock
             recovered, current_combination = recover_cached_individual_classifier_result(cache_dict, execution_mode_str, data_source_label, experiment_mode, augmentation_ratio, attack_types_combined, name, model_name, results_dict, current_combination, total_steps, progress_bar, hyperparameters_enabled=hyperparameters_enabled, expected_n_features=X_train_n_cols, expected_feature_names=subset_feature_names, expected_n_samples_train=len(y_train), expected_n_samples_test=len(y_test))  # Recover only rows produced with the same active data shape and ordered features.
             if recovered:  # Skip recomputation when cache recovery succeeds
+                schedule_cached_classifier_explainability(model, model_name, X_test_subset, y_test, subset_feature_names, file, name, execution_mode_str, attack_types_combined, experiment_mode, hyperparameters_enabled, config, source_files, target_column, input_feature_names, label_encoder, transformer)  # Explain the exact persisted classifier when its compatible artifact exists.
                 continue  # Move to next model because this one has already been recovered
             active_model = clone(model)  # Clone the estimator prototype so fitted state is not retained across atomic classifiers
             artifact_feature_set = f"{name} - {'Optimized Hyperparameters' if hyperparameters_enabled else 'Default Hyperparameters'}"  # Resolve HP-isolated artifact feature-set label
@@ -11060,6 +11320,7 @@ def run_stacking_evaluation_for_feature_set(name, stacking_model, X_train_df, y_
 
                 progress_bar.update(1)  # Advance progress bar even for skipped cached evaluations
                 current_combination += 1  # Advance the global combination counter for skipped evaluations
+                schedule_cached_classifier_explainability(stacking_model, "StackingClassifier", X_test_subset, y_test, subset_feature_names, file, name, execution_mode_str, attack_types_combined, experiment_mode, hyperparameters_enabled, config, source_files, target_column, input_feature_names, label_encoder, transformer)  # Explain the exact persisted stacking model when its compatible artifact exists.
                 return (cached_result, current_combination)  # Return the cached stacking result entry without re-running the evaluation
 
         active_stacking_model = clone(stacking_model)  # Isolate fitted stacking state to this atomic feature-set evaluation.
