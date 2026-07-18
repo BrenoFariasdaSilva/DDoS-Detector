@@ -39,7 +39,6 @@ Assumptions:
 import os  # For interacting with the filesystem
 import re  # For stripping ANSI escape sequences
 import sys  # For replacing stdout/stderr
-import threading  # For serializing concurrent terminal and file writes.
 
 # Regex Constants:
 ANSI_ESCAPE_REGEX = re.compile(r"\x1B\[[0-9;]*[a-zA-Z]")  # Pattern to remove ANSI colors
@@ -78,7 +77,6 @@ class Logger:
         mode = "w" if clean else "a"  # Choose file mode based on 'clean' flag
         self.logfile = open(logfile_path, mode, encoding="utf-8")  # Open log file
         self.is_tty = sys.stdout.isatty()  # Verify if stdout is a TTY
-        self.write_lock = threading.RLock()  # Serialize complete dual-channel writes across evaluation threads.
 
     def write(self, message):
         """
@@ -88,32 +86,31 @@ class Logger:
         :param message: The message to log.
         """
 
-        with self.write_lock:  # Keep each terminal and file message publication indivisible.
-            if message is None:  # Ignore None messages
-                return  # Early exit
+        if message is None:  # Ignore None messages
+            return  # Early exit
 
-            out = str(message)  # Convert message to string
-            if not out.endswith("\n"):  # Ensure newline termination
-                out += "\n"  # Append newline if missing
+        out = str(message)  # Convert message to string
+        if not out.endswith("\n"):  # Ensure newline termination
+            out += "\n"  # Append newline if missing
 
-            clean_out = ANSI_ESCAPE_REGEX.sub("", out)  # Strip ANSI sequences for log file
+        clean_out = ANSI_ESCAPE_REGEX.sub("", out)  # Strip ANSI sequences for log file
 
-            try:  # Write to log file
-                self.logfile.write(clean_out)  # Write cleaned message
-                self.logfile.flush()  # Ensure immediate write
-            except Exception:  # Fail silently to avoid breaking user code
-                pass  # Silent fail
+        try:  # Write to log file
+            self.logfile.write(clean_out)  # Write cleaned message
+            self.logfile.flush()  # Ensure immediate write
+        except Exception:  # Fail silently to avoid breaking user code
+            pass  # Silent fail
 
-            try:  # Write to terminal: colored when TTY, cleaned otherwise
-                if sys.__stdout__ is not None:  # Verify that the original terminal stream remains available.
-                    if self.is_tty:  # Terminal supports colors
-                        sys.__stdout__.write(out)  # Write colored message
-                        sys.__stdout__.flush()  # Flush immediately
-                    else:  # Terminal does not support colors
-                        sys.__stdout__.write(clean_out)  # Write cleaned message
-                        sys.__stdout__.flush()  # Flush immediately
-            except Exception:  # Fail silently to avoid breaking user code
-                pass  # Silent fail
+        try:  # Write to terminal: colored when TTY, cleaned otherwise
+            if sys.__stdout__ is not None:
+                if self.is_tty:  # Terminal supports colors
+                    sys.__stdout__.write(out)  # Write colored message
+                    sys.__stdout__.flush()  # Flush immediately
+                else:  # Terminal does not support colors
+                    sys.__stdout__.write(clean_out)  # Write cleaned message
+                    sys.__stdout__.flush()  # Flush immediately
+        except Exception:  # Fail silently to avoid breaking user code
+            pass  # Silent fail
 
     def flush(self):
         """
@@ -122,11 +119,10 @@ class Logger:
         :param self: Instance of the Logger class.
         """
 
-        with self.write_lock:  # Prevent flushes from interleaving with active dual-channel writes.
-            try:  # Flush log file buffer
-                self.logfile.flush()  # Flush log file
-            except Exception:  # Fail silently
-                pass  # Silent fail
+        try:  # Flush log file buffer
+            self.logfile.flush()  # Flush log file
+        except Exception:  # Fail silently
+            pass  # Silent fail
 
     def close(self):
         """
@@ -135,8 +131,7 @@ class Logger:
         :param self: Instance of the Logger class.
         """
 
-        with self.write_lock:  # Prevent closure while another thread publishes a message.
-            try:  # Close log file
-                self.logfile.close()  # Close log file
-            except Exception:  # Fail silently
-                pass  # Silent fail
+        try:  # Close log file
+            self.logfile.close()  # Close log file
+        except Exception:  # Fail silently
+            pass  # Silent fail
