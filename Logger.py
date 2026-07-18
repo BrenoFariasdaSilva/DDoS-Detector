@@ -36,6 +36,7 @@ Assumptions:
     - The logger is safe for short-lived scripts and long-running processes.
 """
 
+import fcntl  # Provide process-safe serialization for shared detached log writes
 import os  # For interacting with the filesystem
 import re  # For stripping ANSI escape sequences
 import sys  # For replacing stdout/stderr
@@ -95,14 +96,13 @@ class Logger:
 
         clean_out = ANSI_ESCAPE_REGEX.sub("", out)  # Strip ANSI sequences for log file
 
-        try:  # Write to log file
-            self.logfile.write(clean_out)  # Write cleaned message
-            self.logfile.flush()  # Ensure immediate write
-        except Exception:  # Fail silently to avoid breaking user code
-            pass  # Silent fail
-
-        try:  # Write to terminal: colored when TTY, cleaned otherwise
-            if sys.__stdout__ is not None:
+        lock_acquired = False  # Track the process-safe log lock for exception-safe release
+        try:  # Serialize file and terminal writes from every stacking process
+            fcntl.flock(self.logfile.fileno(), fcntl.LOCK_EX)  # Acquire an exclusive advisory lock for one complete record
+            lock_acquired = True  # Record successful lock acquisition before writing
+            self.logfile.write(clean_out)  # Write the complete cleaned record while holding the process lock
+            self.logfile.flush()  # Flush every locked record immediately
+            if sys.__stdout__ is not None:  # Mirror the same complete record to the original terminal when available
                 if self.is_tty:  # Terminal supports colors
                     sys.__stdout__.write(out)  # Write colored message
                     sys.__stdout__.flush()  # Flush immediately
@@ -111,6 +111,12 @@ class Logger:
                     sys.__stdout__.flush()  # Flush immediately
         except Exception:  # Fail silently to avoid breaking user code
             pass  # Silent fail
+        finally:  # Release the process-safe record lock after every outcome
+            if lock_acquired:  # Unlock only when this write acquired the advisory lock
+                try:  # Keep unlock failures from affecting user code
+                    fcntl.flock(self.logfile.fileno(), fcntl.LOCK_UN)  # Release the shared log file for the next process
+                except Exception:  # Fail silently during lock release
+                    pass  # Preserve logger compatibility after an unlock failure
 
     def flush(self):
         """
