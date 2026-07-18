@@ -927,7 +927,7 @@ def parse_cli_args():
         parser.set_defaults(enable_explainability=None)  # Preserve the YAML/default setting when neither explainability flag is provided.
         parser.add_argument("--n-jobs", dest="n_jobs", type=int, default=None, help="Override evaluation.n_jobs for estimators that support parallel fitting (-1 uses all processors; 1 is memory-safe)",)
         parser.add_argument("--feature-extraction-n-jobs", dest="feature_extraction_n_jobs", type=int, default=None, help="Override evaluation.feature_extraction_n_jobs for feature extraction/transformation stages such as PCA, not classifier training (-1 uses available CPUs; 1 is memory-safe)")  # Add the independent feature extraction thread override
-        parser.add_argument("--feature-set-workers", dest="feature_set_workers", type=str, default=None, help="Persistent process counts by feature set, for example ga=1,pca=1,rfe=1; only 0 or 1 is supported")  # Add the persistent feature-set process override
+        parser.add_argument("--feature-set-workers", dest="feature_set_workers", type=str, default=None, help="Persistent process counts by feature set, for example full=1,ga=1,pca=1,rfe=1; only 0 or 1 is supported")  # Add the persistent feature-set process override
         parser.add_argument("--low-memory", dest="low_memory", action="store_true", default=False, help="Enable low memory mode for pandas operations")  # Add low memory mode CLI argument
         parser.add_argument("--dataset-file-format", type=str, default=None, dest="dataset_file_format", help="File format for dataset files: arff, csv, parquet, txt")  # Dataset file format CLI override
         parser.add_argument("--augmentation-file-format", type=str, default=None, dest="augmentation_file_format", help="File format for augmentation files: arff, csv, parquet, txt")  # Augmentation file format CLI override
@@ -1114,7 +1114,7 @@ def get_default_config():
         "evaluation": {
             "n_jobs": 1,
             "feature_extraction_n_jobs": 1,  # Use one thread for feature extraction by default without changing classifier training parallelism
-            "feature_set_workers": {"ga": 0, "pca": 0, "rfe": 0},  # Keep persistent feature-set multiprocessing disabled unless explicitly configured
+            "feature_set_workers": {"full": 0, "ga": 0, "pca": 0, "rfe": 0},  # Keep persistent feature-set multiprocessing disabled unless explicitly configured
             "training_heartbeat_interval_seconds": 60,  # Use low-frequency progress heartbeats when public training units are unavailable
             "threads_limit": 2,
             "cv_folds": 10,
@@ -1248,7 +1248,7 @@ def validate_feature_extraction_n_jobs(value: Any, source: str = "evaluation.fea
     return value  # Return the validated independent feature extraction setting.
 
 
-FEATURE_SET_WORKER_KEYS = ("ga", "pca", "rfe")  # Define the only feature-set process identities supported by the persistent scheduler
+FEATURE_SET_WORKER_KEYS = ("full", "ga", "pca", "rfe")  # Define the feature-set process identities supported by the persistent scheduler
 FEATURE_PROCESS_START_METHOD = "spawn"  # Select clean-interpreter feature workers without inheriting initialized native thread pools
 FEATURE_PROCESS_STATUS_FIELDS = ("total", "cached", "pending", "running", "computed", "failed", "completed")  # Define synchronized global and feature-local status fields
 FEATURE_PROCESS_STATUS_INDEX = {name: index for index, name in enumerate(FEATURE_PROCESS_STATUS_FIELDS)}  # Resolve compact shared-array positions by status name
@@ -1260,7 +1260,7 @@ def validate_feature_set_workers(value: Any, source: str = "evaluation.feature_s
 
     :param value: Mapping or comma-separated feature-set worker specification.
     :param source: User-facing setting name used in validation errors.
-    :return: Dictionary containing validated GA, PCA, and RFE process counts.
+    :return: Dictionary containing validated Full, GA, PCA, and RFE process counts.
     """
 
     if value is None:  # Preserve disabled sequential execution when no setting is supplied
@@ -1268,7 +1268,7 @@ def validate_feature_set_workers(value: Any, source: str = "evaluation.feature_s
     if isinstance(value, str):  # Parse the CLI comma-separated representation
         entries = [entry.strip() for entry in value.split(",") if entry.strip()]  # Normalize non-empty key-value entries
         if not entries:  # Reject an empty CLI specification
-            raise ValueError(f"{source} must contain ga, pca, or rfe assignments")  # Raise a descriptive empty-value error
+            raise ValueError(f"{source} must contain full, ga, pca, or rfe assignments")  # Raise a descriptive empty-value error
         parsed_value = {}  # Accumulate parsed CLI assignments
         for entry in entries:  # Parse every requested feature-set count
             if entry.count("=") != 1:  # Require one unambiguous key-value separator
@@ -13560,7 +13560,7 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
         feature_mode_names = list_grid_feature_modes(ga_selected_features, pca_n_components, rfe_selected_features, feature_names, config=config)  # Resolve actual feature modes in evaluation order
         evaluation_plan = build_evaluation_plan(hp_runs, [None] + list(augmentation_ratios), feature_mode_names, methods_cfg.get("stacking", True))  # Build the exact default-first, original-first full-grid order
         if persistent_feature_set_processes_enabled(feature_mode_names, config=config):  # Route the complete cache-first grid through persistent OS processes when explicitly enabled
-            persistent_results, persistent_comparisons = run_persistent_feature_set_grid(combined_files_df_holder.pop(), combined_dataset_reference, original_files_list, attack_types_list, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, hp_runs, augmentation_file_paths, list(augmentation_ratios), evaluation_plan, "combined_files", "Original Combined Files", config)  # Execute one generic GA, PCA, and RFE worker path without matrix pickling
+            persistent_results, persistent_comparisons = run_persistent_feature_set_grid(combined_files_df_holder.pop(), combined_dataset_reference, original_files_list, attack_types_list, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, hp_runs, augmentation_file_paths, list(augmentation_ratios), evaluation_plan, "combined_files", "Original Combined Files", config)  # Execute one generic Full, GA, PCA, and RFE worker path without matrix pickling
             feature_analysis_dir = save_combined_files_results_to_csv(combined_dataset_reference, persistent_results, config=config)  # Save every globally ordered result only after complete child success
             if persistent_comparisons:  # Preserve the existing combined augmentation comparison artifact
                 save_combined_files_augmentation_comparison(None, None, feature_analysis_dir, config=config, comparison_results=persistent_comparisons)  # Save unchanged comparison metrics for both HP modes
@@ -13904,12 +13904,12 @@ def resolve_feature_set_worker_key(feature_set_name: str) -> str:  # Resolve one
     Resolve a runtime feature-set name to its configured process key.
 
     :param feature_set_name: Runtime feature-set display name.
-    :return: Configured worker key for GA, PCA, or RFE.
+    :return: Configured worker key for Full, GA, PCA, or RFE.
     """
 
-    key_by_name = {"GA Features": "ga", "PCA Components": "pca", "RFE Features": "rfe"}  # Map supported runtime identities to configuration keys
+    key_by_name = {"Full Features": "full", "GA Features": "ga", "PCA Components": "pca", "RFE Features": "rfe"}  # Map supported runtime identities to configuration keys
     if feature_set_name not in key_by_name:  # Reject unsupported persistent feature-set identities
-        raise ValueError(f"Persistent feature-set processes support only GA Features, PCA Components, and RFE Features, not {feature_set_name}")  # Report the unsupported runtime identity
+        raise ValueError(f"Persistent feature-set processes support only Full Features, GA Features, PCA Components, and RFE Features, not {feature_set_name}")  # Report the unsupported runtime identity
     return key_by_name[feature_set_name]  # Return the configured process key
 
 
@@ -13953,6 +13953,7 @@ def build_feature_process_metadata(feature_names: List[Any], ga_selected_feature
     rfe_names = [str(feature) for feature in (rfe_selected_features or []) if str(feature) in feature_index]  # Preserve valid RFE feature order
     pca_count = min(int(pca_n_components or 0), len(normalized_feature_names))  # Resolve the exact effective PCA component count
     return {  # Return small descriptors for every supported persistent feature set
+        "Full Features": {"feature_names": normalized_feature_names, "indices": list(range(len(normalized_feature_names))), "feature_count": len(normalized_feature_names)},  # Describe the unchanged full input columns
         "GA Features": {"feature_names": ga_names, "indices": [feature_index[name] for name in ga_names], "feature_count": len(ga_names)},  # Describe GA input columns
         "PCA Components": {"feature_names": [f"PC{index + 1}" for index in range(pca_count)], "indices": None, "feature_count": pca_count},  # Describe PCA output components
         "RFE Features": {"feature_names": rfe_names, "indices": [feature_index[name] for name in rfe_names], "feature_count": len(rfe_names)},  # Describe RFE input columns
@@ -14238,7 +14239,7 @@ def materialize_feature_process_subset(source: np.memmap, indices: List[int], te
     return np.memmap(output_path, dtype=source.dtype, mode="r", shape=output_shape, order="C")  # Reopen the completed selected matrix read-only
 
 
-def prepare_feature_process_original_resources(process_payload: dict) -> dict:  # Open shared sources and materialize only this worker's feature representation
+def prepare_feature_process_original_resources(process_payload: dict) -> dict:  # Open shared sources and prepare only this worker's feature representation
     """
     Prepare original-data resources for one persistent feature-set worker.
 
@@ -14256,12 +14257,16 @@ def prepare_feature_process_original_resources(process_payload: dict) -> dict:  
     preprocessing_bundle = load(shared_resources["preprocessing_path"])  # Load only the small fitted scaler and label encoder bundle
     scaler = preprocessing_bundle["scaler"]  # Resolve the unchanged fitted StandardScaler
     label_encoder = preprocessing_bundle["label_encoder"]  # Resolve the unchanged fitted LabelEncoder
-    temp_dir = create_feature_process_temp_directory(process_payload["file"], config=process_payload["config"])  # Create one worker-owned feature backing directory
     feature_metadata = process_payload["feature_metadata"]  # Resolve this worker's small feature descriptor
     chunk_rows = int(process_payload["config"].get("stacking", {}).get("memory_management", {}).get("process_memmap_chunk_rows", 100000))  # Resolve bounded selected-column materialization
     transformer = None  # Initialize the optional fitted PCA transformer
+    temp_dir = None  # Full Features reuses coordinator-owned source mappings without worker-owned backing files
     try:  # Remove worker-owned feature files if materialization fails
-        if process_payload["feature_set"] == "PCA Components":  # Reuse the exact existing PCA fitting and transformation path
+        if process_payload["feature_set"] == "Full Features":  # Reuse the exact coordinator-owned scaled matrices without copying every column
+            X_train_feature = X_train_source  # Preserve exact full-feature values, order, dtype, and backing resource
+            X_test_feature = X_test_source  # Preserve exact full-feature values, order, dtype, and backing resource
+        elif process_payload["feature_set"] == "PCA Components":  # Reuse the exact existing PCA fitting and transformation path
+            temp_dir = create_feature_process_temp_directory(process_payload["file"], config=process_payload["config"])  # Create PCA worker-owned feature backing
             X_train_materialized, X_test_materialized, transformer = apply_pca_transformation(X_train_source, X_test_source, feature_metadata["feature_count"], file_path=process_payload["file"], config=process_payload["config"], feature_names=process_payload["input_feature_names"], scaler=scaler, source_files=process_payload["source_files"], cache_context=process_payload["pca_cache_context"])  # Preserve PCA component count, fitting data, cache, and thread control
             train_descriptor = persist_feature_process_array(X_train_materialized, temp_dir, "X_train_feature", chunk_rows=chunk_rows)  # Spill exact PCA training output to worker-owned disk backing
             test_descriptor = persist_feature_process_array(X_test_materialized, temp_dir, "X_test_feature", chunk_rows=chunk_rows)  # Spill exact PCA testing output to worker-owned disk backing
@@ -14270,6 +14275,7 @@ def prepare_feature_process_original_resources(process_payload: dict) -> dict:  
             X_train_feature = open_feature_process_array(train_descriptor)  # Reopen PCA training output read-only
             X_test_feature = open_feature_process_array(test_descriptor)  # Reopen PCA testing output read-only
         else:  # Materialize the configured GA or RFE columns directly to worker-owned memmaps
+            temp_dir = create_feature_process_temp_directory(process_payload["file"], config=process_payload["config"])  # Create selected-feature worker-owned backing
             X_train_feature = materialize_feature_process_subset(X_train_source, feature_metadata["indices"], temp_dir, "X_train_feature", chunk_rows)  # Materialize exact ordered training columns in bounded slices
             X_test_feature = materialize_feature_process_subset(X_test_source, feature_metadata["indices"], temp_dir, "X_test_feature", chunk_rows)  # Materialize exact ordered testing columns in bounded slices
     except Exception:  # Release opened shared mappings and worker-owned files before propagating
@@ -14277,7 +14283,8 @@ def prepare_feature_process_original_resources(process_payload: dict) -> dict:  
         for array_name, array in (("X_train_source", X_train_source), ("X_test_source", X_test_source), ("y_train", y_train), ("y_test", y_test)):  # Close every opened coordinator-owned mapping
             close_feature_source_memmap(array, array_name)  # Release this worker's read-only mapping only
         raise  # Preserve the original materialization failure
-    return {"X_train": X_train_feature, "X_test": X_test_feature, "y_train": y_train, "y_test": y_test, "X_train_source": X_train_source, "X_test_source": X_test_source, "scaler": scaler, "label_encoder": label_encoder, "transformer": transformer, "temp_dir": temp_dir}  # Return bounded worker-owned evaluation resources
+    source_cleanup_required = process_payload["feature_set"] != "Full Features"  # Avoid storing duplicate references when full matrices are the shared source mappings
+    return {"X_train": X_train_feature, "X_test": X_test_feature, "y_train": y_train, "y_test": y_test, "X_train_source": X_train_source if source_cleanup_required else None, "X_test_source": X_test_source if source_cleanup_required else None, "scaler": scaler, "label_encoder": label_encoder, "transformer": transformer, "temp_dir": temp_dir}  # Return bounded worker evaluation resources and exact cleanup ownership
 
 
 def cleanup_feature_process_original_resources(resources: Optional[dict]) -> None:  # Release one worker's original-data mappings and owned backing files
@@ -14529,7 +14536,7 @@ def format_feature_process_progress(task: dict, status_state: dict, pid: Optiona
     status_snapshot = read_feature_process_status(status_state)  # Read global and feature-local counters under one shared lock
     global_status = status_snapshot["global"]  # Resolve current global execution status
     feature_status = status_snapshot["features"][task["feature_set"]]  # Resolve current feature-local execution status
-    feature_label = task["worker_key"].upper()  # Use concise GA, PCA, or RFE identity
+    feature_label = task["worker_key"].upper()  # Use concise Full, GA, PCA, or RFE identity
     queue_position = f"{task['pending_queue_position']}/{task['pending_queue_total']}" if task.get("pending_queue_position") is not None else "cached"  # Distinguish pending queue order from pre-start cache recovery
     return f"[{feature_label} {feature_status['completed']}/{feature_status['total']} | Feature Cached {feature_status['cached']} | Feature Pending {feature_status['pending']} | Feature Running {feature_status['running']} | Feature Computed {feature_status['computed']} | Feature Failed {feature_status['failed']} | Local ID {task['feature_local_position']}/{task['feature_local_total']} | Queue {queue_position} | Global ID {task['global_id']}/{global_status['total']} | Completed {global_status['completed']}/{global_status['total']} | Cached {global_status['cached']} | Pending {global_status['pending']} | Running {global_status['running']} | Computed {global_status['computed']} | Failed {global_status['failed']} | PID {process_id}]"  # Return complete dynamic status without fixed denominators
 
@@ -14626,6 +14633,8 @@ def evaluate_feature_process_augmented_task(task: dict, process_payload: dict, r
     X_augmented_scaled = np.asarray(artifact_bundle["scaler"].transform(ratio_data["X_raw"]))  # Apply the exact persisted original-training scaler
     if artifact_bundle["transformer"] is not None:  # Apply the exact persisted PCA transformer when this model uses components
         X_augmented_model = np.asarray(artifact_bundle["transformer"].transform(X_augmented_scaled))  # Preserve PCA testing transformation semantics
+    elif task["feature_set"] == "Full Features":  # Keep the complete scaled matrix without materializing an identical all-column copy
+        X_augmented_model = X_augmented_scaled  # Preserve exact Full Features order and values through the existing evaluator
     else:  # Apply the exact persisted GA or RFE feature order
         model_feature_indices = [artifact_bundle["input_feature_names"].index(feature) for feature in artifact_bundle["model_feature_names"]]  # Resolve persisted model column positions
         X_augmented_model = X_augmented_scaled[:, model_feature_indices]  # Materialize only the exact required feature-set columns
@@ -14783,11 +14792,13 @@ def run_feature_set_process_worker(process_payload: dict, status_queue: Any, sta
         task_queue = list(process_payload["tasks"])  # Copy only matrix-free descriptors into feature-local sequential order
         model_maps = build_feature_process_model_maps(process_payload["config"], process_payload["optimized_params"]) if task_queue else {}  # Rebuild estimator prototypes only when this cache-first queue contains pending work
         source_descriptor = (process_payload.get("shared_resources") or {}).get("X_train_scaled")  # Read shared source shape and dtype metadata without reopening data
+        matrix_resource = source_descriptor["path"] if source_descriptor else "artifact-backed"  # Report exact backing identity without opening matrix data
         matrix_shape = (source_descriptor["shape"][0], process_payload["feature_metadata"]["feature_count"]) if source_descriptor else (process_payload["expected_train_count"], process_payload["feature_metadata"]["feature_count"])  # Resolve startup matrix shape from small metadata
         matrix_dtype = source_descriptor["dtype"] if source_descriptor else "artifact-backed"  # Resolve startup dtype without loading combination data
-        print(f"[WORKER START] Feature Set={process_payload['feature_set']} | Worker Index={process_payload['worker_index']} | PID={os.getpid()} | PPID={os.getppid()} | Pending Queue={len(task_queue)} | Matrix Shape={matrix_shape} | Matrix Dtype={matrix_dtype}")  # Log required worker identity, queue, and matrix metadata
+        feature_start_status = read_feature_process_status(status_state)["features"][process_payload["feature_set"]]  # Read exact cache-first feature status before this worker processes its queue
+        print(f"[WORKER START] Feature Set={process_payload['feature_set']} | Worker Index={process_payload['worker_index']} | PID={os.getpid()} | PPID={os.getppid()} | Queue Size={len(task_queue)} | Cached Count={feature_start_status['cached']} | Pending Count={len(task_queue)} | Matrix Resource={matrix_resource} | Matrix Shape={matrix_shape} | Matrix Dtype={matrix_dtype}")  # Log required worker identity, queue, cache, and matrix metadata
         sys.stdout.flush()  # Flush startup evidence for detached process-tree verification
-        status_queue.put({"status": "started", "feature_set": process_payload["feature_set"], "worker_index": process_payload["worker_index"], "pid": os.getpid(), "ppid": os.getppid(), "queue_size": len(task_queue)})  # Report only small startup metadata to the coordinator
+        status_queue.put({"status": "started", "feature_set": process_payload["feature_set"], "worker_index": process_payload["worker_index"], "pid": os.getpid(), "ppid": os.getppid(), "queue_size": len(task_queue), "cached_count": feature_start_status["cached"], "pending_count": len(task_queue), "matrix_resource": matrix_resource, "matrix_shape": matrix_shape, "matrix_dtype": matrix_dtype})  # Report only small startup metadata to the coordinator
         resource_state["cache_dict"] = load_cache_results(process_payload["cache_ref_file"], config=process_payload["config"], notify_discovery=False)  # Initialize the worker-local cache snapshot
         for task in task_queue:  # Process only this feature set's pending combinations sequentially
             active_task = task  # Record current task before any lifecycle transition
@@ -14954,7 +14965,7 @@ def execute_feature_set_processes(pending_by_feature: dict, process_payload: dic
                 terminal_features.add(feature_set_name)  # Mark the feature queue complete
                 running_task_by_feature.pop(feature_set_name, None)  # Clear terminal worker current-task identity
             elif status_type == "started":  # Log process startup metadata received from the child
-                print(f"[COORDINATOR] Worker started | Feature Set={feature_set_name} | Worker Index={status.get('worker_index')} | PID={status.get('pid')} | PPID={status.get('ppid')} | Pending Queue={status.get('queue_size')}")  # Surface child startup to the coordinator log
+                print(f"[COORDINATOR] Worker started | Feature Set={feature_set_name} | Worker Index={status.get('worker_index')} | PID={status.get('pid')} | PPID={status.get('ppid')} | Queue Size={status.get('queue_size')} | Cached Count={status.get('cached_count')} | Pending Count={status.get('pending_count')} | Matrix Resource={status.get('matrix_resource')} | Matrix Shape={status.get('matrix_shape')} | Matrix Dtype={status.get('matrix_dtype')}")  # Surface child startup to the coordinator log
             elif status_type == "running":  # Track exact current combination for abrupt-death status reconciliation
                 running_task_by_feature[feature_set_name] = status  # Store only small task identity metadata
             elif status_type == "progress":  # Surface one cache or computation completion from shared authoritative state
@@ -16112,7 +16123,7 @@ def build_telegram_pipeline_summary(config: Optional[dict], dataset_path: Option
             f"Enabled classifiers: {', '.join(enabled_classifiers) if enabled_classifiers else 'None'}",  # Report classifiers instantiated by the model factory
             f"Disabled classifiers: {', '.join(disabled_classifiers) if disabled_classifiers else 'None'}",  # Report classifiers excluded from the model factory
             f"Feature selection methods: {', '.join(feature_methods) if feature_methods else 'None'}",  # Report the configured feature-set strategies
-            f"Feature-set workers: ga={feature_set_workers['ga']}, pca={feature_set_workers['pca']}, rfe={feature_set_workers['rfe']} | start method: {FEATURE_PROCESS_START_METHOD}",  # Report process isolation configuration
+            f"Feature-set workers: full={feature_set_workers['full']}, ga={feature_set_workers['ga']}, pca={feature_set_workers['pca']}, rfe={feature_set_workers['rfe']} | start method: {FEATURE_PROCESS_START_METHOD}",  # Report process isolation configuration
             f"Test data augmentation: {'ON' if test_data_augmentation else 'OFF'}",  # Report the independent augmented-test toggle
         ]
 
