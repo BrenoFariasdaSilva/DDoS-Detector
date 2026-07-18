@@ -105,7 +105,6 @@ from colorama import Style  # For terminal text styling
 from joblib import dump, load  # For exporting and loading trained models and scalers
 from lime.lime_tabular import LimeTabularExplainer  # Import LIME library
 from Logger import Logger  # For logging output to both terminal and file
-from feature_processes import FEATURE_SET_KEYS, close_array_resource, create_resource_directory, open_array_resource, partition_evaluation_plan, remove_resource_directory, run_feature_set_processes, save_array_resource, validate_feature_set_workers  # Import focused persistent feature-set process infrastructure.
 from pathlib import Path  # For handling file paths
 from scipy.io import arff as scipy_arff  # Used to read ARFF files
 from sklearn.base import clone  # Clone estimator prototypes before each atomic fit
@@ -928,7 +927,6 @@ def parse_cli_args():
         parser.set_defaults(enable_explainability=None)  # Preserve the YAML/default setting when neither explainability flag is provided.
         parser.add_argument("--n-jobs", dest="n_jobs", type=int, default=None, help="Override evaluation.n_jobs for estimators that support parallel fitting (-1 uses all processors; 1 is memory-safe)",)
         parser.add_argument("--feature-extraction-n-jobs", dest="feature_extraction_n_jobs", type=int, default=None, help="Override evaluation.feature_extraction_n_jobs for feature extraction/transformation stages such as PCA, not classifier training (-1 uses available CPUs; 1 is memory-safe)")  # Add the independent feature extraction thread override
-        parser.add_argument("--feature-set-workers", dest="feature_set_workers", type=str, default=None, help="Persistent process mapping such as ga=1,pca=1,rfe=1; only one worker per feature set is supported")  # Add persistent feature-set process configuration.
         parser.add_argument("--low-memory", dest="low_memory", action="store_true", default=False, help="Enable low memory mode for pandas operations")  # Add low memory mode CLI argument
         parser.add_argument("--dataset-file-format", type=str, default=None, dest="dataset_file_format", help="File format for dataset files: arff, csv, parquet, txt")  # Dataset file format CLI override
         parser.add_argument("--augmentation-file-format", type=str, default=None, dest="augmentation_file_format", help="File format for augmentation files: arff, csv, parquet, txt")  # Augmentation file format CLI override
@@ -1115,7 +1113,6 @@ def get_default_config():
         "evaluation": {
             "n_jobs": 1,
             "feature_extraction_n_jobs": 1,  # Use one thread for feature extraction by default without changing classifier training parallelism
-            "feature_set_workers": {},  # Keep feature-set multiprocessing disabled unless explicitly configured.
             "training_heartbeat_interval_seconds": 60,  # Use low-frequency progress heartbeats when public training units are unavailable
             "threads_limit": 2,
             "cv_folds": 10,
@@ -1269,7 +1266,6 @@ def merge_configs(defaults, file_config, cli_args):
         
         if cli_args is None:  # If no CLI args
             validate_feature_extraction_n_jobs(config.get("evaluation", {}).get("feature_extraction_n_jobs", 1))  # Validate the effective file or default feature extraction setting.
-            config.setdefault("evaluation", {})["feature_set_workers"] = validate_feature_set_workers(config.get("evaluation", {}).get("feature_set_workers", {}))  # Validate YAML feature-set process configuration.
             return config  # Return merged config
         
         if hasattr(cli_args, "verbose") and cli_args.verbose:  # Verbose flag
@@ -1335,9 +1331,6 @@ def merge_configs(defaults, file_config, cli_args):
             validated_feature_extraction_n_jobs = validate_feature_extraction_n_jobs(cli_args.feature_extraction_n_jobs, "--feature-extraction-n-jobs")  # Validate the independent CLI value.
             config.setdefault("evaluation", {})["feature_extraction_n_jobs"] = validated_feature_extraction_n_jobs  # Apply the feature extraction override without changing classifier n_jobs.
 
-        if hasattr(cli_args, "feature_set_workers") and cli_args.feature_set_workers is not None:  # Feature-set process mapping CLI override.
-            config.setdefault("evaluation", {})["feature_set_workers"] = validate_feature_set_workers(cli_args.feature_set_workers, "--feature-set-workers")  # Parse and validate the complete CLI process mapping.
-
         if hasattr(cli_args, "low_memory") and cli_args.low_memory:  # Low memory CLI override
             config["execution"]["low_memory"] = True  # Apply low memory override to config
 
@@ -1378,7 +1371,6 @@ def merge_configs(defaults, file_config, cli_args):
             config.setdefault("memory_watcher", {})["capture_tracemalloc"] = True  # Enable optional Python allocation reports
 
         validate_feature_extraction_n_jobs(config.get("evaluation", {}).get("feature_extraction_n_jobs", 1))  # Validate the effective feature extraction setting after CLI precedence is applied.
-        config.setdefault("evaluation", {})["feature_set_workers"] = validate_feature_set_workers(config.get("evaluation", {}).get("feature_set_workers", {}))  # Validate the effective feature-set process mapping after CLI precedence.
         return config  # Return final merged configuration
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
@@ -13434,386 +13426,6 @@ def compute_class_distribution(combined_df: pd.DataFrame, target_col: str) -> Li
         raise
 
 
-class FeatureProcessProgress:  # Translate one worker completion into a small coordinator event.
-    """Report one durable feature-local completion from a persistent child process."""
-
-    def __init__(self, event_queue: Any, feature_set: str, local_id: int, local_total: int, global_id: int):  # Initialize one combination progress adapter.
-        """
-        Initialize a feature-process progress adapter.
-
-        :param self: Instance of the FeatureProcessProgress class.
-        :param event_queue: Multiprocessing queue receiving small progress events.
-        :param feature_set: Runtime feature-set identity.
-        :param local_id: One-based position in the feature-set queue.
-        :param local_total: Complete feature-set queue size.
-        :param global_id: Original one-based evaluation-plan identity.
-        :return: None.
-        """
-
-        self.event_queue = event_queue  # Store the coordinator event queue.
-        self.feature_set = feature_set  # Store the runtime feature identity.
-        self.local_id = local_id  # Store the feature-local queue position.
-        self.local_total = local_total  # Store the feature-local denominator.
-        self.global_id = global_id  # Store the immutable global identity.
-        self.reported = False  # Prevent duplicate completion events from one combination.
-
-    def set_description(self, description: str) -> None:  # Preserve the existing progress-bar interface without interactive rendering.
-        """
-        Accept an existing progress description without emitting carriage returns.
-
-        :param self: Instance of the FeatureProcessProgress class.
-        :param description: Existing classifier progress description.
-        :return: None.
-        """
-
-        return None  # Detached workers use explicit newline-delimited lifecycle logs.
-
-    def update(self, amount: int = 1) -> None:  # Report one persisted or cache-recovered combination.
-        """
-        Report one completed combination to the coordinator.
-
-        :param self: Instance of the FeatureProcessProgress class.
-        :param amount: Existing progress increment, which must represent one combination.
-        :return: None.
-        """
-
-        if amount != 1 or self.reported:  # Reject skipped ranges and duplicate updates in process mode.
-            if amount != 1:  # Surface an unexpected scheduling mismatch.
-                raise ValueError(f"Feature-process progress expected one completion, received {amount}")  # Prevent silent plan drift.
-            return  # Ignore an accidental duplicate update after the first durable event.
-        self.event_queue.put({"type": "progress", "feature_set": self.feature_set, "worker_index": 1, "local_id": self.local_id, "local_total": self.local_total, "global_id": self.global_id})  # Send only small progress metadata.
-        self.reported = True  # Mark this combination reported exactly once.
-
-
-def resolve_process_feature_sets(worker_config: dict, partitions: dict) -> List[str]:
-    """
-    Resolve and validate the exact feature sets assigned to persistent processes.
-
-    :param worker_config: Validated public worker mapping.
-    :param partitions: Evaluation-plan partitions keyed by runtime feature identity.
-    :return: Runtime feature-set names in authoritative plan order.
-    """
-
-    configured_names = [FEATURE_SET_KEYS[key] for key in worker_config]  # Translate public keys without changing configuration order.
-    planned_names = list(partitions.keys())  # Preserve first occurrence in the authoritative evaluation plan.
-    if set(configured_names) != set(planned_names):  # Require complete isolation when process mode is enabled.
-        raise ValueError(f"evaluation.feature_set_workers must match the active feature sets exactly; configured={configured_names}, active={planned_names}")  # Reject implicit mixed sequential/process scheduling.
-    return [name for name in planned_names if name in configured_names]  # Return authoritative process startup order.
-
-
-def build_feature_process_resources(file: str, df: pd.DataFrame, feature_names: List[Any], ga_selected_features: Any, pca_n_components: Any, rfe_selected_features: Any, source_files: List[str], augmentation_ratios: List[float], augmented_df: Optional[pd.DataFrame], attack_types: Optional[List[str]], config: dict) -> Tuple[str, dict, Any, Any, List[str]]:
-    """
-    Prepare exact feature matrices and labels as coordinator-owned memmaps.
-
-    :param file: Dataset file or directory identity.
-    :param df: Original cleaned dataset used for the deterministic split.
-    :param feature_names: Ordered original feature names.
-    :param ga_selected_features: Sanitized GA feature selection.
-    :param pca_n_components: Effective PCA component count.
-    :param rfe_selected_features: Sanitized RFE feature selection.
-    :param source_files: Ordered original source-file provenance.
-    :param augmentation_ratios: Ordered augmented-test ratios.
-    :param augmented_df: Combined augmented source dataframe, or None.
-    :param attack_types: Combined classification scope used by PCA cache identity.
-    :param config: Runtime configuration dictionary.
-    :return: Resource directory, feature metadata, scaler, label encoder, and numeric input names.
-    """
-
-    resource_directory = create_resource_directory(str(resolve_feature_source_spill_base_directory(file, config=config)))  # Create one coordinator-owned resource directory.
-    feature_source_arrays = None  # Track full scaled matrix ownership for failure cleanup.
-    feature_iterator = None  # Track lazy feature materialization for failure cleanup.
-    try:  # Remove every prepared resource if setup cannot finish.
-        numeric_input_names = [str(column) for column in df.iloc[:, :-1].select_dtypes(include=np.number).columns]  # Capture the exact scaling and PCA input schema.
-        target_column = str(df.columns[-1])  # Capture the positional target identity.
-        original_sample_count = int(len(df))  # Preserve the population used by deterministic ratio sampling.
-        data_splits = prepare_evaluation_data_splits(df, config=config)  # Reuse the existing split, label encoding, and scaling path.
-        if data_splits is None:  # Reject a single-class dataset before starting children.
-            raise ValueError("Feature-set process execution requires at least two target classes")  # Preserve the existing classification requirement.
-        X_train_scaled, X_test_scaled, y_train, y_test, scaler, label_encoder = data_splits  # Unpack the exact existing preprocessing outputs.
-        feature_source_arrays = {"X_train_scaled": X_train_scaled, "X_test_scaled": X_test_scaled, "spilled_to_memmap": False}  # Transfer full source ownership into the existing lifecycle holder.
-        label_resources = {"train": save_array_resource(y_train, resource_directory, "y_train"), "test": save_array_resource(y_test, resource_directory, "y_test")}  # Persist shared labels once without queue pickling.
-        pca_cache_context = {"execution_mode": str(config.get("execution", {}).get("execution_mode", "combined_files")), "data_source": "Original", "experiment_mode": "original_only", "augmentation_ratio": None, "target_column": target_column, "original_sample_count": original_sample_count, "augmented_sample_count": 0, "test_size": 0.2, "random_state": 42, "stratified": True, "augmentation_merged_into_training_after_split": False, "attack_types": normalize_metadata_for_json(attack_types)}  # Build the unchanged fitted-PCA split provenance.
-        feature_sets_config = dict(config.get("stacking", {}).get("feature_sets_config", {}))  # Preserve the resolved feature strategy configuration.
-        feature_iterator = iterate_feature_sets_sequentially(feature_source_arrays, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, file, feature_sets_config, config, scaler=scaler, source_files=source_files, pca_cache_context=pca_cache_context, pca_input_feature_names=numeric_input_names)  # Reuse the existing exact feature materialization path.
-        feature_resources = {}  # Accumulate only metadata and small fitted transformers.
-        for name, X_train_subset, X_test_subset, subset_names, transformer in feature_iterator:  # Materialize each selected feature set exactly once.
-            resolved_names = setup_feature_set_names(name, X_train_subset, subset_names)  # Reuse established PCA and subset feature naming.
-            safe_name = re.sub(r"[^A-Za-z0-9]+", "_", name).strip("_").lower()  # Build deterministic resource filenames.
-            feature_resources[name] = {"train": save_array_resource(X_train_subset, resource_directory, f"{safe_name}_train"), "test": save_array_resource(X_test_subset, resource_directory, f"{safe_name}_test"), "feature_names": list(resolved_names), "transformer": transformer, "augmented": {}}  # Persist exact matrices and small feature metadata.
-        if feature_iterator is not None and hasattr(feature_iterator, "close"):  # Finish generator-side cleanup after every feature is persisted.
-            feature_iterator.close()  # Release subset and source mappings owned by the iterator.
-        feature_iterator = None  # Prevent duplicate generator cleanup.
-        cleanup_feature_source_arrays(feature_source_arrays, config=config)  # Release full scaled sources after every selected feature resource exists.
-        feature_source_arrays = None  # Prevent duplicate source cleanup.
-        if augmented_df is not None:  # Prepare ratio-specific transformed feature matrices only when augmentation is active.
-            feature_lookup = {str(feature): index for index, feature in enumerate(numeric_input_names)}  # Map exact numeric input names to scaled columns.
-            for ratio in augmentation_ratios:  # Preserve configured augmented-test order.
-                sampled_df = sample_augmented_by_ratio(augmented_df, original_sample_count, ratio)  # Reuse deterministic seed and sample-size semantics.
-                if sampled_df is None or sampled_df.empty:  # Reject a plan ratio that cannot produce its promised combinations.
-                    raise ValueError(f"Unable to prepare augmented feature resources for ratio {ratio}")  # Prevent plan/resource divergence.
-                sampled_features = sampled_df.iloc[:, :-1].select_dtypes(include=np.number)  # Select numeric augmented inputs through the existing positional schema.
-                missing_features = [feature for feature in numeric_input_names if feature not in sampled_features.columns]  # Verify the complete original feature order.
-                if missing_features:  # Reject incompatible augmented sources before child startup.
-                    raise ValueError(f"Augmented testing data is missing original feature columns: {missing_features}")  # Preserve existing compatibility behavior.
-                X_augmented_scaled = np.asarray(scaler.transform(sampled_features[numeric_input_names].to_numpy(copy=False)))  # Apply the exact original-training scaler once.
-                y_augmented = np.asarray(label_encoder.transform(sampled_df.iloc[:, -1].to_numpy(copy=False)), dtype=np.int64)  # Apply the exact original-training label mapping.
-                ratio_slug = str(int(round(ratio * 100)))  # Build deterministic ratio resource names.
-                augmented_label_resource = save_array_resource(y_augmented, resource_directory, f"y_augmented_{ratio_slug}")  # Persist ratio labels once for all feature workers.
-                for name, metadata in feature_resources.items():  # Materialize only the matrices required by selected feature processes.
-                    if name == "PCA Components":  # Transform PCA inputs with the exact fitted baseline transformer.
-                        X_augmented_feature = np.asarray(metadata["transformer"].transform(X_augmented_scaled))  # Preserve PCA transformed values.
-                    else:  # Select ordinary feature subsets in their established order.
-                        indices = [feature_lookup[feature] for feature in metadata["feature_names"]]  # Resolve exact scaled columns for this feature set.
-                        X_augmented_feature = X_augmented_scaled[:, indices]  # Build the required feature-specific augmented matrix.
-                    metadata["augmented"][ratio] = {"test": save_array_resource(X_augmented_feature, resource_directory, f"{re.sub(r'[^A-Za-z0-9]+', '_', name).strip('_').lower()}_augmented_{ratio_slug}"), "labels": augmented_label_resource}  # Persist exact ratio feature metadata.
-                    del X_augmented_feature  # Release this feature matrix before preparing the next one.
-                del sampled_df, sampled_features, X_augmented_scaled, y_augmented  # Release ratio data after every feature resource is durable.
-                gc.collect()  # Reclaim ratio memory before the next configured sample.
-        shared_resources = {"labels": label_resources, "features": feature_resources, "target_column": target_column, "original_sample_count": original_sample_count}  # Assemble worker resource metadata without full arrays.
-        return resource_directory, shared_resources, scaler, label_encoder, numeric_input_names  # Return complete coordinator-owned resources.
-    except Exception:  # Clean partial resources before surfacing setup failures.
-        if feature_iterator is not None and hasattr(feature_iterator, "close"):  # Close a partially consumed feature iterator.
-            feature_iterator.close()  # Trigger existing generator cleanup.
-        cleanup_feature_source_arrays(feature_source_arrays, config=config)  # Release any full source matrices or spill files.
-        remove_resource_directory(resource_directory)  # Delete only this coordinator's partial resources.
-        raise  # Preserve the original setup failure.
-
-
-def evaluate_feature_process_original_combination(payload: dict, task: dict, model_prototype: Any, hp_params_map: dict, X_train: Any, X_test: Any, y_train: Any, y_test: Any, scaler: Any, label_encoder: Any, transformer: Any, feature_names: List[str], cache_dict: dict, progress: Any, cache_ref_file: Optional[str]) -> dict:
-    """
-    Evaluate one original-data combination through the existing model workflow.
-
-    :param payload: Persistent worker metadata.
-    :param task: Partitioned evaluation-plan task.
-    :param model_prototype: Configured classifier prototype.
-    :param hp_params_map: Effective optimized-parameter mapping.
-    :param X_train: Read-only feature training memmap.
-    :param X_test: Read-only feature testing memmap.
-    :param y_train: Read-only training-label memmap.
-    :param y_test: Read-only testing-label memmap.
-    :param scaler: Original-training fitted scaler.
-    :param label_encoder: Original-training fitted label encoder.
-    :param transformer: Optional fitted PCA transformer.
-    :param feature_names: Ordered classifier feature names.
-    :param cache_dict: Worker-local resume dictionary.
-    :param progress: Progress adapter for this combination.
-    :param cache_ref_file: Dataset cache identity, or None during artifact-only recovery.
-    :return: Completed or cache-recovered result entry.
-    """
-
-    feature_set, hyperparameters_enabled, _, classifier_name = task["combination"]  # Unpack the authoritative plan object.
-    is_stacking = classifier_name == "StackingClassifier"  # Resolve the classifier workflow.
-    individual_models = {} if is_stacking else {classifier_name: model_prototype}  # Restrict evaluation to this one actual combination.
-    stacking_model = build_evaluation_stacking_model(payload["models_by_hp"][hyperparameters_enabled], config=payload["config"]) if is_stacking else None  # Build stacking only for its planned combination.
-    experiment_mode = "original_only"  # Preserve original-training experiment semantics.
-    experiment_id = payload["experiment_ids"][(hyperparameters_enabled, None)]  # Reuse one established experiment identity across the complete HP/testing slice.
-    individual_results, stacking_result, _ = evaluate_single_feature_set(task["local_id"], feature_set, X_train, X_test, feature_names, individual_models, stacking_model, y_train, y_test, payload["file"], payload["execution_mode"], payload["attack_types"], payload["original_data_source"], experiment_id, experiment_mode, None, hp_params_map, scaler, label_encoder, transformer, payload["input_feature_names"], payload["target_column"], payload["source_files"], task["global_total"], task["global_id"], progress, stacking_enabled=is_stacking, config=payload["config"], cache_dict=cache_dict, cache_ref_file=cache_ref_file, hyperparameters_enabled=hyperparameters_enabled)  # Reuse cache, fit, prediction, metrics, export, and heartbeat logic.
-    return stacking_result if is_stacking else individual_results[(feature_set, classifier_name)]  # Return this combination's result only.
-
-
-def evaluate_feature_process_augmented_combination(payload: dict, task: dict, model_prototype: Any, hp_params_map: dict, X_train: Any, y_train: Any, X_augmented: Any, y_augmented: Any, scaler: Any, label_encoder: Any, transformer: Any, feature_names: List[str], cache_dict: dict, progress: Any) -> dict:
-    """
-    Evaluate one persisted original-trained model on an augmented feature memmap.
-
-    :param payload: Persistent worker metadata.
-    :param task: Partitioned evaluation-plan task.
-    :param model_prototype: Configured classifier prototype.
-    :param hp_params_map: Effective optimized-parameter mapping.
-    :param X_train: Read-only baseline training memmap used for artifact recovery.
-    :param y_train: Read-only training-label memmap.
-    :param X_augmented: Read-only transformed augmented feature memmap.
-    :param y_augmented: Read-only transformed augmented-label memmap.
-    :param scaler: Original-training fitted scaler.
-    :param label_encoder: Original-training fitted label encoder.
-    :param transformer: Optional fitted PCA transformer.
-    :param feature_names: Ordered classifier feature names.
-    :param cache_dict: Worker-local resume dictionary.
-    :param progress: Progress adapter for this combination.
-    :return: Completed or cache-recovered result entry.
-    """
-
-    feature_set, hyperparameters_enabled, ratio, classifier_name = task["combination"]  # Unpack the authoritative augmented plan object.
-    data_source = f"Augmented@{int(ratio * 100)}%_CombinedFiles" if payload["execution_mode"] == "combined_files" else f"Augmented@{int(ratio * 100)}%"  # Preserve established result labels.
-    results = {}  # Receive an optional cache-recovered result.
-    recovered, _ = recover_cached_individual_classifier_result(cache_dict, payload["execution_mode"], data_source, "original_training_augmented_testing", ratio, payload["attack_types"], feature_set, classifier_name, results, task["global_id"], task["global_total"], progress, hyperparameters_enabled=hyperparameters_enabled, expected_n_features=len(feature_names), expected_feature_names=feature_names, expected_n_samples_train=len(y_train), expected_n_samples_test=len(y_augmented))  # Reuse strict cache compatibility validation.
-    if recovered:  # Return immediately without fit or prediction on a valid cache hit.
-        log_training_phase(feature_set, classifier_name, "Cache persistence", "Recovered")  # Emit the durable cache recovery phase.
-        return results[(feature_set, classifier_name)]  # Return the existing scientific result unchanged.
-    artifact_feature_set = f"{feature_set} - {'Optimized Hyperparameters' if hyperparameters_enabled else 'Default Hyperparameters'}"  # Resolve the established model identity.
-    dataset_name = build_filename_safe_dataset_identity(resolve_canonical_dataset_identity(payload["file"], True)) if payload["execution_mode"] == "combined_files" else os.path.basename(os.path.dirname(payload["file"]))  # Resolve the established model directory identity.
-    artifact_context = build_stacking_model_artifact_context(payload["file"], payload["source_files"], payload["execution_mode"], payload["attack_types"], payload["target_column"], classifier_name, model_prototype, artifact_feature_set, payload["input_feature_names"], feature_names, list(label_encoder.classes_), transformer, hyperparameters_enabled)  # Rebuild the exact original-training compatibility identity.
-    artifact_bundle, rejection_reason = load_existing_model_if_available(classifier_name, payload["file"], dataset_name, artifact_feature_set, artifact_context, config=payload["config"])  # Load only a complete compatible classifier artifact.
-    if artifact_bundle is None:  # Recover a missing artifact without replacing the cached baseline metric.
-        silent_progress = FeatureProcessProgress(payload["event_queue"], feature_set, task["local_id"], task["local_total"], task["global_id"])  # Reuse the existing interface for artifact-only recovery.
-        silent_progress.update = lambda amount=1: None  # Suppress duplicate coordinator completion for artifact-only recovery.
-        baseline_task = dict(task)  # Copy the current task metadata for an original-only recovery fit.
-        baseline_task["combination"] = (feature_set, hyperparameters_enabled, None, classifier_name)  # Restore the baseline combination identity.
-        evaluate_feature_process_original_combination(payload, baseline_task, model_prototype, hp_params_map, X_train, payload["baseline_test"], y_train, payload["baseline_labels"], scaler, label_encoder, transformer, feature_names, {}, silent_progress, None)  # Reuse the original fit and atomic model export path.
-        artifact_bundle, rejection_reason = load_existing_model_if_available(classifier_name, payload["file"], dataset_name, artifact_feature_set, artifact_context, config=payload["config"])  # Reload the recovered artifact through strict validation.
-        if artifact_bundle is None:  # Refuse prediction without compatible fitted state.
-            raise RuntimeError(f"Original-only artifact recovery failed for {feature_set} - {classifier_name}: {rejection_reason}")  # Surface the exact artifact failure.
-    loaded_model = artifact_bundle["model"]  # Use the persisted original-trained estimator.
-    combination_header = build_telegram_combination_header(feature_set, classifier_name, ratio, hyperparameters_enabled)  # Build the exact augmented combination label.
-    training_ram_stats = {}  # Preserve the existing evaluation interface.
-    if classifier_name == "StackingClassifier":  # Evaluate a persisted stacking classifier without fitting.
-        X_augmented_model = pd.DataFrame(X_augmented, columns=feature_names)  # Preserve the established named stacking prediction input.
-        metrics = evaluate_stacking_classifier(loaded_model, None, None, X_augmented_model, y_augmented, config=payload["config"], training_ram_stats=training_ram_stats, fit_model=False, notification_context=combination_header, feature_set=feature_set)  # Reuse existing prediction and metric logic.
-        classifier_type = "Stacking"  # Preserve stacking result metadata.
-    else:  # Evaluate one persisted individual classifier without fitting.
-        metrics = evaluate_individual_classifier(loaded_model, classifier_name, None, None, X_augmented, y_augmented, payload["file"], scaler, feature_names, artifact_feature_set, config=payload["config"], training_ram_stats=training_ram_stats, fit_model=False, notification_context=combination_header)  # Reuse existing prediction and metric logic.
-        classifier_type = "Individual"  # Preserve individual result metadata.
-    experiment_id = payload["experiment_ids"][(hyperparameters_enabled, ratio)]  # Reuse one established experiment identity across the complete HP/testing slice.
-    result_entry = build_classifier_result_entry(loaded_model.__class__.__name__, payload["file"], payload["execution_mode"], payload["attack_types"], feature_set, classifier_type, classifier_name, data_source, experiment_id, "original_training_augmented_testing", ratio, len(feature_names), len(y_train), len(y_augmented), metrics, feature_names, hyperparams_map=hp_params_map, hyperparameters_enabled=hyperparameters_enabled, effective_hyperparameters=serialize_effective_estimator_parameters(loaded_model))  # Build the unchanged result schema.
-    log_training_phase(feature_set, classifier_name, "Cache persistence", "Started")  # Mark the process-safe result transaction start.
-    persist_cache_result_entry(payload["file"], result_entry, cache_dict, config=payload["config"])  # Reuse the complete flock-protected load-merge-validate-replace transaction.
-    log_training_phase(feature_set, classifier_name, "Cache persistence", "Completed")  # Mark durable result persistence.
-    progress.update(1)  # Advance feature-local and global completion after durable persistence.
-    return result_entry  # Return the completed augmented result.
-
-
-def run_feature_set_process(payload: dict, event_queue: Any) -> None:
-    """
-    Process one complete feature-set queue inside one persistent spawned child.
-
-    :param payload: Metadata-only worker payload containing memmap paths and combination definitions.
-    :param event_queue: Coordinator queue receiving small lifecycle and result events.
-    :return: None.
-    """
-
-    global CONFIG  # Set the child module's runtime configuration fallback.
-    CONFIG = payload["config"]  # Preserve existing CONFIG fallback behavior in reused functions.
-    child_config = deep_merge_dicts(payload["config"], {"logging": {"clean": False}})  # Prevent child logger startup from truncating the shared detached log.
-    initialize_logger(config=child_config)  # Open the shared append log through the process-safe Logger.
-    payload["event_queue"] = event_queue  # Expose the small event queue only for artifact-recovery progress suppression.
-    opened_arrays = []  # Track worker-owned read-only mappings for deterministic closure.
-    try:  # Keep this process alive through its complete feature queue.
-        X_train = open_array_resource(payload["feature_resources"]["train"])  # Open only this feature set's baseline training matrix.
-        X_test = open_array_resource(payload["feature_resources"]["test"])  # Open only this feature set's baseline testing matrix.
-        y_train = open_array_resource(payload["label_resources"]["train"])  # Open the shared training labels read-only.
-        y_test = open_array_resource(payload["label_resources"]["test"])  # Open the shared testing labels read-only.
-        opened_arrays.extend([X_train, X_test, y_train, y_test])  # Register baseline mapping ownership.
-        payload["baseline_test"] = X_test  # Expose baseline test data for rare artifact-only recovery.
-        payload["baseline_labels"] = y_test  # Expose baseline labels for rare artifact-only recovery.
-        startup_message = f"[FEATURE WORKER START] Feature Set: {payload['feature_set']} | Worker: {payload['worker_index']} | PID: {os.getpid()} | PPID: {os.getppid()} | Queue Size: {len(payload['tasks'])} | Matrix Shape: {tuple(X_train.shape)} | Matrix Dtype: {X_train.dtype} | Start Method: spawn"  # Build the required durable startup record.
-        print(startup_message, flush=True)  # Write startup details to the shared process-safe log.
-        event_queue.put({"type": "startup", "feature_set": payload["feature_set"], "worker_index": payload["worker_index"], "pid": os.getpid(), "message": startup_message})  # Notify the coordinator with small startup metadata.
-        cache_dict = load_cache_results(payload["file"], config=payload["config"])  # Load resume state once for the complete persistent queue.
-        feature_names = payload["feature_resources"]["feature_names"]  # Read this feature set's exact ordered names.
-        transformer = payload["feature_resources"].get("transformer")  # Read only this feature set's optional PCA transformer.
-        augmented_arrays = {}  # Reuse ratio-specific mappings across both hyperparameter modes.
-        for task in payload["tasks"]:  # Process the complete feature queue sequentially.
-            feature_set, hyperparameters_enabled, ratio, classifier_name = task["combination"]  # Unpack the original plan object.
-            testing_mode = "Original" if ratio is None else "Augmented"  # Distinguish original and augmented prediction modes.
-            ratio_label = "None" if ratio is None else f"{ratio:g}"  # Format the exact augmentation identity.
-            hp_label = "Optimized Hyperparameters" if hyperparameters_enabled else "Default Hyperparameters"  # Format the exact hyperparameter mode.
-            print(f"[FEATURE WORKER COMBINATION] Feature Set: {feature_set} | Worker: {payload['worker_index']} | Local: {task['local_id']}/{task['local_total']} | Global ID: {task['global_id']}/{task['global_total']} | Classifier: {classifier_name} | Hyperparameters: {hp_label} | Testing Mode: {testing_mode} | Augmentation Ratio: {ratio_label} | PID: {os.getpid()} | Status: Started", flush=True)  # Emit the complete pre-evaluation identity.
-            models_map = payload["models_by_hp"][hyperparameters_enabled]  # Resolve the authoritative model prototypes for this HP mode.
-            hp_params_map = payload["params_by_hp"][hyperparameters_enabled]  # Resolve the authoritative optimized-parameter metadata.
-            model_prototype = models_map[classifier_name] if classifier_name != "StackingClassifier" else build_evaluation_stacking_model(models_map, config=payload["config"])  # Resolve the planned classifier prototype.
-            progress = FeatureProcessProgress(event_queue, feature_set, task["local_id"], task["local_total"], task["global_id"])  # Build one durable completion adapter.
-            if ratio is None:  # Fit and evaluate one original-data combination.
-                result_entry = evaluate_feature_process_original_combination(payload, task, model_prototype, hp_params_map, X_train, X_test, y_train, y_test, payload["scaler"], payload["label_encoder"], transformer, feature_names, cache_dict, progress, payload["file"])  # Reuse the original model workflow.
-            else:  # Evaluate one persisted original-trained model on augmented data.
-                if ratio not in augmented_arrays:  # Open this ratio's feature resources only on first use.
-                    ratio_metadata = payload["feature_resources"]["augmented"][ratio]  # Resolve this feature set's ratio metadata.
-                    augmented_arrays[ratio] = (open_array_resource(ratio_metadata["test"]), open_array_resource(ratio_metadata["labels"]))  # Open transformed features and labels read-only.
-                    opened_arrays.extend(augmented_arrays[ratio])  # Register ratio mapping ownership.
-                X_augmented, y_augmented = augmented_arrays[ratio]  # Reuse the open ratio mappings.
-                result_entry = evaluate_feature_process_augmented_combination(payload, task, model_prototype, hp_params_map, X_train, y_train, X_augmented, y_augmented, payload["scaler"], payload["label_encoder"], transformer, feature_names, cache_dict, progress)  # Reuse persisted-model prediction and cache logic.
-            annotate_results_with_combination_flags([result_entry], payload["config"].get("stacking", {}).get("methods", {}).get("feature_selection", True), hyperparameters_enabled, ratio is not None)  # Preserve the sequential final-export dimension annotations.
-            event_queue.put({"type": "result", "feature_set": feature_set, "worker_index": payload["worker_index"], "global_id": task["global_id"], "result": result_entry})  # Send only the small completed result payload.
-            print(f"[FEATURE WORKER COMBINATION] Feature Set: {feature_set} | Worker: {payload['worker_index']} | Local: {task['local_id']}/{task['local_total']} | Global ID: {task['global_id']}/{task['global_total']} | Classifier: {classifier_name} | PID: {os.getpid()} | Status: Completed", flush=True)  # Emit post-persistence or cache-recovery completion.
-        done_message = f"[FEATURE WORKER DONE] Feature Set: {payload['feature_set']} | Worker: {payload['worker_index']} | PID: {os.getpid()} | Completed: {len(payload['tasks'])}/{len(payload['tasks'])}"  # Build the independent queue completion record.
-        print(done_message, flush=True)  # Write completion to the shared process-safe log.
-        event_queue.put({"type": "done", "feature_set": payload["feature_set"], "worker_index": payload["worker_index"], "pid": os.getpid(), "message": done_message})  # Notify the coordinator of normal completion.
-    finally:  # Release only resources opened by this worker.
-        for array in reversed(opened_arrays):  # Close mappings in reverse open order.
-            close_array_resource(array)  # Release the worker-owned handle without deleting shared files.
-        if logger is not None:  # Close this child's append logger after terminal output.
-            logger.close()  # Release the child-owned log descriptor.
-
-
-def build_feature_process_comparisons(results: List[dict], hp_runs: List[Tuple[bool, dict, dict]], augmentation_ratios: List[float], config: dict) -> List[dict]:
-    """
-    Build existing augmentation comparisons from globally ordered process results.
-
-    :param results: Completed result rows in authoritative global order.
-    :param hp_runs: Ordered hyperparameter modes used by the plan.
-    :param augmentation_ratios: Ordered augmented-test ratios.
-    :param config: Runtime configuration dictionary.
-    :return: Existing comparison rows annotated by hyperparameter mode.
-    """
-
-    comparisons = []  # Accumulate comparison rows across HP modes.
-    for hyperparameters_enabled, _, _ in hp_runs:  # Preserve default-first HP order.
-        hp_mode = "Optimized Hyperparameters" if hyperparameters_enabled else "Default Hyperparameters"  # Resolve persisted HP identity.
-        original = {(row["feature_set"], row["model_name"]): row for row in results if row.get("hyperparameter_mode") == hp_mode and float(row.get("augmentation_ratio", 0.0) or 0.0) == 0.0}  # Rebuild the baseline result mapping.
-        ratio_results = {ratio: {(row["feature_set"], row["model_name"]): row for row in results if row.get("hyperparameter_mode") == hp_mode and float(row.get("augmentation_ratio", 0.0) or 0.0) == float(ratio)} for ratio in augmentation_ratios}  # Rebuild each ratio mapping.
-        if original and any(ratio_results.values()):  # Generate comparisons only when both sides exist.
-            hp_comparisons = generate_ratio_comparison_report(original, ratio_results, config=config)  # Reuse the existing comparison calculations.
-            for comparison in hp_comparisons:  # Preserve HP identity in the shared export.
-                comparison["hyperparameter_mode"] = hp_mode  # Annotate this comparison row.
-            comparisons.extend(hp_comparisons)  # Append this HP mode's comparisons.
-    return comparisons  # Return the complete existing comparison output.
-
-
-def execute_combined_feature_process_grid(file: str, df: pd.DataFrame, feature_names: List[Any], ga_selected_features: Any, pca_n_components: Any, rfe_selected_features: Any, original_files_list: List[str], augmentation_file_paths: List[str], augmentation_ratios: List[float], hp_runs: List[Tuple[bool, dict, dict]], evaluation_plan: List[Tuple[str, bool, Optional[float], str]], attack_types_list: List[str], config: dict) -> Tuple[List[dict], List[dict]]:
-    """
-    Prepare resources and execute the combined-files grid in persistent feature processes.
-
-    :param file: Combined dataset directory identity.
-    :param df: Combined original dataframe owned by the coordinator.
-    :param feature_names: Ordered combined feature names.
-    :param ga_selected_features: Sanitized GA feature selection.
-    :param pca_n_components: Effective PCA component count.
-    :param rfe_selected_features: Sanitized RFE feature selection.
-    :param original_files_list: Ordered original source-file provenance.
-    :param augmentation_file_paths: Ordered augmented source files.
-    :param augmentation_ratios: Ordered augmented-test ratios.
-    :param hp_runs: Ordered model and hyperparameter modes.
-    :param evaluation_plan: Authoritative complete evaluation plan.
-    :param attack_types_list: Combined classification scope.
-    :param config: Runtime configuration dictionary.
-    :return: Globally ordered result rows and existing comparison rows.
-    """
-
-    resource_directory = None  # Track coordinator ownership through child shutdown.
-    augmented_df = None  # Track the optional combined augmented source.
-    try:  # Delete memmaps only after every child is joined.
-        if augmentation_file_paths:  # Load augmented data once after the original coordinator dataframe is ready for release.
-            augmented_df, _, _ = combine_files_for_combined_evaluation(augmentation_file_paths, config=config)  # Reuse existing preprocessing and combination semantics.
-            if augmented_df is None:  # Reject an evaluation plan whose augmented resources are unavailable.
-                raise RuntimeError("Failed to build augmented resources for the feature-process evaluation plan")  # Prevent combination loss.
-        resource_directory, resources, scaler, label_encoder, input_feature_names = build_feature_process_resources(file, df, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, original_files_list, augmentation_ratios, augmented_df, attack_types_list, config)  # Prepare exact disk-backed resources before spawn.
-        del df  # Release the coordinator's combined dataframe after every worker resource is durable.
-        if augmented_df is not None:  # Release the coordinator's augmented dataframe before child startup.
-            del augmented_df  # Drop the complete augmented source reference.
-            augmented_df = None  # Prevent duplicate cleanup bookkeeping.
-        gc.collect()  # Reclaim coordinator dataframe memory before workers fit estimators.
-        partitions = partition_evaluation_plan(evaluation_plan)  # Partition actual plan objects without changing IDs or ordering.
-        worker_config = validate_feature_set_workers(config.get("evaluation", {}).get("feature_set_workers", {}))  # Revalidate runtime CONFIG fallback behavior.
-        process_feature_sets = resolve_process_feature_sets(worker_config, partitions)  # Require complete feature isolation.
-        models_by_hp = {enabled: models for enabled, models, _ in hp_runs}  # Preserve the exact model maps used to build the plan.
-        params_by_hp = {enabled: params for enabled, _, params in hp_runs}  # Preserve exact optimized-parameter metadata.
-        experiment_ids = {}  # Build one experiment identity per established HP/testing slice.
-        for hyperparameters_enabled, _, _ in hp_runs:  # Preserve default-first identity creation order.
-            experiment_ids[(hyperparameters_enabled, None)] = generate_experiment_id(file, "combined_files_original_only")  # Preserve one baseline identity across all feature/classifier combinations.
-            for ratio in augmentation_ratios:  # Preserve configured augmented-test identity order.
-                experiment_ids[(hyperparameters_enabled, ratio)] = generate_experiment_id(file, "combined_files_original_training_augmented_testing", ratio)  # Preserve one ratio identity across all feature/classifier combinations.
-        payloads = []  # Build one metadata-only payload per selected feature set.
-        for feature_set in process_feature_sets:  # Preserve authoritative feature startup order.
-            payloads.append({"feature_set": feature_set, "worker_index": 1, "tasks": partitions[feature_set], "feature_resources": resources["features"][feature_set], "label_resources": resources["labels"], "scaler": scaler, "label_encoder": label_encoder, "models_by_hp": models_by_hp, "params_by_hp": params_by_hp, "experiment_ids": experiment_ids, "file": file, "execution_mode": "combined_files", "attack_types": attack_types_list, "original_data_source": "Original Combined Files", "input_feature_names": input_feature_names, "target_column": resources["target_column"], "source_files": original_files_list, "config": config})  # Pass no full matrix or dataframe through process arguments.
-        print(f"[FEATURE PROCESS COORDINATOR] Start Method: spawn | Workers: {len(payloads)} | Feature Sets: {', '.join(process_feature_sets)} | Combinations: {len(evaluation_plan)}", flush=True)  # Log process architecture and authoritative denominator.
-        results = run_feature_set_processes(payloads, len(evaluation_plan), "stacking", "run_feature_set_process")  # Start, monitor, join, and reap every persistent child.
-        comparisons = build_feature_process_comparisons(results, hp_runs, augmentation_ratios, config)  # Rebuild unchanged comparison outputs.
-        return results, comparisons  # Return globally ordered rows and comparison rows.
-    finally:  # Enforce coordinator-only memmap deletion ownership.
-        if augmented_df is not None:  # Release an augmented dataframe after setup failure.
-            del augmented_df  # Drop the remaining coordinator reference.
-        remove_resource_directory(resource_directory)  # Delete exact memmaps only after the process runner has joined every child.
-        gc.collect()  # Reclaim released coordinator resources.
-
-
 def process_combined_files_evaluation(original_files_list, combined_files_df, attack_types_list, dataset_name, config=None):
     """
     Process evaluation for combined files evaluation mode with optional data augmentation.
@@ -13889,24 +13501,6 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
         feature_mode_names = list_grid_feature_modes(ga_selected_features, pca_n_components, rfe_selected_features, feature_names, config=config)  # Resolve actual feature modes in evaluation order
         evaluation_plan = build_evaluation_plan(hp_runs, [None] + list(augmentation_ratios), feature_mode_names, methods_cfg.get("stacking", True))  # Build the exact default-first, original-first full-grid order
         total_steps = len(evaluation_plan)  # Use the ordered runtime plan as the exact full-grid denominator
-        feature_set_workers = validate_feature_set_workers(config.get("evaluation", {}).get("feature_set_workers", {}))  # Resolve optional persistent feature-set process execution.
-        if feature_set_workers:  # Use the process coordinator only when explicitly configured.
-            process_original_df_holder = [combined_files_df_holder.pop()]  # Transfer sole ownership without retaining a caller dataframe reference.
-            all_grid_results, all_comparison_results = execute_combined_feature_process_grid(combined_dataset_reference, process_original_df_holder.pop(), feature_names, ga_selected_features, pca_n_components, rfe_selected_features, original_files_list, augmentation_file_paths, augmentation_ratios, hp_runs, evaluation_plan, attack_types_list, config)  # Run the complete grid through persistent feature-set processes.
-            del process_original_df_holder  # Release the empty ownership-transfer holder after resource preparation and execution.
-            feature_analysis_dir = save_combined_files_results_to_csv(combined_dataset_reference, all_grid_results, config=config)  # Save every globally ordered process result through the existing final exporter.
-            if all_comparison_results:  # Preserve the existing combined-files comparison artifact.
-                save_combined_files_augmentation_comparison(None, None, feature_analysis_dir, config=config, comparison_results=all_comparison_results)  # Save unchanged comparison calculations.
-            enable_automl = methods_cfg.get("automl", True)  # Preserve the existing post-grid AutoML toggle.
-            if enable_automl:  # Run AutoML only after every feature process has joined.
-                automl_combined_df, _, _ = combine_files_for_combined_evaluation(original_files_list, config=config)  # Rebuild the original dataframe for the independent AutoML workflow.
-                if automl_combined_df is not None:  # Run AutoML when source recombination succeeds.
-                    run_automl_pipeline(combined_dataset_reference, automl_combined_df, feature_names, data_source_label="Original Combined Files", config=config)  # Preserve the existing AutoML inputs and behavior.
-                    del automl_combined_df  # Release AutoML data after completion.
-            else:  # Report the existing disabled AutoML state.
-                print(f"{BackgroundColors.YELLOW}[DEBUG] AutoML pipeline is DISABLED (stacking.methods.automl=false). Skipping AutoML for combined files evaluation. Enable via config or --enable-automl flag.{Style.RESET_ALL}")  # Preserve existing operator guidance.
-            remove_cache_file(combined_dataset_reference, config=config)  # Remove resume data only after complete final export.
-            return  # Finish the process-isolated combined-files evaluation path.
         grid_progress = create_grid_progress(total_steps, f"{dataset_name} Combined Grid")  # Share one counter across HP and augmentation modes
         grid_progress["evaluation_plan"] = evaluation_plan  # Reuse the authoritative plan in every evaluation section sharing this progress bar
         all_grid_results = []  # Accumulate every result row for a single consolidated export
@@ -14554,10 +14148,6 @@ def orchestrate_all_combinations(input_path, dataset_name=None, config=None):
     if config is None:  # If no config provided
         config = CONFIG  # Use global CONFIG
 
-    feature_set_workers = validate_feature_set_workers(config.get("evaluation", {}).get("feature_set_workers", {}))  # Resolve persistent process configuration before separate-file setup.
-    if feature_set_workers:  # Reject a mode whose resource coordinator is not implemented.
-        raise ValueError("evaluation.feature_set_workers is supported only with execution.execution_mode=combined_files; use an empty mapping for sequential separate-files execution")  # Prevent silently ignored process configuration.
-
     files_to_process = determine_files_to_process(config.get("execution", {}).get("csv_file", None), input_path, config=config)  # Determine files
 
     methods_cfg = config.get("stacking", {}).get("methods", {})  # Retrieve method toggles from config
@@ -15143,9 +14733,6 @@ def log_resolved_configuration(config: dict) -> None:
         print(f"{BackgroundColors.GREEN}[INFO] Method toggle — Hyperparameter Optimization: {BackgroundColors.CYAN}{hp_enabled}{Style.RESET_ALL}")  # Log hyperparameter optimization toggle state
         print(f"{BackgroundColors.GREEN}[INFO] Method toggle — Data Augmentation: {BackgroundColors.CYAN}{da_enabled}{Style.RESET_ALL}")  # Log data augmentation toggle state
         print(f"{BackgroundColors.GREEN}[INFO] Method toggle — AutoML: {BackgroundColors.CYAN}{automl_enabled}{Style.RESET_ALL}")  # Log AutoML toggle state
-        feature_set_workers = validate_feature_set_workers(config.get("evaluation", {}).get("feature_set_workers", {}))  # Resolve persistent feature-set process configuration.
-        worker_summary = ",".join(f"{key}={count}" for key, count in feature_set_workers.items()) if feature_set_workers else "disabled (sequential)"  # Format the effective scheduling mode.
-        print(f"{BackgroundColors.GREEN}[INFO] Feature-set workers: {BackgroundColors.CYAN}{worker_summary}{Style.RESET_ALL}")  # Log the exact persistent process mapping.
 
         feature_sets_cfg = config.get("stacking", {}).get("feature_sets_config", {})  # Get resolved feature sets configuration
         full_features_flag = feature_sets_cfg.get("use_full", True)  # Resolve Full Features flag from feature sets config
