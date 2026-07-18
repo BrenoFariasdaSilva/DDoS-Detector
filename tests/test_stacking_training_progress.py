@@ -1,0 +1,433 @@
+import contextlib  # Capture deterministic progress output without changing production logging.
+import io  # Provide an in-memory text stream for progress assertions.
+import os  # Verify progress records contain the active process identity.
+import pickle  # Verify fitted estimator serialization remains byte-identical.
+from pathlib import Path  # Read isolated detached log artifacts.
+import tempfile  # Create isolated detached log destinations.
+import threading  # Verify heartbeat threads stop after every fit outcome.
+import time  # Simulate blocking estimators for heartbeat coverage.
+import unittest  # Provide the repository-standard focused test runner.
+from unittest import mock  # Inject deterministic clocks and lightweight AutoML objectives.
+import warnings  # Suppress expected convergence warnings in tiny deterministic fixtures.
+
+import lightgbm as lgb  # Exercise the exact installed LightGBM estimator callback.
+import numpy as np  # Compare predictions, probabilities, metrics, and feature importance exactly.
+from sklearn.base import clone  # Create independent baseline and progress-enabled estimators.
+from sklearn.datasets import make_classification  # Build small deterministic classification data.
+from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier, StackingClassifier  # Exercise boosting, forest, and stacking paths.
+from sklearn.linear_model import LogisticRegression  # Exercise heartbeat-only logistic training.
+from sklearn.metrics import accuracy_score, f1_score  # Compare unchanged evaluation metrics.
+from sklearn.neighbors import KNeighborsClassifier, NearestCentroid  # Exercise phase-only neighbor training.
+from sklearn.neural_network import MLPClassifier  # Exercise heartbeat-only neural-network training.
+from sklearn.svm import SVC  # Exercise heartbeat-only SVM training.
+from xgboost import XGBClassifier  # Exercise the exact installed XGBoost estimator callback.
+from xgboost.callback import TrainingCallback  # Build one existing public callback for preservation coverage.
+
+import stacking  # Exercise the real production progress integration.
+import training_progress  # Exercise reusable progress state, ETA, heartbeat, and terminal behavior directly.
+
+
+class ExistingXGBoostCallback(TrainingCallback):  # Record existing public XGBoost callback execution
+    """Record completed XGBoost rounds through the public callback API."""
+
+    def __init__(self):  # Initialize existing callback state
+        """
+        Initialize one existing XGBoost callback fixture.
+
+        :param self: Instance of the ExistingXGBoostCallback class.
+        :return: None.
+        """
+
+        self.units = []  # Store completed public boosting rounds.
+
+    def after_iteration(self, model, epoch, evals_log):  # Record one completed public boosting round
+        """
+        Record one completed XGBoost boosting round.
+
+        :param self: Instance of the ExistingXGBoostCallback class.
+        :param model: Active public XGBoost model handle.
+        :param epoch: Zero-based completed boosting-round index.
+        :param evals_log: Public XGBoost evaluation history mapping.
+        :return: False so training continues unchanged.
+        """
+
+        self.units.append(epoch + 1)  # Record the real completed round.
+        return False  # Preserve ordinary training continuation.
+
+
+class SleepingEstimator:  # Simulate one unsupported blocking estimator
+    """Provide a deterministic blocking fit without public training units."""
+
+    def __init__(self, delay_seconds=0.04):  # Initialize blocking estimator state
+        """
+        Initialize one sleeping estimator fixture.
+
+        :param self: Instance of the SleepingEstimator class.
+        :param delay_seconds: Blocking fit duration in seconds.
+        :return: None.
+        """
+
+        self.delay_seconds = delay_seconds  # Store the deterministic blocking duration.
+
+    def fit(self, X_train, y_train):  # Execute one blocking fit
+        """
+        Sleep once and return the fitted estimator.
+
+        :param self: Instance of the SleepingEstimator class.
+        :param X_train: Training feature matrix.
+        :param y_train: Training labels.
+        :return: The fitted estimator instance.
+        """
+
+        time.sleep(self.delay_seconds)  # Block long enough for multiple heartbeat intervals.
+        return self  # Preserve standard estimator fit return semantics.
+
+
+class FailingEstimator(SleepingEstimator):  # Simulate one unsupported failing estimator
+    """Raise one original fit exception after a deterministic heartbeat window."""
+
+    def __init__(self, failure, delay_seconds=0.04):  # Initialize failing estimator state
+        """
+        Initialize one failing estimator fixture.
+
+        :param self: Instance of the FailingEstimator class.
+        :param failure: Exception instance raised by fit.
+        :param delay_seconds: Blocking fit duration in seconds.
+        :return: None.
+        """
+
+        super().__init__(delay_seconds=delay_seconds)  # Initialize the inherited blocking duration.
+        self.failure = failure  # Store the exact exception instance to preserve.
+
+    def fit(self, X_train, y_train):  # Execute one failing blocking fit
+        """
+        Sleep once and raise the configured exception instance.
+
+        :param self: Instance of the FailingEstimator class.
+        :param X_train: Training feature matrix.
+        :param y_train: Training labels.
+        :return: Never returns because the configured exception is raised.
+        """
+
+        time.sleep(self.delay_seconds)  # Block long enough for heartbeat output before failure.
+        raise self.failure  # Preserve the original exception instance and traceback path.
+
+
+class TrainingProgressTests(unittest.TestCase):  # Group deterministic training progress behavior
+    """Verify callbacks, heartbeats, phases, results, and serialization."""
+
+    @classmethod
+    def setUpClass(cls):  # Build one small deterministic dataset for the suite
+        """
+        Build one deterministic binary classification fixture.
+
+        :param cls: TrainingProgressTests class.
+        :return: None.
+        """
+
+        cls.X_train, cls.y_train = make_classification(n_samples=80, n_features=6, n_informative=4, n_redundant=0, random_state=42)  # Build a compact deterministic binary dataset.
+        cls.fast_config = {"evaluation": {"training_heartbeat_interval_seconds": 0.01}}  # Use a fast heartbeat only inside focused tests.
+
+    def fit_with_output(self, model, classifier_name, fit_kwargs=None):  # Fit one estimator and capture progress output
+        """
+        Fit one estimator through the production progress integration.
+
+        :param self: Instance of the TrainingProgressTests class.
+        :param model: Estimator instance to fit.
+        :param classifier_name: Classifier identity for progress output.
+        :param fit_kwargs: Optional public fit keyword arguments.
+        :return: Captured progress output string.
+        """
+
+        output = io.StringIO()  # Allocate one isolated progress output stream.
+        with contextlib.redirect_stdout(output):  # Capture only output from this estimator fit.
+            stacking.fit_classifier_with_progress(model, self.X_train, self.y_train, "PCA Components", classifier_name, config=self.fast_config, fit_kwargs=fit_kwargs)  # Execute the production fit path on small deterministic data.
+        return output.getvalue()  # Return captured progress text for assertions.
+
+    def assert_results_identical(self, baseline, observed):  # Compare scientific outputs from two fitted estimators
+        """
+        Require identical predictions, probabilities when exposed, metrics, and serialization.
+
+        :param self: Instance of the TrainingProgressTests class.
+        :param baseline: Estimator fitted without progress integration.
+        :param observed: Estimator fitted with progress integration.
+        :return: None.
+        """
+
+        baseline_predictions = baseline.predict(self.X_train)  # Generate baseline predictions on the deterministic fixture.
+        observed_predictions = observed.predict(self.X_train)  # Generate progress-enabled predictions on the same fixture.
+        np.testing.assert_array_equal(baseline_predictions, observed_predictions)  # Require exact prediction equality.
+        self.assertEqual(accuracy_score(self.y_train, baseline_predictions), accuracy_score(self.y_train, observed_predictions))  # Require unchanged accuracy.
+        self.assertEqual(f1_score(self.y_train, baseline_predictions), f1_score(self.y_train, observed_predictions))  # Require unchanged F1 score.
+        if hasattr(baseline, "predict_proba") and hasattr(observed, "predict_proba"):  # Compare probabilities only when both estimators expose them.
+            np.testing.assert_array_equal(baseline.predict_proba(self.X_train), observed.predict_proba(self.X_train))  # Require exact probability equality.
+        self.assertEqual(pickle.dumps(baseline), pickle.dumps(observed))  # Require byte-identical fitted model serialization.
+
+    def test_xgboost_public_rounds_preserve_results_callbacks_and_identity(self):  # Verify XGBoost genuine progress
+        """
+        Verify XGBoost rounds, results, serialization, callback preservation, and identity restoration.
+
+        :param self: Instance of the TrainingProgressTests class.
+        :return: None.
+        """
+
+        baseline = XGBClassifier(n_estimators=7, max_depth=2, learning_rate=0.1, random_state=42, n_jobs=1)  # Build the deterministic no-progress baseline.
+        observed = clone(baseline)  # Build the independent progress-enabled estimator.
+        baseline.fit(self.X_train, self.y_train)  # Fit the baseline once without progress integration.
+        output = self.fit_with_output(observed, "XGBoost")  # Fit through the public XGBoost callback path.
+        self.assertIn("Round: 7/7 | Progress: 100.00%", output)  # Require the exact configured boosting-round total.
+        self.assertNotIn("Status: Active", output)  # Require genuine callbacks instead of heartbeat-only reporting.
+        self.assertIsNone(observed.get_params(deep=False).get("callbacks"))  # Require temporary callback removal from estimator identity.
+        np.testing.assert_array_equal(baseline.feature_importances_, observed.feature_importances_)  # Require unchanged XGBoost feature importance.
+        self.assert_results_identical(baseline, observed)  # Require unchanged predictions, metrics, probabilities, and serialization.
+
+        existing_callback = ExistingXGBoostCallback()  # Build one pre-existing public XGBoost callback.
+        existing_callbacks = [existing_callback]  # Preserve an identity-bearing callback list.
+        callback_model = XGBClassifier(n_estimators=4, max_depth=2, learning_rate=0.1, random_state=42, n_jobs=1, callbacks=existing_callbacks)  # Build an estimator with an existing callback.
+        callback_output = self.fit_with_output(callback_model, "XGBoost")  # Fit while composing the temporary progress callback.
+        self.assertEqual(existing_callback.units, [1, 2, 3, 4])  # Require every existing callback invocation to remain intact.
+        self.assertIs(callback_model.get_params(deep=False).get("callbacks"), existing_callbacks)  # Require exact callback-list identity restoration.
+        self.assertIn("Round: 4/4 | Progress: 100.00%", callback_output)  # Require progress alongside the existing callback.
+
+    def test_lightgbm_public_iterations_preserve_results_and_callbacks(self):  # Verify LightGBM genuine progress
+        """
+        Verify LightGBM iterations, results, serialization, and callback preservation.
+
+        :param self: Instance of the TrainingProgressTests class.
+        :return: None.
+        """
+
+        baseline = lgb.LGBMClassifier(n_estimators=7, max_depth=2, learning_rate=0.1, random_state=42, n_jobs=1, verbosity=-1)  # Build the deterministic no-progress baseline.
+        observed = clone(baseline)  # Build the independent progress-enabled estimator.
+        baseline.fit(self.X_train, self.y_train)  # Fit the baseline once without progress integration.
+        output = self.fit_with_output(observed, "LightGBM")  # Fit through the public LightGBM callback path.
+        self.assertIn("Iteration: 7/7 | Progress: 100.00%", output)  # Require the exact configured boosting-iteration total.
+        np.testing.assert_array_equal(baseline.feature_importances_, observed.feature_importances_)  # Require unchanged LightGBM feature importance.
+        self.assertEqual(baseline.booster_.model_to_string(), observed.booster_.model_to_string())  # Require unchanged serialized booster content.
+        self.assert_results_identical(baseline, observed)  # Require unchanged predictions, metrics, probabilities, and serialization.
+
+        existing_units = []  # Record one caller-supplied LightGBM callback's invocations.
+
+        def existing_callback(environment):  # Record one existing public LightGBM callback invocation
+            """
+            Record one completed LightGBM iteration.
+
+            :param environment: Public LightGBM callback environment.
+            :return: None.
+            """
+
+            existing_units.append(environment.iteration + 1)  # Record the real completed iteration.
+
+        callback_model = clone(baseline)  # Build an independent LightGBM estimator for callback composition.
+        callback_output = self.fit_with_output(callback_model, "LightGBM", fit_kwargs={"callbacks": [existing_callback]})  # Fit with the caller's existing public callback preserved.
+        self.assertEqual(existing_units, list(range(1, 8)))  # Require every existing LightGBM callback invocation.
+        self.assertIn("Iteration: 7/7 | Progress: 100.00%", callback_output)  # Require genuine progress beside the existing callback.
+
+    def test_gradient_boosting_public_stages_preserve_results_and_monitor(self):  # Verify sklearn Gradient Boosting genuine progress
+        """
+        Verify Gradient Boosting stages, results, serialization, and monitor preservation.
+
+        :param self: Instance of the TrainingProgressTests class.
+        :return: None.
+        """
+
+        baseline = GradientBoostingClassifier(n_estimators=7, max_depth=2, learning_rate=0.1, random_state=42)  # Build the deterministic no-progress baseline.
+        observed = clone(baseline)  # Build the independent progress-enabled estimator.
+        baseline.fit(self.X_train, self.y_train)  # Fit the baseline once without progress integration.
+        existing_stages = []  # Record an existing public monitor's stage invocations.
+
+        def existing_monitor(stage_index, estimator, local_variables):  # Record one existing public sklearn monitor invocation
+            """
+            Record one completed Gradient Boosting stage.
+
+            :param stage_index: Zero-based completed stage index.
+            :param estimator: Active GradientBoostingClassifier instance.
+            :param local_variables: Public monitor local-variable mapping.
+            :return: False so training continues unchanged.
+            """
+
+            existing_stages.append(stage_index + 1)  # Record the real completed stage.
+            return False  # Preserve ordinary training continuation.
+
+        output = self.fit_with_output(observed, "Gradient Boosting", fit_kwargs={"monitor": existing_monitor})  # Fit through the composed public monitor path.
+        self.assertEqual(existing_stages, list(range(1, 8)))  # Require every existing monitor invocation.
+        self.assertIn("Stage: 7/7 | Progress: 100.00%", output)  # Require the exact configured boosting-stage total.
+        np.testing.assert_array_equal(baseline.feature_importances_, observed.feature_importances_)  # Require unchanged sklearn feature importance.
+        self.assert_results_identical(baseline, observed)  # Require unchanged predictions, metrics, probabilities, and serialization.
+
+    def test_unsupported_estimators_use_single_fit_without_percentages(self):  # Verify heartbeat-only model semantics
+        """
+        Verify unsupported estimators retain single-fit semantics without fabricated percentages.
+
+        :param self: Instance of the TrainingProgressTests class.
+        :return: None.
+        """
+
+        estimators = [  # Build every requested estimator lacking a safe public unit callback.
+            ("Random Forest", RandomForestClassifier(n_estimators=7, random_state=42, n_jobs=1)),  # Exercise Random Forest without warm-start batching.
+            ("SVM", SVC(kernel="rbf", probability=True, random_state=42)),  # Exercise SVM without solver changes.
+            ("Logistic Regression", LogisticRegression(max_iter=200, random_state=42, n_jobs=1)),  # Exercise Logistic Regression without solver changes.
+            ("KNN", KNeighborsClassifier(n_neighbors=3, n_jobs=1)),  # Exercise KNN without fabricated training units.
+            ("Nearest Centroid", NearestCentroid()),  # Exercise Nearest Centroid without fabricated training units.
+            ("MLP (Neural Net)", MLPClassifier(hidden_layer_sizes=(8,), max_iter=40, random_state=42)),  # Exercise MLP without repeated partial fits.
+            ("StackingClassifier", StackingClassifier(estimators=[("lr", LogisticRegression(max_iter=200, random_state=42)), ("knn", KNeighborsClassifier(n_neighbors=3))], final_estimator=LogisticRegression(max_iter=200, random_state=42), cv=2, n_jobs=1)),  # Exercise unchanged sklearn stacking CV behavior.
+        ]  # Complete the heartbeat-only estimator list.
+        with warnings.catch_warnings():  # Suppress expected tiny-fixture convergence warnings.
+            warnings.simplefilter("ignore")  # Keep focused output limited to progress assertions.
+            for classifier_name, prototype in estimators:  # Compare every heartbeat-only estimator against a direct-fit baseline.
+                with self.subTest(classifier=classifier_name):  # Isolate failures by classifier identity.
+                    baseline = clone(prototype)  # Build the direct-fit baseline estimator.
+                    observed = clone(prototype)  # Build the progress-enabled estimator.
+                    baseline.fit(self.X_train, self.y_train)  # Execute one baseline blocking fit.
+                    output = self.fit_with_output(observed, classifier_name)  # Execute one progress-enabled blocking fit.
+                    self.assertNotIn("Progress:", output)  # Forbid fabricated percentages for unsupported estimators.
+                    self.assert_results_identical(baseline, observed)  # Require unchanged predictions, metrics, probabilities, and serialization.
+                    if classifier_name == "Random Forest":  # Compare Random Forest importance separately.
+                        np.testing.assert_array_equal(baseline.feature_importances_, observed.feature_importances_)  # Require unchanged forest feature importance.
+                        self.assertFalse(observed.warm_start)  # Require the original single-fit forest behavior without batching.
+                    if classifier_name == "MLP (Neural Net)":  # Inspect the neural-network continuation setting separately.
+                        self.assertFalse(observed.warm_start)  # Require the original single-fit MLP behavior without epoch batching.
+
+    def test_heartbeat_stops_after_success_and_preserves_failure(self):  # Verify heartbeat lifecycle and exceptions
+        """
+        Verify heartbeat cleanup after success and exact exception preservation after failure.
+
+        :param self: Instance of the TrainingProgressTests class.
+        :return: None.
+        """
+
+        success_output = self.fit_with_output(SleepingEstimator(), "SVM")  # Run one successful blocking heartbeat-only fit.
+        self.assertIn("Status: Active", success_output)  # Require a low-frequency active heartbeat.
+        self.assertIn("ETA: unavailable", success_output)  # Require unavailable ETA without public units.
+        self.assertIn(f"PID: {os.getpid()}", success_output)  # Require the active process identity.
+        self.assertNotIn("Progress:", success_output)  # Forbid elapsed-time-derived percentages.
+        self.assertFalse(any(thread.name.startswith("training-heartbeat-") for thread in threading.enumerate()))  # Require no heartbeat thread after successful fit.
+
+        failure = RuntimeError("Original fit failure")  # Create the exact exception instance expected from fit.
+        output = io.StringIO()  # Allocate isolated failure progress output.
+        with self.assertRaises(RuntimeError) as raised:  # Require the original fit exception to propagate.
+            with contextlib.redirect_stdout(output):  # Capture heartbeat output from the failing fit.
+                stacking.fit_classifier_with_progress(FailingEstimator(failure), self.X_train, self.y_train, "PCA Components", "SVM", config=self.fast_config)  # Execute one failing heartbeat-only fit.
+        self.assertIs(raised.exception, failure)  # Require exact exception-instance preservation.
+        self.assertIn("Status: Active", output.getvalue())  # Require heartbeat output before the failure.
+        self.assertFalse(any(thread.name.startswith("training-heartbeat-") for thread in threading.enumerate()))  # Require no heartbeat thread after exceptional fit.
+
+    def test_eta_uses_completed_public_units(self):  # Verify unit-derived ETA calculation
+        """
+        Verify ETA derives only from completed public training units.
+
+        :param self: Instance of the TrainingProgressTests class.
+        :return: None.
+        """
+
+        output = io.StringIO()  # Allocate isolated deterministic ETA output.
+        progress = training_progress.TrainingProgress("PCA Components", "XGBoost", stacking.calculate_execution_time, output_stream=output, total_units=4, unit_label="Round", heartbeat=False, heartbeat_interval_seconds=0.01)  # Build a four-round genuine progress scope directly from the focused module.
+        with mock.patch.object(training_progress.time, "monotonic", side_effect=[100.0, 110.0]):  # Fix start and first-completed-unit timestamps in the reusable module.
+            with progress:  # Start timing at the fixed initial timestamp.
+                progress.report_unit(1)  # Report one real completed unit after ten seconds.
+        self.assertIn("Round: 1/4 | Progress: 25.00% | Elapsed: 10s | ETA: 30s", output.getvalue())  # Require ETA derived from one completed unit only.
+
+    def test_automl_uses_public_completed_trial_callback(self):  # Verify Optuna trial progress
+        """
+        Verify AutoML model search reports genuine completed Optuna trials.
+
+        :param self: Instance of the TrainingProgressTests class.
+        :return: None.
+        """
+
+        def objective(trial, X_train, y_train, cv_folds, config=None):  # Provide one lightweight deterministic Optuna objective
+            """
+            Return a deterministic value after selecting one model identity.
+
+            :param trial: Active public Optuna trial.
+            :param X_train: Training feature matrix.
+            :param y_train: Training labels.
+            :param cv_folds: Configured cross-validation fold count.
+            :param config: Runtime configuration dictionary.
+            :return: Deterministic trial score.
+            """
+
+            trial.suggest_categorical("model_name", ["KNN"])  # Populate the production best-model parameter.
+            return float(trial.number)  # Return a deterministic increasing trial score.
+
+        config = {"automl": {"n_trials": 3, "timeout": 30, "cv_folds": 2, "random_state": 42}, "evaluation": {"training_heartbeat_interval_seconds": 0.01}}  # Configure three lightweight public trials.
+        output = io.StringIO()  # Allocate isolated AutoML progress output.
+        with mock.patch.object(stacking, "automl_objective", side_effect=objective):  # Replace only expensive model evaluation inside the real study flow.
+            with contextlib.redirect_stdout(output):  # Capture public trial callback records.
+                best_model_name, best_params, study = stacking.run_automl_model_search(self.X_train, self.y_train, "fixture.csv", config=config)  # Run the production Optuna orchestration.
+        self.assertEqual(best_model_name, "KNN")  # Require the deterministic selected model identity.
+        self.assertEqual(len(study.trials), 3)  # Require the configured real trial count.
+        self.assertIn("Trial: 3/3 | Progress: 100.00%", output.getvalue())  # Require genuine callback completion at the exact total.
+        self.assertFalse(any(thread.name.startswith("training-heartbeat-") for thread in threading.enumerate()))  # Require AutoML heartbeat cleanup after study completion.
+
+    def test_automl_stacking_uses_public_completed_trial_callback(self):  # Verify Optuna stacking-trial progress
+        """
+        Verify AutoML stacking search reports genuine completed Optuna trials.
+
+        :param self: Instance of the TrainingProgressTests class.
+        :return: None.
+        """
+
+        def objective(trial, X_train, y_train, cv_folds, candidate_models, config=None):  # Provide one lightweight deterministic stacking objective
+            """
+            Return a deterministic stacking score after populating required public parameters.
+
+            :param trial: Active public Optuna trial.
+            :param X_train: Training feature matrix.
+            :param y_train: Training labels.
+            :param cv_folds: Configured cross-validation fold count.
+            :param candidate_models: Candidate base-learner parameter mapping.
+            :param config: Runtime configuration dictionary.
+            :return: Deterministic stacking trial score.
+            """
+
+            trial.suggest_categorical("meta_learner", ["Logistic Regression"])  # Populate the production meta-learner parameter.
+            trial.suggest_int("stacking_cv_splits", 2, 2)  # Populate the production stacking fold parameter.
+            for candidate_name in candidate_models:  # Populate every production base-learner selection parameter.
+                parameter_name = f"use_{candidate_name.replace(' ', '_').replace('(', '').replace(')', '')}"  # Mirror the production public parameter identity.
+                trial.suggest_categorical(parameter_name, [True])  # Select every deterministic candidate base learner.
+            return float(trial.number)  # Return a deterministic increasing stacking score.
+
+        candidates = {"KNN": {"n_neighbors": 3}, "Decision Tree": {"max_depth": 2}}  # Provide two deterministic candidate model configurations.
+        config = {"automl": {"stacking_trials": 3, "stacking_top_n": 2, "timeout": 30, "cv_folds": 2, "random_state": 42}, "evaluation": {"training_heartbeat_interval_seconds": 0.01}}  # Configure three lightweight public stacking trials.
+        output = io.StringIO()  # Allocate isolated stacking-search progress output.
+        with mock.patch.object(stacking, "extract_top_automl_models", return_value=candidates):  # Replace model extraction with two deterministic candidates.
+            with mock.patch.object(stacking, "automl_stacking_objective", side_effect=objective):  # Replace only expensive stacking evaluation inside the real study flow.
+                with contextlib.redirect_stdout(output):  # Capture public stacking-trial callback records.
+                    best_config, study = stacking.run_automl_stacking_search(self.X_train, self.y_train, object(), "fixture.csv", config=config)  # Run the production Optuna stacking orchestration.
+        self.assertEqual(len(study.trials), 3)  # Require the configured real stacking-trial count.
+        self.assertEqual(best_config["meta_learner"], "Logistic Regression")  # Require the deterministic selected meta-learner.
+        self.assertIn("Trial: 3/3 | Progress: 100.00%", output.getvalue())  # Require genuine stacking callback completion at the exact total.
+        self.assertFalse(any(thread.name.startswith("training-heartbeat-") for thread in threading.enumerate()))  # Require stacking-search heartbeat cleanup after study completion.
+
+    def test_phase_records_are_newline_delimited_in_detached_log(self):  # Verify detached log readability
+        """
+        Verify every required phase remains newline-delimited in detached stacking.log output.
+
+        :param self: Instance of the TrainingProgressTests class.
+        :return: None.
+        """
+
+        phases = ["Model preparation", "Training", "Prediction", "Metrics", "Explainability", "Model export", "Cache persistence"]  # List every required lifecycle phase.
+        with tempfile.TemporaryDirectory() as temporary_directory:  # Isolate the detached log artifact.
+            log_path = Path(temporary_directory) / "stacking.log"  # Resolve the isolated production-style log path.
+            detached_logger = stacking.Logger(str(log_path), clean=True)  # Create the repository's real dual-channel logger.
+            original_stdout = stacking.sys.stdout  # Preserve the active test output stream.
+            try:  # Restore stdout and close the logger after phase emission.
+                stacking.sys.stdout = detached_logger  # Route production phase records through stacking.log.
+                detached_interactive = training_progress.interactive_terminal_attached(detached_logger)  # Resolve reusable terminal behavior through the detached repository logger.
+                for phase in phases:  # Emit every required lifecycle phase once.
+                    stacking.log_training_phase("PCA Components", "SVM", phase, "Completed")  # Write one production phase record.
+            finally:  # Restore output even if phase logging fails.
+                stacking.sys.stdout = original_stdout  # Restore the active test output stream.
+                detached_logger.close()  # Close the isolated log file.
+            log_text = log_path.read_text(encoding="utf-8")  # Read the durable detached log output.
+        for phase in phases:  # Verify every required lifecycle phase is durable.
+            self.assertIn(f"Phase: {phase}", log_text)  # Require a distinct record for this phase.
+        self.assertNotIn("\r", log_text)  # Forbid interactive carriage-return rendering in detached logs.
+        self.assertIn("Feature Set: PCA | Classifier: SVM", log_text)  # Require concise feature-set and classifier identities.
+        self.assertFalse(detached_interactive)  # Require interactive progress rendering to remain disabled for detached logging.
+
+
+if __name__ == "__main__":  # Support direct focused test execution.
+    unittest.main()  # Run the training progress test suite.
