@@ -102,7 +102,6 @@ import tracemalloc  # Capture optional Python allocation snapshots at phase boun
 import uuid  # Generate collision-resistant watcher run identifiers
 import yaml  # Import YAML library
 from colorama import Style  # For terminal text styling
-from concurrent.futures import CancelledError, ThreadPoolExecutor, as_completed  # For bounded nested feature-set and classifier execution.
 from joblib import dump, load  # For exporting and loading trained models and scalers
 from lime.lime_tabular import LimeTabularExplainer  # Import LIME library
 from Logger import Logger  # For logging output to both terminal and file
@@ -134,10 +133,10 @@ from sklearn.neural_network import MLPClassifier  # For neural network model
 from sklearn.preprocessing import LabelEncoder, StandardScaler  # For label encoding and feature scaling
 from sklearn.svm import SVC  # For Support Vector Machine model
 from sklearn.tree import DecisionTreeClassifier  # For Decision Tree classifier model
-from telegram_bot import TelegramBot, send_exception_via_telegram as send_exception_via_telegram_serialized, send_telegram_message as send_telegram_message_serialized, setup_global_exception_hook  # For sending progress messages to Telegram
+from telegram_bot import TelegramBot, send_exception_via_telegram, send_telegram_message, setup_global_exception_hook  # For sending progress messages to Telegram
 from threadpoolctl import threadpool_limits  # For narrowly limiting BLAS and OpenMP threads during feature extraction
 from tqdm import tqdm  # For progress bars
-from typing import Any, Callable, Dict, Optional, List, Tuple, cast  # For optional and collection typing hints
+from typing import Any, Callable, Optional, List, Tuple, cast  # For optional and collection typing hints
 from xgboost import XGBClassifier  # For XGBoost classifier
 
 
@@ -174,66 +173,6 @@ MEMORY_WATCHER_FINALIZED = False  # Prevents duplicate terminal watcher events
 FEATURE_SOURCE_TEMP_DIRS: set = set()  # Tracks temporary feature-source directories created by this process
 CACHE_THREAD_LOCKS: dict = {}  # Stores process-local cache locks by normalized destination path
 CACHE_THREAD_LOCKS_GUARD = threading.Lock()  # Serializes process-local cache lock creation
-RESULT_PUBLICATION_LOCK = threading.RLock()  # Serializes authoritative in-memory result and cache publication.
-PROGRESS_STATE_LOCK = threading.RLock()  # Serializes shared progress-bar descriptions and counters.
-NOTIFICATION_STATE_LOCK = threading.RLock()  # Serializes Telegram calls made by concurrent evaluation threads.
-EXPLAINABILITY_STATE_LOCK = threading.RLock()  # Serializes access to global explainability process state.
-MEMORY_WATCHER_EVENT_LOCK = threading.RLock()  # Serializes watcher event identifiers and JSONL publication.
-FEATURE_SOURCE_STATE_LOCK = threading.RLock()  # Serializes temporary feature-source ownership tracking.
-ARTIFACT_RECOVERY_LOCK = threading.RLock()  # Serializes missing-model recovery across concurrent combinations.
-PLOT_PUBLICATION_LOCK = threading.RLock()  # Serializes matplotlib output that targets shared metric filenames.
-FEATURE_SET_DISPLAY_KEYS = {"Full Features": "full", "Explicit Features": "explicit", "GA Features": "ga", "PCA Components": "pca", "RFE Features": "rfe"}  # Maps production feature-set labels to worker configuration keys.
-
-
-def send_telegram_message(bot: Any, messages: Any, condition: bool = True) -> None:  # Serialize Telegram notifications from concurrent evaluation threads.
-    """
-    Send one Telegram notification under the shared notification lock.
-
-    :param bot: Telegram bot instance used by the existing notification implementation.
-    :param messages: Message string or message collection accepted by the existing implementation.
-    :param condition: Additional condition controlling whether the message is sent.
-    :return: None.
-    """
-
-    with NOTIFICATION_STATE_LOCK:  # Prevent concurrent event-loop creation and shared bot access.
-        send_telegram_message_serialized(bot, messages, condition=condition)  # Delegate to the established Telegram implementation.
-
-
-def send_exception_via_telegram(exc_type: Any, exc_value: Any, exc_tb: Any) -> None:  # Serialize exception notifications from concurrent evaluation threads.
-    """
-    Send one exception notification under the shared notification lock.
-
-    :param exc_type: Exception type reported by the caller.
-    :param exc_value: Exception value reported by the caller.
-    :param exc_tb: Exception traceback reported by the caller.
-    :return: None.
-    """
-
-    with NOTIFICATION_STATE_LOCK:  # Prevent concurrent exception formatting and shared bot access.
-        send_exception_via_telegram_serialized(exc_type, exc_value, exc_tb)  # Delegate to the established exception notification implementation.
-
-
-class SynchronizedProgressBar:  # Provide atomic progress operations for concurrent classifier completion.
-    """Serialize the subset of tqdm operations used by the evaluation pipeline."""
-
-    def __init__(self, progress_bar: Any) -> None:  # Store the wrapped tqdm instance.
-        self.progress_bar = progress_bar  # Retain the existing progress-bar behavior and formatting.
-
-    def set_description(self, description: str) -> None:  # Serialize active-combination description updates.
-        with PROGRESS_STATE_LOCK:  # Prevent concurrent terminal rendering changes.
-            self.progress_bar.set_description(description)  # Delegate the description update to tqdm.
-
-    def set_postfix_str(self, text_value: str) -> None:  # Serialize progress postfix updates.
-        with PROGRESS_STATE_LOCK:  # Prevent concurrent postfix rendering changes.
-            self.progress_bar.set_postfix_str(text_value)  # Delegate the postfix update to tqdm.
-
-    def update(self, amount: int = 1) -> None:  # Serialize completed-combination increments.
-        with PROGRESS_STATE_LOCK:  # Preserve exact monotonic progress counts.
-            self.progress_bar.update(amount)  # Delegate the counter increment to tqdm.
-
-    def close(self) -> None:  # Serialize terminal progress finalization.
-        with PROGRESS_STATE_LOCK:  # Prevent closure during an active update.
-            self.progress_bar.close()  # Delegate finalization to tqdm.
 
 
 # Functions Definitions:
@@ -523,36 +462,35 @@ def write_memory_phase_event(phase: str, config: Optional[dict] = None, **metada
     """
 
     global MEMORY_WATCHER_EVENT_COUNTER  # Increment shared phase event counter
-    with MEMORY_WATCHER_EVENT_LOCK:  # Preserve event ordering and indivisible JSONL appends across evaluation threads.
-        try:  # Keep diagnostics from interrupting model execution
-            if not memory_watcher_enabled(config):  # Skip phase writes when watcher is disabled
-                return  # Leave without diagnostics
-            state_path = MEMORY_WATCHER_PHASE_STATE_PATH  # Read shared phase-state path
-            if not state_path:  # Skip until watcher startup resolves the state path
-                return  # Leave without diagnostics
-            MEMORY_WATCHER_EVENT_COUNTER += 1  # Increment monotonic event counter
-            event_id = MEMORY_WATCHER_EVENT_COUNTER  # Capture current event id
-            event = build_memory_phase_metadata(config, **metadata)  # Build compact metadata payload
-            event["event_id"] = event_id  # Store phase event id
-            event["timestamp"] = datetime.datetime.now(datetime.timezone.utc).isoformat()  # Store phase timestamp
-            event["phase"] = phase  # Store phase name
-            tmp_path = f"{state_path}.{os.getpid()}.{event_id}.tmp"  # Build same-directory temporary path
-            with open(tmp_path, "w", encoding="utf-8") as file_obj:  # Write temporary phase state
-                json.dump(sanitize_memory_watcher_value(event), file_obj, sort_keys=True)  # Serialize compact phase state
-                file_obj.write("\n")  # Terminate JSON file
-                file_obj.flush()  # Flush Python buffer
-                os.fsync(file_obj.fileno())  # Flush phase-state data to disk
-            os.replace(tmp_path, state_path)  # Atomically publish latest phase state
-            phase_events_path = os.path.join(os.path.dirname(state_path), "phase_events.jsonl")  # Resolve phase events JSONL path
-            with open(phase_events_path, "a", encoding="utf-8") as events_file:  # Append an ordered main-process phase event
-                events_file.write(json.dumps({"timestamp": event["timestamp"], "event_type": "phase_event", "phase_metadata": sanitize_memory_watcher_value(event)}, sort_keys=True) + "\n")  # Write compact phase event row
-                events_file.flush()  # Flush phase event row promptly
-            write_memory_tracemalloc_report(phase, event_id, config=config)  # Write optional tracemalloc report
-        except Exception as exc:  # Swallow watcher write failures
-            try:  # Best-effort warning output
-                print(f"{BackgroundColors.YELLOW}[WARNING] Memory watcher phase write failed for phase {phase}: {exc}{Style.RESET_ALL}")  # Log phase write failure
-            except Exception:  # Ignore logging failure
-                pass  # Continue training
+    try:  # Keep diagnostics from interrupting model execution
+        if not memory_watcher_enabled(config):  # Skip phase writes when watcher is disabled
+            return  # Leave without diagnostics
+        state_path = MEMORY_WATCHER_PHASE_STATE_PATH  # Read shared phase-state path
+        if not state_path:  # Skip until watcher startup resolves the state path
+            return  # Leave without diagnostics
+        MEMORY_WATCHER_EVENT_COUNTER += 1  # Increment monotonic event counter
+        event_id = MEMORY_WATCHER_EVENT_COUNTER  # Capture current event id
+        event = build_memory_phase_metadata(config, **metadata)  # Build compact metadata payload
+        event["event_id"] = event_id  # Store phase event id
+        event["timestamp"] = datetime.datetime.now(datetime.timezone.utc).isoformat()  # Store phase timestamp
+        event["phase"] = phase  # Store phase name
+        tmp_path = f"{state_path}.{os.getpid()}.{event_id}.tmp"  # Build same-directory temporary path
+        with open(tmp_path, "w", encoding="utf-8") as file_obj:  # Write temporary phase state
+            json.dump(sanitize_memory_watcher_value(event), file_obj, sort_keys=True)  # Serialize compact phase state
+            file_obj.write("\n")  # Terminate JSON file
+            file_obj.flush()  # Flush Python buffer
+            os.fsync(file_obj.fileno())  # Flush phase-state data to disk
+        os.replace(tmp_path, state_path)  # Atomically publish latest phase state
+        phase_events_path = os.path.join(os.path.dirname(state_path), "phase_events.jsonl")  # Resolve phase events JSONL path
+        with open(phase_events_path, "a", encoding="utf-8") as events_file:  # Append an ordered main-process phase event
+            events_file.write(json.dumps({"timestamp": event["timestamp"], "event_type": "phase_event", "phase_metadata": sanitize_memory_watcher_value(event)}, sort_keys=True) + "\n")  # Write compact phase event row
+            events_file.flush()  # Flush phase event row promptly
+        write_memory_tracemalloc_report(phase, event_id, config=config)  # Write optional tracemalloc report
+    except Exception as exc:  # Swallow watcher write failures
+        try:  # Best-effort warning output
+            print(f"{BackgroundColors.YELLOW}[WARNING] Memory watcher phase write failed for phase {phase}: {exc}{Style.RESET_ALL}")  # Log phase write failure
+        except Exception:  # Ignore logging failure
+            pass  # Continue training
 
 
 def create_memory_watcher_run_directory(config: Optional[dict] = None) -> Optional[str]:  # Create unique watcher run directory
@@ -873,7 +811,6 @@ def parse_cli_args():
         parser.set_defaults(enable_explainability=None)  # Preserve the YAML/default setting when neither explainability flag is provided.
         parser.add_argument("--n-jobs", dest="n_jobs", type=int, default=None, help="Override evaluation.n_jobs for estimators that support parallel fitting (-1 uses all processors; 1 is memory-safe)",)
         parser.add_argument("--feature-extraction-n-jobs", dest="feature_extraction_n_jobs", type=int, default=None, help="Override evaluation.feature_extraction_n_jobs for feature extraction/transformation stages such as PCA, not classifier training (-1 uses available CPUs; 1 is memory-safe)")  # Add the independent feature extraction thread override
-        parser.add_argument("--feature-set-workers", dest="feature_set_workers", type=str, default=None, help="Override evaluation.feature_set_workers with comma-separated assignments such as ga=2,pca=1,rfe=1")  # Add the outer feature-set worker override.
         parser.add_argument("--low-memory", dest="low_memory", action="store_true", default=False, help="Enable low memory mode for pandas operations")  # Add low memory mode CLI argument
         parser.add_argument("--dataset-file-format", type=str, default=None, dest="dataset_file_format", help="File format for dataset files: arff, csv, parquet, txt")  # Dataset file format CLI override
         parser.add_argument("--augmentation-file-format", type=str, default=None, dest="augmentation_file_format", help="File format for augmentation files: arff, csv, parquet, txt")  # Augmentation file format CLI override
@@ -1060,7 +997,6 @@ def get_default_config():
         "evaluation": {
             "n_jobs": 1,
             "feature_extraction_n_jobs": 1,  # Use one thread for feature extraction by default without changing classifier training parallelism
-            "feature_set_workers": {},  # Keep outer feature-set concurrency disabled unless the user explicitly configures it.
             "threads_limit": 2,
             "cv_folds": 10,
             "random_state": 42,
@@ -1127,37 +1063,6 @@ def get_default_config():
         raise  # Re-raise to preserve original failure semantics
 
 
-def validate_feature_set_worker_yaml_duplicates(yaml_text: str, source: str) -> None:  # Reject ambiguous worker keys before safe loading collapses them.
-    """
-    Validate that the YAML worker map contains no repeated normalized keys.
-
-    :param yaml_text: Raw YAML configuration text.
-    :param source: User-facing configuration source name.
-    :return: None.
-    """
-
-    root_node = yaml.compose(yaml_text)  # Parse the YAML node tree while preserving repeated mapping entries.
-    if root_node is None or not isinstance(root_node, yaml.MappingNode):  # Ignore empty files and let the established loader validate other root shapes.
-        return  # Leave unrelated YAML validation to the existing load path.
-    evaluation_nodes = [value_node for key_node, value_node in root_node.value if str(key_node.value).strip().lower() == "evaluation"]  # Collect every top-level evaluation section before loading.
-    if len(evaluation_nodes) > 1:  # Reject repeated evaluation sections because their worker maps would otherwise be ambiguous.
-        raise ValueError(f"{source} contains repeated evaluation mappings")  # Report the ambiguous top-level structure.
-    if not evaluation_nodes or not isinstance(evaluation_nodes[0], yaml.MappingNode):  # Stop when no mapping-form evaluation section exists.
-        return  # Leave missing or malformed sections to the normal validation path.
-    worker_nodes = [value_node for key_node, value_node in evaluation_nodes[0].value if str(key_node.value).strip().lower() == "feature_set_workers"]  # Collect every worker-map declaration in the evaluation section.
-    if len(worker_nodes) > 1:  # Reject repeated worker-map declarations before safe loading overwrites one.
-        raise ValueError(f"{source} contains repeated evaluation.feature_set_workers mappings")  # Report the duplicated setting.
-    if not worker_nodes or not isinstance(worker_nodes[0], yaml.MappingNode):  # Stop when the worker setting is absent or not a mapping node.
-        return  # Let typed worker validation report any malformed value later.
-    normalized_keys = set()  # Track case-insensitive keys that have already appeared.
-    for key_node, value_node in worker_nodes[0].value:  # Inspect every raw worker assignment without discarding duplicates.
-        del value_node  # Mark the unused value node explicitly.
-        normalized_key = str(key_node.value).strip().lower()  # Normalize worker keys using the runtime parser rules.
-        if normalized_key in normalized_keys:  # Detect exact, case-only, and whitespace-only key duplication.
-            raise ValueError(f"{source} contains repeated evaluation.feature_set_workers key: {normalized_key}")  # Reject ambiguous per-key precedence.
-        normalized_keys.add(normalized_key)  # Record the normalized key for subsequent comparisons.
-
-
 def load_config_file(config_path=None):
     """
     Load configuration from YAML file.
@@ -1177,12 +1082,8 @@ def load_config_file(config_path=None):
         
         try:  # Try to load YAML file
             with open(config_path, "r", encoding="utf-8") as f:  # Open config file
-                yaml_text = f.read()  # Read raw text so repeated worker keys can be rejected before loading.
-            validate_feature_set_worker_yaml_duplicates(yaml_text, str(config_path))  # Reject ambiguous feature-set worker declarations.
-            config = yaml.safe_load(yaml_text)  # Load YAML safely after raw structural validation.
+                config = yaml.safe_load(f)  # Load YAML safely
             return config or {}  # Return loaded config or empty dict
-        except ValueError:  # Preserve explicit worker validation failures instead of silently ignoring them.
-            raise  # Propagate invalid user concurrency configuration.
         except Exception as e:  # If loading fails
             print(f"{BackgroundColors.YELLOW}Warning: Failed to load config file {config_path}: {e}{Style.RESET_ALL}")
             return {}  # Return empty dict on error
@@ -1228,60 +1129,6 @@ def validate_feature_extraction_n_jobs(value: Any, source: str = "evaluation.fea
     return value  # Return the validated independent feature extraction setting.
 
 
-def validate_feature_set_workers_map(value: Any, source: str = "evaluation.feature_set_workers") -> Dict[str, int]:  # Validate and normalize explicit outer worker assignments.
-    """
-    Validate a feature-set worker mapping.
-
-    :param value: Mapping from supported feature-set keys to positive worker counts.
-    :param source: User-facing setting name used in validation errors.
-    :return: Normalized worker mapping with lowercase keys.
-    """
-
-    if value is None:  # Treat an omitted YAML value as disabled only when the setting is absent after default merging.
-        raise ValueError(f"{source} must be a mapping")  # Reject an explicit null because it obscures user intent.
-    if not isinstance(value, dict):  # Require mapping syntax for unambiguous per-feature allocation.
-        raise ValueError(f"{source} must be a mapping")  # Reject scalar and sequence forms.
-    supported_keys = set(FEATURE_SET_DISPLAY_KEYS.values())  # Define every accepted normalized feature-set key.
-    normalized_workers: Dict[str, int] = {}  # Build a canonical mapping independent of YAML key case.
-    for raw_key, raw_count in value.items():  # Validate every supplied worker assignment.
-        if not isinstance(raw_key, str) or not raw_key.strip():  # Require non-empty textual feature-set keys.
-            raise ValueError(f"{source} keys must be non-empty strings")  # Reject keys that cannot identify a feature set.
-        normalized_key = raw_key.strip().lower()  # Normalize case and surrounding whitespace consistently.
-        if normalized_key not in supported_keys:  # Reject unknown feature sets instead of silently ignoring misspellings.
-            raise ValueError(f"{source} contains unsupported key '{raw_key}'; valid keys are {sorted(supported_keys)}")  # Report the complete accepted key set.
-        if normalized_key in normalized_workers:  # Reject duplicate keys produced by case or whitespace normalization.
-            raise ValueError(f"{source} contains repeated key '{normalized_key}'")  # Preserve unambiguous per-key allocation.
-        if isinstance(raw_count, bool) or not isinstance(raw_count, int) or raw_count <= 0:  # Accept only positive integer worker counts.
-            raise ValueError(f"{source}.{normalized_key} must be an integer greater than 0")  # Reject booleans, fractions, strings, zero, and negatives.
-        normalized_workers[normalized_key] = raw_count  # Store the validated positive worker count.
-    return normalized_workers  # Return canonical worker configuration.
-
-
-def parse_feature_set_workers_cli(value: str) -> Dict[str, int]:  # Parse strict comma-separated CLI worker assignments.
-    """
-    Parse feature-set worker assignments supplied through the command line.
-
-    :param value: Comma-separated key=value assignments.
-    :return: Normalized worker mapping with lowercase keys.
-    """
-
-    if not isinstance(value, str) or not value.strip():  # Reject an empty override because it cannot express intentional precedence.
-        raise ValueError("--feature-set-workers must contain at least one key=value assignment")  # Report the required CLI form.
-    parsed_workers: Dict[str, int] = {}  # Accumulate raw integer assignments before shared map validation.
-    for assignment in value.split(","):  # Parse each comma-delimited feature-set assignment.
-        assignment_text = assignment.strip()  # Remove harmless surrounding whitespace.
-        if not assignment_text or assignment_text.count("=") != 1:  # Require exactly one key/value delimiter in every segment.
-            raise ValueError(f"Invalid --feature-set-workers assignment '{assignment}'; expected key=value")  # Report the malformed segment.
-        raw_key, raw_count = [part.strip() for part in assignment_text.split("=", 1)]  # Split and normalize both assignment components.
-        normalized_key = raw_key.lower()  # Normalize the CLI key before duplicate detection.
-        if normalized_key in parsed_workers:  # Reject repeated CLI keys instead of applying implicit last-write precedence.
-            raise ValueError(f"--feature-set-workers contains repeated key '{normalized_key}'")  # Report the ambiguous override.
-        if not re.fullmatch(r"[0-9]+", raw_count):  # Require a decimal positive integer representation.
-            raise ValueError(f"--feature-set-workers value for '{raw_key}' must be an integer greater than 0")  # Reject signs, fractions, booleans, and empty counts.
-        parsed_workers[raw_key] = int(raw_count)  # Store the integer for canonical shared validation.
-    return validate_feature_set_workers_map(parsed_workers, "--feature-set-workers")  # Apply supported-key and positive-count validation.
-
-
 def merge_configs(defaults, file_config, cli_args):
     """
     Merge configurations with priority: CLI > file > defaults.
@@ -1294,7 +1141,6 @@ def merge_configs(defaults, file_config, cli_args):
 
     try:
         config = deep_merge_dicts(defaults, file_config)  # Merge file config into defaults
-        config.setdefault("evaluation", {})["feature_set_workers"] = validate_feature_set_workers_map(config.get("evaluation", {}).get("feature_set_workers", {}))  # Validate and normalize YAML worker allocation before CLI precedence.
         
         classification_mode = config.get("execution", {}).get("classification_mode", None)  # Read classification_mode from config if present
         if classification_mode is not None:  # If classification_mode was explicitly set in config
@@ -1368,10 +1214,6 @@ def merge_configs(defaults, file_config, cli_args):
             validated_feature_extraction_n_jobs = validate_feature_extraction_n_jobs(cli_args.feature_extraction_n_jobs, "--feature-extraction-n-jobs")  # Validate the independent CLI value.
             config.setdefault("evaluation", {})["feature_extraction_n_jobs"] = validated_feature_extraction_n_jobs  # Apply the feature extraction override without changing classifier n_jobs.
 
-        if hasattr(cli_args, "feature_set_workers") and cli_args.feature_set_workers is not None:  # Feature-set worker CLI override.
-            cli_feature_set_workers = parse_feature_set_workers_cli(cli_args.feature_set_workers)  # Parse and validate explicit per-key CLI assignments.
-            config.setdefault("evaluation", {}).setdefault("feature_set_workers", {}).update(cli_feature_set_workers)  # Override only supplied keys while preserving unrelated YAML allocations.
-
         if hasattr(cli_args, "low_memory") and cli_args.low_memory:  # Low memory CLI override
             config["execution"]["low_memory"] = True  # Apply low memory override to config
 
@@ -1412,7 +1254,6 @@ def merge_configs(defaults, file_config, cli_args):
             config.setdefault("memory_watcher", {})["capture_tracemalloc"] = True  # Enable optional Python allocation reports
 
         validate_feature_extraction_n_jobs(config.get("evaluation", {}).get("feature_extraction_n_jobs", 1))  # Validate the effective feature extraction setting after CLI precedence is applied.
-        config.setdefault("evaluation", {})["feature_set_workers"] = validate_feature_set_workers_map(config.get("evaluation", {}).get("feature_set_workers", {}))  # Validate the final merged worker map after CLI precedence.
         return config  # Return final merged configuration
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
@@ -5712,8 +5553,7 @@ def resolve_feature_source_spill_base_directory(file: str, config: Optional[dict
     else:  # Use the dataset's stacking output area by default
         base_directory = Path(get_stacking_output_dir(str(file), config)) / "Array_Cache"  # Build dataset-local temporary array cache directory
     base_directory.mkdir(parents=True, exist_ok=True)  # Ensure base directory exists
-    with FEATURE_SOURCE_STATE_LOCK:  # Prevent concurrent spill workers from removing the same stale directory.
-        cleanup_stale_feature_source_directories(base_directory, config=config)  # Remove only ownership-proven leftovers from terminated local processes
+    cleanup_stale_feature_source_directories(base_directory, config=config)  # Remove only ownership-proven leftovers from terminated local processes
     return base_directory  # Return base directory path
 
 
@@ -5749,8 +5589,7 @@ def cleanup_stale_feature_source_directories(base_directory: Path, config: Optio
             continue  # Never delete an active directory owned by this or another running process
         try:
             shutil.rmtree(str(candidate))  # Delete only the exact ownership-proven stale directory
-            with FEATURE_SOURCE_STATE_LOCK:  # Serialize shared temporary-directory ownership updates.
-                FEATURE_SOURCE_TEMP_DIRS.discard(str(candidate.resolve()))  # Remove any matching local tracking entry
+            FEATURE_SOURCE_TEMP_DIRS.discard(str(candidate.resolve()))  # Remove any matching local tracking entry
             verbose_output(f"{BackgroundColors.GREEN}[MEMORY] Removed stale feature-source spill directory: {BackgroundColors.CYAN}{candidate}{Style.RESET_ALL}", config=config)  # Log stale cleanup when verbose
         except Exception as exc:
             print(f"{BackgroundColors.YELLOW}[WARNING] Failed to clean stale feature-source spill directory at {candidate}: {exc}{Style.RESET_ALL}")  # Keep stale cleanup best-effort
@@ -5830,8 +5669,7 @@ def cleanup_feature_source_arrays(feature_source_arrays: Optional[dict], config:
         if spill_temp_dir and os.path.isdir(spill_temp_dir):  # Remove only this run's unique temporary directory
             shutil.rmtree(spill_temp_dir)  # Delete temporary memmap files after handles are explicitly closed
         if spill_temp_dir and not os.path.exists(spill_temp_dir):  # Stop tracking only after confirmed removal
-            with FEATURE_SOURCE_STATE_LOCK:  # Serialize shared temporary-directory ownership updates.
-                FEATURE_SOURCE_TEMP_DIRS.discard(str(Path(spill_temp_dir).resolve()))  # Remove this exact directory from the current-run tracker
+            FEATURE_SOURCE_TEMP_DIRS.discard(str(Path(spill_temp_dir).resolve()))  # Remove this exact directory from the current-run tracker
     except Exception as exc:  # Keep cleanup best-effort
         print(f"{BackgroundColors.YELLOW}[WARNING] Failed to clean feature-source spill files at {spill_temp_dir}: {exc}{Style.RESET_ALL}")  # Log cleanup failure
     finally:
@@ -5874,8 +5712,7 @@ def maybe_spill_feature_source_arrays(feature_source_arrays: dict, file: str, co
         host_identity = hashlib.sha256(platform.node().encode("utf-8")).hexdigest()[:12]  # Identify the host that owns this temporary directory
         process_create_time = int(psutil.Process(os.getpid()).create_time() * 1000000)  # Pair PID with process birth time so reuse cannot mark a stale directory active
         temp_dir = str(Path(tempfile.mkdtemp(prefix=f"FeatureSource_{host_identity}_{os.getpid()}_{process_create_time}_", dir=str(base_directory))).resolve())  # Create an ownership-bearing unique spill directory
-        with FEATURE_SOURCE_STATE_LOCK:  # Serialize shared temporary-directory ownership updates.
-            FEATURE_SOURCE_TEMP_DIRS.add(temp_dir)  # Track the directory immediately so partial spills are covered
+        FEATURE_SOURCE_TEMP_DIRS.add(temp_dir)  # Track the directory immediately so partial spills are covered
         feature_source_arrays["spill_temp_dir"] = temp_dir  # Expose the directory to every evaluation cleanup path before writing files
         X_train_memmap, train_path = spill_array_to_memmap(X_train_source, temp_dir, "X_train_scaled")  # Spill train source matrix
         X_test_memmap, test_path = spill_array_to_memmap(X_test_source, temp_dir, "X_test_scaled")  # Spill test source matrix
@@ -5905,8 +5742,7 @@ def maybe_spill_feature_source_arrays(feature_source_arrays: dict, file: str, co
             except Exception as cleanup_exc:
                 print(f"{BackgroundColors.YELLOW}[WARNING] Failed to clean partial feature-source spill directory at {temp_dir}: {cleanup_exc}{Style.RESET_ALL}")  # Log cleanup failure without hiding the spill error
         if temp_dir and not os.path.exists(temp_dir):  # Stop tracking only after confirmed removal
-            with FEATURE_SOURCE_STATE_LOCK:  # Serialize shared temporary-directory ownership updates.
-                FEATURE_SOURCE_TEMP_DIRS.discard(str(Path(temp_dir).resolve()))  # Remove the exact failed directory from current-run tracking
+            FEATURE_SOURCE_TEMP_DIRS.discard(str(Path(temp_dir).resolve()))  # Remove the exact failed directory from current-run tracking
         feature_source_arrays.pop("spill_temp_dir", None)  # Restore the in-memory holder after failed spilling
         write_memory_phase_event("after_feature_source_spill", config=config, dataset_source=file, spilled_total_nbytes=total_nbytes, event_outcome=f"failed:{exc}")  # Publish failed spill event when watcher is active
         print(f"{BackgroundColors.YELLOW}[WARNING] Feature-source memmap spill failed; continuing with in-memory arrays: {exc}{Style.RESET_ALL}")  # Warn operator that memory-saving spill is unavailable
@@ -5920,15 +5756,12 @@ def cleanup_tracked_feature_source_directories(config: Optional[dict] = None) ->
     :return: None.
     """
 
-    with FEATURE_SOURCE_STATE_LOCK:  # Serialize the shared ownership snapshot.
-        tracked_directories = list(FEATURE_SOURCE_TEMP_DIRS)  # Snapshot current-run ownership entries for safe removal
-    for temp_dir in tracked_directories:  # Process the stable ownership snapshot outside the lock.
+    for temp_dir in list(FEATURE_SOURCE_TEMP_DIRS):  # Snapshot current-run ownership entries for safe removal
         try:
             if os.path.isdir(temp_dir):  # Remove only an exact directory created and tracked by this process
                 shutil.rmtree(temp_dir)  # Retry cleanup after evaluation-level handles have been released
             if not os.path.exists(temp_dir):  # Confirm removal before clearing ownership tracking
-                with FEATURE_SOURCE_STATE_LOCK:  # Serialize shared temporary-directory ownership updates.
-                    FEATURE_SOURCE_TEMP_DIRS.discard(temp_dir)  # Mark this exact directory cleaned
+                FEATURE_SOURCE_TEMP_DIRS.discard(temp_dir)  # Mark this exact directory cleaned
         except Exception as exc:
             print(f"{BackgroundColors.YELLOW}[WARNING] Failed to clean tracked feature-source spill directory at {temp_dir}: {exc}{Style.RESET_ALL}")  # Keep final cleanup best-effort
 
@@ -8060,7 +7893,7 @@ def start_explainability_process(model: Any, model_name: str, X_test: Any, y_tes
         raise  # Propagate startup failure to trigger synchronous fallback.
 
 
-def execute_explainability_schedule(model: Any, model_name: str, X_test: Any, y_test: Any, feature_names: Any, dataset_file: str, feature_set: str, execution_mode: str, config: Optional[dict], experiment_mode: str, hyperparameters_enabled: bool, training_ram_stats: Optional[dict] = None) -> Optional[dict]:  # Execute one explainability decision while the caller owns serialization.
+def schedule_explainability_job(model: Any, model_name: str, X_test: Any, y_test: Any, feature_names: Any, dataset_file: str, feature_set: str, execution_mode: str, config: Optional[dict], experiment_mode: str, hyperparameters_enabled: bool, training_ram_stats: Optional[dict] = None) -> Optional[dict]:
     """
     Dispatch explainability after classifier result completion.
 
@@ -8113,29 +7946,6 @@ def execute_explainability_schedule(model: Any, model_name: str, X_test: Any, y_
     gc.collect()  # Reclaim explainability temporaries before returning to the classifier loop.
     verbose_output(f"{BackgroundColors.GREEN}Completed synchronous explainability for {BackgroundColors.CYAN}{model_name} - {explainability_feature_set}{Style.RESET_ALL}", config=config)  # Log synchronous explainability completion.
     return {"mode": "synchronous", "pid": None, "average_training_ram": average_training_ram, "latest_training_ram": latest_training_ram, "dispatch_ram": dispatch_ram}  # Return synchronous dispatch metadata.
-
-
-def schedule_explainability_job(model: Any, model_name: str, X_test: Any, y_test: Any, feature_names: Any, dataset_file: str, feature_set: str, execution_mode: str, config: Optional[dict], experiment_mode: str, hyperparameters_enabled: bool, training_ram_stats: Optional[dict] = None) -> Optional[dict]:  # Serialize explainability scheduling across concurrent classifiers.
-    """
-    Schedule one explainability job under the shared state lock.
-
-    :param model: Fitted model object from the completed classifier result.
-    :param model_name: Model name used for labels and filenames.
-    :param X_test: Test feature matrix for explainability.
-    :param y_test: Test labels for explainability.
-    :param feature_names: Feature names associated with the test feature matrix.
-    :param dataset_file: Dataset file path used for output directory construction.
-    :param feature_set: Feature set label used for output directory construction.
-    :param execution_mode: Execution mode string used for output directory construction.
-    :param config: Configuration dictionary used by explainability routines.
-    :param experiment_mode: Experiment mode string controlling original-only explainability.
-    :param hyperparameters_enabled: Whether this classifier result used optimized hyperparameters.
-    :param training_ram_stats: RAM statistics collected during classifier training.
-    :return: Dispatch outcome dictionary, or None when explainability is disabled.
-    """
-
-    with EXPLAINABILITY_STATE_LOCK:  # Protect process tracking, dispatch limits, and shared explainability artifacts.
-        return execute_explainability_schedule(model, model_name, X_test, y_test, feature_names, dataset_file, feature_set, execution_mode, config, experiment_mode, hyperparameters_enabled, training_ram_stats=training_ram_stats)  # Execute the established scheduling policy without overlap.
 
 
 def finalize_pending_explainability_jobs(config: Optional[dict] = None, terminate: bool = False) -> None:
@@ -9355,7 +9165,7 @@ def write_cache_dataframe_temporary(cache_path: str, cache_df: pd.DataFrame, con
         if expected_identities != validated_identities or len(validated_cache) != len(set(expected_identities)):  # Reject truncation, reordering, duplication, or identity loss.
             raise ValueError("Temporary cache validation did not preserve every resume identity")  # Prevent publication of an inconsistent snapshot.
         return temporary_path  # Return the fully synchronized and validated staging path.
-    except BaseException:  # Preserve ordinary failures and interruptions while removing incomplete staging files.
+    except Exception:  # Preserve the original staging or validation error.
         if temporary_fd >= 0:  # Close the raw descriptor only when ownership was not transferred.
             try:  # Avoid masking the original persistence error during descriptor cleanup.
                 os.close(temporary_fd)  # Close the raw temporary descriptor.
@@ -9414,7 +9224,7 @@ def persist_cache_dataframe_atomically(cache_path: str, cache_df: pd.DataFrame, 
 
         replace_cache_file_atomically(primary_temporary, cache_path)  # Atomically publish the fully validated authoritative cache snapshot.
         primary_temporary = None  # Mark the primary staging path as consumed by atomic replacement.
-    except BaseException:  # Roll back backup publication for ordinary failures and interruptions before surfacing the original error.
+    except Exception:  # Roll back any backup publication and surface the original transaction failure.
         if backup_published:  # Restore the prior backup state only when this transaction changed it.
             try:  # Keep rollback failure from masking the original persistence error.
                 if rollback_temporary is not None:  # Restore the previously validated known-good backup atomically.
@@ -9467,28 +9277,27 @@ def persist_cache_result_entry(cache_ref_file: Optional[str], result_entry: dict
     if config is None:  # Use global configuration when no configuration is provided.
         config = CONFIG  # Assign the global configuration reference.
 
-    with RESULT_PUBLICATION_LOCK:  # Serialize shared result identity decisions with durable cache publication.
-        methods_cfg = config.get("stacking", {}).get("methods", {})  # Read active method toggles for cache metadata.
-        result_entry["augmentation_ratio"] = resolve_persisted_augmentation_ratio(result_entry.get("experiment_mode", "original_only"), result_entry.get("augmentation_ratio", None))  # Persist explicit baseline or augmented ratio metadata.
-        result_entry["feature_selection_enabled"] = resolve_persisted_feature_selection_enabled(result_entry.get("feature_set", ""), methods_cfg.get("feature_selection", True))  # Persist row-level FS context with the temporary row.
-        result_entry["hyperparameters_enabled"] = result_entry.get("hyperparameter_mode") == "Optimized Hyperparameters"  # Persist HP boolean derived from explicit HP mode.
-        result_entry["data_augmentation_enabled"] = resolve_persisted_data_augmentation_enabled(result_entry.get("experiment_mode", "original_only"), result_entry.get("augmentation_ratio", None), result_entry.get("data_augmentation_enabled", False))  # Persist row-level DA context.
-        validate_cache_result_payload(result_entry, config=config)  # Validate the complete normalized cache payload before writing.
-        resume_key = build_cache_identity_from_row(result_entry)  # Build the same identity used during resume loading.
+    methods_cfg = config.get("stacking", {}).get("methods", {})  # Read active method toggles for cache metadata.
+    result_entry["augmentation_ratio"] = resolve_persisted_augmentation_ratio(result_entry.get("experiment_mode", "original_only"), result_entry.get("augmentation_ratio", None))  # Persist explicit baseline or augmented ratio metadata.
+    result_entry["feature_selection_enabled"] = resolve_persisted_feature_selection_enabled(result_entry.get("feature_set", ""), methods_cfg.get("feature_selection", True))  # Persist row-level FS context with the temporary row.
+    result_entry["hyperparameters_enabled"] = result_entry.get("hyperparameter_mode") == "Optimized Hyperparameters"  # Persist HP boolean derived from explicit HP mode.
+    result_entry["data_augmentation_enabled"] = resolve_persisted_data_augmentation_enabled(result_entry.get("experiment_mode", "original_only"), result_entry.get("augmentation_ratio", None), result_entry.get("data_augmentation_enabled", False))  # Persist row-level DA context.
+    validate_cache_result_payload(result_entry, config=config)  # Validate the complete normalized cache payload before writing.
+    resume_key = build_cache_identity_from_row(result_entry)  # Build the same identity used during resume loading.
 
-        if cache_dict is not None and resume_key in cache_dict:  # Avoid duplicate writes when the same identity is already registered in memory.
-            return  # Return without appending a duplicate cache row.
+    if cache_dict is not None and resume_key in cache_dict:  # Avoid duplicate writes when the same identity is already registered in memory.
+        return  # Return without appending a duplicate cache row.
 
-        try:  # Persist and verify the row before any in-memory cache registration.
-            save_cache_result_entry(cache_ref_file, result_entry, config=config)  # Persist the fully computed atomic result immediately.
-            verify_cache_result_persisted(cache_ref_file, resume_key, config=config)  # Verify the real resume loader can recover the exact identity.
-        except Exception as e:  # If cache persistence or recovery verification fails.
-            print(f"{BackgroundColors.RED}Failed to persist cache result for identity {resume_key}: {e}{Style.RESET_ALL}")  # Log the affected atomic identity clearly.
-            send_exception_via_telegram(type(e), e, e.__traceback__)  # Notify through the existing exception reporting path.
-            raise  # Propagate the failure so later combinations do not proceed as cached.
+    try:  # Persist and verify the row before any in-memory cache registration.
+        save_cache_result_entry(cache_ref_file, result_entry, config=config)  # Persist the fully computed atomic result immediately.
+        verify_cache_result_persisted(cache_ref_file, resume_key, config=config)  # Verify the real resume loader can recover the exact identity.
+    except Exception as e:  # If cache persistence or recovery verification fails.
+        print(f"{BackgroundColors.RED}Failed to persist cache result for identity {resume_key}: {e}{Style.RESET_ALL}")  # Log the affected atomic identity clearly.
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Notify through the existing exception reporting path.
+        raise  # Propagate the failure so later combinations do not proceed as cached.
 
-        if cache_dict is not None:  # Register successful writes for the remainder of the current process.
-            cache_dict[resume_key] = result_entry  # Store the result under its resume identity.
+    if cache_dict is not None:  # Register successful writes for the remainder of the current process.
+        cache_dict[resume_key] = result_entry  # Store the result under its resume identity.
 
 
 def save_cache_result_entry(csv_path: str, result_entry: dict, config=None) -> None:
@@ -11428,6 +11237,9 @@ def recover_cached_individual_classifier_result(cache_dict, execution_mode_str, 
     :return: Tuple (recovered, next_current_combination) where recovered indicates if cache was hit.
     """
 
+    if not cache_dict:  # Skip recovery when cache dictionary is empty or unavailable
+        return (False, current_combination)  # Signal no cache hit and unchanged counter
+
     resume_key = build_resume_cache_key(
         execution_mode_str,
         data_source_label,
@@ -11439,12 +11251,10 @@ def recover_cached_individual_classifier_result(cache_dict, execution_mode_str, 
         hyperparameters_enabled,
     )  # Build full resume cache key for this evaluation unit
 
-    with RESULT_PUBLICATION_LOCK:  # Read shared resume state consistently with concurrent cache publication.
-        if not cache_dict:  # Skip recovery when cache dictionary is empty or unavailable
-            return (False, current_combination)  # Signal no cache hit and unchanged counter
-        if resume_key not in cache_dict:  # Skip recovery when no cached result exists for this key
-            return (False, current_combination)  # Signal cache miss and unchanged counter
-        cached_result = cache_dict[resume_key]  # Retrieve cached result entry for this classifier
+    if resume_key not in cache_dict:  # Skip recovery when no cached result exists for this key
+        return (False, current_combination)  # Signal cache miss and unchanged counter
+
+    cached_result = cache_dict[resume_key]  # Retrieve cached result entry for this classifier
     cached_n_features = cached_result.get("n_features", None)  # Read the feature count persisted with the cached evaluation.
     cached_feature_names = cached_result.get("features_list", None)  # Read the ordered feature names persisted with the cached evaluation.
     cached_n_samples_train = cached_result.get("n_samples_train", None)  # Read the cached training sample count.
@@ -11457,8 +11267,7 @@ def recover_cached_individual_classifier_result(cache_dict, execution_mode_str, 
     test_count_matches = expected_n_samples_test is None or (cached_n_samples_test is not None and int(cached_n_samples_test) == int(expected_n_samples_test))  # Require the active test sample count to match.
 
     if not all((feature_count_matches, feature_names_match, train_count_matches, test_count_matches)):  # Reject stale cache rows that share a broad resume key but represent different evaluated data.
-        with RESULT_PUBLICATION_LOCK:  # Coordinate stale identity removal with concurrent cache writers.
-            cache_dict.pop(resume_key, None)  # Remove the stale in-memory identity so the recomputed result can be persisted.
+        del cache_dict[resume_key]  # Remove the stale in-memory identity so the recomputed result can be persisted.
         print(f"{BackgroundColors.YELLOW}[RESUME] Ignored incompatible cached combination for {BackgroundColors.CYAN}{feature_set_name} - {model_name}{BackgroundColors.YELLOW}: active shape or feature identity differs from saved partial progress.{Style.RESET_ALL}")  # Explain why this classifier will be recomputed.
         return (False, current_combination)  # Signal cache rejection without advancing the progress counter.
 
@@ -11765,9 +11574,8 @@ def run_stacking_evaluation_for_feature_set(name, stacking_model, X_train_df, y_
 
         if cache_dict:  # Verify if a cache dictionary is available for resume
             resume_key = build_resume_cache_key(execution_mode_str, data_source_label, experiment_mode, augmentation_ratio, attack_types_combined, name, "StackingClassifier", hyperparameters_enabled)  # Build the full resume cache key for the stacking classifier
-            with RESULT_PUBLICATION_LOCK:  # Read shared stacking resume state consistently with concurrent cache publication.
-                cached_result = cache_dict.get(resume_key)  # Retrieve cached stacking result entry for full resume logging.
-            if cached_result is not None:  # Verify if the stacking result is already cached from a previous run
+            if resume_key in cache_dict:  # Verify if the stacking result is already cached from a previous run
+                cached_result = cache_dict[resume_key]  # Retrieve cached stacking result entry for full resume logging
                 combination_header = build_telegram_combination_header(name, "StackingClassifier", augmentation_ratio, hyperparameters_enabled)  # Build full recovered stacking combination label
                 print(f"{BackgroundColors.YELLOW}[RESUME] Recovered combination {current_combination}/{total_steps}: {combination_header} from saved partial progress (no recomputation performed).{Style.RESET_ALL}")  # Log recovered stacking combination to stdout for visibility
 
@@ -11832,8 +11640,7 @@ def run_stacking_evaluation_for_feature_set(name, stacking_model, X_train_df, y_
             file_path_obj = Path(file)  # Create Path object for the dataset file
             feature_analysis_dir = file_path_obj.parent / "Feature_Analysis"  # Build Feature_Analysis directory path for outputs
             stacking_output_dir = get_stacking_output_dir(str(file_path_obj), config)  # Get stacking output directory path from config
-            with PLOT_PUBLICATION_LOCK:  # Prevent concurrent matplotlib state and shared metric filenames from interleaving.
-                generate_and_save_metric_plots(y_test, s_y_pred, config.get("stacking", {}), stacking_output_dir)  # Generate and save metric plots to stacking output directory
+            generate_and_save_metric_plots(y_test, s_y_pred, config.get("stacking", {}), stacking_output_dir)  # Generate and save metric plots to stacking output directory
         except Exception:  # If metric plot generation fails
             pass  # Continue without plotting
 
@@ -12040,416 +11847,13 @@ def initialize_evaluation_run_state(base_models, feature_sets, data_source_label
     if stacking_enabled:  # Count one extra step per feature set only when stacking is enabled
         total_steps += len(feature_sets)
 
-    progress_bar = SynchronizedProgressBar(tqdm(total=total_steps, desc=f"{data_source_label} Data", file=sys.stdout))  # Wrap progress updates for safe concurrent use.
+    progress_bar = tqdm(total=total_steps, desc=f"{data_source_label} Data", file=sys.stdout)  # Progress bar for all evaluations
 
     all_results = {}  # Dictionary to store results: (feature_set, model_name) -> result_entry
 
     current_combination = 1  # Counter for combination index
 
     return individual_models, total_steps, progress_bar, all_results, current_combination  # Return all initialized evaluation state variables
-
-
-def resolve_feature_set_worker_plan(config: dict, feature_mode_names: List[str]) -> Dict[str, int]:  # Resolve explicit outer concurrency and enforce resource boundaries.
-    """
-    Resolve worker counts for the active feature-set plan.
-
-    :param config: Effective runtime configuration dictionary.
-    :param feature_mode_names: Ordered active production feature-set labels.
-    :return: Ordered normalized worker mapping, or an empty mapping for sequential execution.
-    """
-
-    configured_workers = validate_feature_set_workers_map(config.get("evaluation", {}).get("feature_set_workers", {}))  # Read the already merged CLI and YAML worker map defensively.
-    if not configured_workers:  # Preserve the established sequential path when no outer workers were requested.
-        return {}  # Signal that production must use the legacy iterator and loops unchanged.
-    if config.get("execution", {}).get("low_memory", False):  # Refuse intentional matrix overlap under explicit low-memory mode.
-        raise ValueError("evaluation.feature_set_workers cannot be used while execution.low_memory is enabled")  # Report the incompatible resource policies.
-    estimator_jobs = config.get("evaluation", {}).get("n_jobs", 1)  # Read estimator-level parallelism without mutating its semantics.
-    if isinstance(estimator_jobs, bool) or not isinstance(estimator_jobs, int) or estimator_jobs != 1:  # Prevent nested estimator processes or threads beneath outer concurrency.
-        raise ValueError("evaluation.n_jobs must be 1 when evaluation.feature_set_workers is enabled")  # Require the resource-safe estimator boundary explicitly.
-    feature_extraction_jobs = validate_feature_extraction_n_jobs(config.get("evaluation", {}).get("feature_extraction_n_jobs", 1))  # Read independent feature extraction parallelism.
-    if feature_extraction_jobs != 1:  # Prevent nested numerical pools beneath concurrent PCA and classifier workloads.
-        raise ValueError("evaluation.feature_extraction_n_jobs must be 1 when evaluation.feature_set_workers is enabled")  # Require the resource-safe transformation boundary explicitly.
-    active_workers = {FEATURE_SET_DISPLAY_KEYS[name]: configured_workers.get(FEATURE_SET_DISPLAY_KEYS[name], 1) for name in feature_mode_names}  # Apply a deterministic one-worker fallback to unspecified active feature sets.
-    logical_cpu_count = os.cpu_count() or 1  # Resolve a conservative available logical CPU count.
-    requested_capacity = sum(active_workers.values())  # Calculate the maximum simultaneous classifier-combination capacity.
-    if requested_capacity > logical_cpu_count:  # Refuse an explicit nested pool plan that exceeds available logical CPUs.
-        raise ValueError(f"evaluation.feature_set_workers requests {requested_capacity} concurrent combinations but only {logical_cpu_count} logical CPUs are available")  # Report the exact oversubscription boundary.
-    return active_workers  # Return the active ordered worker allocation.
-
-
-def execute_combination_workloads(feature_set_name: str, combination_names: List[str], worker_count: int, workload: Callable[[str, threading.Event], Any], cancellation_event: threading.Event) -> Dict[str, Any]:  # Execute bounded classifier combinations for one feature set.
-    """
-    Execute classifier-combination workloads with deterministic result ordering.
-
-    :param feature_set_name: Feature-set label used in failure diagnostics.
-    :param combination_names: Ordered classifier-combination identities.
-    :param worker_count: Maximum simultaneous workloads for this feature set.
-    :param workload: Callable accepting a combination name and shared cancellation event.
-    :param cancellation_event: Shared cancellation signal spanning all feature sets.
-    :return: Results ordered exactly like combination_names.
-    """
-
-    if isinstance(worker_count, bool) or not isinstance(worker_count, int) or worker_count <= 0:  # Defend direct callers from invalid pool sizes.
-        raise ValueError(f"Worker count for {feature_set_name} must be an integer greater than 0")  # Reject invalid executor construction.
-    if not combination_names:  # Avoid constructing an executor for an empty classifier plan.
-        return {}  # Return an empty deterministic result mapping.
-    executor = ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix=f"combination-{FEATURE_SET_DISPLAY_KEYS.get(feature_set_name, 'feature')}")  # Create one bounded per-feature-set thread pool.
-    future_names: Dict[Any, str] = {}  # Map futures back to stable combination identities.
-    completed_results: Dict[str, Any] = {}  # Store results independently of completion order.
-    primary_failure: Optional[BaseException] = None  # Preserve the first workload failure for propagation.
-    try:  # Guarantee cancellation and thread joining on success, failure, or interruption.
-        for combination_name in combination_names:  # Submit combinations in declared production order.
-            if cancellation_event.is_set():  # Stop submitting new work after another pipeline fails.
-                raise CancelledError(f"Cancelled {feature_set_name} before submitting {combination_name}")  # Surface cooperative cancellation to the outer coordinator.
-            future = executor.submit(workload, combination_name, cancellation_event)  # Submit one isolated classifier combination.
-            future_names[future] = combination_name  # Retain deterministic identity for result collection.
-        for future in as_completed(list(future_names.keys())):  # Consume completion events without imposing sequential waits.
-            combination_name = future_names[future]  # Resolve the completed combination identity.
-            try:  # Capture the first failure while allowing safe executor shutdown.
-                completed_results[combination_name] = future.result()  # Store the completed workload result by stable identity.
-            except BaseException as exc:  # Include interrupts and memory failures in cooperative cancellation.
-                primary_failure = exc  # Preserve the original failure object and traceback.
-                cancellation_event.set()  # Signal sibling combinations and feature sets to stop accepting work.
-                for pending_future in future_names:  # Cancel every combination that has not started.
-                    pending_future.cancel()  # Leave running tasks to finish their atomic persistence and cleanup.
-                break  # Stop consuming successful results after the first failure.
-        if primary_failure is not None:  # Propagate the original workload failure after cancellation is initiated.
-            raise primary_failure  # Preserve failure type and traceback for the production caller.
-        return {combination_name: completed_results[combination_name] for combination_name in combination_names}  # Reorder results to the declared combination plan.
-    finally:  # Reap all worker threads before feature matrices can be released.
-        executor.shutdown(wait=True, cancel_futures=True)  # Wait for running atomic work and cancel pending submissions.
-
-
-def execute_feature_set_workloads(feature_set_names: List[str], workload: Callable[[str, threading.Event], Any], cancellation_event: Optional[threading.Event] = None) -> Dict[str, Any]:  # Execute active feature pipelines concurrently.
-    """
-    Execute feature-set workloads concurrently with deterministic result ordering.
-
-    :param feature_set_names: Ordered production feature-set labels.
-    :param workload: Callable accepting a feature-set name and shared cancellation event.
-    :param cancellation_event: Optional caller-owned cancellation signal.
-    :return: Results ordered exactly like feature_set_names.
-    """
-
-    if not feature_set_names:  # Avoid executor creation for an empty feature plan.
-        return {}  # Return an empty deterministic result mapping.
-    shared_cancellation = cancellation_event if cancellation_event is not None else threading.Event()  # Use one cancellation signal across every nested pool.
-    executor = ThreadPoolExecutor(max_workers=len(feature_set_names), thread_name_prefix="feature-set")  # Give every active feature set an independently progressing pipeline.
-    future_names: Dict[Any, str] = {}  # Map futures back to stable feature-set identities.
-    completed_results: Dict[str, Any] = {}  # Store feature results independently of completion order.
-    primary_failure: Optional[BaseException] = None  # Preserve the first pipeline failure for propagation.
-    try:  # Guarantee complete thread cleanup on every exit path.
-        for feature_set_name in feature_set_names:  # Submit feature pipelines in declared production order.
-            if shared_cancellation.is_set():  # Stop submission after an earlier external cancellation.
-                raise CancelledError(f"Cancelled before submitting {feature_set_name}")  # Surface cooperative cancellation.
-            future = executor.submit(workload, feature_set_name, shared_cancellation)  # Start one complete feature-set pipeline.
-            future_names[future] = feature_set_name  # Retain stable identity for deterministic collection.
-        for future in as_completed(list(future_names.keys())):  # Observe genuine overlap while collecting whichever pipeline finishes first.
-            feature_set_name = future_names[future]  # Resolve the completed feature-set identity.
-            try:  # Capture the first pipeline failure and cancel pending siblings.
-                completed_results[feature_set_name] = future.result()  # Store one completed feature-set result.
-            except BaseException as exc:  # Include interrupts and memory failures in coordinated shutdown.
-                primary_failure = exc  # Preserve the original failure object and traceback.
-                shared_cancellation.set()  # Tell every nested combination pool to stop accepting work.
-                for pending_future in future_names:  # Cancel feature pipelines that have not started.
-                    pending_future.cancel()  # Allow already running pipelines to complete atomic cleanup.
-                break  # Stop consuming results after the first failure.
-        if primary_failure is not None:  # Propagate the original pipeline failure after cancellation is initiated.
-            raise primary_failure  # Preserve failure type and traceback for the caller.
-        return {feature_set_name: completed_results[feature_set_name] for feature_set_name in feature_set_names}  # Reorder results to the declared feature plan.
-    finally:  # Reap every feature thread before shared source matrices are released.
-        executor.shutdown(wait=True, cancel_futures=True)  # Wait for running pipelines and cancel pending submissions.
-
-
-def materialize_concurrent_feature_set(feature_set_name: str, feature_source_arrays: dict, feature_names: List[Any], ga_selected_features: Any, pca_n_components: Any, rfe_selected_features: Any, file: str, feature_sets_config: dict, config: dict, scaler: Any, source_files: List[str], pca_cache_context: dict, pca_input_feature_names: List[Any]) -> Tuple[Any, Any, Any, Any, Any]:  # Materialize one isolated feature-set view from immutable shared sources.
-    """
-    Materialize one production feature set while retaining its cleanup iterator.
-
-    :param feature_set_name: Production feature-set label to materialize.
-    :param feature_source_arrays: Shared immutable scaled source matrices.
-    :param feature_names: Complete ordered feature-name list.
-    :param ga_selected_features: GA-selected feature list or None.
-    :param pca_n_components: PCA component count or None.
-    :param rfe_selected_features: RFE-selected feature list or None.
-    :param file: Dataset path used for PCA artifact loading.
-    :param feature_sets_config: Effective feature-set configuration.
-    :param config: Runtime configuration dictionary.
-    :param scaler: Fitted source scaler.
-    :param source_files: Ordered source-file provenance.
-    :param pca_cache_context: PCA split and dataset identity.
-    :param pca_input_feature_names: Ordered numeric PCA input schema.
-    :return: Training matrix, testing matrix, names, transformer, and cleanup iterator.
-    """
-
-    target_key = FEATURE_SET_DISPLAY_KEYS[feature_set_name]  # Resolve the normalized worker and strategy key.
-    target_feature_config = {"use_full": target_key == "full", "use_pca": target_key == "pca", "use_rfe": target_key == "rfe", "use_ga": target_key == "ga", "explicit_features": feature_sets_config.get("explicit_features", []) if target_key == "explicit" else []}  # Enable only the requested materialization strategy.
-    target_config = dict(config)  # Isolate nested configuration changes from concurrent sibling pipelines.
-    target_stacking_config = dict(config.get("stacking", {}))  # Copy the stacking section before strategy replacement.
-    target_stacking_config["feature_sets_config"] = target_feature_config  # Install the one-mode feature configuration.
-    target_methods = dict(target_stacking_config.get("methods", {}))  # Copy method toggles before enabling the selected materializer.
-    target_methods["feature_selection"] = target_key != "full"  # Allow non-full target strategies while preserving the full-only shortcut.
-    target_stacking_config["methods"] = target_methods  # Store isolated method toggles for list generation.
-    target_config["stacking"] = target_stacking_config  # Store the isolated stacking section in this worker configuration.
-    target_source_arrays = {"X_train_scaled": feature_source_arrays["X_train_scaled"], "X_test_scaled": feature_source_arrays["X_test_scaled"], "spilled_to_memmap": False}  # Give the iterator local ownership references without copying shared matrices.
-    materialization_iterator = iterate_feature_sets_sequentially(target_source_arrays, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, file, target_feature_config, target_config, scaler=scaler, source_files=source_files, pca_cache_context=pca_cache_context, pca_input_feature_names=pca_input_feature_names)  # Reuse the established exact feature transformation and lifecycle implementation.
-    try:  # Convert an absent expected mode into an explicit production failure.
-        materialized_name, X_train_subset, X_test_subset, subset_feature_names, transformer = next(materialization_iterator)  # Materialize exactly one enabled feature set.
-    except StopIteration as exc:  # Report a plan/materialization mismatch instead of silently dropping work.
-        materialization_iterator.close()  # Release any partially allocated subset resources.
-        raise RuntimeError(f"Feature-set plan could not materialize {feature_set_name}") from exc  # Preserve the missing planned mode identity.
-    if materialized_name != feature_set_name:  # Defend deterministic plan identity against future iterator changes.
-        materialization_iterator.close()  # Release the unexpected materialized resources.
-        raise RuntimeError(f"Feature-set plan expected {feature_set_name} but materialized {materialized_name}")  # Reject silent result mislabeling.
-    return X_train_subset, X_test_subset, subset_feature_names, transformer, materialization_iterator  # Keep the iterator alive until every classifier finishes using its matrices.
-
-
-def evaluate_original_concurrent_combination(feature_set_name: str, combination_name: str, cancellation_event: threading.Event, context: dict) -> dict:  # Evaluate one original-training classifier combination.
-    """
-    Evaluate one original-training combination through the established atomic paths.
-
-    :param feature_set_name: Production feature-set label.
-    :param combination_name: Individual model name or stacking identity.
-    :param cancellation_event: Shared cancellation signal spanning nested pools.
-    :param context: Read-only feature-specific matrices and evaluation inputs.
-    :return: Standardized durable classifier result entry.
-    """
-
-    if cancellation_event.is_set():  # Stop before fitting when a sibling combination already failed.
-        raise CancelledError(f"Cancelled {feature_set_name} - {combination_name} before evaluation")  # Preserve cooperative nested cancellation.
-    combination_index = context["feature_start_combination"] + context["combination_names"].index(combination_name)  # Resolve the stable global progress identity.
-    if combination_name == "StackingClassifier":  # Route the stacking prototype through its established atomic evaluation path.
-        stacking_result, next_combination = run_stacking_evaluation_for_feature_set(feature_set_name, context["stacking_model"], context["X_train_df"], context["y_train"], context["X_test_df"], context["y_test"], context["X_test_subset"], context["X_train_subset"].shape[1], context["file"], context["execution_mode_str"], context["attack_types_combined"], context["data_source_label"], context["experiment_id"], context["experiment_mode"], context["augmentation_ratio"], context["scaler"], context["label_encoder"], context["transformer"], context["pca_input_feature_names"], context["target_column_name"], context["source_files"], context["subset_feature_names"], context["total_steps"], combination_index, context["progress_bar"], config=context["config"], cache_dict=context["cache_dict"], cache_ref_file=context["effective_cache_ref"], hyperparameters_enabled=context["hyperparameters_enabled"])  # Evaluate one stacking combination with durable cache and artifact publication.
-        del next_combination  # Discard the local increment because global indices are preassigned.
-        return stacking_result  # Return the standardized stacking result entry.
-    model_results, next_combination = run_individual_classifiers_for_feature_set(feature_set_name, {combination_name: context["individual_models"][combination_name]}, context["X_train_df"], context["y_train"], context["X_test_df"], context["y_test"], context["X_test_subset"], context["X_train_subset"].shape[1], context["file"], context["execution_mode_str"], context["attack_types_combined"], context["data_source_label"], context["experiment_id"], context["experiment_mode"], context["augmentation_ratio"], context["hyperparams_map"], context["scaler"], context["label_encoder"], context["transformer"], context["pca_input_feature_names"], context["target_column_name"], context["source_files"], context["subset_feature_names"], context["total_steps"], combination_index, context["progress_bar"], config=context["config"], cache_dict=context["cache_dict"], cache_ref_file=context["effective_cache_ref"], hyperparameters_enabled=context["hyperparameters_enabled"])  # Evaluate one individual combination through its established atomic path.
-    del next_combination  # Discard the local increment because global indices are preassigned.
-    return model_results[(feature_set_name, combination_name)]  # Return the standardized individual result entry.
-
-
-def evaluate_concurrent_feature_set(feature_set_name: str, cancellation_event: threading.Event, context: dict) -> Dict[Tuple[str, str], dict]:  # Run one feature-set pipeline with bounded classifier concurrency.
-    """
-    Evaluate one materialized feature set through its configured combination pool.
-
-    :param feature_set_name: Production feature-set label to evaluate.
-    :param cancellation_event: Shared cancellation signal spanning all feature pipelines.
-    :param context: Immutable evaluation inputs and synchronized shared publication state.
-    :return: Result entries ordered by the declared classifier plan.
-    """
-
-    if cancellation_event.is_set():  # Stop before materialization when another feature pipeline already failed.
-        raise CancelledError(f"Cancelled {feature_set_name} before materialization")  # Preserve cooperative cancellation semantics.
-    materialization_iterator = None  # Reserve cleanup ownership before any transformation can fail.
-    try:  # Guarantee feature-specific arrays remain valid until every nested combination exits.
-        X_train_subset, X_test_subset, subset_feature_names_list, transformer, materialization_iterator = materialize_concurrent_feature_set(feature_set_name, context["feature_source_arrays"], context["feature_names"], context["ga_selected_features"], context["pca_n_components"], context["rfe_selected_features"], context["file"], context["feature_sets_config"], context["config"], context["scaler"], context["source_files"], context["pca_cache_context"], context["pca_input_feature_names"])  # Materialize the planned matrix through the established feature implementation.
-        if X_train_subset.shape[1] == 0:  # Reject an unexpected empty planned mode before creating classifier workers.
-            raise RuntimeError(f"Concurrent feature set {feature_set_name} materialized zero features")  # Preserve plan and progress consistency.
-        subset_feature_names = setup_feature_set_names(feature_set_name, X_train_subset, subset_feature_names_list)  # Resolve exact production feature labels for artifacts and cache identity.
-        X_train_df, X_test_df = convert_subset_to_dataframes(X_train_subset, X_test_subset, subset_feature_names)  # Build shared read-only DataFrame views for combination workers.
-        feature_index = context["feature_mode_names"].index(feature_set_name)  # Resolve the stable feature position in the declared plan.
-        combination_names = list(context["individual_models"].keys()) + (["StackingClassifier"] if context["stacking_enabled"] else [])  # Build the exact classifier order used by sequential production.
-        combinations_per_feature = len(combination_names)  # Resolve the stable index stride for this feature set.
-        feature_start_combination = context["starting_combination"] + feature_index * combinations_per_feature  # Assign deterministic global combination indices independent of completion timing.
-        phase_metadata = {"dataset_identity": os.path.basename(str(context["file"])), "dataset_source": context["file"], "execution_mode": context["execution_mode_str"], "attack_scope": context["attack_types_combined"], "data_source": context["data_source_label"], "experiment_mode": context["experiment_mode"], "augmentation_ratio": context["augmentation_ratio"], "feature_set_name": feature_set_name, "hyperparameter_mode": "Optimized Hyperparameters" if context["hyperparameters_enabled"] else "Default Hyperparameters", "train_sample_count": len(context["y_train"]), "test_sample_count": len(context["y_test"]), "feature_count": X_train_subset.shape[1]}  # Build stable watcher metadata for the overlapping feature pipeline.
-        if memory_watcher_enabled(context["config"]):  # Add exact matrix layout only when watcher diagnostics are active.
-            phase_metadata.update(build_array_memory_metadata("X_train_subset", X_train_subset))  # Record the concurrent training subset layout.
-            phase_metadata.update(build_array_memory_metadata("X_test_subset", X_test_subset))  # Record the concurrent testing subset layout.
-        write_memory_phase_event("before_feature_set_evaluation", config=context["config"], **phase_metadata, event_outcome="starting")  # Publish feature-set start through the serialized watcher path.
-        combination_context = dict(context)  # Isolate feature-specific inner inputs from sibling feature pipelines.
-        combination_context.update({"X_train_df": X_train_df, "X_test_df": X_test_df, "X_train_subset": X_train_subset, "X_test_subset": X_test_subset, "subset_feature_names": subset_feature_names, "transformer": transformer, "feature_start_combination": feature_start_combination, "combination_names": combination_names})  # Bind read-only matrices and deterministic identities for inner workers.
-
-        def evaluate_combination(combination_name: str, shared_cancellation: threading.Event) -> dict:  # Evaluate one isolated classifier combination.
-            return evaluate_original_concurrent_combination(feature_set_name, combination_name, shared_cancellation, combination_context)  # Delegate isolated atomic evaluation to the reusable combination function.
-
-        combination_results = execute_combination_workloads(feature_set_name, combination_names, context["worker_plan"][FEATURE_SET_DISPLAY_KEYS[feature_set_name]], evaluate_combination, cancellation_event)  # Run actual bounded combination overlap for this feature set.
-        ordered_results = {(feature_set_name, combination_name): combination_results[combination_name] for combination_name in combination_names}  # Restore exact production insertion order.
-        write_memory_phase_event("after_feature_set_evaluation", config=context["config"], **phase_metadata, event_outcome="completed")  # Publish feature-set completion through the serialized watcher path.
-        del X_train_df, X_test_df, combination_results  # Release DataFrame views and temporary results before matrix cleanup.
-        gc.collect()  # Reclaim per-feature temporary objects before returning metadata.
-        return ordered_results  # Return results in declared classifier order.
-    finally:  # Release feature-specific matrices only after nested executor shutdown completes.
-        if materialization_iterator is not None and hasattr(materialization_iterator, "close"):  # Close the owning iterator when materialization succeeded.
-            materialization_iterator.close()  # Trigger PCA, RFE, or subset-specific cleanup deterministically.
-
-
-def evaluate_feature_sets_concurrently(feature_mode_names: List[str], worker_plan: Dict[str, int], context: dict) -> Tuple[Dict[Tuple[str, str], dict], int]:  # Coordinate actual feature-set pipeline concurrency.
-    """
-    Evaluate every active feature set with bounded nested thread pools.
-
-    :param feature_mode_names: Ordered production feature-set labels.
-    :param worker_plan: Effective positive combination-worker count per normalized feature key.
-    :param context: Immutable evaluation inputs and synchronized shared publication state.
-    :return: Ordered results and the next deterministic global combination index.
-    """
-
-    context["feature_mode_names"] = list(feature_mode_names)  # Store a private ordered plan for stable index calculations.
-    context["worker_plan"] = dict(worker_plan)  # Store the validated active worker allocation for nested pools.
-    allocation_text = ", ".join(f"{key}={value}" for key, value in worker_plan.items())  # Format the exact effective worker allocation for diagnostics.
-    print(f"{BackgroundColors.GREEN}[CONCURRENCY] Starting thread-based feature-set pipelines with combination workers: {BackgroundColors.CYAN}{allocation_text}{Style.RESET_ALL}")  # Report the selected backend and allocation explicitly.
-    print(f"{BackgroundColors.GREEN}[CONCURRENCY] Estimator jobs=1, feature extraction jobs=1, and BLAS/OpenMP threads=1 while outer concurrency is active.{Style.RESET_ALL}")  # Report nested resource boundaries explicitly.
-
-    def run_feature_pipeline(feature_set_name: str, cancellation_event: threading.Event) -> Dict[Tuple[str, str], dict]:  # Bind the immutable production context to one outer workload.
-        return evaluate_concurrent_feature_set(feature_set_name, cancellation_event, context)  # Execute one complete materialize/evaluate/cleanup pipeline.
-
-    with threadpool_limits(limits=1):  # Bound native numerical pools once around all nested feature and classifier threads.
-        feature_results = execute_feature_set_workloads(feature_mode_names, run_feature_pipeline)  # Run actual outer pipeline overlap and cooperative failure handling.
-    ordered_results: Dict[Tuple[str, str], dict] = {}  # Flatten feature results in declared order rather than completion order.
-    for feature_set_name in feature_mode_names:  # Preserve the existing feature-set ordering contract.
-        ordered_results.update(feature_results[feature_set_name])  # Append each already ordered classifier result group.
-    combinations_per_feature = len(context["individual_models"]) + (1 if context["stacking_enabled"] else 0)  # Calculate the exact deterministic progress stride.
-    next_combination = context["starting_combination"] + len(feature_mode_names) * combinations_per_feature  # Advance past every completed or recovered planned combination.
-    return ordered_results, next_combination  # Return stable results and the next global progress identity.
-
-
-def load_augmented_artifact_with_recovery(feature_set_name: str, model_name: str, artifact_feature_set: str, artifact_context: dict, context: dict) -> dict:  # Load or rebuild one original-trained artifact transaction.
-    """
-    Load one compatible artifact and serialize original-only recovery when required.
-
-    :param feature_set_name: Production feature-set label.
-    :param model_name: Individual model name or stacking identity.
-    :param artifact_feature_set: Hyperparameter-isolated artifact feature label.
-    :param artifact_context: Exact compatibility metadata for artifact loading.
-    :param context: Read-only augmented evaluation and recovery inputs.
-    :return: Complete compatible persisted artifact bundle.
-    """
-
-    artifact_bundle, rejection_reason = load_existing_model_if_available(model_name, context["file"], context["dataset_name"], artifact_feature_set, artifact_context, config=context["config"])  # Load only a complete compatible artifact transaction.
-    if artifact_bundle is not None:  # Return immediately when strict artifact validation succeeds.
-        return artifact_bundle  # Preserve the existing fitted artifact without retraining.
-    with ARTIFACT_RECOVERY_LOCK:  # Prevent concurrent combinations from racing through recursive original-only recovery.
-        artifact_bundle, rejection_reason = load_existing_model_if_available(model_name, context["file"], context["dataset_name"], artifact_feature_set, artifact_context, config=context["config"])  # Re-read because a sibling may have repaired the artifact.
-        if artifact_bundle is None:  # Retrain only when the artifact remains unavailable under serialized recovery.
-            print(f"{BackgroundColors.YELLOW}[WARNING] Retraining {BackgroundColors.CYAN}{model_name}{BackgroundColors.YELLOW} on original data only because {rejection_reason}.{Style.RESET_ALL}")  # Report the exact recovery reason.
-            recovery_results = evaluate_on_dataset(context["file"], context["original_df"], context["feature_names"], context["ga_selected_features"], context["pca_n_components"], context["rfe_selected_features"], context["base_models"], data_source_label="Original", hyperparams_map=context["hyperparams_map"], experiment_id=generate_experiment_id(context["file"], "original_only"), experiment_mode="original_only", augmentation_ratio=None, execution_mode_str=context["execution_mode_str"], attack_types_combined=context["attack_types_combined"], config=context["config"], cache_ref_file=context["cache_ref_file"], hyperparameters_enabled=context["hyperparameters_enabled"], source_files=context["source_files"], artifact_recovery_target=(feature_set_name, model_name))  # Rebuild only the missing original-trained classifier identity.
-            del recovery_results  # Release recursive recovery metadata before artifact reloading.
-            gc.collect()  # Reclaim recursive evaluation temporaries promptly.
-            artifact_bundle, rejection_reason = load_existing_model_if_available(model_name, context["file"], context["dataset_name"], artifact_feature_set, artifact_context, config=context["config"])  # Load the newly published artifact transaction.
-        if artifact_bundle is None:  # Fail explicitly when serialized recovery did not publish a compatible artifact.
-            raise RuntimeError(f"Original-only artifact recovery failed for {feature_set_name} - {model_name}: {rejection_reason}")  # Preserve the affected production identity.
-        return artifact_bundle  # Return the compatible recovered artifact bundle.
-
-
-def evaluate_persisted_augmented_artifact(feature_set_name: str, model_name: str, artifact_feature_set: str, artifact_bundle: dict, combination_header: str, context: dict) -> dict:  # Evaluate one persisted classifier on augmented rows.
-    """
-    Transform augmented rows and evaluate one persisted original-trained classifier.
-
-    :param feature_set_name: Production feature-set label.
-    :param model_name: Individual model name or stacking identity.
-    :param artifact_feature_set: Hyperparameter-isolated artifact feature label.
-    :param artifact_bundle: Complete compatible fitted model and preprocessing bundle.
-    :param combination_header: Exact progress and notification identity.
-    :param context: Read-only augmented matrices and result metadata.
-    :return: Standardized durable augmented-testing result entry.
-    """
-
-    subset_feature_names = context["subset_feature_names"]  # Resolve exact persisted model feature order.
-    loaded_model = artifact_bundle["model"]  # Retrieve the persisted fitted classifier.
-    X_augmented_scaled = np.asarray(artifact_bundle["scaler"].transform(context["X_augmented_original_schema"]))  # Apply the exact persisted original-training scaler.
-    if artifact_bundle["transformer"] is not None:  # Apply persisted PCA when this feature mode owns a transformer.
-        X_augmented_model = np.asarray(artifact_bundle["transformer"].transform(X_augmented_scaled))  # Transform scaled augmented rows into persisted component space.
-    else:  # Select persisted original-schema columns for non-PCA feature modes.
-        model_feature_indices = [artifact_bundle["input_feature_names"].index(feature) for feature in artifact_bundle["model_feature_names"]]  # Resolve exact persisted feature positions.
-        X_augmented_model = X_augmented_scaled[:, model_feature_indices]  # Select augmented columns in persisted model order.
-    y_augmented = np.asarray(artifact_bundle["label_encoder"].transform(context["y_augmented_raw"]), dtype=np.int64)  # Encode augmented targets with the persisted original-training classes.
-    X_augmented_df = pd.DataFrame(X_augmented_model, columns=subset_feature_names)  # Build named matrix input for persisted stacking evaluation.
-    training_ram_stats: dict = {}  # Retain the established metrics-call interface without fitting.
-    if model_name == "StackingClassifier":  # Route persisted stacking through its established prediction path.
-        metrics = evaluate_stacking_classifier(loaded_model, None, None, X_augmented_df, y_augmented, config=context["config"], training_ram_stats=training_ram_stats, fit_model=False, notification_context=combination_header)  # Evaluate without changing the persisted fitted estimator.
-        classifier_type = "Stacking"  # Preserve the established result classifier category.
-    else:  # Route persisted individual classifiers through their established prediction path.
-        metrics = evaluate_individual_classifier(loaded_model, model_name, None, None, X_augmented_model, y_augmented, context["file"], artifact_bundle["scaler"], subset_feature_names, artifact_feature_set, config=context["config"], training_ram_stats=training_ram_stats, fit_model=False, notification_context=combination_header)  # Evaluate without fitting or exporting a replacement model.
-        classifier_type = "Individual"  # Preserve the established result classifier category.
-    result_entry = build_classifier_result_entry(loaded_model.__class__.__name__, context["file"], context["execution_mode_str"], context["attack_types_combined"], feature_set_name, classifier_type, model_name, context["data_source_label"], context["experiment_id"], context["experiment_mode"], context["augmentation_ratio"], len(subset_feature_names), context["original_train_count"], len(y_augmented), metrics, subset_feature_names, hyperparams_map=context["hyperparams_map"], hyperparameters_enabled=context["hyperparameters_enabled"], effective_hyperparameters=serialize_effective_estimator_parameters(loaded_model))  # Build the standardized augmented-testing result entry.
-    persist_cache_result_entry(context["effective_cache_ref"], result_entry, context["cache_dict"], config=context["config"])  # Publish the completed atomic result through the serialized crash-safe cache path.
-    context["progress_bar"].update(1)  # Advance synchronized progress after durable result publication.
-    del loaded_model, X_augmented_scaled, X_augmented_model, X_augmented_df, y_augmented, metrics, training_ram_stats  # Release model and transformed augmented matrices before returning metadata.
-    gc.collect()  # Reclaim augmented combination temporaries promptly.
-    return result_entry  # Return one durable standardized result entry.
-
-
-def evaluate_augmented_concurrent_combination(feature_set_name: str, model_name: str, cancellation_event: threading.Event, context: dict) -> dict:  # Evaluate one persisted augmented-testing combination.
-    """
-    Recover or evaluate one augmented-testing classifier combination.
-
-    :param feature_set_name: Production feature-set label.
-    :param model_name: Individual model name or stacking identity.
-    :param cancellation_event: Shared cancellation signal spanning nested pools.
-    :param context: Read-only feature-specific augmented evaluation inputs.
-    :return: Standardized durable or cache-recovered result entry.
-    """
-
-    if cancellation_event.is_set():  # Stop before artifact loading when a sibling already failed.
-        raise CancelledError(f"Cancelled augmented {feature_set_name} - {model_name} before evaluation")  # Preserve cooperative nested cancellation.
-    combination_index = context["feature_start_combination"] + context["combination_names"].index(model_name)  # Resolve stable global progress identity.
-    local_results: Dict[Tuple[str, str], dict] = {}  # Isolate result assembly for this classifier combination.
-    recovered, next_combination = recover_cached_individual_classifier_result(context["cache_dict"], context["execution_mode_str"], context["data_source_label"], context["experiment_mode"], context["augmentation_ratio"], context["attack_types_combined"], feature_set_name, model_name, local_results, combination_index, context["total_steps"], context["progress_bar"], hyperparameters_enabled=context["hyperparameters_enabled"], expected_n_features=len(context["subset_feature_names"]), expected_feature_names=context["subset_feature_names"], expected_n_samples_train=context["original_train_count"], expected_n_samples_test=len(context["y_augmented_raw"]))  # Recover only exact augmented-evaluation cache identities and shapes.
-    del next_combination  # Discard local increments because global indices are preassigned.
-    if recovered:  # Return durable prior work without artifact loading or prediction.
-        return local_results[(feature_set_name, model_name)]  # Return the exact recovered result entry.
-    combination_header = build_telegram_combination_header(feature_set_name, model_name, context["augmentation_ratio"], context["hyperparameters_enabled"])  # Build exact augmented-test progress identity.
-    context["progress_bar"].set_description(combination_header)  # Publish the active combination through synchronized progress rendering.
-    artifact_feature_set = f"{feature_set_name} - {'Optimized Hyperparameters' if context['hyperparameters_enabled'] else 'Default Hyperparameters'}"  # Resolve HP-isolated persisted artifact identity.
-    model_prototype = context["stacking_model"] if model_name == "StackingClassifier" else context["individual_models"][model_name]  # Select the correct unfitted compatibility prototype.
-    artifact_context = build_stacking_model_artifact_context(context["file"], context["source_files"], context["execution_mode_str"], context["attack_types_combined"], context["target_column_name"], model_name, model_prototype, artifact_feature_set, context["pca_input_feature_names"], context["subset_feature_names"], context["expected_label_classes"], context["expected_transformer"], context["hyperparameters_enabled"])  # Build exact original-training artifact provenance.
-    artifact_bundle = load_augmented_artifact_with_recovery(feature_set_name, model_name, artifact_feature_set, artifact_context, context)  # Load or serialize recovery for one complete artifact transaction.
-    result_entry = evaluate_persisted_augmented_artifact(feature_set_name, model_name, artifact_feature_set, artifact_bundle, combination_header, context)  # Transform and evaluate the augmented rows without fitting.
-    del artifact_bundle, artifact_context  # Release persisted artifact state and compatibility metadata.
-    return result_entry  # Return one durable augmented-testing result.
-
-
-def evaluate_concurrent_augmented_feature_set(feature_set_name: str, cancellation_event: threading.Event, context: dict) -> Dict[Tuple[str, str], dict]:  # Evaluate persisted original-trained artifacts for one augmented feature set.
-    """
-    Evaluate one augmented-testing feature set through its configured combination pool.
-
-    :param feature_set_name: Production feature-set label to evaluate.
-    :param cancellation_event: Shared cancellation signal spanning all feature pipelines.
-    :param context: Immutable augmented-evaluation inputs and synchronized publication state.
-    :return: Result entries ordered by the declared classifier plan.
-    """
-
-    if cancellation_event.is_set():  # Stop before artifact work when another feature pipeline already failed.
-        raise CancelledError(f"Cancelled augmented {feature_set_name} before evaluation")  # Preserve cooperative cancellation semantics.
-    subset_feature_names = context["selected_features_by_mode"][feature_set_name]  # Resolve exact persisted model feature order for this feature set.
-    expected_transformer = PCA(n_components=len(subset_feature_names)) if feature_set_name == "PCA Components" else None  # Build the compatibility prototype used by strict artifact validation.
-    combination_names = list(context["individual_models"].keys()) + (["StackingClassifier"] if context["stacking_enabled"] else [])  # Build the exact sequential classifier order.
-    feature_index = context["feature_mode_names"].index(feature_set_name)  # Resolve stable feature position in the declared plan.
-    feature_start_combination = context["starting_combination"] + feature_index * len(combination_names)  # Assign deterministic global indices independent of completion order.
-    combination_context = dict(context)  # Isolate feature-specific augmented inputs from sibling feature pipelines.
-    combination_context.update({"subset_feature_names": subset_feature_names, "expected_transformer": expected_transformer, "combination_names": combination_names, "feature_start_combination": feature_start_combination})  # Bind exact feature and progress identities for inner workers.
-
-    def evaluate_augmented_combination(model_name: str, shared_cancellation: threading.Event) -> dict:  # Bind feature identity to one reusable augmented combination call.
-        return evaluate_augmented_concurrent_combination(feature_set_name, model_name, shared_cancellation, combination_context)  # Execute cache recovery, artifact loading, transformation, and evaluation.
-
-    combination_results = execute_combination_workloads(feature_set_name, combination_names, context["worker_plan"][FEATURE_SET_DISPLAY_KEYS[feature_set_name]], evaluate_augmented_combination, cancellation_event)  # Run bounded persisted-model prediction overlap for this feature set.
-    ordered_results = {(feature_set_name, model_name): combination_results[model_name] for model_name in combination_names}  # Restore exact classifier insertion order.
-    del combination_results  # Release temporary combination results after all workers join.
-    return ordered_results  # Return deterministic augmented feature-set results.
-
-
-def evaluate_augmented_feature_sets_concurrently(feature_mode_names: List[str], worker_plan: Dict[str, int], context: dict) -> Tuple[Dict[Tuple[str, str], dict], int]:  # Coordinate augmented-testing feature and classifier concurrency.
-    """
-    Evaluate every augmented-testing feature set with bounded nested thread pools.
-
-    :param feature_mode_names: Ordered production feature-set labels.
-    :param worker_plan: Effective positive combination-worker count per normalized feature key.
-    :param context: Immutable augmented-evaluation inputs and synchronized publication state.
-    :return: Ordered results and the next deterministic global combination index.
-    """
-
-    context["feature_mode_names"] = list(feature_mode_names)  # Store a private ordered plan for stable combination indices.
-    context["worker_plan"] = dict(worker_plan)  # Store validated active worker allocation for nested pools.
-    allocation_text = ", ".join(f"{key}={value}" for key, value in worker_plan.items())  # Format the exact augmented worker allocation.
-    print(f"{BackgroundColors.GREEN}[CONCURRENCY] Starting augmented-testing feature pipelines with combination workers: {BackgroundColors.CYAN}{allocation_text}{Style.RESET_ALL}")  # Report the selected backend and allocation.
-
-    def run_augmented_pipeline(feature_set_name: str, cancellation_event: threading.Event) -> Dict[Tuple[str, str], dict]:  # Bind immutable augmented context to one outer workload.
-        return evaluate_concurrent_augmented_feature_set(feature_set_name, cancellation_event, context)  # Execute one complete persisted-artifact feature pipeline.
-
-    with threadpool_limits(limits=1):  # Bound native numerical pools around all augmented prediction threads.
-        feature_results = execute_feature_set_workloads(feature_mode_names, run_augmented_pipeline)  # Run actual outer feature-pipeline overlap.
-    ordered_results: Dict[Tuple[str, str], dict] = {}  # Flatten results in declared feature order rather than completion order.
-    for feature_set_name in feature_mode_names:  # Preserve the existing feature-set ordering contract.
-        ordered_results.update(feature_results[feature_set_name])  # Append each ordered classifier result group.
-    combinations_per_feature = len(context["individual_models"]) + (1 if context["stacking_enabled"] else 0)  # Calculate exact stable progress stride.
-    next_combination = context["starting_combination"] + len(feature_mode_names) * combinations_per_feature  # Advance past every completed or recovered augmented combination.
-    return ordered_results, next_combination  # Return stable augmented results and next global index.
 
 
 def evaluate_single_feature_set(
@@ -12619,7 +12023,6 @@ def evaluate_on_dataset(
             feature_sets_config = {"use_full": True, "use_pca": False, "use_rfe": False, "use_ga": False, "explicit_features": []}  # Suppress every selection strategy without mutating CLI/config state
 
         feature_mode_names = [artifact_recovery_target[0]] if artifact_recovery_target is not None else list_grid_feature_modes(ga_selected_features, pca_n_components, rfe_selected_features, feature_names, config=config)  # Resolve the full plan or one missing artifact mode.
-        feature_worker_plan = resolve_feature_set_worker_plan(config, feature_mode_names)  # Resolve explicit outer concurrency while preserving an empty-map sequential fallback.
         planned_models = base_models if artifact_recovery_target is None else ({artifact_recovery_target[1]: base_models[artifact_recovery_target[1]]} if artifact_recovery_target[1] != "StackingClassifier" else {})  # Keep recovery progress limited to the missing artifact.
         if grid_progress is None:  # Build the exact standalone plan for the current data and HP slice
             evaluation_plan = build_evaluation_plan([(bool(hyperparameters_enabled), planned_models, hyperparams_map or {})], [augmentation_ratio], feature_mode_names, stacking_enabled)  # Build the standalone ordered runtime combinations
@@ -12669,7 +12072,7 @@ def evaluate_on_dataset(
         individual_models = {key: value for key, value in base_models.items() if artifact_recovery_target is None or (artifact_recovery_target[1] != "StackingClassifier" and key == artifact_recovery_target[1])}  # Restrict recovery without retaining fitted estimators.
         if grid_progress is None:
             total_steps = len(evaluation_plan)
-            progress_bar = SynchronizedProgressBar(tqdm(total=total_steps, desc=f"{data_source_label} Data", file=sys.stdout))  # Serialize progress operations when outer workers are active.
+            progress_bar = tqdm(total=total_steps, desc=f"{data_source_label} Data", file=sys.stdout)
             all_results = {}
             current_combination = 1
         else:
@@ -12700,16 +12103,6 @@ def evaluate_on_dataset(
             }
             dataset_name = build_filename_safe_dataset_identity(resolve_canonical_dataset_identity(str(file), True)) if execution_mode_str == "combined_files" else os.path.basename(os.path.dirname(file))
             evaluation_models = list(individual_models.items()) + ([('StackingClassifier', stacking_model)] if stacking_enabled else [])
-            if feature_worker_plan:  # Use the explicit concurrent path for persisted-model augmented testing.
-                augmented_context = {"selected_features_by_mode": selected_features_by_mode, "individual_models": individual_models, "stacking_model": stacking_model, "stacking_enabled": stacking_enabled, "starting_combination": current_combination, "cache_dict": cache_dict, "execution_mode_str": execution_mode_str, "data_source_label": data_source_label, "experiment_mode": experiment_mode, "augmentation_ratio": augmentation_ratio, "attack_types_combined": attack_types_combined, "total_steps": total_steps, "progress_bar": progress_bar, "hyperparameters_enabled": hyperparameters_enabled, "original_train_count": original_train_count, "y_augmented_raw": y_augmented_raw, "file": file, "source_files": pca_source_files, "target_column_name": target_column_name, "pca_input_feature_names": pca_input_feature_names, "expected_label_classes": expected_label_classes, "dataset_name": dataset_name, "config": config, "X_augmented_original_schema": X_augmented_original_schema, "experiment_id": experiment_id, "effective_cache_ref": effective_cache_ref, "hyperparams_map": hyperparams_map or {}, "feature_names": feature_names, "ga_selected_features": ga_selected_features, "pca_n_components": pca_n_components, "rfe_selected_features": rfe_selected_features, "base_models": base_models, "original_df": df, "cache_ref_file": cache_ref_file}  # Bind read-only augmented inputs and synchronized publication objects for every feature pipeline.
-                all_results, current_combination = evaluate_augmented_feature_sets_concurrently(feature_mode_names, feature_worker_plan, augmented_context)  # Run actual nested augmented feature-set and classifier concurrency.
-                if grid_progress is None:  # Close only progress bars created by this standalone augmented evaluation.
-                    progress_bar.close()  # Finalize synchronized standalone progress rendering.
-                else:  # Advance the shared grid counter deterministically after all augmented workers finish.
-                    grid_progress["current_combination"] = current_combination  # Store the next stable global combination index.
-                del X_augmented_original_schema, y_augmented_raw, augmented_features, df_augmented_for_testing, augmented_context  # Release augmented source views and worker context.
-                gc.collect()  # Reclaim augmented concurrency references after executor shutdown.
-                return all_results  # Return deterministic results from the explicit concurrent path.
             for name in feature_mode_names:
                 subset_feature_names = selected_features_by_mode[name]
                 expected_transformer = PCA(n_components=len(subset_feature_names)) if name == "PCA Components" else None
@@ -12771,19 +12164,6 @@ def evaluate_on_dataset(
         del data_splits, X_train_scaled, X_test_scaled  # Remove duplicate local references so the holder can truly release or spill the full matrices.
         del df  # Release the original dataframe after split and scaling before classifier fitting.
         gc.collect()  # Reclaim released dataframe memory before feature-set materialization.
-
-        if feature_worker_plan:  # Select the concurrent production path only after an explicit non-empty worker map.
-            concurrent_context = {"feature_source_arrays": feature_source_arrays, "feature_names": feature_names, "ga_selected_features": ga_selected_features, "pca_n_components": pca_n_components, "rfe_selected_features": rfe_selected_features, "file": file, "feature_sets_config": feature_sets_config, "config": config, "scaler": scaler, "source_files": pca_source_files, "pca_cache_context": pca_cache_context, "pca_input_feature_names": pca_input_feature_names, "individual_models": individual_models, "stacking_model": stacking_model, "stacking_enabled": stacking_enabled, "y_train": y_train, "y_test": y_test, "execution_mode_str": execution_mode_str, "attack_types_combined": attack_types_combined, "data_source_label": data_source_label, "experiment_id": experiment_id, "experiment_mode": experiment_mode, "augmentation_ratio": augmentation_ratio, "label_encoder": label_encoder, "target_column_name": target_column_name, "total_steps": total_steps, "starting_combination": current_combination, "progress_bar": progress_bar, "cache_dict": cache_dict, "effective_cache_ref": effective_cache_ref, "hyperparameters_enabled": hyperparameters_enabled, "hyperparams_map": hyperparams_map or {}}  # Bind read-only evaluation inputs and synchronized publication objects for every feature pipeline.
-            all_results, current_combination = evaluate_feature_sets_concurrently(feature_mode_names, feature_worker_plan, concurrent_context)  # Run actual nested feature-set and classifier concurrency.
-            if grid_progress is None:  # Close only a progress bar created by this standalone evaluation.
-                progress_bar.close()  # Finalize synchronized standalone progress rendering.
-            else:  # Advance the shared grid counter deterministically after all feature workers finish.
-                grid_progress["current_combination"] = current_combination  # Store the next stable global combination index.
-            cleanup_feature_source_arrays(feature_source_arrays, config=config)  # Release shared scaled source matrices after every outer pipeline has joined.
-            feature_source_arrays = None  # Prevent duplicate cleanup in the outer finally block.
-            del y_train, y_test, scaler, label_encoder, concurrent_context  # Release labels, preprocessing, and worker context before returning results.
-            gc.collect()  # Reclaim concurrent pipeline references after complete executor shutdown.
-            return all_results  # Return deterministic results from the explicit concurrent path.
 
         feature_sets_iter = iterate_feature_sets_sequentially(feature_source_arrays, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, file, feature_sets_config, config, scaler=scaler, source_files=pca_source_files, pca_cache_context=pca_cache_context, pca_input_feature_names=pca_input_feature_names)  # Create the lazy feature-set iterator with exact PCA source, feature, scaler, and split provenance.
         for idx, (name, X_train_subset, X_test_subset, subset_feature_names_list, transformer) in enumerate(feature_sets_iter, start=1):  # Evaluate one materialized feature set at a time
@@ -14250,7 +13630,7 @@ def create_grid_progress(total_steps, description):
     return {
         "total_steps": total_steps,
         "current_combination": 1,
-        "progress_bar": SynchronizedProgressBar(tqdm(total=total_steps, desc=description, file=sys.stdout)),  # Serialize shared grid progress operations under concurrent completion.
+        "progress_bar": tqdm(total=total_steps, desc=description, file=sys.stdout),
     }  # Return shared denominator, counter, and progress bar
 
 
