@@ -138,6 +138,7 @@ from threadpoolctl import threadpool_limits  # For narrowly limiting BLAS and Op
 from tqdm import tqdm  # For progress bars
 from typing import Any, Callable, Optional, List, Tuple, cast  # For optional and collection typing hints
 from xgboost import XGBClassifier  # For XGBoost classifier
+from training_progress import TRAINING_HEARTBEAT_INTERVAL_SECONDS, TrainingProgress, XGBoostProgressCallback, format_training_feature_set, interactive_terminal_attached  # Import reusable training progress infrastructure.
 
 
 # Macros:
@@ -335,6 +336,121 @@ def stop_training_ram_monitor(monitor: Optional[dict]) -> dict:
     average_percent = float(sum(numeric_samples) / len(numeric_samples))  # Compute arithmetic mean RAM usage for this classifier training period.
     thread_alive = bool(isinstance(thread, threading.Thread) and thread.is_alive())  # Record whether sampler cleanup completed.
     return {"latest_percent": latest_percent, "average_percent": average_percent, "sample_count": len(numeric_samples), "thread_alive": thread_alive}  # Return classifier RAM summary.
+
+
+def log_training_phase(feature_set: Optional[str], classifier_name: str, phase: str, status: str) -> None:  # Emit one durable classifier phase record
+    """
+    Emit one classifier lifecycle phase record to the active logger.
+
+    :param feature_set: Feature-set name or artifact label.
+    :param classifier_name: Classifier identity shown in progress output.
+    :param phase: Lifecycle phase name.
+    :param status: Current phase status.
+    :return: None.
+    """
+
+    try:  # Keep lifecycle reporting failures from affecting classifier execution.
+        feature_label = format_training_feature_set(feature_set)  # Normalize the feature-set label for detached logs.
+        print(f"[TRAINING] Feature Set: {feature_label} | Classifier: {classifier_name} | Phase: {phase} | Status: {status} | PID: {os.getpid()}")  # Write one newline-delimited phase record.
+        sys.stdout.flush()  # Flush the phase record immediately for detached SSH runs.
+    except Exception:  # Ignore an unavailable output stream during lifecycle reporting.
+        return  # Preserve the caller's training, prediction, metric, or persistence semantics.
+
+
+def build_training_progress(feature_set: Optional[str], classifier_name: str, total_units: Optional[int] = None, unit_label: Optional[str] = None, heartbeat: bool = False, config: Optional[dict] = None) -> TrainingProgress:  # Build one progress scope from experiment context
+    """
+    Build one reusable training progress scope from experiment configuration.
+
+    :param feature_set: Feature-set name or artifact label.
+    :param classifier_name: Classifier identity shown in progress output.
+    :param total_units: Exact public training-unit total when available.
+    :param unit_label: Public training-unit label when available.
+    :param heartbeat: Whether to emit low-frequency active heartbeats.
+    :param config: Configuration dictionary using global CONFIG when None.
+    :return: Configured TrainingProgress instance.
+    """
+
+    active_config = config if config is not None else CONFIG  # Resolve experiment configuration without exposing it to the reusable module.
+    configured_interval = active_config.get("evaluation", {}).get("training_heartbeat_interval_seconds", TRAINING_HEARTBEAT_INTERVAL_SECONDS) if isinstance(active_config, dict) else TRAINING_HEARTBEAT_INTERVAL_SECONDS  # Read the progress-specific interval with the established fallback.
+    return TrainingProgress(feature_set, classifier_name, calculate_execution_time, output_stream=sys.stdout, total_units=total_units, unit_label=unit_label, heartbeat=heartbeat, heartbeat_interval_seconds=configured_interval)  # Pass required progress context explicitly without new global state.
+
+
+def fit_classifier_with_progress(model: Any, X_train: Any, y_train: Any, feature_set: Optional[str], classifier_name: str, config: Optional[dict] = None, fit_kwargs: Optional[dict] = None) -> Any:  # Fit one estimator with safe progress reporting
+    """
+    Fit one estimator with public training-unit callbacks or heartbeat reporting.
+
+    :param model: Estimator instance to fit.
+    :param X_train: Training feature matrix passed through unchanged.
+    :param y_train: Training labels passed through unchanged.
+    :param feature_set: Feature-set name or artifact label.
+    :param classifier_name: Classifier identity shown in progress output.
+    :param config: Configuration dictionary using global CONFIG when None.
+    :param fit_kwargs: Optional public fit keyword arguments to preserve and extend.
+    :return: The fitted estimator returned by its original fit method.
+    """
+
+    options = dict(fit_kwargs or {})  # Copy only the small fit-options mapping without copying training data.
+    model_type = type(model)  # Require the exact installed estimator class before enabling genuine progress.
+
+    if model_type is XGBClassifier:  # Use XGBoost's public boosting callback for exact rounds.
+        total_rounds = int(model.get_num_boosting_rounds())  # Read the public configured boosting-round total.
+        progress = build_training_progress(feature_set, classifier_name, total_rounds, "Round", heartbeat=False, config=config)  # Create a genuine XGBoost round reporter.
+        existing_callbacks = model.get_params(deep=False).get("callbacks")  # Preserve the estimator's existing public callbacks exactly.
+        callback_list = [XGBoostProgressCallback(progress)] + list(existing_callbacks or [])  # Prepend the non-stopping progress callback while preserving existing callback order.
+        model.set_params(callbacks=callback_list)  # Install callbacks through XGBoost's public estimator parameter API.
+        try:  # Restore the original callback parameter after every fit outcome.
+            with progress:  # Scope callback timing to the original blocking fit.
+                return model.fit(X_train, y_train, **options)  # Execute one unchanged XGBoost fit call.
+        finally:  # Restore callback identity even when XGBoost training raises.
+            model.set_params(callbacks=existing_callbacks)  # Remove only the temporary progress callback from model identity and serialization.
+
+    if model_type is lgb.LGBMClassifier:  # Use LightGBM's public iteration callback for exact iterations.
+        total_iterations = int(model.get_params(deep=False).get("n_estimators", 100))  # Read the public configured boosting-iteration total.
+        progress = build_training_progress(feature_set, classifier_name, total_iterations, "Iteration", heartbeat=False, config=config)  # Create a genuine LightGBM iteration reporter.
+        existing_callbacks = list(options.get("callbacks") or [])  # Preserve any caller-supplied public LightGBM callbacks.
+
+        def report_lightgbm_iteration(environment) -> None:  # Adapt the public LightGBM callback environment
+            """
+            Report one completed LightGBM boosting iteration.
+
+            :param environment: Public LightGBM callback environment.
+            :return: None.
+            """
+
+            progress.report_unit(environment.iteration - environment.begin_iteration + 1)  # Convert the public iteration index into completed iterations.
+
+        report_lightgbm_iteration.order = 0  # Run non-mutating progress before callbacks that may stop training.
+        report_lightgbm_iteration.before_iteration = False  # Report only after a boosting iteration completes.
+        options["callbacks"] = [report_lightgbm_iteration] + existing_callbacks  # Preserve existing callbacks after the temporary progress callback.
+        with progress:  # Scope callback timing to the original blocking fit.
+            return model.fit(X_train, y_train, **options)  # Execute one unchanged LightGBM fit call.
+
+    if model_type is GradientBoostingClassifier:  # Use sklearn's public monitor callback for exact completed stages.
+        total_stages = int(model.get_params(deep=False).get("n_estimators", 100))  # Read the public configured boosting-stage total.
+        progress = build_training_progress(feature_set, classifier_name, total_stages, "Stage", heartbeat=False, config=config)  # Create a genuine Gradient Boosting stage reporter.
+        existing_monitor = options.get("monitor")  # Preserve any caller-supplied public monitor callback.
+
+        def report_gradient_stage(stage_index, estimator, local_variables) -> bool:  # Adapt sklearn's public stage monitor
+            """
+            Report one completed Gradient Boosting stage and preserve an existing monitor result.
+
+            :param stage_index: Zero-based completed boosting-stage index.
+            :param estimator: Active GradientBoostingClassifier instance.
+            :param local_variables: Public monitor local-variable mapping.
+            :return: Existing monitor stop decision or False.
+            """
+
+            stop_training = bool(existing_monitor(stage_index, estimator, local_variables)) if callable(existing_monitor) else False  # Preserve an existing monitor's stop decision.
+            progress.report_unit(stage_index + 1)  # Convert the zero-based monitor index into completed stages.
+            return stop_training  # Preserve existing early-stop behavior without adding any stop condition.
+
+        options["monitor"] = report_gradient_stage  # Install the composed callback through sklearn's public fit API.
+        with progress:  # Scope callback timing to the original blocking fit.
+            return model.fit(X_train, y_train, **options)  # Execute one unchanged Gradient Boosting fit call.
+
+    progress = build_training_progress(feature_set, classifier_name, heartbeat=True, config=config)  # Use heartbeat-only reporting for estimators without safe public training units.
+    with progress:  # Ensure the heartbeat stops after success, failure, or interruption.
+        return model.fit(X_train, y_train, **options)  # Preserve the estimator's original single blocking fit call.
 
 
 def store_training_ram_stats(stats_holder: Optional[dict], stats: dict) -> None:
@@ -997,6 +1113,7 @@ def get_default_config():
         "evaluation": {
             "n_jobs": 1,
             "feature_extraction_n_jobs": 1,  # Use one thread for feature extraction by default without changing classifier training parallelism
+            "training_heartbeat_interval_seconds": 60,  # Use low-frequency progress heartbeats when public training units are unavailable
             "threads_limit": 2,
             "cv_folds": 10,
             "random_state": 42,
@@ -6299,33 +6416,40 @@ def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, 
         start_time = time.time()  # Record the start time
 
         if fit_model:  # Fit only during the original-data training lifecycle.
+            log_training_phase(feature_set, model_name, "Training", "Started")  # Mark training separately from later combination phases.
             sys.stdout.flush()  # Flush stdout before model training to ensure logs are visible under nohup
             training_ram_monitor = start_training_ram_monitor(TRAINING_RAM_SAMPLE_INTERVAL_SECONDS)  # Start RAM monitoring immediately before classifier fit.
             try:  # Ensure RAM monitoring stops even when classifier fit fails.
-                model.fit(X_train, y_train)  # Fit the model on original training data only.
+                fit_classifier_with_progress(model, X_train, y_train, feature_set, model_name, config=config)  # Fit once with safe public callbacks or heartbeat-only reporting.
             finally:  # Stop RAM monitoring immediately after classifier fit exits.
                 classifier_ram_stats = stop_training_ram_monitor(training_ram_monitor)  # Summarize RAM usage across this classifier fit.
                 store_training_ram_stats(training_ram_stats, classifier_ram_stats)  # Associate RAM statistics with this classifier only.
                 training_ram_monitor = None  # Clear monitor state after stop processing.
             if classifier_ram_stats.get("thread_alive", False):  # Verify whether sampler thread cleanup completed.
                 verbose_output(f"{BackgroundColors.YELLOW}[WARNING] RAM monitor thread remained alive after training {model_name}.{Style.RESET_ALL}", config=config)  # Log monitor cleanup anomaly without changing classifier results.
+            log_training_phase(feature_set, model_name, "Training", "Completed")  # Mark fit completion without implying the combination is complete.
             params_digest = get_classifier_params_digest(model)  # Build fitted classifier parameter digest
             fit_metadata = dict(phase_metadata)  # Copy caller watcher metadata
             fit_metadata.update({"dataset_identity": os.path.basename(str(dataset_file)) if dataset_file is not None else fit_metadata.get("dataset_identity"), "classifier_name": model_name, "classifier_params_digest": params_digest, "classifier_params_reference": f"sha256:{params_digest.get('digest')}", "train_sample_count": len(y_train), "test_sample_count": len(y_test), "feature_count": X_train.shape[1] if hasattr(X_train, "shape") and len(X_train.shape) > 1 else fit_metadata.get("feature_count"), "n_jobs": get_classifier_n_jobs(model), "event_outcome": "fit_completed"})  # Build fit completion watcher metadata
             write_memory_phase_event("after_classifier_fit", config=config, **fit_metadata)  # Publish classifier fit completion
         else:
             store_training_ram_stats(training_ram_stats, stop_training_ram_monitor(None))  # Preserve RAM-stat shape without starting a training monitor.
+            log_training_phase(feature_set, model_name, "Training", "Skipped (persisted model)")  # Record that loaded-model evaluation performs no fit.
 
+        log_training_phase(feature_set, model_name, "Prediction", "Started")  # Mark prediction as distinct from model training.
         y_pred = model.predict(X_test)  # Predict the labels for the test set
+        log_training_phase(feature_set, model_name, "Prediction", "Completed")  # Mark prediction completion before metric computation.
 
         elapsed_time = time.time() - start_time  # Calculate the total time elapsed
 
+        log_training_phase(feature_set, model_name, "Metrics", "Started")  # Mark metric computation as a separate phase.
         acc = accuracy_score(y_test, y_pred)  # Calculate Accuracy
         prec = precision_score(y_test, y_pred, average="weighted", zero_division=cast(Any, 0))  # Calculate Precision
         rec = recall_score(y_test, y_pred, average="weighted", zero_division=cast(Any, 0))  # Calculate Recall
         f1 = f1_score(y_test, y_pred, average="weighted", zero_division=cast(Any, 0))  # Calculate F1-Score
 
         fpr, fnr = compute_fpr_fnr(y_test, y_pred)  # Compute False Positive and False Negative rates
+        log_training_phase(feature_set, model_name, "Metrics", "Completed")  # Mark metrics completion before reporting and persistence.
 
         human_time = calculate_execution_time(elapsed_time)  # Convert elapsed duration to human-readable string using helper
         total_seconds = int(round(elapsed_time))  # Reuse elapsed_time as total seconds for reporting
@@ -6373,7 +6497,7 @@ def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, 
         raise
 
 
-def evaluate_stacking_classifier(model, X_train, y_train, X_test, y_test, config=None, training_ram_stats=None, fit_model=True, notification_context=None):  # Evaluate stacking with RAM statistics and notification context
+def evaluate_stacking_classifier(model, X_train, y_train, X_test, y_test, config=None, training_ram_stats=None, fit_model=True, notification_context=None, feature_set=None):  # Evaluate stacking with RAM statistics and notification context
     """
     Trains the StackingClassifier model and evaluates its performance on the test set.
 
@@ -6386,6 +6510,7 @@ def evaluate_stacking_classifier(model, X_train, y_train, X_test, y_test, config
     :param training_ram_stats: Mutable holder receiving classifier training RAM statistics.
     :param fit_model: Whether to fit on original training data before prediction.
     :param notification_context: Exact evaluation combination label for remote notifications.
+    :param feature_set: Feature-set name used for training progress output.
     :return: Metrics tuple (acc, prec, rec, f1, fpr, fnr, elapsed_time)
     """
     
@@ -6400,29 +6525,36 @@ def evaluate_stacking_classifier(model, X_train, y_train, X_test, y_test, config
         start_time = time.time()  # Record the start time for timing training and prediction
 
         if fit_model:  # Fit only during the original-data training lifecycle.
+            log_training_phase(feature_set, "StackingClassifier", "Training", "Started")  # Mark stacking training separately from later phases.
             sys.stdout.flush()  # Flush stdout before stacking training to ensure logs are visible under nohup
             training_ram_monitor = start_training_ram_monitor(TRAINING_RAM_SAMPLE_INTERVAL_SECONDS)  # Start RAM monitoring immediately before stacking fit.
             try:  # Ensure RAM monitoring stops even when stacking fit fails.
-                model.fit(X_train, y_train)  # Fit the stacking model on original training data only.
+                fit_classifier_with_progress(model, X_train, y_train, feature_set, "StackingClassifier", config=config)  # Preserve the single public stacking fit with heartbeat-only reporting.
             finally:  # Stop RAM monitoring immediately after stacking fit exits.
                 stacking_ram_summary = stop_training_ram_monitor(training_ram_monitor)  # Summarize RAM usage across this stacking fit.
                 store_training_ram_stats(training_ram_stats, stacking_ram_summary)  # Associate RAM statistics with this stacking classifier only.
                 training_ram_monitor = None  # Clear monitor state after stop processing.
             if stacking_ram_summary.get("thread_alive", False):  # Verify whether sampler thread cleanup completed.
                 verbose_output(f"{BackgroundColors.YELLOW}[WARNING] RAM monitor thread remained alive after training StackingClassifier.{Style.RESET_ALL}", config=config)  # Log monitor cleanup anomaly without changing stacking results.
+            log_training_phase(feature_set, "StackingClassifier", "Training", "Completed")  # Mark fit completion without implying combination completion.
         else:
             store_training_ram_stats(training_ram_stats, stop_training_ram_monitor(None))  # Preserve RAM-stat shape without starting a training monitor.
+            log_training_phase(feature_set, "StackingClassifier", "Training", "Skipped (persisted model)")  # Record that loaded stacking evaluation performs no fit.
 
+        log_training_phase(feature_set, "StackingClassifier", "Prediction", "Started")  # Mark stacking prediction as distinct from training.
         y_pred = model.predict(X_test)  # Predict the labels for the test set
+        log_training_phase(feature_set, "StackingClassifier", "Prediction", "Completed")  # Mark prediction completion before metric computation.
 
         elapsed_time = time.time() - start_time  # Calculate the total time elapsed
 
+        log_training_phase(feature_set, "StackingClassifier", "Metrics", "Started")  # Mark stacking metric computation as a separate phase.
         acc = accuracy_score(y_test, y_pred)  # Calculate Accuracy
         prec = precision_score(y_test, y_pred, average="weighted", zero_division=cast(Any, 0))  # Calculate Precision (weighted)
         rec = recall_score(y_test, y_pred, average="weighted", zero_division=cast(Any, 0))  # Calculate Recall (weighted)
         f1 = f1_score(y_test, y_pred, average="weighted", zero_division=cast(Any, 0))  # Calculate F1-Score (weighted)
 
         fpr, fnr = compute_fpr_fnr(y_test, y_pred)  # Compute False Positive and False Negative rates for binary or multiclass predictions
+        log_training_phase(feature_set, "StackingClassifier", "Metrics", "Completed")  # Mark stacking metrics completion before reporting and persistence.
 
         human_time = calculate_execution_time(elapsed_time)  # Convert elapsed duration to human-readable string using helper
         total_seconds = int(round(elapsed_time))  # Reuse elapsed_time as total seconds for reporting
@@ -6852,6 +6984,7 @@ def create_shap_progress_wrapper(tqdm_callable, progress_desc, progress_phase):
     def wrapped_tqdm(*args, **kwargs):
         kwargs.setdefault("desc", progress_desc)  # Inject contextual description only when SHAP did not already provide one.
         kwargs.setdefault("file", sys.stdout)  # Route progress output through the configured stdout logger.
+        kwargs.setdefault("disable", not interactive_terminal_attached(sys.stdout))  # Render SHAP's interactive bar only on an attached terminal.
         progress_bar = tqdm_callable(*args, **kwargs)  # Delegate progress-bar construction to the original tqdm callable.
         if hasattr(progress_bar, "set_postfix_str") and progress_phase:  # Verify postfix support before appending SHAP phase metadata.
             progress_bar.set_postfix_str(progress_phase, refresh=False)  # Append concise SHAP phase metadata without forcing a redraw.
@@ -9665,7 +9798,23 @@ def run_automl_model_search(X_train, y_train, file_path, config=None):
         )  # Create Optuna study to maximize F1 score
 
         objective_fn = lambda trial: automl_objective(trial, X_train, y_train, automl_cv_folds, config=config)  # Create objective wrapper
-        study.optimize(objective_fn, n_trials=automl_n_trials, timeout=automl_timeout, n_jobs=1)  # Run the optimization
+        progress = build_training_progress("AutoML", "AutoML Model Search", automl_n_trials, "Trial", heartbeat=True, config=config)  # Track genuine completed Optuna trials with between-trial heartbeats.
+
+        def report_completed_trial(completed_study, completed_trial) -> None:  # Adapt Optuna's public completed-trial callback
+            """
+            Report one completed or pruned AutoML model-search trial.
+
+            :param completed_study: Active public Optuna study.
+            :param completed_trial: Public frozen trial that just finished.
+            :return: None.
+            """
+
+            progress.report_unit(len(completed_study.trials))  # Derive genuine progress from trials recorded by the public study API.
+
+        log_training_phase("AutoML", "AutoML Model Search", "Training", "Started")  # Mark Optuna trial execution as the AutoML training phase.
+        with progress:  # Ensure between-trial heartbeats stop after every study outcome.
+            study.optimize(objective_fn, n_trials=automl_n_trials, timeout=automl_timeout, n_jobs=1, callbacks=[report_completed_trial])  # Run unchanged optimization with one public reporting callback.
+        log_training_phase("AutoML", "AutoML Model Search", "Training", "Completed")  # Mark search completion without implying later evaluation or export completion.
 
         completed_trials = [t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]  # Get completed trials
 
@@ -9856,9 +10005,26 @@ def run_automl_stacking_search(X_train, y_train, model_study, file_path, config=
         objective_fn = lambda trial: automl_stacking_objective(
             trial, X_train, y_train, config.get("automl", {}).get("cv_folds", 5), candidate_models
         )  # Create stacking objective wrapper
-        stacking_study.optimize(
-            objective_fn, n_trials=config.get("automl", {}).get("stacking_trials", 20), timeout=config.get("automl", {}).get("timeout", 3600), n_jobs=1
-        )  # Run stacking optimization
+        stacking_trials = int(config.get("automl", {}).get("stacking_trials", 20))  # Resolve the exact configured Optuna stacking-trial budget.
+        progress = build_training_progress("AutoML", "AutoML Stacking Search", stacking_trials, "Trial", heartbeat=True, config=config)  # Track genuine completed stacking trials with between-trial heartbeats.
+
+        def report_completed_stacking_trial(completed_study, completed_trial) -> None:  # Adapt Optuna's public completed-trial callback
+            """
+            Report one completed or pruned AutoML stacking-search trial.
+
+            :param completed_study: Active public Optuna stacking study.
+            :param completed_trial: Public frozen trial that just finished.
+            :return: None.
+            """
+
+            progress.report_unit(len(completed_study.trials))  # Derive genuine progress from trials recorded by the public study API.
+
+        log_training_phase("AutoML", "AutoML Stacking Search", "Training", "Started")  # Mark stacking trial execution as a distinct AutoML training phase.
+        with progress:  # Ensure between-trial heartbeats stop after every study outcome.
+            stacking_study.optimize(
+                objective_fn, n_trials=stacking_trials, timeout=config.get("automl", {}).get("timeout", 3600), n_jobs=1, callbacks=[report_completed_stacking_trial]
+            )  # Run unchanged stacking optimization with one public reporting callback.
+        log_training_phase("AutoML", "AutoML Stacking Search", "Training", "Completed")  # Mark stacking search completion before held-out evaluation.
 
         completed = [
             t for t in stacking_study.trials if t.state == optuna.trial.TrialState.COMPLETE
@@ -9951,7 +10117,7 @@ def build_automl_stacking_model(best_config, config=None):
         raise
 
 
-def evaluate_automl_model_on_test(model, model_name, X_train, y_train, X_test, y_test):
+def evaluate_automl_model_on_test(model, model_name, X_train, y_train, X_test, y_test, config=None):
     """
     Trains and evaluates an AutoML-selected model on the held-out test set.
 
@@ -9961,18 +10127,24 @@ def evaluate_automl_model_on_test(model, model_name, X_train, y_train, X_test, y
     :param y_train: Training target labels
     :param X_test: Testing features array
     :param y_test: Testing target labels
+    :param config: Configuration dictionary using global CONFIG when None.
     :return: Dictionary containing all evaluation metrics
     """
     
     try:
         start_time = time.time()  # Record start time
 
+        log_training_phase("AutoML", model_name, "Training", "Started")  # Mark full-data AutoML model training separately from evaluation.
         sys.stdout.flush()  # Flush stdout before model training to ensure logs are visible under nohup
-        model.fit(X_train, y_train)  # Train model on full training set using its internal n_jobs parallelism
+        fit_classifier_with_progress(model, X_train, y_train, "AutoML", model_name, config=config)  # Train once with exact public units or heartbeat-only reporting.
+        log_training_phase("AutoML", model_name, "Training", "Completed")  # Mark full-data fit completion without implying evaluation completion.
+        log_training_phase("AutoML", model_name, "Prediction", "Started")  # Mark held-out prediction as a separate phase.
         y_pred = model.predict(X_test)  # Generate predictions on test set
+        log_training_phase("AutoML", model_name, "Prediction", "Completed")  # Mark held-out prediction completion before metrics.
 
         elapsed = time.time() - start_time  # Calculate elapsed training time
 
+        log_training_phase("AutoML", model_name, "Metrics", "Started")  # Mark held-out AutoML metric computation separately.
         acc = accuracy_score(y_test, y_pred)  # Calculate accuracy
         prec = precision_score(y_test, y_pred, average="weighted", zero_division=cast(Any, 0))  # Calculate weighted precision
         rec = recall_score(y_test, y_pred, average="weighted", zero_division=cast(Any, 0))  # Calculate weighted recall
@@ -9990,6 +10162,7 @@ def evaluate_automl_model_on_test(model, model_name, X_train, y_train, X_test, y
             roc_auc = None  # Keep as None
 
         fpr, fnr = compute_fpr_fnr(y_test, y_pred)  # Compute false positive and false negative rates for binary or multiclass predictions
+        log_training_phase("AutoML", model_name, "Metrics", "Completed")  # Mark held-out metrics completion before reporting.
 
         total_seconds = int(round(elapsed))  # Reuse elapsed as total seconds for reporting
         train_seconds = total_seconds  # Reuse total seconds as training time when only one timer exists
@@ -10373,7 +10546,7 @@ def run_automl_stacking_phase(X_train_scaled, y_train_arr, X_test_scaled, y_test
                 )  # Output evaluation message
 
                 stacking_metrics = evaluate_automl_model_on_test(
-                    best_stacking_model, "AutoML_Stacking", X_train_scaled, y_train_arr, X_test_scaled, y_test_arr
+                    best_stacking_model, "AutoML_Stacking", X_train_scaled, y_train_arr, X_test_scaled, y_test_arr, config=config
                 )  # Evaluate stacking model on test set
 
         return stacking_config, stacking_metrics, stacking_study  # Return stacking results tuple
@@ -10418,17 +10591,25 @@ def export_automl_pipeline_artifacts(model_study, stacking_study, stacking_confi
             best_model_name, best_params, individual_metrics, stacking_config, automl_output_dir, feature_names, dataset_file=file
         )  # Export best configuration to file
 
+        log_training_phase("AutoML", best_model_name, "Model export", "Started")  # Mark best individual model export separately from training and metrics.
         export_automl_best_model(
             best_individual_model, scaler, automl_output_dir, best_model_name, feature_names, dataset_file=file
         )  # Export best individual model to file
+        log_training_phase("AutoML", best_model_name, "Model export", "Completed")  # Mark best individual model export completion.
 
         if stacking_config is not None and stacking_metrics is not None:  # If stacking was successful
+            log_training_phase("AutoML", "AutoML_Stacking", "Model preparation", "Started")  # Mark final stacking artifact reconstruction separately.
             best_stacking_model_final = build_automl_stacking_model(stacking_config, config=config)  # Rebuild stacking model for export
+            log_training_phase("AutoML", "AutoML_Stacking", "Model preparation", "Completed")  # Mark final stacking artifact preparation before its required fit.
+            log_training_phase("AutoML", "AutoML_Stacking", "Training", "Started")  # Mark the existing full-data export fit separately.
             sys.stdout.flush()  # Flush stdout before stacking training to ensure logs are visible under nohup
-            best_stacking_model_final.fit(X_train_scaled, y_train_arr)  # Fit stacking model on full training data
+            fit_classifier_with_progress(best_stacking_model_final, X_train_scaled, y_train_arr, "AutoML", "AutoML_Stacking", config=config)  # Preserve the existing single full-data stacking fit with heartbeat reporting.
+            log_training_phase("AutoML", "AutoML_Stacking", "Training", "Completed")  # Mark export fit completion before model persistence.
+            log_training_phase("AutoML", "AutoML_Stacking", "Model export", "Started")  # Mark final stacking model export separately.
             export_automl_best_model(
                 best_stacking_model_final, scaler, automl_output_dir, "AutoML_Stacking", feature_names, dataset_file=file
             )  # Export best stacking model to file
+            log_training_phase("AutoML", "AutoML_Stacking", "Model export", "Completed")  # Mark final stacking model export completion.
     except Exception as e:
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
@@ -10551,11 +10732,14 @@ def run_automl_pipeline(file, df, feature_names, data_source_label="Original", c
 
         automl_start = time.time()  # Record pipeline start time
 
+        log_training_phase("AutoML", "AutoML", "Model preparation", "Started")  # Mark AutoML split and scaling preparation separately from trials.
         training_data = prepare_automl_training_data(df, config=config)  # Prepare scaled training and test splits, returns None for single-class targets
         if training_data is None:  # If preparation failed due to insufficient classes
+            log_training_phase("AutoML", "AutoML", "Model preparation", "Skipped (insufficient classes)")  # Close the preparation phase truthfully before early return.
             return None  # Abort pipeline early
 
         X_train_scaled, X_test_scaled, y_train_arr, y_test_arr, scaler = training_data  # Unpack prepared training data tuple
+        log_training_phase("AutoML", "AutoML", "Model preparation", "Completed")  # Mark AutoML preparation completion before trial execution.
 
         send_telegram_message(TELEGRAM_BOT, f"Starting AutoML pipeline for {os.path.basename(file)}")  # Notify via Telegram
 
@@ -10584,6 +10768,8 @@ def run_automl_pipeline(file, df, feature_names, data_source_label="Original", c
         )  # Build results list for CSV
 
         save_automl_results(file, results_list, config=config)  # Save AutoML results to CSV
+        log_training_phase("AutoML", "AutoML", "Cache persistence", "Skipped (AutoML uses result export)")  # Record that AutoML has no classifier resume-cache write path.
+        log_training_phase("AutoML", "AutoML", "Explainability", "Skipped (not used by AutoML)")  # Record that this AutoML pipeline has no explainability phase.
 
         automl_elapsed = time.time() - automl_start  # Calculate total AutoML pipeline time
 
@@ -11433,8 +11619,10 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
         for model_name, model in individual_models.items():  # Iterate over each individual model sequentially to prevent loky deadlock
             recovered, current_combination = recover_cached_individual_classifier_result(cache_dict, execution_mode_str, data_source_label, experiment_mode, augmentation_ratio, attack_types_combined, name, model_name, results_dict, current_combination, total_steps, progress_bar, hyperparameters_enabled=hyperparameters_enabled, expected_n_features=X_train_n_cols, expected_feature_names=subset_feature_names, expected_n_samples_train=len(y_train), expected_n_samples_test=len(y_test))  # Recover only rows produced with the same active data shape and ordered features.
             if recovered:  # Skip recomputation when cache recovery succeeds
+                log_training_phase(name, model_name, "Cache persistence", "Recovered")  # Record durable cache recovery without implying retraining.
                 schedule_cached_classifier_explainability(model, model_name, X_test_subset, y_test, subset_feature_names, file, name, execution_mode_str, attack_types_combined, experiment_mode, hyperparameters_enabled, config, source_files, target_column, input_feature_names, label_encoder, transformer)  # Explain the exact persisted classifier when its compatible artifact exists.
                 continue  # Move to next model because this one has already been recovered
+            log_training_phase(name, model_name, "Model preparation", "Started")  # Mark estimator cloning and artifact identity preparation.
             active_model = clone(model)  # Clone the estimator prototype so fitted state is not retained across atomic classifiers
             artifact_feature_set = f"{name} - {'Optimized Hyperparameters' if hyperparameters_enabled else 'Default Hyperparameters'}"  # Resolve HP-isolated artifact feature-set label
             dataset_name = build_filename_safe_dataset_identity(resolve_canonical_dataset_identity(str(file), True)) if execution_mode_str == "combined_files" else os.path.basename(os.path.dirname(file))  # Resolve model export dataset folder by execution mode.
@@ -11449,6 +11637,7 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
             if memory_watcher_enabled(config):  # Add concrete matrix layout diagnostics only when the watcher is active
                 phase_metadata.update(build_array_memory_metadata("X_train", X_train_values))  # Record train matrix shape/dtype/layout
                 phase_metadata.update(build_array_memory_metadata("X_test", X_test_values))  # Record test matrix shape/dtype/layout
+            log_training_phase(name, model_name, "Model preparation", "Completed")  # Mark preparation completion before the blocking fit.
             write_memory_phase_event("before_classifier_fit", config=config, **phase_metadata, event_outcome="starting")  # Publish classifier fit start
             training_ram_stats = {}  # Hold RAM statistics for this classifier fit only.
 
@@ -11481,16 +11670,21 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
                 effective_hyperparameters=effective_hyperparameters,
             )  # Build standardized result entry for this individual classifier
             write_memory_phase_event("before_cache_persist", config=config, **phase_metadata, event_outcome="starting")  # Publish cache persistence start
+            log_training_phase(name, model_name, "Cache persistence", "Started")  # Mark result cache persistence separately from training.
             persist_cache_result_entry(cache_ref_file, result_entry, cache_dict, config=config)  # Persist this atomic classifier result immediately and register its resume identity
+            log_training_phase(name, model_name, "Cache persistence", "Completed")  # Mark durable cache completion before artifact export.
             write_memory_phase_event("after_cache_persist", config=config, **phase_metadata, event_outcome="persisted")  # Publish cache persistence completion
 
             results_dict[(name, model_name)] = result_entry  # Store result keyed by feature set and model only after durable cache verification
 
+            log_training_phase(name, model_name, "Model export", "Started")  # Mark fitted artifact export separately from cache persistence.
             export_model_and_scaler(active_model, scaler, dataset_name, model_name, feature_set=artifact_feature_set, dataset_csv_path=file, config=config, artifact_context=artifact_context, label_encoder=label_encoder, transformer=transformer)  # Atomically persist the original-trained classifier and fitted preprocessing.
+            log_training_phase(name, model_name, "Model export", "Completed")  # Mark model export completion before explainability scheduling.
             pass  # Verify removal of duplicate individual model accuracy print
             progress_bar.update(1)  # Advance progress bar by one step
 
             write_memory_phase_event("before_explainability_schedule", config=config, **phase_metadata, event_outcome="starting")  # Publish explainability scheduling start
+            log_training_phase(name, model_name, "Explainability", "Started")  # Mark explainability dispatch as a separate combination phase.
             explainability_outcome = "skipped"  # Track explainability scheduling outcome
             if config.get("explainability", {}).get("enabled", False) and experiment_mode == "original_only":  # Only queue explainability on original data
                 try:  # Attempt to dispatch explainability for this model.
@@ -11502,7 +11696,9 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
                         f"{BackgroundColors.YELLOW}Explainability failed for {model_name}: {e}{Style.RESET_ALL}",
                         config=config
                     )  # Log explainability failure before propagation.
+                    log_training_phase(name, model_name, "Explainability", "Failed")  # Record explainability dispatch failure before preserving the exception.
                     raise  # Preserve explainability failure propagation.
+            log_training_phase(name, model_name, "Explainability", explainability_outcome.capitalize())  # Report truthful skipped, scheduled, or failed dispatch status.
             write_memory_phase_event("after_explainability_schedule", config=config, **phase_metadata, event_outcome=explainability_outcome)  # Publish explainability scheduling completion
 
             current_combination += 1  # Advance the global combination counter
@@ -11597,9 +11793,11 @@ def run_stacking_evaluation_for_feature_set(name, stacking_model, X_train_df, y_
 
                 progress_bar.update(1)  # Advance progress bar even for skipped cached evaluations
                 current_combination += 1  # Advance the global combination counter for skipped evaluations
+                log_training_phase(name, "StackingClassifier", "Cache persistence", "Recovered")  # Record durable stacking cache recovery without retraining.
                 schedule_cached_classifier_explainability(stacking_model, "StackingClassifier", X_test_subset, y_test, subset_feature_names, file, name, execution_mode_str, attack_types_combined, experiment_mode, hyperparameters_enabled, config, source_files, target_column, input_feature_names, label_encoder, transformer)  # Explain the exact persisted stacking model when its compatible artifact exists.
                 return (cached_result, current_combination)  # Return the cached stacking result entry without re-running the evaluation
 
+        log_training_phase(name, "StackingClassifier", "Model preparation", "Started")  # Mark stacking clone and artifact identity preparation.
         active_stacking_model = clone(stacking_model)  # Isolate fitted stacking state to this atomic feature-set evaluation.
 
         try:  # Attempt to obtain a compact snapshot of stacking model parameters for logging
@@ -11625,11 +11823,12 @@ def run_stacking_evaluation_for_feature_set(name, stacking_model, X_train_df, y_
         phase_cache_key = build_resume_cache_key(execution_mode_str, data_source_label, experiment_mode, augmentation_ratio, attack_types_combined, name, "StackingClassifier", hyperparameters_enabled)  # Build stacking cache identity source for diagnostics
         phase_cache_digest = hashlib.sha256(json.dumps(phase_cache_key, sort_keys=True, default=str).encode("utf-8")).hexdigest()  # Build stable stacking cache identity digest
         phase_metadata = {"dataset_identity": os.path.basename(str(file)), "dataset_source": file, "execution_mode": execution_mode_str, "attack_scope": attack_types_combined, "data_source": data_source_label, "experiment_mode": experiment_mode, "augmentation_ratio": augmentation_ratio, "feature_set_name": name, "hyperparameter_mode": "Optimized Hyperparameters" if hyperparameters_enabled else "Default Hyperparameters", "classifier_name": "StackingClassifier", "classifier_params_digest": phase_params_digest, "classifier_params_reference": f"sha256:{phase_params_digest.get('digest')}", "train_sample_count": len(y_train), "test_sample_count": len(y_test), "feature_count": X_train_n_cols, "n_jobs": get_classifier_n_jobs(active_stacking_model), "cache_identity": phase_cache_digest, "cache_reference": cache_ref_file, "combination_index": current_combination, "total_combinations": total_steps}  # Build compact phase metadata for stacking
+        log_training_phase(name, "StackingClassifier", "Model preparation", "Completed")  # Mark preparation completion before the blocking stacking fit.
         write_memory_phase_event("before_classifier_fit", config=config, **phase_metadata, event_outcome="starting")  # Publish stacking fit start
         stacking_ram_stats = {}  # Hold RAM statistics for this stacking fit only.
 
         stacking_metrics = evaluate_stacking_classifier(
-            active_stacking_model, X_train_df, y_train, X_test_df, y_test, config=config, training_ram_stats=stacking_ram_stats, notification_context=combination_header  # Include the exact active combination in Telegram output
+            active_stacking_model, X_train_df, y_train, X_test_df, y_test, config=config, training_ram_stats=stacking_ram_stats, notification_context=combination_header, feature_set=name  # Include the exact active combination and feature set in progress output
         )  # Evaluate stacking model with DataFrames and retrieve metrics tuple
         write_memory_phase_event("after_classifier_fit", config=config, **phase_metadata, event_outcome="fit_and_prediction_completed")  # Publish stacking fit completion
         write_memory_phase_event("after_prediction_and_metrics", config=config, **phase_metadata, accuracy=stacking_metrics[0], precision=stacking_metrics[1], recall=stacking_metrics[2], f1_score=stacking_metrics[3], event_outcome="metrics_completed")  # Publish stacking metrics completion
@@ -11653,18 +11852,23 @@ def run_stacking_evaluation_for_feature_set(name, stacking_model, X_train_df, y_
         )  # Build standardized result entry for the stacking classifier
 
         write_memory_phase_event("before_cache_persist", config=config, **phase_metadata, event_outcome="starting")  # Publish stacking cache persistence start
+        log_training_phase(name, "StackingClassifier", "Cache persistence", "Started")  # Mark stacking cache persistence separately from training.
         persist_cache_result_entry(cache_ref_file, stacking_result_entry, cache_dict, config=config)  # Persist this atomic stacking result immediately and register its resume identity
+        log_training_phase(name, "StackingClassifier", "Cache persistence", "Completed")  # Mark durable stacking cache completion before artifact export.
         write_memory_phase_event("after_cache_persist", config=config, **phase_metadata, event_outcome="persisted")  # Publish stacking cache persistence completion
 
         dataset_name = build_filename_safe_dataset_identity(resolve_canonical_dataset_identity(str(file), True)) if execution_mode_str == "combined_files" else os.path.basename(os.path.dirname(file))  # Resolve stacking export dataset folder by execution mode.
         artifact_feature_set = f"{name} - {'Optimized Hyperparameters' if hyperparameters_enabled else 'Default Hyperparameters'}"  # Keep stacking artifacts isolated by HP mode
         artifact_context = build_stacking_model_artifact_context(file, source_files, execution_mode_str, attack_types_combined, target_column, "StackingClassifier", active_stacking_model, artifact_feature_set, input_feature_names, subset_feature_names, list(label_encoder.classes_), transformer, hyperparameters_enabled)  # Build ratio-independent original-training artifact identity.
+        log_training_phase(name, "StackingClassifier", "Model export", "Started")  # Mark fitted stacking artifact export separately from cache persistence.
         export_model_and_scaler(active_stacking_model, scaler, dataset_name, "StackingClassifier", feature_set=artifact_feature_set, dataset_csv_path=file, config=config, artifact_context=artifact_context, label_encoder=label_encoder, transformer=transformer)  # Atomically persist fitted stacking and preprocessing.
+        log_training_phase(name, "StackingClassifier", "Model export", "Completed")  # Mark stacking export completion before explainability scheduling.
         pass  # Verify removal of duplicate stacking classifier accuracy print
         progress_bar.update(1)  # Advance progress bar after stacking evaluation
         current_combination += 1  # Advance the global combination counter
 
         write_memory_phase_event("before_explainability_schedule", config=config, **phase_metadata, event_outcome="starting")  # Publish stacking explainability scheduling start
+        log_training_phase(name, "StackingClassifier", "Explainability", "Started")  # Mark stacking explainability dispatch as a separate phase.
         explainability_outcome = "skipped"  # Track stacking explainability scheduling outcome
         if config.get("explainability", {}).get("enabled", False) and experiment_mode == "original_only":  # Only queue explainability on original data
             try:  # Attempt to dispatch explainability for stacking model.
@@ -11676,7 +11880,9 @@ def run_stacking_evaluation_for_feature_set(name, stacking_model, X_train_df, y_
                     f"{BackgroundColors.YELLOW}Explainability failed for StackingClassifier: {e}{Style.RESET_ALL}",
                     config=config
                 )  # Log explainability failure before propagation.
+                log_training_phase(name, "StackingClassifier", "Explainability", "Failed")  # Record stacking explainability dispatch failure before preserving the exception.
                 raise  # Preserve explainability failure propagation.
+        log_training_phase(name, "StackingClassifier", "Explainability", explainability_outcome.capitalize())  # Report truthful skipped, scheduled, or failed dispatch status.
         write_memory_phase_event("after_explainability_schedule", config=config, **phase_metadata, event_outcome=explainability_outcome)  # Publish stacking explainability scheduling completion
         write_memory_phase_event("before_memory_cleanup", config=config, **phase_metadata, event_outcome="starting")  # Publish stacking cleanup start
         del active_stacking_model, artifact_context, stacking_ram_stats  # Release fitted stacking, artifact metadata, and RAM statistics before returning.
@@ -11847,7 +12053,7 @@ def initialize_evaluation_run_state(base_models, feature_sets, data_source_label
     if stacking_enabled:  # Count one extra step per feature set only when stacking is enabled
         total_steps += len(feature_sets)
 
-    progress_bar = tqdm(total=total_steps, desc=f"{data_source_label} Data", file=sys.stdout)  # Progress bar for all evaluations
+    progress_bar = tqdm(total=total_steps, desc=f"{data_source_label} Data", file=sys.stdout, disable=not interactive_terminal_attached(sys.stdout))  # Render evaluation progress interactively only on an attached terminal
 
     all_results = {}  # Dictionary to store results: (feature_set, model_name) -> result_entry
 
@@ -12072,7 +12278,7 @@ def evaluate_on_dataset(
         individual_models = {key: value for key, value in base_models.items() if artifact_recovery_target is None or (artifact_recovery_target[1] != "StackingClassifier" and key == artifact_recovery_target[1])}  # Restrict recovery without retaining fitted estimators.
         if grid_progress is None:
             total_steps = len(evaluation_plan)
-            progress_bar = tqdm(total=total_steps, desc=f"{data_source_label} Data", file=sys.stdout)
+            progress_bar = tqdm(total=total_steps, desc=f"{data_source_label} Data", file=sys.stdout, disable=not interactive_terminal_attached(sys.stdout))  # Render local evaluation progress interactively only on an attached terminal.
             all_results = {}
             current_combination = 1
         else:
@@ -12134,7 +12340,7 @@ def evaluate_on_dataset(
                     X_augmented_df = pd.DataFrame(X_augmented_model, columns=subset_feature_names)
                     training_ram_stats = {}
                     if model_name == "StackingClassifier":
-                        metrics = evaluate_stacking_classifier(loaded_model, None, None, X_augmented_df, y_augmented, config=config, training_ram_stats=training_ram_stats, fit_model=False, notification_context=combination_header)  # Report persisted stacking-model evaluation provenance
+                        metrics = evaluate_stacking_classifier(loaded_model, None, None, X_augmented_df, y_augmented, config=config, training_ram_stats=training_ram_stats, fit_model=False, notification_context=combination_header, feature_set=name)  # Report persisted stacking-model evaluation provenance with phase identity
                         classifier_type = "Stacking"
                     else:
                         metrics = evaluate_individual_classifier(loaded_model, model_name, None, None, X_augmented_model, y_augmented, file, artifact_bundle["scaler"], subset_feature_names, artifact_feature_set, config=config, training_ram_stats=training_ram_stats, fit_model=False, notification_context=combination_header)  # Report persisted individual-model evaluation provenance
@@ -13630,7 +13836,7 @@ def create_grid_progress(total_steps, description):
     return {
         "total_steps": total_steps,
         "current_combination": 1,
-        "progress_bar": tqdm(total=total_steps, desc=description, file=sys.stdout),
+        "progress_bar": tqdm(total=total_steps, desc=description, file=sys.stdout, disable=not interactive_terminal_attached(sys.stdout)),  # Render shared grid progress interactively only on an attached terminal.
     }  # Return shared denominator, counter, and progress bar
 
 
