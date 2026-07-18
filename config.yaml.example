@@ -427,6 +427,7 @@ stacking: # Stacking experiment settings
 evaluation: # Evaluation and CV defaults
   n_jobs: 1 # Number of parallel jobs for model training (1 preserves sequential memory-safe classifier fitting)
   feature_extraction_n_jobs: 1 # Number of threads used for feature extraction/transformation such as PCA (-1 uses available CPUs); classifier training still uses evaluation.n_jobs
+  feature_set_workers: {} # Optional positive worker counts per active feature set (full, explicit, ga, pca, rfe); an empty map preserves sequential evaluation
   threads_limit: 2 # Thread limit for parallel classifier evaluation (prevents resource exhaustion)
   cv_folds: 10 # Number of cross-validation folds for model evaluation
   random_state: 42 # Random seed for reproducibility across all models
