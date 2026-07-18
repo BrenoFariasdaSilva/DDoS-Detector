@@ -39,7 +39,6 @@ Assumptions:
 import os  # For interacting with the filesystem
 import re  # For stripping ANSI escape sequences
 import sys  # For replacing stdout/stderr
-import fcntl  # Coordinate complete log records across independent Linux processes
 
 # Regex Constants:
 ANSI_ESCAPE_REGEX = re.compile(r"\x1B\[[0-9;]*[a-zA-Z]")  # Pattern to remove ANSI colors
@@ -96,17 +95,11 @@ class Logger:
 
         clean_out = ANSI_ESCAPE_REGEX.sub("", out)  # Strip ANSI sequences for log file
 
-        try:  # Write one complete process-safe log record
-            fcntl.flock(self.logfile.fileno(), fcntl.LOCK_EX)  # Serialize the complete write and flush transaction
+        try:  # Write to log file
             self.logfile.write(clean_out)  # Write cleaned message
             self.logfile.flush()  # Ensure immediate write
         except Exception:  # Fail silently to avoid breaking user code
             pass  # Silent fail
-        finally:  # Release the interprocess log lock after every attempted write
-            try:  # Preserve logging's fail-safe behavior during unlock
-                fcntl.flock(self.logfile.fileno(), fcntl.LOCK_UN)  # Release the shared log file for another process
-            except Exception:  # Ignore unavailable or already-closed descriptors
-                pass  # Silent fail
 
         try:  # Write to terminal: colored when TTY, cleaned otherwise
             if sys.__stdout__ is not None:
