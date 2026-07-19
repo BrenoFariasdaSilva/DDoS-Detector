@@ -14,6 +14,8 @@ Description :
         - When attached to `sys.stdout`/`sys.stderr` the logger writes colored
             output to the controlling terminal (when available) and a color-free
             record to the specified log file.
+        - Optional IANA-timezone timestamps are applied once at the shared
+            terminal/file emission boundary.
         - ANSI escape sequences are removed from the file output using a
             conservative regex; lines are flushed immediately to keep logs live.
         - Provides minimal API: `write()`, `flush()` and `close()` so it can be
@@ -25,11 +27,11 @@ Usage:
     sys.stdout = logger # optional: redirect all prints to logger
 
 Notes & TODOs:
-    - Consider adding timestamps, log rotation, and JSON output format.
+    - Consider adding log rotation and JSON output format.
     - The ANSI regex is intentionally simple; adjust if you need broader support.
 
 Dependencies:
-    - Python >= 3.8 (no external runtime dependencies required)
+    - Python >= 3.9 (no external runtime dependencies required)
 
 Assumptions:
     - The log file will contain cleaned, human-readable text (no ANSI codes).
@@ -40,9 +42,14 @@ import fcntl  # Provide process-safe serialization for shared detached log write
 import os  # For interacting with the filesystem
 import re  # For stripping ANSI escape sequences
 import sys  # For replacing stdout/stderr
+from datetime import datetime  # Obtain timezone-aware wall-clock timestamps at record emission
+from zoneinfo import ZoneInfo  # Resolve the standard-library São Paulo timezone
 
 # Regex Constants:
 ANSI_ESCAPE_REGEX = re.compile(r"\x1B\[[0-9;]*[a-zA-Z]")  # Pattern to remove ANSI colors
+LEADING_ANSI_ESCAPE_REGEX = re.compile(r"^(?:\x1B\[[0-9;]*[a-zA-Z])+")  # Preserve leading terminal controls before the visible timestamp
+LOG_TIMESTAMP_PREFIX_REGEX = re.compile(r"^\d{2}/\d{2}/\d{4} - \d{2}h\d{2}m\d{2}s: ")  # Recognize the exact durable timestamp prefix
+SAO_PAULO_TIMEZONE_NAME = "America/Sao_Paulo"  # Define the explicit Brazilian runtime log timezone
 
 # Classes Definitions:
 
@@ -60,13 +67,15 @@ class Logger:
     :param clean: If True, truncate the log file on init; otherwise append.
     """
 
-    def __init__(self, logfile_path, clean=False):
+    def __init__(self, logfile_path, clean=False, timestamp_timezone=None, timestamp_now=None):  # Initialize optional per-record timezone formatting
         """
         Initialize the Logger.
 
         :param self: Instance of the Logger class.
         :param logfile_path: Path to the log file.
         :param clean: If True, truncate the log file on init; otherwise append.
+        :param timestamp_timezone: Optional IANA timezone applied to every non-empty physical line.
+        :param timestamp_now: Optional timezone-aware clock callable used for deterministic testing.
         """
 
         self.logfile_path = logfile_path  # Store log file path
@@ -78,6 +87,33 @@ class Logger:
         mode = "w" if clean else "a"  # Choose file mode based on 'clean' flag
         self.logfile = open(logfile_path, mode, encoding="utf-8")  # Open log file
         self.is_tty = sys.stdout.isatty()  # Verify if stdout is a TTY
+        self.timestamp_zone = ZoneInfo(str(timestamp_timezone)) if timestamp_timezone is not None else None  # Resolve the explicit timezone once per logger instance
+        self.timestamp_now = timestamp_now if timestamp_now is not None else datetime.now  # Use an injectable timezone-aware emission clock
+
+    def format_message(self, message):  # Prefix every non-empty physical line at emission time
+        """
+        Format one complete log record with optional timezone-aware timestamps.
+
+        :param self: Instance of the Logger class.
+        :param message: Newline-terminated record text.
+        :return: Record text with exactly one timestamp on every non-empty physical line.
+        """
+
+        if self.timestamp_zone is None:  # Preserve callers that do not opt into timestamp formatting
+            return message  # Return the original record unchanged
+        emitted_at = self.timestamp_now(self.timestamp_zone)  # Obtain the current explicit-zone time when the record is emitted
+        timestamp_prefix = emitted_at.strftime("%d/%m/%Y - %Hh%Mm%Ss: ")  # Format the exact zero-padded Brazilian timestamp
+        formatted_lines = []  # Collect physical lines while preserving original line endings
+        for line in message.splitlines(keepends=True):  # Format every physical line in one locked logical record
+            leading_match = LEADING_ANSI_ESCAPE_REGEX.match(line)  # Locate leading terminal controls such as screen clearing and colors
+            leading_ansi = leading_match.group(0) if leading_match is not None else ""  # Preserve leading terminal controls before visible output
+            visible_line = line[len(leading_ansi):]  # Read record content after leading terminal controls
+            clean_visible_line = ANSI_ESCAPE_REGEX.sub("", visible_line)  # Normalize content before duplicate-prefix detection
+            if not clean_visible_line.strip() or LOG_TIMESTAMP_PREFIX_REGEX.match(clean_visible_line):  # Preserve blank lines and already timestamped records
+                formatted_lines.append(line)  # Keep the physical line unchanged
+            else:  # Prefix one previously untimestamped non-empty physical line
+                formatted_lines.append(f"{leading_ansi}{timestamp_prefix}{visible_line}")  # Place terminal controls before the visible timestamp without duplicating content
+        return "".join(formatted_lines)  # Return one complete formatted record for locked output
 
     def write(self, message):
         """
@@ -94,12 +130,12 @@ class Logger:
         if not out.endswith("\n"):  # Ensure newline termination
             out += "\n"  # Append newline if missing
 
-        clean_out = ANSI_ESCAPE_REGEX.sub("", out)  # Strip ANSI sequences for log file
-
         lock_acquired = False  # Track the process-safe log lock for exception-safe release
         try:  # Serialize file and terminal writes from every stacking process
             fcntl.flock(self.logfile.fileno(), fcntl.LOCK_EX)  # Acquire an exclusive advisory lock for one complete record
             lock_acquired = True  # Record successful lock acquisition before writing
+            out = self.format_message(out)  # Sample and apply the optional timestamp at synchronized emission
+            clean_out = ANSI_ESCAPE_REGEX.sub("", out)  # Strip ANSI sequences for log file
             self.logfile.write(clean_out)  # Write the complete cleaned record while holding the process lock
             self.logfile.flush()  # Flush every locked record immediately
             if sys.__stdout__ is not None:  # Mirror the same complete record to the original terminal when available
