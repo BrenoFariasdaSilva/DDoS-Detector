@@ -1,12 +1,14 @@
 import os  # Provide process identities for detached progress records.
+import math  # Validate finite progress intervals without affecting training.
 import sys  # Resolve active and original output streams.
 import threading  # Run low-overhead heartbeat reporting beside blocking fits.
 import time  # Measure elapsed training time with a monotonic clock.
-from typing import Any, Callable, Optional, cast  # Define progress context and callback type hints.
+from typing import Any, Callable, Optional  # Define progress context and callback type hints.
 from xgboost.callback import TrainingCallback  # Use XGBoost's public boosting-round callback API.
 
 
-TRAINING_HEARTBEAT_INTERVAL_SECONDS = 60.0  # Define the detached classifier training heartbeat fallback.
+DEFAULT_TRAINING_PROGRESS_INTERVAL_MINUTES = 15.0  # Define the single built-in recurring training-progress default.
+DEFAULT_TRAINING_PROGRESS_INTERVAL_SECONDS = DEFAULT_TRAINING_PROGRESS_INTERVAL_MINUTES * 60.0  # Convert the built-in fallback once for the seconds-based reporter boundary.
 
 
 def format_training_feature_set(feature_set: Optional[str]) -> str:  # Normalize progress feature-set labels
@@ -45,7 +47,7 @@ def interactive_terminal_attached(output_stream: Optional[Any] = None) -> bool: 
 class TrainingProgress:  # Report genuine public units or heartbeat-only activity
     """Report genuine training units or low-frequency active heartbeats."""
 
-    def __init__(self, feature_set: Optional[str], classifier_name: str, duration_formatter: Callable[[float], str], output_stream: Optional[Any] = None, total_units: Optional[int] = None, unit_label: Optional[str] = None, heartbeat: bool = False, heartbeat_interval_seconds: float = TRAINING_HEARTBEAT_INTERVAL_SECONDS):  # Initialize one training progress scope
+    def __init__(self, feature_set: Optional[str], classifier_name: str, duration_formatter: Callable[[float], str], output_stream: Optional[Any] = None, total_units: Optional[int] = None, unit_label: Optional[str] = None, heartbeat: bool = False, report_interval_seconds: float = DEFAULT_TRAINING_PROGRESS_INTERVAL_SECONDS):  # Initialize one training progress scope
         """
         Initialize one classifier training progress scope.
 
@@ -57,14 +59,14 @@ class TrainingProgress:  # Report genuine public units or heartbeat-only activit
         :param total_units: Exact public training-unit total when available.
         :param unit_label: Public training-unit label when available.
         :param heartbeat: Whether to emit low-frequency active heartbeats.
-        :param heartbeat_interval_seconds: Configured heartbeat interval in seconds.
+        :param report_interval_seconds: Configured recurring progress interval in seconds.
         :return: None.
         """
 
         try:  # Keep malformed progress configuration from affecting estimator training.
-            resolved_interval = float(heartbeat_interval_seconds)  # Normalize the configured heartbeat interval.
+            resolved_interval = float(report_interval_seconds)  # Normalize the configured recurring progress interval.
         except (TypeError, ValueError):  # Fall back when the optional reporting value is invalid.
-            resolved_interval = TRAINING_HEARTBEAT_INTERVAL_SECONDS  # Use the stable low-frequency heartbeat fallback.
+            resolved_interval = DEFAULT_TRAINING_PROGRESS_INTERVAL_SECONDS  # Use the stable low-frequency progress fallback.
         self.feature_set = format_training_feature_set(feature_set)  # Store the normalized feature-set label.
         self.classifier_name = str(classifier_name)  # Store the classifier identity as log-safe text.
         self.duration_formatter = duration_formatter  # Store the caller's established duration formatter.
@@ -72,8 +74,12 @@ class TrainingProgress:  # Report genuine public units or heartbeat-only activit
         self.total_units = int(total_units) if total_units is not None else None  # Store the exact public unit total when available.
         self.unit_label = str(unit_label) if unit_label is not None else None  # Store the public unit label when available.
         self.heartbeat = bool(heartbeat)  # Store whether this scope emits active heartbeats.
-        self.interval_seconds = resolved_interval if resolved_interval > 0 else TRAINING_HEARTBEAT_INTERVAL_SECONDS  # Use the configured positive interval or stable fallback.
+        self.interval_seconds = resolved_interval if math.isfinite(resolved_interval) and resolved_interval > 0 else DEFAULT_TRAINING_PROGRESS_INTERVAL_SECONDS  # Use the configured positive finite interval or stable fallback.
         self.start_time: Optional[float] = None  # Initialize the monotonic training start timestamp.
+        self.last_report_time: Optional[float] = None  # Initialize this task's independent recurring-report timestamp.
+        self.latest_completed_units: Optional[int] = None  # Retain the newest public callback state even when it is rate-limited.
+        self.final_unit_reported = False  # Prevent duplicate immediate 100% progress records.
+        self.report_lock = threading.Lock()  # Serialize heartbeat and callback timing inside this classifier task only.
         self.stop_event = threading.Event()  # Create a scope-owned heartbeat stop event.
         self.thread: Optional[threading.Thread] = None  # Initialize the optional heartbeat thread reference.
 
@@ -86,6 +92,10 @@ class TrainingProgress:  # Report genuine public units or heartbeat-only activit
         """
 
         self.start_time = time.monotonic()  # Record a monotonic timestamp immediately before blocking training.
+        self.last_report_time = self.start_time  # Schedule the first recurring record one full interval after training starts.
+        self.latest_completed_units = None  # Reset retained callback state for this training scope.
+        self.final_unit_reported = False  # Reset final-report state for this training scope.
+        self.stop_event.clear()  # Reset the scope-owned event before an optional heartbeat thread starts.
         if self.heartbeat:  # Start a heartbeat only when no reliable internal percentage is available.
             try:  # Keep heartbeat startup failures from affecting estimator training.
                 thread_name = f"training-heartbeat-{os.getpid()}-{id(self)}"  # Build a process-specific thread identity for future multiprocessing compatibility.
@@ -126,13 +136,32 @@ class TrainingProgress:  # Report genuine public units or heartbeat-only activit
         """
 
         while not self.stop_event.wait(self.interval_seconds):  # Wait efficiently between heartbeat records.
-            try:  # Keep reporting failures isolated from estimator training.
-                elapsed_seconds = max(time.monotonic() - cast(float, self.start_time), 0.0)  # Calculate elapsed time from the monotonic training start.
+            if not self.report_heartbeat():  # Emit only when this task's shared recurring interval is due.
+                continue  # Keep waiting when a recent unit callback already consumed this interval.
+
+    def report_heartbeat(self) -> bool:  # Emit one active record when the task interval is due
+        """
+        Emit one rate-limited heartbeat for this classifier task.
+
+        :param self: Instance of the TrainingProgress class.
+        :return: True when a heartbeat was emitted, otherwise False.
+        """
+
+        try:  # Keep reporting failures isolated from estimator training.
+            now = time.monotonic()  # Read the monotonic clock for this interval decision.
+            with self.report_lock:  # Coordinate heartbeat timing with public unit callbacks for this task only.
+                if self.start_time is None or self.last_report_time is None or self.final_unit_reported:  # Require an active unfinished scope.
+                    return False  # Skip inactive or already-finalized progress scopes.
+                if now - self.last_report_time < self.interval_seconds:  # Enforce the configured recurring-report interval.
+                    return False  # Retain silence until this task's next interval boundary.
+                elapsed_seconds = max(now - self.start_time, 0.0)  # Calculate elapsed time from the monotonic training start.
                 elapsed_label = self.duration_formatter(elapsed_seconds)  # Format elapsed time through the caller's established formatter.
                 print(f"[TRAINING] Feature Set: {self.feature_set} | Classifier: {self.classifier_name} | Status: Active | Elapsed: {elapsed_label} | ETA: unavailable | PID: {os.getpid()}", file=self.output_stream)  # Write one newline-delimited heartbeat without a fabricated percentage.
                 self.output_stream.flush()  # Flush every heartbeat immediately to detached logs.
-            except Exception:  # Stop only progress output if the stream becomes unavailable.
-                return  # Leave estimator training untouched after a reporting failure.
+                self.last_report_time = now  # Advance only this classifier task's recurring-report timer.
+            return True  # Report successful heartbeat emission.
+        except Exception:  # Stop only progress output if the stream becomes unavailable.
+            return False  # Leave estimator training untouched after a reporting failure.
 
     def report_unit(self, completed_units: int) -> None:  # Report one completed public training unit
         """
@@ -148,13 +177,24 @@ class TrainingProgress:  # Report genuine public units or heartbeat-only activit
             total = int(self.total_units) if self.total_units is not None else 0  # Resolve the exact public unit total.
             if completed < 1 or total < 1 or completed > total or self.unit_label is None or self.start_time is None:  # Reject incomplete or inconsistent callback metadata.
                 return  # Avoid emitting an unreliable percentage or ETA.
-            elapsed_seconds = max(time.monotonic() - self.start_time, 0.0)  # Calculate elapsed time after the completed unit.
-            remaining_seconds = (elapsed_seconds / completed) * (total - completed)  # Estimate remaining time only from completed real units.
-            progress_percent = (completed / total) * 100.0  # Calculate genuine percentage from the public unit denominator.
-            elapsed_label = self.duration_formatter(elapsed_seconds)  # Format elapsed time through the caller's established formatter.
-            eta_label = self.duration_formatter(remaining_seconds)  # Format the unit-based ETA through the caller's established formatter.
-            print(f"[TRAINING] Feature Set: {self.feature_set} | Classifier: {self.classifier_name} | {self.unit_label}: {completed}/{total} | Progress: {progress_percent:.2f}% | Elapsed: {elapsed_label} | ETA: {eta_label} | PID: {os.getpid()}", file=self.output_stream)  # Write one genuine unit-completion record.
-            self.output_stream.flush()  # Flush every genuine progress record immediately to detached logs.
+            now = time.monotonic()  # Read the monotonic clock once for this callback and interval decision.
+            with self.report_lock:  # Coordinate callback timing with an optional heartbeat for this task only.
+                self.latest_completed_units = completed  # Retain the most recent genuine round, iteration, stage, or trial state.
+                is_final = completed == total  # Detect the configured final public unit.
+                if is_final and self.final_unit_reported:  # Suppress duplicate 100% callbacks.
+                    return  # Preserve one immediate final progress record only.
+                if not is_final and self.last_report_time is not None and now - self.last_report_time < self.interval_seconds:  # Rate-limit recurring non-final callback records.
+                    return  # Retain the latest state without emitting before the interval.
+                elapsed_seconds = max(now - self.start_time, 0.0)  # Calculate elapsed time after the latest completed unit.
+                remaining_seconds = (elapsed_seconds / completed) * (total - completed)  # Estimate remaining time only from completed real units.
+                progress_percent = (completed / total) * 100.0  # Calculate genuine percentage from the public unit denominator.
+                elapsed_label = self.duration_formatter(elapsed_seconds)  # Format elapsed time through the caller's established formatter.
+                eta_label = self.duration_formatter(remaining_seconds)  # Format the unit-based ETA through the caller's established formatter.
+                print(f"[TRAINING] Feature Set: {self.feature_set} | Classifier: {self.classifier_name} | {self.unit_label}: {completed}/{total} | Progress: {progress_percent:.2f}% | Elapsed: {elapsed_label} | ETA: {eta_label} | PID: {os.getpid()}", file=self.output_stream)  # Write the latest due or immediate final unit-completion record.
+                self.output_stream.flush()  # Flush every emitted genuine progress record immediately to detached logs.
+                self.last_report_time = now  # Advance only this classifier task's recurring-report timer.
+                if is_final:  # Mark the configured final public unit after successful output.
+                    self.final_unit_reported = True  # Prevent duplicate final progress records without delaying fit completion logs.
         except Exception:  # Ignore reporting failures so callbacks cannot alter fitted results.
             return  # Preserve estimator training after a reporting failure.
 
