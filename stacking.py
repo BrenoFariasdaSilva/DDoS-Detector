@@ -11390,6 +11390,116 @@ def build_telegram_combination_header(name, model_name, augmentation_ratio=None,
     return " - ".join(parts)
 
 
+def build_cached_telegram_result_messages(cached_result, feature_set_name, model_name, augmentation_ratio, hyperparameters_enabled, execution_mode_str):  # Build established cache summary and Telegram text from one persisted result
+    """
+    Build the established cached-result console summary and Telegram message.
+
+    :param cached_result: Persisted result row recovered without recomputation.
+    :param feature_set_name: Active feature-set display name.
+    :param model_name: Active classifier display name.
+    :param augmentation_ratio: Active augmentation ratio or None.
+    :param hyperparameters_enabled: Whether optimized hyperparameters are active.
+    :param execution_mode_str: Runtime execution mode fallback.
+    :return: Tuple containing console summary and Telegram message.
+    """
+
+    combination_header = build_telegram_combination_header(feature_set_name, model_name, augmentation_ratio, hyperparameters_enabled)  # Reuse the established evaluation label
+    cached_execution_mode = cached_result.get("execution_mode", execution_mode_str)  # Resolve execution mode from the persisted row
+    evaluation_mode = str(cached_execution_mode).replace("_", " ").title().replace(" ", "") if cached_execution_mode else "SeparateFiles"  # Preserve the established CamelCase mode label
+    acc = cached_result.get("accuracy", "N/A")  # Recover persisted accuracy
+    prec = cached_result.get("precision", "N/A")  # Recover persisted precision
+    rec = cached_result.get("recall", "N/A")  # Recover persisted recall
+    f1 = cached_result.get("f1_score", "N/A")  # Recover persisted F1 score
+    fpr = cached_result.get("fpr", "N/A")  # Recover persisted false-positive rate
+    fnr = cached_result.get("fnr", "N/A")  # Recover persisted false-negative rate
+    cached_elapsed = cached_result.get("elapsed_time_s", 0)  # Recover persisted elapsed seconds
+    cached_elapsed = int(round(float(cached_elapsed))) if cached_elapsed is not None else 0  # Normalize persisted elapsed seconds for display
+    cached_human_time = calculate_execution_time(cached_elapsed)  # Format elapsed time through the established duration formatter
+    cached_msg = f"{BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}: Mode {BackgroundColors.CYAN}{evaluation_mode}{BackgroundColors.GREEN} | F1-Score {BackgroundColors.CYAN}{f1}{BackgroundColors.GREEN} | Accuracy: {BackgroundColors.CYAN}{acc}{BackgroundColors.GREEN} | Precision: {BackgroundColors.CYAN}{prec}{BackgroundColors.GREEN} | Recall: {BackgroundColors.CYAN}{rec}{BackgroundColors.GREEN} | FPR: {BackgroundColors.CYAN}{fpr}{BackgroundColors.GREEN} | FNR: {BackgroundColors.CYAN}{fnr}{BackgroundColors.GREEN} | Training Time: {BackgroundColors.CYAN}{cached_elapsed}s{BackgroundColors.GREEN} | Execution Time: {BackgroundColors.CYAN}{cached_elapsed}s{BackgroundColors.GREEN} | Total Time: {BackgroundColors.CYAN}{cached_human_time}{BackgroundColors.GREEN} ({BackgroundColors.CYAN}{cached_elapsed}s{BackgroundColors.GREEN}){Style.RESET_ALL}"  # Preserve the existing recovered-result summary wording
+    telegram_msg = f"[CACHE] Recovered saved result without fit, prediction, or metric recomputation | {combination_header}\n{cached_msg}"  # Preserve the existing cache notification wording
+    return cached_msg, telegram_msg  # Return identical console and Telegram representations
+
+
+def build_feature_process_notification_result(result_entry: dict) -> dict:  # Reduce one persisted result to small Telegram fields
+    """
+    Build a matrix-free notification result from one persisted cache row.
+
+    :param result_entry: Persisted classifier result entry.
+    :return: Small scalar-only notification result mapping.
+    """
+
+    fields = ("feature_set", "hyperparameter_mode", "model_name", "execution_mode", "experiment_mode", "augmentation_ratio", "accuracy", "precision", "recall", "f1_score", "fpr", "fnr", "elapsed_time_s")  # List only fields required for identity, completion, and cache notifications
+    return {field: result_entry.get(field) for field in fields}  # Exclude estimators, matrices, predictions, probabilities, and feature lists
+
+
+def send_feature_process_result_notification(task: dict, result_entry: dict, event: str, dynamic_total: int, notified_global_ids: set) -> bool:  # Send one coordinator-owned persisted-result notification at most once
+    """
+    Send one computed or cached persistent-process result notification.
+
+    :param task: Authoritative evaluation-plan task descriptor.
+    :param result_entry: Small fields copied from the persisted result row.
+    :param event: Computed or cached terminal event.
+    :param dynamic_total: Actual evaluation-plan length.
+    :param notified_global_ids: Coordinator-owned notification identity set.
+    :return: True when this result consumed its sole notification attempt.
+    """
+
+    global_id = int(task["global_id"])  # Resolve the original global combination identity
+    if event not in {"computed", "cached"}:  # Reject nonterminal notification events
+        return False  # Leave unrelated lifecycle events untouched
+    if global_id in notified_global_ids:  # Suppress a duplicate queue event in the single coordinator
+        return False  # Preserve one application-level delivery attempt per combination
+    expected_hyperparameter_mode = "Optimized Hyperparameters" if task["hyperparameters_enabled"] else "Default Hyperparameters"  # Resolve the authoritative plan mode
+    expected_augmentation_ratio = resolve_persisted_augmentation_ratio(task["experiment_mode"], task["augmentation_ratio"])  # Resolve the authoritative persisted testing ratio
+    actual_augmentation_ratio = resolve_persisted_augmentation_ratio(result_entry.get("experiment_mode"), result_entry.get("augmentation_ratio"))  # Normalize the completed result ratio
+    exact_identity_matches = result_entry.get("feature_set") == task["feature_set"] and result_entry.get("model_name") == task["classifier_name"] and result_entry.get("hyperparameter_mode") == expected_hyperparameter_mode and result_entry.get("experiment_mode") == task["experiment_mode"] and actual_augmentation_ratio == expected_augmentation_ratio  # Verify fresh completion metadata against its persisted result
+    legacy_cache_identity_matches = event == "cached" and result_entry.get("feature_set") in {None, task["feature_set"]} and result_entry.get("model_name") in {None, task["classifier_name"]} and result_entry.get("hyperparameter_mode") in {None, expected_hyperparameter_mode} and result_entry.get("experiment_mode") in {None, task["experiment_mode"]} and (result_entry.get("augmentation_ratio") is None or actual_augmentation_ratio == expected_augmentation_ratio)  # Preserve accepted legacy cache notification semantics
+    identity_matches = (exact_identity_matches or legacy_cache_identity_matches) and 1 <= global_id <= int(dynamic_total)  # Require one authoritative dynamic plan identity for every notification
+    if not identity_matches:  # Isolate malformed notification metadata from scientific completion
+        return False  # Avoid sending stale or cross-feature result data
+    notified_global_ids.add(global_id)  # Reserve the sole application-level delivery attempt before external I/O
+    if event == "computed":  # Restore the historical fresh-completion wording
+        combination_header = build_telegram_combination_header(task["feature_set"], task["classifier_name"], task["augmentation_ratio"], task["hyperparameters_enabled"])  # Reuse the established sequential combination formatter
+        telegram_msg = f"Finished combination {global_id}/{int(dynamic_total)}: {combination_header} with F1: {result_entry.get('f1_score')} in {calculate_execution_time(0, result_entry.get('elapsed_time_s', 0))}"  # Use plan identity and persisted result values
+    else:  # Preserve the established sequential cache-recovery semantics
+        _, telegram_msg = build_cached_telegram_result_messages(result_entry, task["feature_set"], task["classifier_name"], task["augmentation_ratio"], task["hyperparameters_enabled"], task["execution_mode"])  # Reuse the existing cache message construction
+    try:  # Isolate Telegram transport from completed scientific work
+        send_telegram_message(TELEGRAM_BOT, telegram_msg)  # Send through the established host, OS, and script-prefixed utility
+    except Exception:  # Preserve the utility's existing silent delivery-failure semantics under patched or alternate senders
+        pass  # Keep persisted result, status, and future cache recovery valid
+    return True  # Report that this combination consumed its one notification attempt
+
+
+def handle_feature_process_result_notification(status: dict, tasks_by_global_id: dict, dynamic_total: int, notified_global_ids: set, notification_acknowledgements: dict) -> bool:  # Handle one small worker result event in the coordinator
+    """
+    Handle one persisted worker result event and release its feature worker.
+
+    :param status: Worker lifecycle event from the multiprocessing queue.
+    :param tasks_by_global_id: Authoritative evaluation-plan task mapping.
+    :param dynamic_total: Actual evaluation-plan length.
+    :param notified_global_ids: Coordinator-owned notification identity set.
+    :param notification_acknowledgements: Per-feature shared acknowledgement values.
+    :return: True when a notification result event was handled.
+    """
+
+    notification_result = status.get("notification_result")  # Read only the small persisted-result fields from the event
+    if not isinstance(notification_result, dict):  # Ignore ordinary lifecycle records and focused probe events
+        return False  # Leave events without notification data unchanged
+    feature_set_name = status.get("feature_set")  # Resolve the reporting feature worker identity
+    global_id = status.get("global_id")  # Resolve the original global task identity
+    acknowledgement = notification_acknowledgements.get(feature_set_name)  # Resolve only this feature worker's shared acknowledgement
+    try:  # Guarantee worker release even when notification metadata or transport is unavailable
+        task = tasks_by_global_id.get(global_id)  # Resolve the event through the authoritative dynamic plan
+        if task is None or task.get("feature_set") != feature_set_name:  # Reject unknown or cross-feature result events
+            return True  # Mark malformed notification event as deterministically handled
+        send_feature_process_result_notification(task, notification_result, status.get("event"), dynamic_total, notified_global_ids)  # Send computed or cached result through the one coordinator-owned path
+        return True  # Report completion-event handling regardless of Telegram delivery outcome
+    finally:  # Release the exact feature worker after its notification event is handled
+        if acknowledgement is not None and global_id is not None:  # Update only a production worker acknowledgement
+            with acknowledgement.get_lock():  # Serialize the shared integer update across coordinator and child
+                acknowledgement.value = max(int(acknowledgement.value), int(global_id))  # Advance monotonically so stale duplicate events cannot release a future task incorrectly
+
+
 def submit_classifier_evaluations_to_pool(executor, individual_models, current_combination, name, X_train_df, y_train, X_test_df, y_test, file, scaler, subset_feature_names, total_steps, augmentation_ratio=None, hyperparameters_enabled=False):
     """
     Submit each individual classifier to the thread pool executor and return the futures map alongside the updated combination counter.
@@ -11547,20 +11657,8 @@ def recover_cached_individual_classifier_result(cache_dict, execution_mode_str, 
         f"{BackgroundColors.YELLOW}[RESUME] Recovered combination {current_combination}/{total_steps}: {combination_header} from saved partial progress (no recomputation performed).{Style.RESET_ALL}"
     )  # Log recovered combination to stdout for visibility
 
-    cached_execution_mode = cached_result.get("execution_mode", execution_mode_str)  # Resolve execution mode from cached entry for log consistency
-    evaluation_mode = str(cached_execution_mode).replace("_", " ").title().replace(" ", "") if cached_execution_mode else "SeparateFiles"  # Normalize execution mode to CamelCase style
-    acc = cached_result.get("accuracy", "N/A")  # Recover accuracy from cached result for full metrics log
-    prec = cached_result.get("precision", "N/A")  # Recover precision from cached result for full metrics log
-    rec = cached_result.get("recall", "N/A")  # Recover recall from cached result for full metrics log
-    f1 = cached_result.get("f1_score", "N/A")  # Recover F1 score from cached result for full metrics log
-    fpr = cached_result.get("fpr", "N/A")  # Recover FPR from cached result for full metrics log
-    fnr = cached_result.get("fnr", "N/A")  # Recover FNR from cached result for full metrics log
-    cached_elapsed = cached_result.get("elapsed_time_s", 0)  # Recover elapsed time from cached result for full metrics log
-    cached_elapsed = int(round(float(cached_elapsed))) if cached_elapsed is not None else 0  # Normalize elapsed seconds to integer for display
-    cached_human_time = calculate_execution_time(cached_elapsed)  # Format elapsed seconds to human-readable duration string
-    cached_msg = f"{BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}: Mode {BackgroundColors.CYAN}{evaluation_mode}{BackgroundColors.GREEN} | F1-Score {BackgroundColors.CYAN}{f1}{BackgroundColors.GREEN} | Accuracy: {BackgroundColors.CYAN}{acc}{BackgroundColors.GREEN} | Precision: {BackgroundColors.CYAN}{prec}{BackgroundColors.GREEN} | Recall: {BackgroundColors.CYAN}{rec}{BackgroundColors.GREEN} | FPR: {BackgroundColors.CYAN}{fpr}{BackgroundColors.GREEN} | FNR: {BackgroundColors.CYAN}{fnr}{BackgroundColors.GREEN} | Training Time: {BackgroundColors.CYAN}{cached_elapsed}s{BackgroundColors.GREEN} | Execution Time: {BackgroundColors.CYAN}{cached_elapsed}s{BackgroundColors.GREEN} | Total Time: {BackgroundColors.CYAN}{cached_human_time}{BackgroundColors.GREEN} ({BackgroundColors.CYAN}{cached_elapsed}s{BackgroundColors.GREEN}){Style.RESET_ALL}"  # Build the recovered classifier summary once for console and Telegram parity
+    cached_msg, telegram_msg = build_cached_telegram_result_messages(cached_result, feature_set_name, model_name, augmentation_ratio, hyperparameters_enabled, execution_mode_str)  # Build established recovered-result messages from the persisted row
     print(cached_msg)  # Print a full metrics summary for the recovered cached classifier
-    telegram_msg = f"[CACHE] Recovered saved result without fit, prediction, or metric recomputation | {combination_header}\n{cached_msg}"  # Combine cache provenance, evaluation identity, and recovered metrics
     send_telegram_message(TELEGRAM_BOT, telegram_msg)  # Send the provenance-aware recovered individual-classifier result
 
     progress_bar.update(1)  # Advance progress bar even for skipped cached evaluations
@@ -11859,20 +11957,8 @@ def run_stacking_evaluation_for_feature_set(name, stacking_model, X_train_df, y_
                 combination_header = build_telegram_combination_header(name, "StackingClassifier", augmentation_ratio, hyperparameters_enabled)  # Build full recovered stacking combination label
                 print(f"{BackgroundColors.YELLOW}[RESUME] Recovered combination {current_combination}/{total_steps}: {combination_header} from saved partial progress (no recomputation performed).{Style.RESET_ALL}")  # Log recovered stacking combination to stdout for visibility
 
-                cached_execution_mode = cached_result.get("execution_mode", execution_mode_str)  # Resolve execution mode from cached entry for log consistency
-                evaluation_mode = str(cached_execution_mode).replace("_", " ").title().replace(" ", "") if cached_execution_mode else "SeparateFiles"  # Normalize execution mode to CamelCase style
-                acc = cached_result.get("accuracy", "N/A")  # Recover accuracy from cached stacking result for full metrics log
-                prec = cached_result.get("precision", "N/A")  # Recover precision from cached stacking result for full metrics log
-                rec = cached_result.get("recall", "N/A")  # Recover recall from cached stacking result for full metrics log
-                f1 = cached_result.get("f1_score", "N/A")  # Recover F1 score from cached stacking result for full metrics log
-                fpr = cached_result.get("fpr", "N/A")  # Recover FPR from cached stacking result for full metrics log
-                fnr = cached_result.get("fnr", "N/A")  # Recover FNR from cached stacking result for full metrics log
-                cached_elapsed = cached_result.get("elapsed_time_s", 0)  # Recover elapsed time from cached stacking result for full metrics log
-                cached_elapsed = int(round(float(cached_elapsed))) if cached_elapsed is not None else 0  # Normalize elapsed seconds to integer for display
-                cached_human_time = calculate_execution_time(cached_elapsed)  # Format elapsed seconds to human-readable duration string
-                cached_msg = f"{BackgroundColors.CYAN}StackingClassifier{BackgroundColors.GREEN}: Mode {BackgroundColors.CYAN}{evaluation_mode}{BackgroundColors.GREEN} | F1-Score {BackgroundColors.CYAN}{f1}{BackgroundColors.GREEN} | Accuracy: {BackgroundColors.CYAN}{acc}{BackgroundColors.GREEN} | Precision: {BackgroundColors.CYAN}{prec}{BackgroundColors.GREEN} | Recall: {BackgroundColors.CYAN}{rec}{BackgroundColors.GREEN} | FPR: {BackgroundColors.CYAN}{fpr}{BackgroundColors.GREEN} | FNR: {BackgroundColors.CYAN}{fnr}{BackgroundColors.GREEN} | Training Time: {BackgroundColors.CYAN}{cached_elapsed}s{BackgroundColors.GREEN} | Execution Time: {BackgroundColors.CYAN}{cached_elapsed}s{BackgroundColors.GREEN} | Total Time: {BackgroundColors.CYAN}{cached_human_time}{BackgroundColors.GREEN} ({BackgroundColors.CYAN}{cached_elapsed}s{BackgroundColors.GREEN}){Style.RESET_ALL}"  # Build the recovered stacking summary once for console and Telegram parity
+                cached_msg, telegram_msg = build_cached_telegram_result_messages(cached_result, name, "StackingClassifier", augmentation_ratio, hyperparameters_enabled, execution_mode_str)  # Build established recovered stacking messages from the persisted row
                 print(cached_msg)  # Print a full metrics summary for the recovered cached stacking classifier
-                telegram_msg = f"[CACHE] Recovered saved result without fit, prediction, or metric recomputation | {combination_header}\n{cached_msg}"  # Combine cache provenance, evaluation identity, and recovered metrics
                 send_telegram_message(TELEGRAM_BOT, telegram_msg)  # Send the provenance-aware recovered stacking-classifier result
 
                 progress_bar.update(1)  # Advance progress bar even for skipped cached evaluations
@@ -14712,6 +14798,27 @@ def acquire_feature_process_combination_lock(task: dict, process_payload: dict) 
     return acquire_stacking_artifact_lock(lock_path, exclusive=True)  # Hold the combination reservation through final cache verification and durable persistence
 
 
+def publish_feature_process_result_event(task: dict, process_payload: dict, result_entry: dict, event: str, status_queue: Any) -> None:  # Publish one persisted result and await coordinator notification handling
+    """
+    Publish one small terminal result event and await its coordinator acknowledgement.
+
+    :param task: Authoritative feature-process task descriptor.
+    :param process_payload: Small worker payload containing optional acknowledgement state.
+    :param result_entry: Persisted result row for this terminal event.
+    :param event: Computed or cached terminal event.
+    :param status_queue: Multiprocessing lifecycle queue.
+    :return: None.
+    """
+
+    notification_result = build_feature_process_notification_result(result_entry)  # Copy only scalar persisted fields needed by Telegram
+    status_queue.put({"status": "progress", "feature_set": process_payload["feature_set"], "global_id": task["global_id"], "event": event, "notification_result": notification_result, "pid": os.getpid()})  # Publish completion only after persistence and terminal status transition
+    acknowledgement = process_payload.get("notification_acknowledgement")  # Resolve this feature worker's coordinator acknowledgement value
+    if acknowledgement is None:  # Preserve focused direct callers without a coordinator handshake
+        return  # Continue immediately when no production acknowledgement exists
+    while int(acknowledgement.value) < int(task["global_id"]):  # Keep this combination before cleanup until coordinator handles its exact global identity
+        time.sleep(0.01)  # Poll one small shared integer without another timing process or thread
+
+
 def process_feature_process_task(task: dict, process_payload: dict, model_maps: dict, resource_state: dict, status_queue: Any, status_state: dict) -> None:  # Process one matrix-free task under a complete combination reservation
     """
     Process one feature-set task under final cache and computation serialization.
@@ -14747,7 +14854,7 @@ def process_feature_process_task(task: dict, process_payload: dict, model_maps: 
             transition_feature_process_status(status_state, task, "cached")  # Count final cache recovery exactly once and clear running state
             task_finished = True  # Record terminal cache completion before noncritical logging
             log_feature_process_combination(task, status_state, "Cache recovery completed; fit and data loading skipped")  # Report truthful recovery and skip behavior
-            status_queue.put({"status": "progress", "feature_set": process_payload["feature_set"], "global_id": task["global_id"], "event": "cached", "pid": os.getpid()})  # Send only small cache-completion metadata
+            publish_feature_process_result_event(task, process_payload, cached_result, "cached", status_queue)  # Preserve established cache notification semantics before leaving this combination
             return  # Release the reservation and move directly to the next feature-local task
         if task["augmentation_ratio"] is None:  # Load only original resources required for a pending fit
             if resource_state["ratio_data"] is not None:  # Release the previous augmentation ratio before returning to original fitting
@@ -14784,7 +14891,7 @@ def process_feature_process_task(task: dict, process_payload: dict, model_maps: 
             result_entry = evaluate_feature_process_augmented_task(task, process_payload, resource_state["ratio_data"], model_prototype, resource_state["cache_dict"], status_state)  # Predict, calculate metrics, and persist through existing logic
         transition_feature_process_status(status_state, task, "computed")  # Count durably persisted successful computation exactly once before noncritical cleanup
         task_finished = True  # Preserve completed status if later cleanup or logging fails
-        status_queue.put({"status": "progress", "feature_set": process_payload["feature_set"], "global_id": task["global_id"], "event": "computed", "pid": os.getpid()})  # Send only small successful-completion metadata
+        publish_feature_process_result_event(task, process_payload, result_entry, "computed", status_queue)  # Await one coordinator-owned notification attempt before combination cleanup
         log_feature_process_combination(task, status_state, "Combination cleanup started")  # Announce combination-specific release after durable completion
         del result_entry  # Drop the completed result record after durable cache persistence
         gc.collect()  # Reclaim estimator, prediction, probability, metric, and temporary array memory
@@ -14936,11 +15043,15 @@ def execute_feature_set_processes(pending_by_feature: dict, process_payload: dic
     if len(cached_results) + pending_count != len(tasks):  # Reject lost or duplicate task classification before creating children
         raise RuntimeError(f"Feature-process partition mismatch: cached={len(cached_results)}, pending={pending_count}, total={len(tasks)}")  # Surface authoritative plan mismatch
     status_state = create_feature_process_status(context, tasks, pending_by_feature)  # Initialize all shared counters from dynamic plan and cache state
+    tasks_by_global_id = {task["global_id"]: task for task in tasks}  # Index the authoritative dynamic plan for completion-event verification
+    notified_global_ids = set()  # Track one coordinator-owned result notification attempt per combination
+    notification_acknowledgements = {feature_set_name: context.Value("q", 0) for feature_set_name in process_payload["feature_mode_names"]}  # Create one monotonic acknowledgement per persistent feature worker
     for task in tasks:  # Log each valid pre-start cache result without changing already initialized counters
         if task.get("global_id") not in cached_results:  # Skip pending tasks during cache recovery reporting
             continue  # Move to next authoritative task
         prefix = format_feature_process_progress(task, status_state, pid=os.getpid())  # Build dynamic cache-first status from shared counters
         print(f"{prefix} Cache recovery completed | Feature Set={task['feature_set']} | Classifier={task['classifier_name']} | Hyperparameters={'Optimized' if task['hyperparameters_enabled'] else 'Default'} | Testing={'Original' if task['augmentation_ratio'] is None else 'Augmented'} | Augmentation Ratio={task['augmentation_ratio']}")  # Report valid cached combination without data loading
+        send_feature_process_result_notification(task, build_feature_process_notification_result(cached_results[task["global_id"]]), "cached", len(tasks), notified_global_ids)  # Preserve established sequential cache notification semantics without a Finished message
     initial_snapshot = read_feature_process_status(status_state)  # Read exact startup state before any child transition
     print(f"[PLAN] Global={initial_snapshot['global']} | Features={initial_snapshot['features']}")  # Log complete dynamic cached, pending, and feature-local totals
     status_queue = context.Queue()  # Create one small lifecycle channel for every persistent worker
@@ -14957,6 +15068,7 @@ def execute_feature_set_processes(pending_by_feature: dict, process_payload: dic
             child_payload["worker_index"] = 1  # Use the only safely supported worker index
             child_payload["tasks"] = list(pending_by_feature[feature_set_name])  # Assign only matrix-free feature-local pending descriptors
             child_payload["feature_metadata"] = process_payload["feature_metadata_by_name"][feature_set_name]  # Assign only this feature set's small names and indices
+            child_payload["notification_acknowledgement"] = notification_acknowledgements[feature_set_name]  # Pass one small feature-local synchronization value without Telegram credentials or result data
             validate_feature_process_payload(child_payload)  # Prove no matrices, labels, DataFrames, or estimators will be pickled into the child
             worker_key = resolve_feature_set_worker_key(feature_set_name)  # Resolve configured role identity once
             process = context.Process(target=worker_target, args=(child_payload, status_queue, status_state), name=f"Stacking-{worker_key.upper()}-1")  # Build one long-lived OS process for complete feature queue
@@ -14998,7 +15110,17 @@ def execute_feature_set_processes(pending_by_feature: dict, process_payload: dic
                 progress_snapshot = read_feature_process_status(status_state)  # Read consistent cross-process counters after transition
                 feature_snapshot = progress_snapshot["features"][feature_set_name]  # Resolve feature-local status for concise coordinator logging
                 print(f"[COORDINATOR STATUS] Feature Set={feature_set_name} | Global ID={status.get('global_id')} | Event={status.get('event')} | Global={progress_snapshot['global']} | Feature={feature_snapshot}")  # Log dynamic global and feature-local runtime state
+                handle_feature_process_result_notification(status, tasks_by_global_id, len(tasks), notified_global_ids, notification_acknowledgements)  # Send only after persisted status no longer identifies this combination as running
         if failure is not None:  # Stop sibling work after preserving already persisted results from the failed grid
+            empty_notification_polls = 0  # Bound coordinator shutdown draining after the first surfaced worker failure
+            while empty_notification_polls < 2:  # Allow already-published persisted-result events to reach the coordinator before termination
+                try:  # Poll briefly for completion events already in multiprocessing feeder transport
+                    pending_status = status_queue.get(timeout=0.1)  # Receive one queued lifecycle event without waiting on active training
+                except queue_module.Empty:  # Count consecutive empty polls before deterministic shutdown
+                    empty_notification_polls += 1  # Stop after two empty transport windows
+                    continue  # Poll once more or continue to sibling termination
+                empty_notification_polls = 0  # Continue draining while queued events remain available
+                handle_feature_process_result_notification(pending_status, tasks_by_global_id, len(tasks), notified_global_ids, notification_acknowledgements)  # Send or acknowledge any persisted result event without changing scientific status
             for record in process_records:  # Terminate only children that remain active
                 process = record["process"]  # Resolve one tracked child
                 if process.is_alive():  # Avoid signaling a child that already exited
