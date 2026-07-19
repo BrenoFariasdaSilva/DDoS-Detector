@@ -1,3 +1,4 @@
+import argparse  # Build minimal CLI namespaces for precedence tests.
 import contextlib  # Capture deterministic progress output without changing production logging.
 import io  # Provide an in-memory text stream for progress assertions.
 import os  # Verify progress records contain the active process identity.
@@ -82,6 +83,11 @@ class SleepingEstimator:  # Simulate one unsupported blocking estimator
         time.sleep(self.delay_seconds)  # Block long enough for multiple heartbeat intervals.
         return self  # Preserve standard estimator fit return semantics.
 
+    def predict(self, X_test):  # Produce deterministic predictions for lifecycle integration tests
+        """Return one deterministic class for every supplied row."""
+
+        return np.zeros(len(X_test), dtype=np.int64)  # Keep the fixture independent from estimator internals.
+
 
 class FailingEstimator(SleepingEstimator):  # Simulate one unsupported failing estimator
     """Raise one original fit exception after a deterministic heartbeat window."""
@@ -126,7 +132,7 @@ class TrainingProgressTests(unittest.TestCase):  # Group deterministic training 
         """
 
         cls.X_train, cls.y_train = make_classification(n_samples=80, n_features=6, n_informative=4, n_redundant=0, random_state=42)  # Build a compact deterministic binary dataset.
-        cls.fast_config = {"evaluation": {"training_heartbeat_interval_seconds": 0.01}}  # Use a fast heartbeat only inside focused tests.
+        cls.fast_config = {"evaluation": {"training_progress_interval_minutes": 0.01 / 60.0}}  # Use a ten-millisecond progress interval only inside focused tests.
 
     def fit_with_output(self, model, classifier_name, fit_kwargs=None):  # Fit one estimator and capture progress output
         """
@@ -162,6 +168,124 @@ class TrainingProgressTests(unittest.TestCase):  # Group deterministic training 
         if hasattr(baseline, "predict_proba") and hasattr(observed, "predict_proba"):  # Compare probabilities only when both estimators expose them.
             np.testing.assert_array_equal(baseline.predict_proba(self.X_train), observed.predict_proba(self.X_train))  # Require exact probability equality.
         self.assertEqual(pickle.dumps(baseline), pickle.dumps(observed))  # Require byte-identical fitted model serialization.
+
+    def test_default_yaml_cli_precedence_and_fractional_conversion(self):  # Verify the single minutes-based configuration source
+        """Verify default, YAML, CLI precedence, parsing, logging, and seconds conversion."""
+
+        self.assertEqual(training_progress.DEFAULT_TRAINING_PROGRESS_INTERVAL_MINUTES, 15.0)  # Require the built-in fifteen-minute default.
+        defaults = stacking.get_default_config()  # Build the production defaults without file or CLI overrides.
+        self.assertEqual(defaults["evaluation"]["training_progress_interval_minutes"], 15.0)  # Require the runtime default to use the shared constant.
+        repository_root = Path(stacking.__file__).resolve().parent  # Resolve both committed configuration files beside stacking.py.
+        for config_name in ("config.yaml", "config.yaml.example"):  # Verify the operator and example configurations together.
+            with self.subTest(config=config_name):  # Isolate configuration-file failures.
+                file_config = stacking.load_config_file(str(repository_root / config_name))  # Parse through the production YAML loader.
+                self.assertEqual(file_config["evaluation"]["training_progress_interval_minutes"], 15)  # Require the documented fifteen-minute YAML default.
+
+        yaml_config = stacking.merge_configs(stacking.get_default_config(), {"evaluation": {"training_progress_interval_minutes": 0.5}}, None)  # Merge a fractional YAML override without CLI arguments.
+        self.assertEqual(yaml_config["evaluation"]["training_progress_interval_minutes"], 0.5)  # Require YAML to override the built-in default.
+        cli_args = argparse.Namespace(training_progress_interval_minutes=2.5)  # Build one explicit CLI override only.
+        cli_config = stacking.merge_configs(stacking.get_default_config(), {"evaluation": {"training_progress_interval_minutes": 0.5}}, cli_args)  # Apply CLI over YAML and defaults.
+        self.assertEqual(cli_config["evaluation"]["training_progress_interval_minutes"], 2.5)  # Require CLI to win over YAML.
+        with mock.patch.object(stacking.sys, "argv", ["stacking.py", "--training-progress-interval-minutes", "0.5"]):  # Parse the public CLI spelling directly.
+            parsed = stacking.parse_cli_args()  # Exercise the production argparse path.
+        self.assertEqual(parsed.training_progress_interval_minutes, 0.5)  # Require fractional CLI minutes to survive parsing.
+        progress = stacking.build_training_progress("Full Features", "SVM", config={"evaluation": {"training_progress_interval_minutes": 0.5}})  # Cross the single minutes-to-seconds runtime boundary.
+        self.assertEqual(progress.interval_seconds, 30.0)  # Require 0.5 minutes to become exactly thirty seconds once.
+
+        output = io.StringIO()  # Capture resolved runtime configuration logging.
+        with contextlib.redirect_stdout(output):  # Isolate the one configuration log call.
+            stacking.log_resolved_configuration(cli_config)  # Log the effective CLI-over-YAML interval.
+        self.assertEqual(output.getvalue().count("Training progress interval:"), 1)  # Require one resolved interval record.
+        self.assertIn("2.5 minutes", output.getvalue())  # Preserve readable fractional formatting.
+
+    def test_invalid_progress_intervals_are_rejected_clearly(self):  # Verify finite positive validation
+        """Reject zero, negatives, non-finite values, empty values, text, and booleans."""
+
+        invalid_values = (0, -1, float("nan"), float("inf"), float("-inf"), "", "invalid", None, True)  # Enumerate every prohibited configuration class.
+        for value in invalid_values:  # Validate every invalid YAML/programmatic value.
+            with self.subTest(value=value):  # Isolate the rejected value.
+                with self.assertRaisesRegex(ValueError, "evaluation.training_progress_interval_minutes.*positive finite"):  # Require the configuration key in the error.
+                    stacking.validate_training_progress_interval_minutes(value)  # Exercise production validation directly.
+
+        with mock.patch.object(stacking, "send_exception_via_telegram"):  # Keep the merge failure local to this deterministic test.
+            with self.assertRaisesRegex(ValueError, "--training-progress-interval-minutes.*positive finite"):  # Require the invalid CLI option in the error.
+                stacking.merge_configs(stacking.get_default_config(), {}, argparse.Namespace(training_progress_interval_minutes=0.0))  # Reject an explicit zero CLI override.
+        for invalid_text in ("", "not-a-number"):  # Verify argparse rejects empty and non-numeric option values.
+            with self.subTest(cli_value=invalid_text):  # Isolate parser failures.
+                stderr = io.StringIO()  # Capture argparse's clear option error.
+                with mock.patch.object(stacking.sys, "argv", ["stacking.py", "--training-progress-interval-minutes", invalid_text]):  # Supply the invalid public option.
+                    with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit):  # Require normal argparse rejection.
+                        stacking.parse_cli_args()  # Exercise production CLI parsing.
+                self.assertIn("--training-progress-interval-minutes", stderr.getvalue())  # Identify the invalid option clearly.
+
+    def test_unit_callbacks_are_rate_limited_and_final_is_immediate(self):  # Verify callback throttling and latest-state output
+        """Emit only the latest due callback state and one immediate final state."""
+
+        output = io.StringIO()  # Capture deterministic callback-backed progress.
+        progress = training_progress.TrainingProgress("GA Features", "XGBoost", stacking.calculate_execution_time, output_stream=output, total_units=10, unit_label="Round", report_interval_seconds=60.0)  # Build one minute-spaced reporter.
+        with mock.patch.object(training_progress.time, "monotonic", side_effect=[0.0, 5.0, 20.0, 59.0, 60.0, 61.0, 62.0]):  # Control start and frequent callback times.
+            with progress:  # Start this task's independent timer at zero.
+                progress.report_unit(1)  # Retain without logging at five seconds.
+                progress.report_unit(2)  # Retain without logging at twenty seconds.
+                progress.report_unit(3)  # Retain without logging just before one minute.
+                progress.report_unit(4)  # Emit the latest state at the interval boundary.
+                progress.report_unit(10)  # Emit final 100% immediately one second later.
+                progress.report_unit(10)  # Suppress a duplicate final callback.
+        records = [line for line in output.getvalue().splitlines() if line.startswith("[TRAINING]")]  # Read only progress records.
+        self.assertEqual(len(records), 2)  # Require one recurring record and one immediate final record.
+        self.assertIn("Round: 4/10 | Progress: 40.00%", records[0])  # Require the most recent callback state at the interval.
+        self.assertIn("Round: 10/10 | Progress: 100.00%", records[1])  # Require immediate final progress.
+        self.assertNotIn("Round: 1/10", output.getvalue())  # Forbid per-round output before the interval.
+        self.assertEqual(progress.latest_completed_units, 10)  # Retain the latest genuine public state even after rate limiting.
+
+    def test_heartbeat_interval_and_task_timers_are_independent(self):  # Verify heartbeat timing, worker independence, and reset
+        """Keep heartbeat and combination timers local to each progress scope."""
+
+        heartbeat_output = io.StringIO()  # Capture one deterministic heartbeat scope.
+        heartbeat_progress = training_progress.TrainingProgress("RFE Features", "SVM", stacking.calculate_execution_time, output_stream=heartbeat_output, report_interval_seconds=60.0)  # Build one minute-spaced heartbeat reporter.
+        with mock.patch.object(training_progress.time, "monotonic", side_effect=[100.0, 159.0, 160.0]):  # Control start, pre-interval, and due times.
+            with heartbeat_progress:  # Start this task at one hundred seconds.
+                self.assertFalse(heartbeat_progress.report_heartbeat())  # Require silence before the configured interval.
+                self.assertTrue(heartbeat_progress.report_heartbeat())  # Require one heartbeat at the interval.
+        self.assertEqual(heartbeat_output.getvalue().count("Status: Active"), 1)  # Require exactly one due heartbeat.
+
+        first_output, second_output = io.StringIO(), io.StringIO()  # Capture two concurrent-worker-equivalent task scopes separately.
+        first = training_progress.TrainingProgress("Full Features", "SVM", stacking.calculate_execution_time, output_stream=first_output, report_interval_seconds=60.0)  # Build the first worker-local reporter.
+        second = training_progress.TrainingProgress("PCA Components", "MLP", stacking.calculate_execution_time, output_stream=second_output, report_interval_seconds=60.0)  # Build the second worker-local reporter.
+        with mock.patch.object(training_progress.time, "monotonic", side_effect=[100.0, 200.0, 160.0, 260.0]):  # Give each scope its own start and due timestamp.
+            with first, second:  # Activate both independent scopes together.
+                self.assertTrue(first.report_heartbeat())  # Emit the Full task's heartbeat at its own boundary.
+                self.assertTrue(second.report_heartbeat())  # Emit the PCA task's heartbeat at its separate boundary.
+        self.assertEqual(first_output.getvalue().count("Status: Active"), 1)  # Require the first timer to emit independently.
+        self.assertEqual(second_output.getvalue().count("Status: Active"), 1)  # Require the second timer to emit independently.
+
+        new_combination = training_progress.TrainingProgress("Full Features", "Random Forest", stacking.calculate_execution_time, output_stream=io.StringIO(), report_interval_seconds=60.0)  # Build the next classifier combination.
+        with mock.patch.object(training_progress.time, "monotonic", side_effect=[300.0, 300.0]):  # Start and poll the new scope at the same timestamp.
+            with new_combination:  # Reset timing through a fresh training scope.
+                self.assertFalse(new_combination.report_heartbeat())  # Require no inherited due state from the previous Full task.
+
+    def test_short_fit_start_completion_and_failure_remain_immediate(self):  # Verify lifecycle events bypass recurring throttling
+        """Keep start, completion, and failure behavior immediate for short fits."""
+
+        slow_interval_config = {"evaluation": {"training_progress_interval_minutes": 1.0}}  # Configure an interval far longer than the fixture fits.
+        common_args = (self.X_train, self.y_train, self.X_train, self.y_train)  # Reuse deterministic training and testing arrays.
+        success_output = io.StringIO()  # Capture production lifecycle records for a short successful fit.
+        with mock.patch.object(stacking, "send_telegram_message"), mock.patch.object(stacking, "write_memory_phase_event"):  # Isolate external notifications and watcher artifacts.
+            with contextlib.redirect_stdout(success_output):  # Capture immediate lifecycle output.
+                stacking.evaluate_individual_classifier(SleepingEstimator(delay_seconds=0.005), "SVM", *common_args, dataset_file="fixture.csv", feature_names=[f"f{index}" for index in range(self.X_train.shape[1])], feature_set="Full Features", config=slow_interval_config, training_ram_stats={})  # Execute the real production lifecycle around one short fit.
+        self.assertIn("Phase: Training | Status: Started", success_output.getvalue())  # Require immediate training start.
+        self.assertIn("Phase: Training | Status: Completed", success_output.getvalue())  # Require immediate fit completion.
+        self.assertNotIn("Status: Active", success_output.getvalue())  # Avoid an unnecessary intermediate heartbeat for a short fit.
+
+        failure = RuntimeError("Immediate fixture failure")  # Create the exact failure expected from the production fit path.
+        failure_output = io.StringIO()  # Capture the production failure output.
+        with mock.patch.object(stacking, "send_exception_via_telegram"), mock.patch.object(stacking, "write_memory_phase_event"):  # Isolate external failure reporting and watcher artifacts.
+            with self.assertRaises(RuntimeError) as raised:  # Require immediate original failure propagation.
+                with contextlib.redirect_stdout(failure_output):  # Capture the existing immediate failure record.
+                    stacking.evaluate_individual_classifier(FailingEstimator(failure, delay_seconds=0.005), "SVM", *common_args, dataset_file="fixture.csv", feature_names=[f"f{index}" for index in range(self.X_train.shape[1])], feature_set="Full Features", config=slow_interval_config, training_ram_stats={})  # Execute the real failing lifecycle without waiting for the recurring interval.
+        self.assertIs(raised.exception, failure)  # Preserve the exact estimator failure object.
+        self.assertIn("Immediate fixture failure", failure_output.getvalue())  # Require the existing failure log immediately.
+        self.assertNotIn("Status: Active", failure_output.getvalue())  # Avoid an intermediate heartbeat before a short failure.
 
     def test_xgboost_public_rounds_preserve_results_callbacks_and_identity(self):  # Verify XGBoost genuine progress
         """
@@ -321,7 +445,7 @@ class TrainingProgressTests(unittest.TestCase):  # Group deterministic training 
         """
 
         output = io.StringIO()  # Allocate isolated deterministic ETA output.
-        progress = training_progress.TrainingProgress("PCA Components", "XGBoost", stacking.calculate_execution_time, output_stream=output, total_units=4, unit_label="Round", heartbeat=False, heartbeat_interval_seconds=0.01)  # Build a four-round genuine progress scope directly from the focused module.
+        progress = training_progress.TrainingProgress("PCA Components", "XGBoost", stacking.calculate_execution_time, output_stream=output, total_units=4, unit_label="Round", heartbeat=False, report_interval_seconds=0.01)  # Build a four-round genuine progress scope directly from the focused module.
         with mock.patch.object(training_progress.time, "monotonic", side_effect=[100.0, 110.0]):  # Fix start and first-completed-unit timestamps in the reusable module.
             with progress:  # Start timing at the fixed initial timestamp.
                 progress.report_unit(1)  # Report one real completed unit after ten seconds.
@@ -350,7 +474,7 @@ class TrainingProgressTests(unittest.TestCase):  # Group deterministic training 
             trial.suggest_categorical("model_name", ["KNN"])  # Populate the production best-model parameter.
             return float(trial.number)  # Return a deterministic increasing trial score.
 
-        config = {"automl": {"n_trials": 3, "timeout": 30, "cv_folds": 2, "random_state": 42}, "evaluation": {"training_heartbeat_interval_seconds": 0.01}}  # Configure three lightweight public trials.
+        config = {"automl": {"n_trials": 3, "timeout": 30, "cv_folds": 2, "random_state": 42}, "evaluation": {"training_progress_interval_minutes": 0.01 / 60.0}}  # Configure three lightweight public trials.
         output = io.StringIO()  # Allocate isolated AutoML progress output.
         with mock.patch.object(stacking, "automl_objective", side_effect=objective):  # Replace only expensive model evaluation inside the real study flow.
             with contextlib.redirect_stdout(output):  # Capture public trial callback records.
@@ -389,7 +513,7 @@ class TrainingProgressTests(unittest.TestCase):  # Group deterministic training 
             return float(trial.number)  # Return a deterministic increasing stacking score.
 
         candidates = {"KNN": {"n_neighbors": 3}, "Decision Tree": {"max_depth": 2}}  # Provide two deterministic candidate model configurations.
-        config = {"automl": {"stacking_trials": 3, "stacking_top_n": 2, "timeout": 30, "cv_folds": 2, "random_state": 42}, "evaluation": {"training_heartbeat_interval_seconds": 0.01}}  # Configure three lightweight public stacking trials.
+        config = {"automl": {"stacking_trials": 3, "stacking_top_n": 2, "timeout": 30, "cv_folds": 2, "random_state": 42}, "evaluation": {"training_progress_interval_minutes": 0.01 / 60.0}}  # Configure three lightweight public stacking trials.
         output = io.StringIO()  # Allocate isolated stacking-search progress output.
         with mock.patch.object(stacking, "extract_top_automl_models", return_value=candidates):  # Replace model extraction with two deterministic candidates.
             with mock.patch.object(stacking, "automl_stacking_objective", side_effect=objective):  # Replace only expensive stacking evaluation inside the real study flow.
