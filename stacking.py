@@ -104,7 +104,7 @@ import yaml  # Import YAML library
 from colorama import Style  # For terminal text styling
 from joblib import dump, load  # For exporting and loading trained models and scalers
 from lime.lime_tabular import LimeTabularExplainer  # Import LIME library
-from Logger import Logger  # For logging output to both terminal and file
+from Logger import Logger, SAO_PAULO_TIMEZONE_NAME  # For process-safe São Paulo timestamped runtime logging
 from pathlib import Path  # For handling file paths
 from scipy.io import arff as scipy_arff  # Used to read ARFF files
 from sklearn.base import clone  # Clone estimator prototypes before each atomic fit
@@ -1506,7 +1506,7 @@ def initialize_logger(config=None):
         os.makedirs(logs_dir, exist_ok=True)  # Ensure logs directory exists
         log_path = Path(logs_dir) / f"{Path(__file__).stem}.log"  # Build log file path
         
-        logger = Logger(str(log_path), clean=clean)  # Create Logger instance
+        logger = Logger(str(log_path), clean=clean, timestamp_timezone=SAO_PAULO_TIMEZONE_NAME)  # Create one São Paulo timestamped Logger instance
         sys.stdout = logger  # Redirect stdout to logger
         sys.stderr = logger  # Redirect stderr to logger
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
@@ -14665,7 +14665,7 @@ def initialize_feature_process_logger(config: dict) -> None:  # Initialize one s
     logs_dir = config.get("paths", {}).get("logs_dir", "./Logs")  # Resolve the existing stacking log directory
     os.makedirs(logs_dir, exist_ok=True)  # Ensure the log directory exists without truncation
     log_path = Path(logs_dir) / f"{Path(__file__).stem}.log"  # Resolve the established stacking.log path
-    logger = Logger(str(log_path), clean=False)  # Open append mode so no child can truncate coordinator logs
+    logger = Logger(str(log_path), clean=False, timestamp_timezone=SAO_PAULO_TIMEZONE_NAME)  # Open timestamped append mode so no child can truncate coordinator logs
     sys.stdout = logger  # Route child stdout through the process-safe shared logger
     sys.stderr = logger  # Route child stderr through the same process-safe shared logger
 
