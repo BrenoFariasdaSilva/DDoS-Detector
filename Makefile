@@ -36,10 +36,10 @@ if [ -z "$(DETACH)" ]; then \
 	$(PYTHON) $(1); \
 else \
 	SCRIPT_NAME=$$(echo "$(1)" | awk '{print $$1}'); \
-	LOG_FILE=$(LOG_DIR)/$$(basename $$SCRIPT_NAME .py).log; \
+	LOG_FILE="$(LOG_DIR)/$$(basename "$$SCRIPT_NAME" .py).log"; \
 	nohup $(PYTHON) $(1) >/dev/null 2>&1 & \
 	sleep 2; \
-	tail -f $$LOG_FILE; \
+	tail -n +1 -F "$$LOG_FILE"; \
 fi
 endif
 
