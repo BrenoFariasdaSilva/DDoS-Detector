@@ -428,7 +428,7 @@ evaluation: # Evaluation and CV defaults
   n_jobs: 1 # Number of parallel jobs for model training (1 preserves sequential memory-safe classifier fitting)
   feature_extraction_n_jobs: 1 # Number of threads used for feature extraction/transformation such as PCA (-1 uses available CPUs); classifier training still uses evaluation.n_jobs
   feature_set_workers: {full: 0, ga: 0, pca: 0, rfe: 0} # Persistent Linux feature-set process counts; set full=1,ga=1,pca=1,rfe=1 through CLI for four workers
-  training_heartbeat_interval_seconds: 60 # Low-frequency heartbeat interval for classifiers without public training-unit callbacks
+  training_progress_interval_minutes: 15 # Recurring per-classifier training progress and heartbeat interval in positive finite minutes
   threads_limit: 2 # Thread limit for parallel classifier evaluation (prevents resource exhaustion)
   cv_folds: 10 # Number of cross-validation folds for model evaluation
   random_state: 42 # Random seed for reproducibility across all models
