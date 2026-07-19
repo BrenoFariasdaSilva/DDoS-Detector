@@ -138,7 +138,7 @@ from threadpoolctl import threadpool_limits  # For narrowly limiting BLAS and Op
 from tqdm import tqdm  # For progress bars
 from typing import Any, Callable, Optional, List, Tuple, cast  # For optional and collection typing hints
 from xgboost import XGBClassifier  # For XGBoost classifier
-from training_progress import TRAINING_HEARTBEAT_INTERVAL_SECONDS, TrainingProgress, XGBoostProgressCallback, format_training_feature_set, interactive_terminal_attached  # Import reusable training progress infrastructure.
+from training_progress import DEFAULT_TRAINING_PROGRESS_INTERVAL_MINUTES, TrainingProgress, XGBoostProgressCallback, format_training_feature_set, interactive_terminal_attached  # Import reusable training progress infrastructure.
 
 
 # Macros:
@@ -371,8 +371,10 @@ def build_training_progress(feature_set: Optional[str], classifier_name: str, to
     """
 
     active_config = config if config is not None else CONFIG  # Resolve experiment configuration without exposing it to the reusable module.
-    configured_interval = active_config.get("evaluation", {}).get("training_heartbeat_interval_seconds", TRAINING_HEARTBEAT_INTERVAL_SECONDS) if isinstance(active_config, dict) else TRAINING_HEARTBEAT_INTERVAL_SECONDS  # Read the progress-specific interval with the established fallback.
-    return TrainingProgress(feature_set, classifier_name, calculate_execution_time, output_stream=sys.stdout, total_units=total_units, unit_label=unit_label, heartbeat=heartbeat, heartbeat_interval_seconds=configured_interval)  # Pass required progress context explicitly without new global state.
+    configured_minutes = active_config.get("evaluation", {}).get("training_progress_interval_minutes", DEFAULT_TRAINING_PROGRESS_INTERVAL_MINUTES) if isinstance(active_config, dict) else DEFAULT_TRAINING_PROGRESS_INTERVAL_MINUTES  # Read the single minutes-based progress interval with the built-in fallback.
+    interval_minutes = validate_training_progress_interval_minutes(configured_minutes)  # Validate direct and merged runtime configurations at the reporter boundary.
+    interval_seconds = interval_minutes * 60.0  # Convert minutes to seconds once before entering the seconds-based timing implementation.
+    return TrainingProgress(feature_set, classifier_name, calculate_execution_time, output_stream=sys.stdout, total_units=total_units, unit_label=unit_label, heartbeat=heartbeat, report_interval_seconds=interval_seconds)  # Pass required progress context explicitly without new global state.
 
 
 def fit_classifier_with_progress(model: Any, X_train: Any, y_train: Any, feature_set: Optional[str], classifier_name: str, config: Optional[dict] = None, fit_kwargs: Optional[dict] = None) -> Any:  # Fit one estimator with safe progress reporting
@@ -928,6 +930,7 @@ def parse_cli_args():
         parser.add_argument("--n-jobs", dest="n_jobs", type=int, default=None, help="Override evaluation.n_jobs for estimators that support parallel fitting (-1 uses all processors; 1 is memory-safe)",)
         parser.add_argument("--feature-extraction-n-jobs", dest="feature_extraction_n_jobs", type=int, default=None, help="Override evaluation.feature_extraction_n_jobs for feature extraction/transformation stages such as PCA, not classifier training (-1 uses available CPUs; 1 is memory-safe)")  # Add the independent feature extraction thread override
         parser.add_argument("--feature-set-workers", dest="feature_set_workers", type=str, default=None, help="Persistent process counts by feature set, for example full=1,ga=1,pca=1,rfe=1; only 0 or 1 is supported")  # Add the persistent feature-set process override
+        parser.add_argument("--training-progress-interval-minutes", dest="training_progress_interval_minutes", type=float, default=None, help="Recurring classifier training-progress interval in positive finite minutes (default: 15)")  # Add the minutes-based progress interval override
         parser.add_argument("--low-memory", dest="low_memory", action="store_true", default=False, help="Enable low memory mode for pandas operations")  # Add low memory mode CLI argument
         parser.add_argument("--dataset-file-format", type=str, default=None, dest="dataset_file_format", help="File format for dataset files: arff, csv, parquet, txt")  # Dataset file format CLI override
         parser.add_argument("--augmentation-file-format", type=str, default=None, dest="augmentation_file_format", help="File format for augmentation files: arff, csv, parquet, txt")  # Augmentation file format CLI override
@@ -1115,7 +1118,7 @@ def get_default_config():
             "n_jobs": 1,
             "feature_extraction_n_jobs": 1,  # Use one thread for feature extraction by default without changing classifier training parallelism
             "feature_set_workers": {"full": 0, "ga": 0, "pca": 0, "rfe": 0},  # Keep persistent feature-set multiprocessing disabled unless explicitly configured
-            "training_heartbeat_interval_seconds": 60,  # Use low-frequency progress heartbeats when public training units are unavailable
+            "training_progress_interval_minutes": DEFAULT_TRAINING_PROGRESS_INTERVAL_MINUTES,  # Rate-limit recurring classifier progress per training task
             "threads_limit": 2,
             "cv_folds": 10,
             "random_state": 42,
@@ -1248,6 +1251,23 @@ def validate_feature_extraction_n_jobs(value: Any, source: str = "evaluation.fea
     return value  # Return the validated independent feature extraction setting.
 
 
+def validate_training_progress_interval_minutes(value: Any, source: str = "evaluation.training_progress_interval_minutes") -> float:  # Validate the recurring classifier progress interval.
+    """
+    Validate a minutes-based training-progress interval.
+
+    :param value: Configured interval in minutes.
+    :param source: User-facing setting name used in validation errors.
+    :return: Validated finite positive interval in minutes.
+    """
+
+    if isinstance(value, bool) or not isinstance(value, (int, float)):  # Require a genuine YAML or CLI numeric value.
+        raise ValueError(f"{source} must be a positive finite number of minutes")  # Reject empty, textual, and boolean values clearly.
+    resolved = float(value)  # Normalize accepted numeric scalar types once.
+    if not math.isfinite(resolved) or resolved <= 0:  # Reject zero, negatives, NaN, and infinities.
+        raise ValueError(f"{source} must be a positive finite number of minutes")  # Identify the invalid option or configuration key.
+    return resolved  # Return the validated minutes value without converting units here.
+
+
 FEATURE_SET_WORKER_KEYS = ("full", "ga", "pca", "rfe")  # Define the feature-set process identities supported by the persistent scheduler
 FEATURE_PROCESS_START_METHOD = "spawn"  # Select clean-interpreter feature workers without inheriting initialized native thread pools
 FEATURE_PROCESS_STATUS_FIELDS = ("total", "cached", "pending", "running", "computed", "failed", "completed")  # Define synchronized global and feature-local status fields
@@ -1321,6 +1341,7 @@ def merge_configs(defaults, file_config, cli_args):
         if cli_args is None:  # If no CLI args
             validate_feature_extraction_n_jobs(config.get("evaluation", {}).get("feature_extraction_n_jobs", 1))  # Validate the effective file or default feature extraction setting.
             config.setdefault("evaluation", {})["feature_set_workers"] = validate_feature_set_workers(config.get("evaluation", {}).get("feature_set_workers", None))  # Normalize the effective persistent process mapping
+            config["evaluation"]["training_progress_interval_minutes"] = validate_training_progress_interval_minutes(config["evaluation"].get("training_progress_interval_minutes", DEFAULT_TRAINING_PROGRESS_INTERVAL_MINUTES))  # Validate the YAML-over-default progress interval.
             return config  # Return merged config
         
         if hasattr(cli_args, "verbose") and cli_args.verbose:  # Verbose flag
@@ -1389,6 +1410,9 @@ def merge_configs(defaults, file_config, cli_args):
         if hasattr(cli_args, "feature_set_workers") and cli_args.feature_set_workers is not None:  # Persistent feature-set process CLI override
             config.setdefault("evaluation", {})["feature_set_workers"] = validate_feature_set_workers(cli_args.feature_set_workers, "--feature-set-workers")  # Apply the validated CLI process mapping
 
+        if hasattr(cli_args, "training_progress_interval_minutes") and cli_args.training_progress_interval_minutes is not None:  # Training progress interval CLI override
+            config.setdefault("evaluation", {})["training_progress_interval_minutes"] = validate_training_progress_interval_minutes(cli_args.training_progress_interval_minutes, "--training-progress-interval-minutes")  # Apply the validated CLI-over-YAML interval.
+
         if hasattr(cli_args, "low_memory") and cli_args.low_memory:  # Low memory CLI override
             config["execution"]["low_memory"] = True  # Apply low memory override to config
 
@@ -1430,6 +1454,7 @@ def merge_configs(defaults, file_config, cli_args):
 
         validate_feature_extraction_n_jobs(config.get("evaluation", {}).get("feature_extraction_n_jobs", 1))  # Validate the effective feature extraction setting after CLI precedence is applied.
         config.setdefault("evaluation", {})["feature_set_workers"] = validate_feature_set_workers(config.get("evaluation", {}).get("feature_set_workers", None))  # Normalize the final persistent process mapping after CLI precedence
+        config["evaluation"]["training_progress_interval_minutes"] = validate_training_progress_interval_minutes(config["evaluation"].get("training_progress_interval_minutes", DEFAULT_TRAINING_PROGRESS_INTERVAL_MINUTES))  # Normalize the final validated progress interval after CLI precedence.
         return config  # Return final merged configuration
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
@@ -16031,6 +16056,8 @@ def log_resolved_configuration(config: dict) -> None:
         feature_set_workers = validate_feature_set_workers(config.get("evaluation", {}).get("feature_set_workers", None))  # Resolve the effective persistent process mapping
         print(f"{BackgroundColors.GREEN}[INFO] Feature-set workers: {BackgroundColors.CYAN}{feature_set_workers}{BackgroundColors.GREEN} | Start method when enabled: {BackgroundColors.CYAN}{FEATURE_PROCESS_START_METHOD}{Style.RESET_ALL}")  # Log process counts and explicit clean-interpreter start method
         print(f"{BackgroundColors.GREEN}[INFO] Estimator n_jobs: {BackgroundColors.CYAN}{config.get('evaluation', {}).get('n_jobs', 1)}{BackgroundColors.GREEN} | Feature extraction n_jobs: {BackgroundColors.CYAN}{config.get('evaluation', {}).get('feature_extraction_n_jobs', 1)}{Style.RESET_ALL}")  # Log independent estimator and feature-extraction parallelism
+        training_progress_minutes = validate_training_progress_interval_minutes(config.get("evaluation", {}).get("training_progress_interval_minutes", DEFAULT_TRAINING_PROGRESS_INTERVAL_MINUTES))  # Resolve the validated minutes-based progress interval.
+        print(f"{BackgroundColors.GREEN}[INFO] Training progress interval: {BackgroundColors.CYAN}{training_progress_minutes:g} minutes{Style.RESET_ALL}")  # Log the resolved recurring progress interval once.
 
         feature_sets_cfg = config.get("stacking", {}).get("feature_sets_config", {})  # Get resolved feature sets configuration
         full_features_flag = feature_sets_cfg.get("use_full", True)  # Resolve Full Features flag from feature sets config
