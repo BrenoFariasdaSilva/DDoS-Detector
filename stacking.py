@@ -14548,11 +14548,13 @@ def create_feature_process_status(process_context: Any, tasks: List[dict], pendi
     total_pending = sum(len(queue_tasks) for queue_tasks in pending_by_feature.values())  # Derive current global pending count from actual queues
     global_values = [len(tasks), len(tasks) - total_pending, total_pending, 0, 0, 0, len(tasks) - total_pending]  # Initialize authoritative global totals after cache classification
     feature_values = {}  # Accumulate one compact shared counter array per active feature set
+    running_global_ids = {}  # Track exact active task identities outside queue-feeder timing
     for feature_name in feature_names:  # Build counters from this feature's actual plan and pending queue
         feature_total = sum(task["feature_set"] == feature_name for task in tasks)  # Derive complete feature-local plan size
         feature_pending = len(pending_by_feature[feature_name])  # Derive current feature-local pending queue size
         feature_values[feature_name] = process_context.Array("q", [feature_total, feature_total - feature_pending, feature_pending, 0, 0, 0, feature_total - feature_pending], lock=False)  # Store synchronized feature-local counters without per-array locks
-    return {"lock": process_context.RLock(), "global": process_context.Array("q", global_values, lock=False), "features": feature_values}  # Return one-lock state suitable for spawn
+        running_global_ids[feature_name] = process_context.Value("q", 0, lock=False)  # Store one shared active Global ID under the common status lock
+    return {"lock": process_context.RLock(), "global": process_context.Array("q", global_values, lock=False), "features": feature_values, "running_global_ids": running_global_ids}  # Return one-lock state suitable for spawn
 
 
 def read_feature_process_status(status_state: dict) -> dict:  # Read one consistent global and feature-local status snapshot
@@ -14607,6 +14609,7 @@ def transition_feature_process_status(status_state: dict, task: dict, event: str
                 raise RuntimeError(f"Feature-process status invariant failed: accounted={accounted}, total={total}")  # Surface lost or duplicated state immediately
             if int(values[FEATURE_PROCESS_STATUS_INDEX["completed"]]) != int(values[FEATURE_PROCESS_STATUS_INDEX["cached"]]) + int(values[FEATURE_PROCESS_STATUS_INDEX["computed"]]):  # Require completed to mean cached plus computed
                 raise RuntimeError("Feature-process completed counter diverged from cached plus computed")  # Reject incorrect success accounting
+        status_state["running_global_ids"][task["feature_set"]].value = int(task["global_id"]) if event == "started" else 0  # Publish or clear exact active identity atomically with lifecycle counters
     return read_feature_process_status(status_state)  # Return current authoritative snapshot after releasing transition lock
 
 
@@ -14622,6 +14625,7 @@ def reconcile_feature_process_status_after_failure(status_state: dict, failing_f
     with status_state["lock"]:  # Reconcile only after coordinator joined every worker
         for feature_name, feature_values in status_state["features"].items():  # Resolve any task interrupted before its terminal transition
             interrupted = int(feature_values[FEATURE_PROCESS_STATUS_INDEX["running"]])  # Count unfinished active tasks for this feature
+            status_state["running_global_ids"][feature_name].value = 0  # Clear every reconciled active identity after all workers exit
             if interrupted == 0:  # Skip features already terminally accounted
                 continue  # Move to the next feature set
             feature_values[FEATURE_PROCESS_STATUS_INDEX["running"]] = 0  # Clear terminated active work
@@ -14917,11 +14921,20 @@ def run_feature_set_process_worker(process_payload: dict, status_queue: Any, sta
     :return: None.
     """
 
-    resource_state = {"original_resources": None, "ratio_data": None, "active_ratio": None, "cache_dict": {}}  # Track bounded worker resources and the latest cache snapshot
-    active_task = None  # Track exact task identity for failure and abrupt-death reporting
+    resource_state: dict[str, Any] = {"original_resources": None, "ratio_data": None, "active_ratio": None, "cache_dict": {}}  # Track bounded worker resources and the latest cache snapshot
+    active_task: Optional[dict] = None  # Track exact task identity for failure and abrupt-death reporting
+    capacity_gate: Any = process_payload.get("capacity_gate")  # Resolve the coordinator-owned matrix-capacity admission gate
+    capacity_acquired = False  # Track admission ownership for exception-safe release
     try:  # Surface every child failure through both status queue and nonzero exit code
         initialize_feature_process_logger(process_payload["config"])  # Initialize append-only process-safe child logging after spawn
         task_queue = list(process_payload["tasks"])  # Copy only matrix-free descriptors into feature-local sequential order
+        if task_queue and capacity_gate is not None:  # Gate only workers that still have matrix-heavy pending work
+            print(f"[RESOURCE CAPACITY] Feature Set={process_payload['feature_set']} | Worker Index={process_payload['worker_index']} | PID={os.getpid()} | State=Waiting")  # Log visible capacity waiting without changing configured worker creation
+            sys.stdout.flush()  # Flush the waiting decision for detached execution visibility
+            capacity_gate.acquire()  # Wait for one coordinator-established safe matrix admission slot
+            capacity_acquired = True  # Record ownership immediately after successful admission
+            print(f"[RESOURCE CAPACITY] Feature Set={process_payload['feature_set']} | Worker Index={process_payload['worker_index']} | PID={os.getpid()} | State=Admitted")  # Log the exact worker admitted to matrix preparation and evaluation
+            sys.stdout.flush()  # Flush admission evidence before any large allocation path
         model_maps = build_feature_process_model_maps(process_payload["config"], process_payload["optimized_params"]) if task_queue else {}  # Rebuild estimator prototypes only when this cache-first queue contains pending work
         source_descriptor = (process_payload.get("shared_resources") or {}).get("X_train_scaled")  # Read shared source shape and dtype metadata without reopening data
         matrix_resource = source_descriptor["path"] if source_descriptor else "artifact-backed"  # Report exact backing identity without opening matrix data
@@ -14956,6 +14969,9 @@ def run_feature_set_process_worker(process_payload: dict, status_queue: Any, sta
     finally:  # Release every process-owned resource after success, failure, or termination handling
         cleanup_feature_process_original_resources(resource_state["original_resources"])  # Close any remaining original memmaps and owned feature files
         cleanup_feature_process_ratio_data(resource_state["ratio_data"])  # Release any remaining current-ratio augmented resources
+        if capacity_acquired:  # Release only a capacity slot owned by this worker
+            capacity_gate.release()  # Admit the next configured feature worker after complete matrix cleanup
+            capacity_acquired = False  # Clear local ownership before logger shutdown
         try:  # Flush and close only this child process's logger handle
             if logger is not None:  # Close only an initialized child logger
                 logger.flush()  # Flush final worker records
@@ -15024,6 +15040,51 @@ def log_feature_process_tree(process_records: List[dict]) -> dict:  # Log featur
     return {"feature_workers": feature_workers, "auxiliary_processes": auxiliary_processes}  # Return small deterministic process-tree evidence
 
 
+def resolve_feature_process_worker_capacity(pending_by_feature: dict, process_payload: dict) -> dict:  # Resolve safe simultaneous matrix-heavy worker capacity
+    """
+    Resolve safe simultaneous feature-process capacity from pending matrix dimensions and available memory.
+
+    :param pending_by_feature: Cache-filtered task queues partitioned by feature set.
+    :param process_payload: Small shared process payload with feature and matrix metadata.
+    :return: Capacity decision and per-feature peak byte estimates.
+    """
+
+    pending_features = [feature_name for feature_name, queue_tasks in pending_by_feature.items() if queue_tasks]  # Count only workers that can enter matrix-heavy execution
+    memory_snapshot = psutil.virtual_memory()  # Read one deterministic coordinator memory snapshot after shared-resource creation
+    total_bytes = max(0, int(getattr(memory_snapshot, "total", 0)))  # Normalize total physical memory bytes
+    available_bytes = max(0, int(getattr(memory_snapshot, "available", 0)))  # Normalize currently available memory bytes
+    threshold_value = get_memory_watcher_config(process_payload.get("config")).get("system_memory_threshold_percent", 90)  # Read the existing operator-visible memory-pressure threshold
+    threshold_percent = float(90 if threshold_value is None else threshold_value)  # Preserve the watcher default when configuration explicitly supplies no threshold
+    threshold_percent = min(100.0, max(0.0, threshold_percent))  # Bound malformed threshold values without adding another configuration surface
+    reserve_bytes = int(total_bytes * (100.0 - threshold_percent) / 100.0)  # Preserve memory below the configured pressure threshold
+    safe_available_bytes = max(0, available_bytes - reserve_bytes)  # Derive incremental capacity before the configured pressure boundary
+    shared_resources = process_payload.get("shared_resources") or {}  # Read coordinator-owned source descriptors without opening any matrix
+    train_descriptor = shared_resources.get("X_train_scaled") or {}  # Read training shape and dtype metadata when original work remains
+    test_descriptor = shared_resources.get("X_test_scaled") or {}  # Read testing shape metadata when original work remains
+    source_dtype = np.dtype(train_descriptor.get("dtype", "float64"))  # Match scaled feature dtype or its established float64 fallback
+    train_rows = int((train_descriptor.get("shape") or [process_payload.get("expected_train_count", 0)])[0])  # Resolve exact original training cardinality from metadata
+    test_rows = int((test_descriptor.get("shape") or [max(0, int(process_payload.get("original_sample_count", 0)) - train_rows)])[0])  # Resolve exact original testing cardinality without opening data
+    original_rows = int(process_payload.get("original_sample_count", train_rows + test_rows))  # Preserve the cleaned original population used for ratio sampling
+    input_feature_count = len(process_payload.get("input_feature_names", []))  # Resolve full scaled width needed by every augmented transformation
+    feature_metadata = process_payload.get("feature_metadata_by_name", {})  # Read feature-local output widths from small descriptors
+    estimated_bytes_by_feature = {}  # Accumulate conservative matrix peaks for each pending worker
+
+    for feature_name in pending_features:  # Estimate only workers that can allocate evaluation matrices
+        feature_count = int(feature_metadata.get(feature_name, {}).get("feature_count", 0))  # Resolve this worker's exact model input width
+        original_matrix_bytes = (train_rows + test_rows) * feature_count * source_dtype.itemsize  # Count the complete original feature matrix touched by fitting and prediction
+        if feature_name == "PCA Components":  # Include PCA dense output while its worker-owned memmap is persisted
+            original_matrix_bytes *= 2  # Reserve simultaneous transformed output and backing-write residency conservatively
+        pending_ratios = [float(task["augmentation_ratio"]) for task in pending_by_feature[feature_name] if task.get("augmentation_ratio") is not None]  # Read only cache-miss augmented ratios in this feature queue
+        maximum_ratio_rows = max((max(1, int(round(ratio * original_rows))) for ratio in pending_ratios), default=0)  # Mirror deterministic augmentation sample sizing without loading rows
+        augmented_matrix_bytes = maximum_ratio_rows * (input_feature_count + feature_count) * source_dtype.itemsize  # Reserve full scaling plus feature-specific transformation or selection
+        estimated_bytes_by_feature[feature_name] = max(original_matrix_bytes, augmented_matrix_bytes)  # Retain this worker's largest pending matrix phase
+
+    largest_worker_bytes = max(estimated_bytes_by_feature.values(), default=0)  # Resolve a conservative uniform admission weight
+    pending_worker_count = len(pending_features)  # Count configured workers with uncached tasks
+    admitted_worker_count = pending_worker_count if largest_worker_bytes == 0 else max(1, min(pending_worker_count, safe_available_bytes // largest_worker_bytes))  # Admit all metadata-only work or a capacity-bounded positive worker count
+    return {"pending_worker_count": pending_worker_count, "admitted_worker_count": int(admitted_worker_count), "total_bytes": total_bytes, "available_bytes": available_bytes, "reserve_bytes": reserve_bytes, "safe_available_bytes": safe_available_bytes, "largest_worker_bytes": largest_worker_bytes, "estimated_bytes_by_feature": estimated_bytes_by_feature}  # Return complete deterministic scheduling evidence
+
+
 def execute_feature_set_processes(pending_by_feature: dict, process_payload: dict, tasks: List[dict], cached_results: dict, process_context: Any = None, process_target: Any = None) -> dict:  # Start, monitor, join, and close one persistent process per active feature set
     """
     Execute persistent feature-set child processes through an explicit spawn context.
@@ -15054,6 +15115,12 @@ def execute_feature_set_processes(pending_by_feature: dict, process_payload: dic
         send_feature_process_result_notification(task, build_feature_process_notification_result(cached_results[task["global_id"]]), "cached", len(tasks), notified_global_ids)  # Preserve established sequential cache notification semantics without a Finished message
     initial_snapshot = read_feature_process_status(status_state)  # Read exact startup state before any child transition
     print(f"[PLAN] Global={initial_snapshot['global']} | Features={initial_snapshot['features']}")  # Log complete dynamic cached, pending, and feature-local totals
+    capacity_decision = resolve_feature_process_worker_capacity(pending_by_feature, process_payload)  # Resolve matrix admission after cache classification and shared-resource creation
+    admitted_worker_count = capacity_decision["admitted_worker_count"]  # Read the deterministic simultaneous heavy-worker limit
+    pending_worker_count = capacity_decision["pending_worker_count"]  # Read the number of configured workers with pending work
+    capacity_gate = context.BoundedSemaphore(admitted_worker_count) if 0 < admitted_worker_count < pending_worker_count else None  # Create one spawn-safe gate only when resource capacity reduces active concurrency
+    capacity_action = "Gated" if capacity_gate is not None else "Unchanged"  # Distinguish an enforced scheduling decision from full admission
+    print(f"[RESOURCE CAPACITY] Decision={capacity_action} | Pending Workers={pending_worker_count} | Simultaneous Workers={admitted_worker_count} | Available Bytes={capacity_decision['available_bytes']} | Reserved Bytes={capacity_decision['reserve_bytes']} | Safe Available Bytes={capacity_decision['safe_available_bytes']} | Largest Estimated Worker Bytes={capacity_decision['largest_worker_bytes']} | Estimated Bytes={capacity_decision['estimated_bytes_by_feature']}")  # Log exact capacity evidence instead of silently reducing concurrency
     status_queue = context.Queue()  # Create one small lifecycle channel for every persistent worker
     process_records = []  # Track every child for deterministic termination, joining, and closing
     failure = None  # Preserve the first surfaced child failure and traceback
@@ -15069,6 +15136,7 @@ def execute_feature_set_processes(pending_by_feature: dict, process_payload: dic
             child_payload["tasks"] = list(pending_by_feature[feature_set_name])  # Assign only matrix-free feature-local pending descriptors
             child_payload["feature_metadata"] = process_payload["feature_metadata_by_name"][feature_set_name]  # Assign only this feature set's small names and indices
             child_payload["notification_acknowledgement"] = notification_acknowledgements[feature_set_name]  # Pass one small feature-local synchronization value without Telegram credentials or result data
+            child_payload["capacity_gate"] = capacity_gate  # Share only the coordinator-owned admission semaphore with every configured worker
             validate_feature_process_payload(child_payload)  # Prove no matrices, labels, DataFrames, or estimators will be pickled into the child
             worker_key = resolve_feature_set_worker_key(feature_set_name)  # Resolve configured role identity once
             process = context.Process(target=worker_target, args=(child_payload, status_queue, status_state), name=f"Stacking-{worker_key.upper()}-1")  # Build one long-lived OS process for complete feature queue
@@ -15088,7 +15156,8 @@ def execute_feature_set_processes(pending_by_feature: dict, process_payload: dic
                     dead_poll_counts[feature_set_name] = dead_poll_counts.get(feature_set_name, 0) + 1  # Allow queue feeder delivery briefly after process exit
                     if dead_poll_counts[feature_set_name] >= 4:  # Surface an unreported child exit after one second of bounded polling
                         running_task = running_task_by_feature.get(feature_set_name, {})  # Recover last reported current task when available
-                        failure = {"feature_set": feature_set_name, "global_id": running_task.get("global_id"), "error": f"Child exited without terminal status, exitcode={process.exitcode}", "traceback": ""}  # Preserve deterministic child-death evidence
+                        shared_global_id = int(status_state["running_global_ids"][feature_set_name].value)  # Recover active identity even when queue feeder transport was interrupted
+                        failure = {"feature_set": feature_set_name, "global_id": running_task.get("global_id") or shared_global_id or None, "error": f"Child exited without terminal status, exitcode={process.exitcode}", "traceback": ""}  # Preserve deterministic child-death evidence
                         break  # Stop inspecting after the first failure
                 continue  # Resume status monitoring or leave after failure assignment
             status_type = status.get("status")  # Resolve the child lifecycle record type
