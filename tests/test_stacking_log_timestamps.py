@@ -39,6 +39,19 @@ def run_timestamp_feature_worker(logs_dir, feature_set, release_event):  # Emit 
 class StackingLogTimestampTests(unittest.TestCase):  # Verify centralized Brazilian timestamps without scientific changes
     """Verify formatting, runtime coverage, concurrency, multiline output, and Telegram isolation."""
 
+    def test_clean_coordinator_cannot_overwrite_appended_worker_record(self):  # Reproduce stale coordinator offsets against one shared log
+        with tempfile.TemporaryDirectory() as temporary_directory:  # Isolate the shared append destination
+            log_path = Path(temporary_directory) / "shared.log"  # Resolve one coordinator and worker log path
+            coordinator = Logger(str(log_path), clean=True)  # Open the long-lived coordinator descriptor first
+            coordinator.write("coordinator-start")  # Advance the coordinator file position before worker output
+            worker = Logger(str(log_path), clean=False)  # Open the worker descriptor against the same file
+            worker.write("worker-start")  # Append one record while the coordinator remains open
+            worker.close()  # Close the simulated worker descriptor before coordinator resumes
+            coordinator.write("coordinator-finish")  # Append after worker output without overwriting it
+            coordinator.close()  # Flush and close the coordinator descriptor before reading
+            lines = log_path.read_text(encoding="utf-8").splitlines()  # Read exact durable record order
+        self.assertEqual(lines, ["coordinator-start", "worker-start", "coordinator-finish"])  # Preserve every shared record exactly once
+
     def test_exact_timezone_conversion_padding_multiline_and_duplicate_prevention(self):  # Verify direct centralized formatting semantics
         observed_zones = []  # Capture the explicit zone passed at each emission
 
