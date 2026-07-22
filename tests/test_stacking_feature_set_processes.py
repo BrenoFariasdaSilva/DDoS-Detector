@@ -582,6 +582,8 @@ class FeatureSetProcessTests(unittest.TestCase):  # Group persistent feature-set
         with mock.patch.object(stacking, "build_feature_process_artifact_context", return_value={}), mock.patch.object(stacking, "build_filename_safe_dataset_identity", return_value="dataset"), mock.patch.object(stacking, "load_existing_model_if_available", return_value=(artifact_bundle, None)), mock.patch.object(stacking, "evaluate_individual_classifier", return_value={"Accuracy": 1.0}) as evaluate_mock, mock.patch.object(stacking, "build_classifier_result_entry", return_value={"persisted": True}), mock.patch.object(stacking, "persist_cache_result_entry"), mock.patch.object(stacking, "log_feature_process_combination"):  # Isolate scientific evaluator input identity
             stacking.evaluate_feature_process_augmented_task(task, payload, ratio_data, object(), {}, {})  # Reuse existing augmented evaluator for Full
         self.assertIs(evaluate_mock.call_args.args[4], scaled)  # Pass scaler output directly without an identical all-column matrix copy
+        self.assertFalse(evaluate_mock.call_args.kwargs["hyperparameters_enabled"])  # Preserve serialized default hyperparameter identity at evaluator boundary.
+        self.assertEqual(evaluate_mock.call_args.kwargs["augmentation_ratio"], 0.5)  # Preserve serialized augmentation ratio at evaluator boundary.
 
     def test_augmented_task_accepts_shared_encoded_labels_without_local_frame(self):  # Verify shared ratio resources flow through the generic task path
         """
