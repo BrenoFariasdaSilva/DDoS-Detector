@@ -287,6 +287,25 @@ class TrainingProgressTests(unittest.TestCase):  # Group deterministic training 
         self.assertIn("Immediate fixture failure", failure_output.getvalue())  # Require the existing failure log immediately.
         self.assertNotIn("Status: Active", failure_output.getvalue())  # Avoid an intermediate heartbeat before a short failure.
 
+    def test_evaluation_combination_metadata_is_exact_in_phase_and_progress_records(self):  # Verify authoritative metadata formatting across all planned modes
+        """Verify phase and progress records identify every required evaluation-combination mode."""
+
+        combinations = [(False, None, "Default Hyperparameters", "Off"), (True, None, "Optimized Hyperparameters", "Off"), (False, 0.25, "Default Hyperparameters", "25%"), (True, 0.50, "Optimized Hyperparameters", "50%"), (False, 0.75, "Default Hyperparameters", "75%"), (True, 1.00, "Optimized Hyperparameters", "100%")]  # Cover every required hyperparameter and augmentation label.
+        for hyperparameters_enabled, augmentation_ratio, hyperparameter_label, augmentation_label in combinations:  # Verify each authoritative combination independently.
+            with self.subTest(hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio):  # Isolate exact combination-format failures.
+                expected_fields = f"Hyperparameters: {hyperparameter_label} | Data Augmentation: {augmentation_label}"  # Build exact required field sequence.
+                phase_output = io.StringIO()  # Capture one lifecycle record for current combination.
+                with contextlib.redirect_stdout(phase_output):  # Route phase output into isolated stream.
+                    stacking.log_training_phase("GA Features", "XGBoost", "Training", "Started", hyperparameters_enabled, augmentation_ratio)  # Emit phase record from authoritative combination values.
+                self.assertIn(expected_fields, phase_output.getvalue())  # Require exact lifecycle metadata fields.
+                progress_output = io.StringIO()  # Capture one callback progress record for current combination.
+                progress = training_progress.TrainingProgress("GA Features", "XGBoost", stacking.calculate_execution_time, output_stream=progress_output, total_units=1, unit_label="Round", report_interval_seconds=60.0, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio)  # Build callback reporter from same authoritative values.
+                with mock.patch.object(training_progress.time, "monotonic", side_effect=[0.0, 1.0]):  # Control start and final callback timestamps.
+                    with progress:  # Activate current combination progress scope.
+                        progress.report_unit(1)  # Emit immediate final callback record.
+                self.assertIn(expected_fields, progress_output.getvalue())  # Require exact callback metadata fields.
+        self.assertEqual(training_progress.format_training_combination_fields(None, None), "")  # Keep non-combination AutoML and standalone records unlabeled.
+
     def test_xgboost_public_rounds_preserve_results_callbacks_and_identity(self):  # Verify XGBoost genuine progress
         """
         Verify XGBoost rounds, results, serialization, callback preservation, and identity restoration.
