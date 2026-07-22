@@ -84,8 +84,10 @@ class Logger:
         if parent and not os.path.exists(parent):  # Create parent directories if needed
             os.makedirs(parent, exist_ok=True)  # Safe creation
 
-        mode = "w" if clean else "a"  # Choose file mode based on 'clean' flag
-        self.logfile = open(logfile_path, mode, encoding="utf-8")  # Open log file
+        self.logfile = open(logfile_path, "a", encoding="utf-8")  # Keep every process descriptor append-only so stale offsets cannot overwrite records
+        if clean:  # Reset prior run contents before concurrent writers exist
+            self.logfile.seek(0)  # Position the initial coordinator descriptor for truncation
+            self.logfile.truncate()  # Clear prior run contents while retaining append-only writes
         self.is_tty = sys.stdout.isatty()  # Verify if stdout is a TTY
         self.timestamp_zone = ZoneInfo(str(timestamp_timezone)) if timestamp_timezone is not None else None  # Resolve the explicit timezone once per logger instance
         self.timestamp_now = timestamp_now if timestamp_now is not None else datetime.now  # Use an injectable timezone-aware emission clock
