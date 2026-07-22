@@ -65,6 +65,7 @@ import ast  # For safely evaluating Python literals
 import atexit  # For playing a sound when the program finishes
 import concurrent.futures  # For parallel execution
 from contextlib import contextmanager  # For scoped cache file locking across threads and processes
+import ctypes  # For configuring Linux feature workers to terminate with their coordinator
 import dataframe_image as dfi  # For exporting DataFrame styled tables as PNG images
 import datetime  # For getting the current date and time
 import fcntl  # For coordinating stacking artifact loads and atomic replacements on Linux
@@ -90,6 +91,7 @@ import queue as queue_module  # For queue timeout exceptions from explainability
 import re  # For regular expressions
 import seaborn as sns  # For generating feature usage heatmaps
 import shutil  # For removing temporary feature-source spill directories
+import signal  # For selecting the feature-worker parent-death signal
 import shap  # For SHAP explainability analysis
 import subprocess  # For running small system commands (sysctl/wmic)
 import sys  # For system-specific parameters and functions
@@ -14707,6 +14709,27 @@ def initialize_feature_process_logger(config: dict) -> None:  # Initialize one s
     sys.stderr = logger  # Route child stderr through the same process-safe shared logger
 
 
+def configure_feature_process_parent_death(coordinator_pid: int) -> None:  # Terminate Linux feature workers when their coordinator exits
+    """
+    Configure one Linux feature worker to terminate when its coordinator exits.
+
+    :param coordinator_pid: Expected coordinator process identifier.
+    :return: None.
+    """
+
+    if sys.platform != "linux":  # Preserve existing spawn behavior on platforms without Linux prctl
+        return  # Leave non-Linux lifecycle ownership with the coordinator
+    libc = ctypes.CDLL(None, use_errno=True)  # Load the current process C runtime without another dependency
+    prctl = libc.prctl  # Resolve the Linux process-control function
+    prctl.argtypes = [ctypes.c_int, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong]  # Declare the fixed Linux prctl argument layout
+    prctl.restype = ctypes.c_int  # Declare the integer Linux prctl result
+    if prctl(1, signal.SIGTERM, 0, 0, 0) != 0:  # Arm PR_SET_PDEATHSIG before opening shared files or locks
+        error_number = ctypes.get_errno()  # Read the preserved C error number immediately
+        raise OSError(error_number, os.strerror(error_number))  # Surface parent-death setup failure to the coordinator
+    if os.getppid() != int(coordinator_pid):  # Detect coordinator death during spawn before prctl became active
+        raise RuntimeError(f"Feature worker coordinator exited before startup: {coordinator_pid}")  # Prevent an already orphaned worker from entering the task queue
+
+
 def log_feature_process_combination(task: dict, status_state: dict, message: str) -> None:  # Emit one complete combination lifecycle record
     """
     Emit one feature-process combination lifecycle record.
@@ -14835,12 +14858,12 @@ def acquire_feature_process_combination_lock(task: dict, process_payload: dict) 
     return acquire_stacking_artifact_lock(lock_path, exclusive=True)  # Hold the combination reservation through final cache verification and durable persistence
 
 
-def publish_feature_process_result_event(task: dict, process_payload: dict, result_entry: dict, event: str, status_queue: Any) -> None:  # Publish one persisted result and await coordinator notification handling
+def publish_feature_process_result_event(task: dict, process_payload: dict, result_entry: dict, event: str, status_queue: Any) -> None:  # Publish one persisted result without blocking feature-queue progress
     """
-    Publish one small terminal result event and await its coordinator acknowledgement.
+    Publish one small terminal result event for coordinator-owned notification handling.
 
     :param task: Authoritative feature-process task descriptor.
-    :param process_payload: Small worker payload containing optional acknowledgement state.
+    :param process_payload: Small worker payload containing the active feature-set identity.
     :param result_entry: Persisted result row for this terminal event.
     :param event: Computed or cached terminal event.
     :param status_queue: Multiprocessing lifecycle queue.
@@ -14849,11 +14872,6 @@ def publish_feature_process_result_event(task: dict, process_payload: dict, resu
 
     notification_result = build_feature_process_notification_result(result_entry)  # Copy only scalar persisted fields needed by Telegram
     status_queue.put({"status": "progress", "feature_set": process_payload["feature_set"], "global_id": task["global_id"], "event": event, "notification_result": notification_result, "pid": os.getpid()})  # Publish completion only after persistence and terminal status transition
-    acknowledgement = process_payload.get("notification_acknowledgement")  # Resolve this feature worker's coordinator acknowledgement value
-    if acknowledgement is None:  # Preserve focused direct callers without a coordinator handshake
-        return  # Continue immediately when no production acknowledgement exists
-    while int(acknowledgement.value) < int(task["global_id"]):  # Keep this combination before cleanup until coordinator handles its exact global identity
-        time.sleep(0.01)  # Poll one small shared integer without another timing process or thread
 
 
 def process_feature_process_task(task: dict, process_payload: dict, model_maps: dict, resource_state: dict, status_queue: Any, status_state: dict) -> None:  # Process one matrix-free task under a complete combination reservation
@@ -14928,7 +14946,7 @@ def process_feature_process_task(task: dict, process_payload: dict, model_maps: 
             result_entry = evaluate_feature_process_augmented_task(task, process_payload, resource_state["ratio_data"], model_prototype, resource_state["cache_dict"], status_state)  # Predict, calculate metrics, and persist through existing logic
         transition_feature_process_status(status_state, task, "computed")  # Count durably persisted successful computation exactly once before noncritical cleanup
         task_finished = True  # Preserve completed status if later cleanup or logging fails
-        publish_feature_process_result_event(task, process_payload, result_entry, "computed", status_queue)  # Await one coordinator-owned notification attempt before combination cleanup
+        publish_feature_process_result_event(task, process_payload, result_entry, "computed", status_queue)  # Queue one coordinator-owned notification attempt before combination cleanup
         log_feature_process_combination(task, status_state, "Combination cleanup started")  # Announce combination-specific release after durable completion
         del result_entry  # Drop the completed result record after durable cache persistence
         gc.collect()  # Reclaim estimator, prediction, probability, metric, and temporary array memory
@@ -14959,6 +14977,7 @@ def run_feature_set_process_worker(process_payload: dict, status_queue: Any, sta
     capacity_gate: Any = process_payload.get("capacity_gate")  # Resolve the coordinator-owned matrix-capacity admission gate
     capacity_acquired = False  # Track admission ownership for exception-safe release
     try:  # Surface every child failure through both status queue and nonzero exit code
+        configure_feature_process_parent_death(process_payload["coordinator_pid"])  # Prevent spawned work from surviving a killed detached coordinator
         initialize_feature_process_logger(process_payload["config"])  # Initialize append-only process-safe child logging after spawn
         task_queue = list(process_payload["tasks"])  # Copy only matrix-free descriptors into feature-local sequential order
         model_maps = build_feature_process_model_maps(process_payload["config"], process_payload["optimized_params"]) if task_queue else {}  # Rebuild estimator prototypes only when this cache-first queue contains pending work
@@ -15186,6 +15205,7 @@ def execute_feature_set_processes(pending_by_feature: dict, process_payload: dic
             child_payload["capacity_gate"] = capacity_gate  # Share only the coordinator-owned admission semaphore with every configured worker
             child_payload["phase_order"] = phase_order  # Give every worker identical canonical global phase order.
             child_payload["phase_barrier"] = phase_barrier  # Prevent any worker from entering next ratio before all current-ratio work and cleanup finish.
+            child_payload["coordinator_pid"] = os.getpid()  # Give the spawned worker exact parent identity for orphan prevention
             validate_feature_process_payload(child_payload)  # Prove no matrices, labels, DataFrames, or estimators will be pickled into the child
             worker_key = resolve_feature_set_worker_key(feature_set_name)  # Resolve configured role identity once
             process = context.Process(target=worker_target, args=(child_payload, status_queue, status_state), name=f"Stacking-{worker_key.upper()}-1")  # Build one long-lived OS process for complete feature queue
