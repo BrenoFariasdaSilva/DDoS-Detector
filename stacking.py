@@ -13693,9 +13693,34 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
         all_comparison_results = []  # Accumulate augmentation comparisons across both HP modes
 
         try:  # Ensure the shared progress bar is closed after the complete grid
-            for hyperparameters_enabled, base_models, hp_params_map in hp_runs:  # Finish the default grid before beginning optimized runs
+            results_original_by_hp = {}  # Retain each baseline mapping for later ratio comparisons.
+            ratio_results_by_hp = {enabled: {} for enabled, _, _ in hp_runs}  # Retain ratio mappings by hyperparameter mode.
+            for hyperparameters_enabled, augmentation_ratio in dict.fromkeys((item[1], item[2]) for item in evaluation_plan):  # Execute slices in canonical plan order.
+                _, base_models, hp_params_map = next(run for run in hp_runs if run[0] == hyperparameters_enabled)  # Resolve models for current canonical slice.
                 hp_label = "Optimized Hyperparameters" if hyperparameters_enabled else "Default Hyperparameters"  # Build active HP label
                 send_telegram_message(TELEGRAM_BOT, [f"[COMBINED_FILES] Starting {hp_label} grid | Dataset: {dataset_name}"])  # Announce active HP mode
+                if augmentation_ratio is not None:  # Defer augmented processing until both original hyperparameter slices finish.
+                    combined_augmented_df, _, _ = combine_files_for_combined_evaluation(augmentation_file_paths, config=config)  # Load augmented contents only for current ratio slice.
+                    if combined_augmented_df is None:  # Skip current ratio when augmented recombination fails.
+                        continue  # Advance to next canonical slice.
+                    df_sampled = sample_augmented_by_ratio(combined_augmented_df, original_sample_count, augmentation_ratio)  # Sample current configured ratio deterministically.
+                    del combined_augmented_df  # Release full augmented contents before evaluation.
+                    gc.collect()  # Reclaim full augmented contents while retaining current sample.
+                    if df_sampled is None or df_sampled.empty:  # Skip unusable current-ratio samples.
+                        continue  # Advance to next canonical slice.
+                    ratio_original_df, _, _ = combine_files_for_combined_evaluation(original_files_list, config=config)  # Rebuild original training source for current ratio.
+                    if ratio_original_df is None:  # Skip ratio when original reconstruction fails.
+                        del df_sampled  # Release current ratio sample.
+                        gc.collect()  # Reclaim skipped ratio data.
+                        continue  # Advance to next canonical slice.
+                    results_ratio = evaluate_on_dataset(combined_dataset_reference, ratio_original_df, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, base_models, data_source_label=f"Augmented@{int(augmentation_ratio * 100)}%_CombinedFiles", hyperparams_map=hp_params_map, experiment_id=generate_experiment_id(combined_dataset_reference, "combined_files_original_training_augmented_testing", augmentation_ratio), experiment_mode="original_training_augmented_testing", augmentation_ratio=augmentation_ratio, execution_mode_str="combined_files", attack_types_combined=attack_types_list, df_augmented_for_testing=df_sampled, config=config, hyperparameters_enabled=hyperparameters_enabled, grid_progress=grid_progress, source_files=original_files_list)  # Evaluate current augmented slice in canonical order.
+                    ratio_results_list = list(results_ratio.values())  # Convert current ratio results for annotation and export.
+                    annotate_results_with_combination_flags(ratio_results_list, methods_cfg.get("feature_selection", True), hyperparameters_enabled, True)  # Mark active grid dimensions.
+                    all_grid_results.extend(ratio_results_list)  # Preserve canonical augmented result order.
+                    ratio_results_by_hp[hyperparameters_enabled][augmentation_ratio] = results_ratio  # Retain ratio mapping for matching baseline comparison.
+                    del ratio_original_df, df_sampled  # Release current slice data after evaluation.
+                    gc.collect()  # Reclaim current slice memory.
+                    continue  # Advance to next canonical slice.
                 if combined_files_df_holder:  # Use the initially combined dataframe for the first original-only slice.
                     original_df_for_run = combined_files_df_holder.pop()  # Consume the initially combined dataframe exactly once.
                 else:  # Rebuild the original combined dataframe only for later HP slices that need it.
@@ -13718,51 +13743,15 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
                 original_results_list = list(results_original.values())  # Convert baseline results for annotation and export
                 annotate_results_with_combination_flags(original_results_list, methods_cfg.get("feature_selection", True), hyperparameters_enabled, False)  # Mark active grid dimensions
                 all_grid_results.extend(original_results_list)  # Preserve baseline rows beside later grid slices
-
-                ratio_results = {}  # Collect this HP mode's ratio results for comparison reporting
-                for ratio in augmentation_ratios:  # Evaluate each configured augmentation ratio separately
-                    combined_augmented_df, _, _ = combine_files_for_combined_evaluation(augmentation_file_paths, config=config)  # Combine augmented testing files after mandatory zero-variance removal.
-                    if combined_augmented_df is None:  # Skip this ratio when augmented recombination fails.
-                        print(f"{BackgroundColors.YELLOW}Failed to combine augmented files for combined files evaluation ratio {ratio}. Skipping augmentation ratio for {hp_label}.{Style.RESET_ALL}")  # Report skipped augmentation ratio.
-                        continue  # Move to the next configured ratio.
-                    df_sampled = sample_augmented_by_ratio(combined_augmented_df, original_sample_count, ratio)  # Sample augmented rows using the preserved original row count.
-                    del combined_augmented_df  # Release the full augmented combined dataframe before original data is rebuilt.
-                    gc.collect()  # Reclaim augmented source memory before ratio evaluation.
-                    if df_sampled is None or df_sampled.empty:  # Skip unusable ratio samples
-                        if df_sampled is not None:  # Release an empty sampled dataframe before continuing.
-                            del df_sampled  # Release unusable sampled dataframe.
-                            gc.collect()  # Reclaim unusable sampled dataframe memory.
-                        continue  # Move to the next configured ratio
-                    ratio_original_df, _, _ = combine_files_for_combined_evaluation(original_files_list, config=config)  # Rebuild original combined dataframe after augmented source release.
-                    if ratio_original_df is None:  # Skip this ratio when original recombination fails.
-                        print(f"{BackgroundColors.YELLOW}Failed to rebuild original combined files dataframe for ratio {ratio}. Skipping augmentation ratio for {hp_label}.{Style.RESET_ALL}")  # Report skipped ratio due to missing original data.
-                        del df_sampled  # Release sampled augmented rows when original data is unavailable.
-                        gc.collect()  # Reclaim sampled augmented rows before continuing.
-                        continue  # Move to the next configured ratio.
-                    ratio_original_df_holder = [ratio_original_df]  # Transfer ratio original dataframe into evaluation without retaining a caller reference.
-                    df_sampled_holder = [df_sampled]  # Transfer sampled augmented dataframe into evaluation without retaining a caller reference.
-                    del ratio_original_df, df_sampled  # Release direct ratio dataframe references before model evaluation.
-                    gc.collect()  # Reclaim direct ratio dataframe references before fitting starts.
-                    results_ratio = evaluate_on_dataset(
-                        combined_dataset_reference, ratio_original_df_holder.pop(), feature_names, ga_selected_features, pca_n_components,  # Use directory identity for augmented combined evaluation.
-                        rfe_selected_features, base_models, data_source_label=f"Augmented@{int(ratio * 100)}%_CombinedFiles", hyperparams_map=hp_params_map,
-                        experiment_id=generate_experiment_id(combined_dataset_reference, "combined_files_original_training_augmented_testing", ratio), experiment_mode="original_training_augmented_testing", augmentation_ratio=ratio,  # Build augmented-testing experiment identity from combined directory.
-                        execution_mode_str="combined_files", attack_types_combined=attack_types_list, df_augmented_for_testing=df_sampled_holder.pop(),
-                        config=config, hyperparameters_enabled=hyperparameters_enabled, grid_progress=grid_progress,
-                        source_files=original_files_list,  # Preserve only original training-source provenance in model identity.
-                    )  # Evaluate persisted models on this augmented-only test ratio.
-                    del ratio_original_df_holder, df_sampled_holder  # Release empty transfer holders after ratio evaluation returns.
-                    gc.collect()  # Reclaim released ratio holder references before result aggregation.
-                    ratio_results_list = list(results_ratio.values())  # Convert ratio results for annotation and export
-                    annotate_results_with_combination_flags(ratio_results_list, methods_cfg.get("feature_selection", True), hyperparameters_enabled, True)  # Mark active grid dimensions
-                    all_grid_results.extend(ratio_results_list)  # Preserve ratio rows in the consolidated export
-                    ratio_results[ratio] = results_ratio  # Retain ratio result mapping for comparisons
-
-                if ratio_results:  # Preserve existing augmentation comparison output for this HP mode
-                    comparison_results = generate_ratio_comparison_report(results_original, ratio_results, config=config)  # Compare this HP mode's ratios against its matching baseline
-                    for comparison_row in comparison_results:  # Annotate comparison rows so both HP modes remain distinguishable
-                        comparison_row["hyperparameter_mode"] = hp_label  # Store the active HP mode in the comparison export
-                    all_comparison_results.extend(comparison_results)  # Preserve comparisons until the complete grid is ready to save
+                results_original_by_hp[hyperparameters_enabled] = results_original  # Retain matching baseline for comparison generation.
+            for hyperparameters_enabled, _, _ in hp_runs:  # Generate comparisons in established hyperparameter order.
+                ratio_results = ratio_results_by_hp[hyperparameters_enabled]  # Resolve current mode ratio results.
+                if ratio_results and hyperparameters_enabled in results_original_by_hp:  # Compare only complete baseline and ratio groups.
+                    comparison_results = generate_ratio_comparison_report(results_original_by_hp[hyperparameters_enabled], ratio_results, config=config)  # Compare current ratios against matching baseline.
+                    hp_label = "Optimized Hyperparameters" if hyperparameters_enabled else "Default Hyperparameters"  # Resolve comparison hyperparameter label.
+                    for comparison_row in comparison_results:  # Annotate comparison rows by hyperparameter mode.
+                        comparison_row["hyperparameter_mode"] = hp_label  # Store active hyperparameter mode.
+                    all_comparison_results.extend(comparison_results)  # Preserve comparison output order.
         finally:  # Close shared grid progress even if a classifier evaluation fails
             grid_progress["progress_bar"].close()  # Close the one full-grid progress bar
 
@@ -13999,13 +13988,15 @@ def build_evaluation_plan(hp_runs: List[Tuple[bool, dict, dict]], augmentation_m
     :return: Ordered tuples of feature set, hyperparameter mode, augmentation ratio, and classifier.
     """
 
-    evaluation_plan = []  # Accumulate combinations in the existing nested-loop execution order
-    for hyperparameters_enabled, models_map, _ in hp_runs:  # Preserve default-first runnable hyperparameter order
-        classifier_names = list(models_map.keys()) + (["StackingClassifier"] if stacking_enabled else [])  # Preserve enabled individual-classifier order followed by stacking
-        for augmentation_ratio in augmentation_modes:  # Preserve original-first configured augmentation order
-            for feature_mode_name in feature_mode_names:  # Preserve the sequential feature-mode iterator order
-                for classifier_name in classifier_names:  # Preserve individual-classifier order followed by stacking
-                    evaluation_plan.append((feature_mode_name, hyperparameters_enabled, augmentation_ratio, classifier_name))  # Store one existing runtime combination identity
+    evaluation_plan = []  # Accumulate combinations in the canonical phased execution order.
+    augmentation_phases = [[ratio for ratio in augmentation_modes if ratio is None], [ratio for ratio in augmentation_modes if ratio is not None]]  # Separate original and augmented testing phases while preserving ratio order.
+    for feature_mode_name in feature_mode_names:  # Complete every phase for one feature set before advancing to next feature set.
+        for augmentation_phase in augmentation_phases:  # Complete both hyperparameter modes on original data before augmented phases.
+            for hyperparameters_enabled, models_map, _ in hp_runs:  # Preserve default-first hyperparameter order inside each data phase.
+                classifier_names = list(models_map.keys()) + (["StackingClassifier"] if stacking_enabled else [])  # Preserve enabled individual-classifier order followed by stacking.
+                for augmentation_ratio in augmentation_phase:  # Preserve configured ratio order inside each hyperparameter phase.
+                    for classifier_name in classifier_names:  # Preserve individual-classifier order followed by stacking.
+                        evaluation_plan.append((feature_mode_name, hyperparameters_enabled, augmentation_ratio, classifier_name))  # Store one canonical runtime combination identity.
 
     return evaluation_plan  # Return the authoritative ordered progress plan
 
@@ -15689,8 +15680,7 @@ def orchestrate_all_combinations(input_path, dataset_name=None, config=None):
                 if optimized_models:  # Add optimized mode only when at least one classifier has verified optimized parameters
                     hp_runs.append((True, optimized_models, optimized_params))  # Keep optimized models isolated from default model objects
 
-            df_augmented = load_and_validate_augmented_data(file, df_original, config=config) if augmentation_requested and artifacts.get("augmented_file") else None  # Load compatible augmentation data only when enabled
-            augmentation_ratios = config.get("stacking", {}).get("augmentation_ratios", [0.25, 0.50, 0.75, 1.00]) if df_augmented is not None else []  # Generate ratio modes only when augmentation is usable
+            augmentation_ratios = config.get("stacking", {}).get("augmentation_ratios", [0.25, 0.50, 0.75, 1.00]) if augmentation_requested and artifacts.get("augmented_file") else []  # Plan ratio modes from discovered paths without loading augmented contents.
             feature_mode_names = list_grid_feature_modes(ga_sel, pca_n, rfe_sel, feature_names, config=config)  # Resolve actual feature modes in evaluation order
             evaluation_plan = build_evaluation_plan(hp_runs, [None] + list(augmentation_ratios), feature_mode_names, stacking_enabled)  # Build the exact default-first, original-first full-grid order
             total_steps = len(evaluation_plan)  # Use the ordered runtime plan as the exact full-grid denominator
@@ -15701,52 +15691,49 @@ def orchestrate_all_combinations(input_path, dataset_name=None, config=None):
 
             print(f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}Orchestrating full grid: file=[{idx}/{total_files}] {file}, combinations={total_steps}{Style.RESET_ALL}")  # Log exact generated grid size
 
-            for hyperparameters_enabled, base_models, hp_params_map in hp_runs:  # Complete default grid before starting the optimized grid
+            results_original_by_hp = {}  # Retain each baseline result mapping for later ratio comparison.
+            ratio_results_by_hp = {enabled: {} for enabled, _, _ in hp_runs}  # Retain ratio results by hyperparameter mode for comparison export.
+            for hyperparameters_enabled, augmentation_ratio in dict.fromkeys((item[1], item[2]) for item in evaluation_plan):  # Execute slices in first-occurrence order from canonical plan.
+                _, base_models, hp_params_map = next(run for run in hp_runs if run[0] == hyperparameters_enabled)  # Resolve models belonging to current canonical slice.
                 hp_label = "Optimized Hyperparameters" if hyperparameters_enabled else "Default Hyperparameters"  # Build explicit active HP label
                 send_telegram_message(TELEGRAM_BOT, [f"[SEPARATE_FILES] Starting {hp_label} grid | file: {os.path.basename(file)}"])  # Announce active HP grid
+                if augmentation_ratio is None:  # Execute original-data slice without touching augmented contents.
+                    results_original = evaluate_on_dataset(file, df_original, feature_names, ga_sel, pca_n, rfe_sel, base_models, data_source_label="Original", hyperparams_map=hp_params_map, experiment_id=generate_experiment_id(file, "original_only"), experiment_mode="original_only", augmentation_ratio=None, execution_mode_str="separate_files", attack_types_combined=None, config=config, hyperparameters_enabled=hyperparameters_enabled, grid_progress=grid_progress)  # Evaluate every feature and classifier on original data.
+                    original_list = list(results_original.values())  # Convert baseline results for annotation and export.
+                    annotate_results_with_combination_flags(original_list, fs_toggle, hyperparameters_enabled, False)  # Mark baseline grid dimensions.
+                    all_grid_results.extend(original_list)  # Preserve canonical baseline row order.
+                    results_original_by_hp[hyperparameters_enabled] = results_original  # Retain matching baseline for comparisons.
+                    continue  # Advance to next canonical slice.
 
-                results_original = evaluate_on_dataset(
-                    file, df_original, feature_names, ga_sel, pca_n, rfe_sel, base_models,
-                    data_source_label="Original", hyperparams_map=hp_params_map,
-                    experiment_id=generate_experiment_id(file, "original_only"), experiment_mode="original_only", augmentation_ratio=None,
-                    execution_mode_str="separate_files", attack_types_combined=None, config=config,
-                    hyperparameters_enabled=hyperparameters_enabled, grid_progress=grid_progress,
-                )  # Evaluate every feature/classifier combination without augmentation
-                original_list = list(results_original.values())  # Convert baseline results for annotation and export
-                annotate_results_with_combination_flags(original_list, fs_toggle, hyperparameters_enabled, False)  # Mark baseline grid dimensions
-                all_grid_results.extend(original_list)  # Preserve baseline rows beside optimized and augmented rows
+                df_augmented = load_and_validate_augmented_data(file, df_original, config=config)  # Load augmented contents only for current augmented slice.
+                if df_augmented is None:  # Skip current ratio when augmented loading or validation fails.
+                    continue  # Advance without retaining augmented data.
+                df_sampled = sample_augmented_by_ratio(df_augmented, df_original, augmentation_ratio)  # Sample only current configured ratio.
+                del df_augmented  # Release full augmented contents before evaluation.
+                gc.collect()  # Reclaim full augmented contents while retaining current sample.
+                if df_sampled is None or df_sampled.empty:  # Skip ratios producing no augmented test rows.
+                    continue  # Advance to next canonical slice.
+                results_ratio = evaluate_on_dataset(file, df_original, feature_names, ga_sel, pca_n, rfe_sel, base_models, data_source_label=f"Augmented@{int(augmentation_ratio * 100)}%", hyperparams_map=hp_params_map, experiment_id=generate_experiment_id(file, "original_training_augmented_testing", augmentation_ratio), experiment_mode="original_training_augmented_testing", augmentation_ratio=augmentation_ratio, execution_mode_str="separate_files", attack_types_combined=None, df_augmented_for_testing=df_sampled, config=config, hyperparameters_enabled=hyperparameters_enabled, grid_progress=grid_progress)  # Evaluate current ratio slice in canonical order.
+                ratio_list = list(results_ratio.values())  # Convert current ratio results for annotation and export.
+                annotate_results_with_combination_flags(ratio_list, fs_toggle, hyperparameters_enabled, True)  # Mark active grid dimensions.
+                all_grid_results.extend(ratio_list)  # Preserve canonical augmented row order.
+                ratio_results_by_hp[hyperparameters_enabled][augmentation_ratio] = results_ratio  # Retain current ratio for matching baseline comparison.
+                del df_sampled  # Release current ratio sample after evaluation.
+                gc.collect()  # Reclaim ratio-specific memory.
 
-                ratio_results = {}  # Collect ratio results for the existing comparison export
-                for ratio in augmentation_ratios:  # Evaluate each configured augmentation ratio as its own grid mode
-                    df_sampled = sample_augmented_by_ratio(df_augmented, df_original, ratio)  # Sample the active augmentation ratio
-                    if df_sampled is None or df_sampled.empty:  # Skip ratios that cannot produce augmented test data.
-                        continue  # Move to the next configured ratio
-                    results_ratio = evaluate_on_dataset(
-                        file, df_original, feature_names, ga_sel, pca_n, rfe_sel, base_models,
-                        data_source_label=f"Augmented@{int(ratio * 100)}%", hyperparams_map=hp_params_map,
-                        experiment_id=generate_experiment_id(file, "original_training_augmented_testing", ratio), experiment_mode="original_training_augmented_testing", augmentation_ratio=ratio,
-                        execution_mode_str="separate_files", attack_types_combined=None, df_augmented_for_testing=df_sampled,
-                        config=config, hyperparameters_enabled=hyperparameters_enabled, grid_progress=grid_progress,
-                    )  # Evaluate the same feature/classifier grid for this augmentation mode
-                    ratio_list = list(results_ratio.values())  # Convert ratio results for annotation and export
-                    annotate_results_with_combination_flags(ratio_list, fs_toggle, hyperparameters_enabled, True)  # Mark active grid dimensions
-                    all_grid_results.extend(ratio_list)  # Preserve ratio rows in the consolidated grid export
-                    ratio_results[ratio] = results_ratio  # Retain ratio results for comparison reporting
-                    del df_sampled  # Release sampled augmentation rows after the ratio evaluation
-                    gc.collect()  # Reclaim ratio-specific memory
-
-                if ratio_results:  # Preserve the existing augmentation comparison report behavior
-                    comparison_results = generate_ratio_comparison_report(results_original, ratio_results, config=config)  # Compare this HP mode's ratios against its matching baseline
-                    for comparison_row in comparison_results:  # Annotate comparison rows so default and optimized metrics remain distinguishable
-                        comparison_row["hyperparameter_mode"] = hp_label  # Store the active HP mode in the existing comparison export
-                    all_comparison_results.extend(comparison_results)  # Preserve comparisons until the complete grid is ready to save
+            for hyperparameters_enabled, _, _ in hp_runs:  # Generate comparison rows in established hyperparameter order.
+                ratio_results = ratio_results_by_hp[hyperparameters_enabled]  # Resolve ratios belonging to current hyperparameter mode.
+                if ratio_results and hyperparameters_enabled in results_original_by_hp:  # Compare only complete baseline and ratio groups.
+                    comparison_results = generate_ratio_comparison_report(results_original_by_hp[hyperparameters_enabled], ratio_results, config=config)  # Compare ratios against matching baseline.
+                    hp_label = "Optimized Hyperparameters" if hyperparameters_enabled else "Default Hyperparameters"  # Resolve comparison hyperparameter label.
+                    for comparison_row in comparison_results:  # Annotate comparison rows by hyperparameter mode.
+                        comparison_row["hyperparameter_mode"] = hp_label  # Store explicit hyperparameter mode.
+                    all_comparison_results.extend(comparison_results)  # Preserve comparison output order.
 
             save_stacking_results(file, all_grid_results, config=config)  # Save the complete default-first grid once so later modes cannot overwrite earlier rows
             if all_comparison_results:  # Save all HP modes together so optimized comparisons cannot overwrite default comparisons
                 save_augmentation_comparison_results(file, all_comparison_results, config=config)  # Preserve the existing comparison filename and metrics
             remove_cache_file(file, config=config)  # Remove resume cache only after the complete grid is safely exported
-            if df_augmented is not None:  # Release optional augmented dataset after both HP grids finish
-                del df_augmented  # Drop augmented dataframe reference
             del df_original  # Release original dataset after complete file grid
             gc.collect()  # Reclaim dataset memory
         except Exception as e:  # If per-file orchestration fails
