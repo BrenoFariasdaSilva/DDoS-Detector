@@ -23,6 +23,22 @@ def format_training_feature_set(feature_set: Optional[str]) -> str:  # Normalize
     return "PCA" if feature_label == "PCA Components" else feature_label  # Use the concise PCA label while preserving every other identity.
 
 
+def format_training_combination_fields(hyperparameters_enabled: Optional[bool], augmentation_ratio: Optional[float]) -> str:  # Format authoritative evaluation-combination fields
+    """
+    Format hyperparameter and data-augmentation fields for one evaluation combination.
+
+    :param hyperparameters_enabled: Whether optimized hyperparameters are active, or None outside an evaluation combination.
+    :param augmentation_ratio: Authoritative augmentation ratio, or None for original data.
+    :return: Delimiter-prefixed fields, or an empty string outside an evaluation combination.
+    """
+
+    if hyperparameters_enabled is None:  # Omit combination fields when no evaluation-combination identity exists.
+        return ""  # Preserve truthful AutoML and standalone progress records.
+    hyperparameter_label = "Optimized Hyperparameters" if hyperparameters_enabled else "Default Hyperparameters"  # Resolve label from authoritative combination mode.
+    augmentation_label = "Off" if augmentation_ratio is None else f"{int(float(augmentation_ratio) * 100)}%"  # Format authoritative original or ratio mode.
+    return f" | Hyperparameters: {hyperparameter_label} | Data Augmentation: {augmentation_label}"  # Return fields in required stable order.
+
+
 def interactive_terminal_attached(output_stream: Optional[Any] = None) -> bool:  # Resolve whether interactive progress rendering is safe
     """
     Return whether the selected output stream is attached to an interactive terminal.
@@ -47,7 +63,7 @@ def interactive_terminal_attached(output_stream: Optional[Any] = None) -> bool: 
 class TrainingProgress:  # Report genuine public units or heartbeat-only activity
     """Report genuine training units or low-frequency active heartbeats."""
 
-    def __init__(self, feature_set: Optional[str], classifier_name: str, duration_formatter: Callable[[float], str], output_stream: Optional[Any] = None, total_units: Optional[int] = None, unit_label: Optional[str] = None, heartbeat: bool = False, report_interval_seconds: float = DEFAULT_TRAINING_PROGRESS_INTERVAL_SECONDS):  # Initialize one training progress scope
+    def __init__(self, feature_set: Optional[str], classifier_name: str, duration_formatter: Callable[[float], str], output_stream: Optional[Any] = None, total_units: Optional[int] = None, unit_label: Optional[str] = None, heartbeat: bool = False, report_interval_seconds: float = DEFAULT_TRAINING_PROGRESS_INTERVAL_SECONDS, hyperparameters_enabled: Optional[bool] = None, augmentation_ratio: Optional[float] = None):  # Initialize one training progress scope
         """
         Initialize one classifier training progress scope.
 
@@ -60,6 +76,8 @@ class TrainingProgress:  # Report genuine public units or heartbeat-only activit
         :param unit_label: Public training-unit label when available.
         :param heartbeat: Whether to emit low-frequency active heartbeats.
         :param report_interval_seconds: Configured recurring progress interval in seconds.
+        :param hyperparameters_enabled: Whether optimized hyperparameters are active, or None outside an evaluation combination.
+        :param augmentation_ratio: Authoritative augmentation ratio, or None for original data.
         :return: None.
         """
 
@@ -69,6 +87,7 @@ class TrainingProgress:  # Report genuine public units or heartbeat-only activit
             resolved_interval = DEFAULT_TRAINING_PROGRESS_INTERVAL_SECONDS  # Use the stable low-frequency progress fallback.
         self.feature_set = format_training_feature_set(feature_set)  # Store the normalized feature-set label.
         self.classifier_name = str(classifier_name)  # Store the classifier identity as log-safe text.
+        self.combination_fields = format_training_combination_fields(hyperparameters_enabled, augmentation_ratio)  # Store immutable authoritative combination fields.
         self.duration_formatter = duration_formatter  # Store the caller's established duration formatter.
         self.output_stream = output_stream if output_stream is not None else sys.stdout  # Store the caller's active output stream.
         self.total_units = int(total_units) if total_units is not None else None  # Store the exact public unit total when available.
@@ -121,7 +140,7 @@ class TrainingProgress:  # Report genuine public units or heartbeat-only activit
             if self.thread is not None:  # Join only when this scope started a heartbeat thread.
                 self.thread.join(timeout=1.0)  # Wait briefly for event-driven heartbeat shutdown.
                 if self.thread.is_alive():  # Report a cleanup anomaly without masking the classifier result.
-                    print(f"[TRAINING] Feature Set: {self.feature_set} | Classifier: {self.classifier_name} | Status: Heartbeat shutdown pending | PID: {os.getpid()}", file=self.output_stream)  # Write a durable cleanup warning.
+                    print(f"[TRAINING] Feature Set: {self.feature_set} | Classifier: {self.classifier_name}{self.combination_fields} | Status: Heartbeat shutdown pending | PID: {os.getpid()}", file=self.output_stream)  # Write a durable contextual cleanup warning.
                     self.output_stream.flush()  # Flush the cleanup warning immediately.
         except Exception:  # Ignore cleanup output failures after signaling thread shutdown.
             pass  # Preserve the original fit outcome unchanged.
@@ -156,7 +175,7 @@ class TrainingProgress:  # Report genuine public units or heartbeat-only activit
                     return False  # Retain silence until this task's next interval boundary.
                 elapsed_seconds = max(now - self.start_time, 0.0)  # Calculate elapsed time from the monotonic training start.
                 elapsed_label = self.duration_formatter(elapsed_seconds)  # Format elapsed time through the caller's established formatter.
-                print(f"[TRAINING] Feature Set: {self.feature_set} | Classifier: {self.classifier_name} | Status: Active | Elapsed: {elapsed_label} | ETA: unavailable | PID: {os.getpid()}", file=self.output_stream)  # Write one newline-delimited heartbeat without a fabricated percentage.
+                print(f"[TRAINING] Feature Set: {self.feature_set} | Classifier: {self.classifier_name}{self.combination_fields} | Status: Active | Elapsed: {elapsed_label} | ETA: unavailable | PID: {os.getpid()}", file=self.output_stream)  # Write one contextual heartbeat without a fabricated percentage.
                 self.output_stream.flush()  # Flush every heartbeat immediately to detached logs.
                 self.last_report_time = now  # Advance only this classifier task's recurring-report timer.
             return True  # Report successful heartbeat emission.
@@ -190,7 +209,7 @@ class TrainingProgress:  # Report genuine public units or heartbeat-only activit
                 progress_percent = (completed / total) * 100.0  # Calculate genuine percentage from the public unit denominator.
                 elapsed_label = self.duration_formatter(elapsed_seconds)  # Format elapsed time through the caller's established formatter.
                 eta_label = self.duration_formatter(remaining_seconds)  # Format the unit-based ETA through the caller's established formatter.
-                print(f"[TRAINING] Feature Set: {self.feature_set} | Classifier: {self.classifier_name} | {self.unit_label}: {completed}/{total} | Progress: {progress_percent:.2f}% | Elapsed: {elapsed_label} | ETA: {eta_label} | PID: {os.getpid()}", file=self.output_stream)  # Write the latest due or immediate final unit-completion record.
+                print(f"[TRAINING] Feature Set: {self.feature_set} | Classifier: {self.classifier_name}{self.combination_fields} | {self.unit_label}: {completed}/{total} | Progress: {progress_percent:.2f}% | Elapsed: {elapsed_label} | ETA: {eta_label} | PID: {os.getpid()}", file=self.output_stream)  # Write latest contextual due or immediate final unit-completion record.
                 self.output_stream.flush()  # Flush every emitted genuine progress record immediately to detached logs.
                 self.last_report_time = now  # Advance only this classifier task's recurring-report timer.
                 if is_final:  # Mark the configured final public unit after successful output.
