@@ -12351,6 +12351,7 @@ def evaluate_on_dataset(
     grid_progress=None,
     source_files=None,  # Preserve ordered dataset provenance for PCA cache validation.
     artifact_recovery_target=None,
+    feature_mode_name=None,
 ):
     """
     Train on original data or evaluate persisted original-trained models on augmented data.
@@ -12374,6 +12375,7 @@ def evaluate_on_dataset(
     :param hyperparameters_enabled: Explicit hyperparameter mode flag for progress labels and result flow
     :param source_files: Ordered original source files used to construct the training dataset.
     :param artifact_recovery_target: Optional feature-set and classifier identity for original-only artifact recovery.
+    :param feature_mode_name: Optional single feature mode selected by canonical sequential scheduling.
     :return: Dictionary mapping (feature_set, model_name) to results
     """
 
@@ -12399,6 +12401,10 @@ def evaluate_on_dataset(
             feature_sets_config = {"use_full": True, "use_pca": False, "use_rfe": False, "use_ga": False, "explicit_features": []}  # Suppress every selection strategy without mutating CLI/config state
 
         feature_mode_names = [artifact_recovery_target[0]] if artifact_recovery_target is not None else list_grid_feature_modes(ga_selected_features, pca_n_components, rfe_selected_features, feature_names, config=config)  # Resolve the full plan or one missing artifact mode.
+        if feature_mode_name is not None:  # Restrict sequential execution to one canonical feature-set group when requested.
+            if feature_mode_name not in feature_mode_names:  # Reject scheduling identities absent from actual assembled feature modes.
+                raise ValueError(f"Unknown evaluation feature mode: {feature_mode_name}")  # Surface canonical plan and execution mismatch.
+            feature_mode_names = [feature_mode_name]  # Evaluate only current canonical feature-set group.
         planned_models = base_models if artifact_recovery_target is None else ({artifact_recovery_target[1]: base_models[artifact_recovery_target[1]]} if artifact_recovery_target[1] != "StackingClassifier" else {})  # Keep recovery progress limited to the missing artifact.
         if grid_progress is None:  # Build the exact standalone plan for the current data and HP slice
             evaluation_plan = build_evaluation_plan([(bool(hyperparameters_enabled), planned_models, hyperparams_map or {})], [augmentation_ratio], feature_mode_names, stacking_enabled)  # Build the standalone ordered runtime combinations
@@ -12543,6 +12549,8 @@ def evaluate_on_dataset(
 
         feature_sets_iter = iterate_feature_sets_sequentially(feature_source_arrays, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, file, feature_sets_config, config, scaler=scaler, source_files=pca_source_files, pca_cache_context=pca_cache_context, pca_input_feature_names=pca_input_feature_names)  # Create the lazy feature-set iterator with exact PCA source, feature, scaler, and split provenance.
         for idx, (name, X_train_subset, X_test_subset, subset_feature_names_list, transformer) in enumerate(feature_sets_iter, start=1):  # Evaluate one materialized feature set at a time
+            if feature_mode_name is not None and name != feature_mode_name:  # Skip feature matrices outside current canonical sequential group.
+                continue  # Advance without evaluating an out-of-group feature set.
             if artifact_recovery_target is not None and name != artifact_recovery_target[0]:
                 continue  # Materialize only as needed until the missing feature-set artifact is reached.
             if X_train_subset.shape[1] == 0:  # Verify if the subset is empty
@@ -13691,21 +13699,45 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
         grid_progress["evaluation_plan"] = evaluation_plan  # Reuse the authoritative plan in every evaluation section sharing this progress bar
         all_grid_results = []  # Accumulate every result row for a single consolidated export
         all_comparison_results = []  # Accumulate augmentation comparisons across both HP modes
+        orchestration_cache = load_cache_results(combined_dataset_reference, config=config, notify_discovery=False)  # Recover cache identities before any sequential augmentation load.
+        fully_cached_ratios = {ratio for ratio in augmentation_ratios if all(build_resume_cache_key("combined_files", f"Augmented@{int(ratio * 100)}%_CombinedFiles", "original_training_augmented_testing", ratio, attack_types_list, feature_set, classifier, hyperparameters_enabled) in orchestration_cache for feature_set, hyperparameters_enabled, planned_ratio, classifier in evaluation_plan if planned_ratio == ratio)}  # Identify ratio groups requiring no augmented contents.
 
         try:  # Ensure the shared progress bar is closed after the complete grid
             results_original_by_hp = {}  # Retain each baseline mapping for later ratio comparisons.
             ratio_results_by_hp = {enabled: {} for enabled, _, _ in hp_runs}  # Retain ratio mappings by hyperparameter mode.
-            for hyperparameters_enabled, augmentation_ratio in dict.fromkeys((item[1], item[2]) for item in evaluation_plan):  # Execute slices in canonical plan order.
+            active_ratio = None  # Track one sequential augmented ratio across every compatible feature and hyperparameter group.
+            df_sampled = None  # Retain only current ratio sample until its final canonical group completes.
+            for feature_mode_name, hyperparameters_enabled, augmentation_ratio in dict.fromkeys((item[0], item[1], item[2]) for item in evaluation_plan):  # Execute feature, hyperparameter, and ratio groups in canonical plan order.
                 _, base_models, hp_params_map = next(run for run in hp_runs if run[0] == hyperparameters_enabled)  # Resolve models for current canonical slice.
                 hp_label = "Optimized Hyperparameters" if hyperparameters_enabled else "Default Hyperparameters"  # Build active HP label
                 send_telegram_message(TELEGRAM_BOT, [f"[COMBINED_FILES] Starting {hp_label} grid | Dataset: {dataset_name}"])  # Announce active HP mode
                 if augmentation_ratio is not None:  # Defer augmented processing until both original hyperparameter slices finish.
-                    combined_augmented_df, _, _ = combine_files_for_combined_evaluation(augmentation_file_paths, config=config)  # Load augmented contents only for current ratio slice.
-                    if combined_augmented_df is None:  # Skip current ratio when augmented recombination fails.
-                        continue  # Advance to next canonical slice.
-                    df_sampled = sample_augmented_by_ratio(combined_augmented_df, original_sample_count, augmentation_ratio)  # Sample current configured ratio deterministically.
-                    del combined_augmented_df  # Release full augmented contents before evaluation.
-                    gc.collect()  # Reclaim full augmented contents while retaining current sample.
+                    if augmentation_ratio in fully_cached_ratios:  # Recover complete ratio group without loading augmented contents.
+                        cached_group_results = {}  # Accumulate current canonical cached feature group.
+                        current_combination = grid_progress["current_combination"]  # Read next canonical global progress index.
+                        classifiers = [item[3] for item in evaluation_plan if item[0] == feature_mode_name and item[1] == hyperparameters_enabled and item[2] == augmentation_ratio]  # Preserve classifier order from canonical plan.
+                        for classifier_name in classifiers:  # Recover every cached classifier in current canonical group.
+                            recovered, current_combination = recover_cached_individual_classifier_result(orchestration_cache, "combined_files", f"Augmented@{int(augmentation_ratio * 100)}%_CombinedFiles", "original_training_augmented_testing", augmentation_ratio, attack_types_list, feature_mode_name, classifier_name, cached_group_results, current_combination, total_steps, grid_progress["progress_bar"], hyperparameters_enabled=hyperparameters_enabled)  # Reuse production cache recovery, progress, and notification flow.
+                            if not recovered:  # Reject cache drift after complete-ratio preflight.
+                                raise RuntimeError(f"Fully cached ratio {augmentation_ratio} lost combination {feature_mode_name} / {classifier_name}")  # Preserve cache and plan consistency.
+                        grid_progress["current_combination"] = current_combination  # Advance shared progress after cached group recovery.
+                        cached_group_list = list(cached_group_results.values())  # Preserve canonical classifier insertion order.
+                        all_grid_results.extend(cached_group_list)  # Preserve cached results in canonical export order.
+                        ratio_results_by_hp[hyperparameters_enabled].setdefault(augmentation_ratio, {}).update(cached_group_results)  # Retain cached group for comparison export.
+                        continue  # Advance without opening current ratio data.
+                    if active_ratio != augmentation_ratio:  # Load and sample only when canonical execution enters a new ratio.
+                        if df_sampled is not None:  # Release completed prior-ratio sample before next ratio load.
+                            del df_sampled  # Drop prior-ratio DataFrame reference.
+                            gc.collect()  # Reclaim prior-ratio memory before loading next source.
+                            df_sampled = None  # Restore empty lifecycle state before current ratio construction.
+                        combined_augmented_df, _, _ = combine_files_for_combined_evaluation(augmentation_file_paths, config=config)  # Load augmented contents once for current ratio group.
+                        if combined_augmented_df is None:  # Skip current ratio when augmented recombination fails.
+                            active_ratio = augmentation_ratio  # Prevent repeated failed reloads inside same ratio group.
+                            continue  # Advance to next canonical group.
+                        df_sampled = sample_augmented_by_ratio(combined_augmented_df, original_sample_count, augmentation_ratio)  # Sample current configured ratio deterministically once.
+                        del combined_augmented_df  # Release full augmented contents before group evaluation.
+                        gc.collect()  # Reclaim full augmented contents while retaining current sample.
+                        active_ratio = augmentation_ratio  # Record reusable current ratio identity.
                     if df_sampled is None or df_sampled.empty:  # Skip unusable current-ratio samples.
                         continue  # Advance to next canonical slice.
                     ratio_original_df, _, _ = combine_files_for_combined_evaluation(original_files_list, config=config)  # Rebuild original training source for current ratio.
@@ -13713,13 +13745,13 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
                         del df_sampled  # Release current ratio sample.
                         gc.collect()  # Reclaim skipped ratio data.
                         continue  # Advance to next canonical slice.
-                    results_ratio = evaluate_on_dataset(combined_dataset_reference, ratio_original_df, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, base_models, data_source_label=f"Augmented@{int(augmentation_ratio * 100)}%_CombinedFiles", hyperparams_map=hp_params_map, experiment_id=generate_experiment_id(combined_dataset_reference, "combined_files_original_training_augmented_testing", augmentation_ratio), experiment_mode="original_training_augmented_testing", augmentation_ratio=augmentation_ratio, execution_mode_str="combined_files", attack_types_combined=attack_types_list, df_augmented_for_testing=df_sampled, config=config, hyperparameters_enabled=hyperparameters_enabled, grid_progress=grid_progress, source_files=original_files_list)  # Evaluate current augmented slice in canonical order.
+                    results_ratio = evaluate_on_dataset(combined_dataset_reference, ratio_original_df, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, base_models, data_source_label=f"Augmented@{int(augmentation_ratio * 100)}%_CombinedFiles", hyperparams_map=hp_params_map, experiment_id=generate_experiment_id(combined_dataset_reference, "combined_files_original_training_augmented_testing", augmentation_ratio), experiment_mode="original_training_augmented_testing", augmentation_ratio=augmentation_ratio, execution_mode_str="combined_files", attack_types_combined=attack_types_list, df_augmented_for_testing=df_sampled, config=config, hyperparameters_enabled=hyperparameters_enabled, grid_progress=grid_progress, source_files=original_files_list, feature_mode_name=feature_mode_name)  # Evaluate current canonical feature group while reusing ratio sample.
                     ratio_results_list = list(results_ratio.values())  # Convert current ratio results for annotation and export.
                     annotate_results_with_combination_flags(ratio_results_list, methods_cfg.get("feature_selection", True), hyperparameters_enabled, True)  # Mark active grid dimensions.
                     all_grid_results.extend(ratio_results_list)  # Preserve canonical augmented result order.
-                    ratio_results_by_hp[hyperparameters_enabled][augmentation_ratio] = results_ratio  # Retain ratio mapping for matching baseline comparison.
-                    del ratio_original_df, df_sampled  # Release current slice data after evaluation.
-                    gc.collect()  # Reclaim current slice memory.
+                    ratio_results_by_hp[hyperparameters_enabled].setdefault(augmentation_ratio, {}).update(results_ratio)  # Accumulate every feature result under matching ratio and hyperparameter mode.
+                    del ratio_original_df  # Release current group original-data reconstruction after evaluation.
+                    gc.collect()  # Reclaim current group original-data memory while retaining ratio sample.
                     continue  # Advance to next canonical slice.
                 if combined_files_df_holder:  # Use the initially combined dataframe for the first original-only slice.
                     original_df_for_run = combined_files_df_holder.pop()  # Consume the initially combined dataframe exactly once.
@@ -13737,13 +13769,17 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
                     execution_mode_str="combined_files", attack_types_combined=attack_types_list, config=config,
                     hyperparameters_enabled=hyperparameters_enabled, grid_progress=grid_progress,
                     source_files=original_files_list,  # Preserve the ordered original CSV provenance used to build this combined dataset.
+                    feature_mode_name=feature_mode_name,  # Evaluate only current canonical original feature group.
                 )  # Evaluate the no-augmentation feature/classifier slice
                 del original_df_for_run_holder  # Release the empty HP slice transfer holder after evaluation returns.
                 gc.collect()  # Reclaim any released original-only dataframe references before augmentation handling.
                 original_results_list = list(results_original.values())  # Convert baseline results for annotation and export
                 annotate_results_with_combination_flags(original_results_list, methods_cfg.get("feature_selection", True), hyperparameters_enabled, False)  # Mark active grid dimensions
                 all_grid_results.extend(original_results_list)  # Preserve baseline rows beside later grid slices
-                results_original_by_hp[hyperparameters_enabled] = results_original  # Retain matching baseline for comparison generation.
+                results_original_by_hp.setdefault(hyperparameters_enabled, {}).update(results_original)  # Accumulate every original feature result for matching comparisons.
+            if df_sampled is not None:  # Release final ratio sample after its last canonical group.
+                del df_sampled  # Drop final augmented sample reference.
+                gc.collect()  # Reclaim final ratio memory before comparison generation.
             for hyperparameters_enabled, _, _ in hp_runs:  # Generate comparisons in established hyperparameter order.
                 ratio_results = ratio_results_by_hp[hyperparameters_enabled]  # Resolve current mode ratio results.
                 if ratio_results and hyperparameters_enabled in results_original_by_hp:  # Compare only complete baseline and ratio groups.
@@ -13988,15 +14024,21 @@ def build_evaluation_plan(hp_runs: List[Tuple[bool, dict, dict]], augmentation_m
     :return: Ordered tuples of feature set, hyperparameter mode, augmentation ratio, and classifier.
     """
 
-    evaluation_plan = []  # Accumulate combinations in the canonical phased execution order.
-    augmentation_phases = [[ratio for ratio in augmentation_modes if ratio is None], [ratio for ratio in augmentation_modes if ratio is not None]]  # Separate original and augmented testing phases while preserving ratio order.
-    for feature_mode_name in feature_mode_names:  # Complete every phase for one feature set before advancing to next feature set.
-        for augmentation_phase in augmentation_phases:  # Complete both hyperparameter modes on original data before augmented phases.
-            for hyperparameters_enabled, models_map, _ in hp_runs:  # Preserve default-first hyperparameter order inside each data phase.
-                classifier_names = list(models_map.keys()) + (["StackingClassifier"] if stacking_enabled else [])  # Preserve enabled individual-classifier order followed by stacking.
-                for augmentation_ratio in augmentation_phase:  # Preserve configured ratio order inside each hyperparameter phase.
-                    for classifier_name in classifier_names:  # Preserve individual-classifier order followed by stacking.
-                        evaluation_plan.append((feature_mode_name, hyperparameters_enabled, augmentation_ratio, classifier_name))  # Store one canonical runtime combination identity.
+    evaluation_plan = []  # Accumulate combinations in canonical global phase order.
+    original_modes = [ratio for ratio in augmentation_modes if ratio is None]  # Preserve every configured original-testing mode before augmentation.
+    augmented_ratios = [ratio for ratio in augmentation_modes if ratio is not None]  # Preserve configured augmented-ratio order.
+    for feature_mode_name in feature_mode_names:  # Complete original experiments for each feature set in configured order.
+        for hyperparameters_enabled, models_map, _ in hp_runs:  # Preserve default-first hyperparameter order for current feature set.
+            classifier_names = list(models_map.keys()) + (["StackingClassifier"] if stacking_enabled else [])  # Preserve classifier order followed by optional stacking.
+            for augmentation_ratio in original_modes:  # Keep original testing isolated in first global phase.
+                for classifier_name in classifier_names:  # Preserve classifier order inside current original hyperparameter mode.
+                    evaluation_plan.append((feature_mode_name, hyperparameters_enabled, augmentation_ratio, classifier_name))  # Store one original-data combination.
+    for augmentation_ratio in augmented_ratios:  # Complete every combination for current ratio before next ratio.
+        for feature_mode_name in feature_mode_names:  # Preserve configured feature-set order inside current ratio.
+            for hyperparameters_enabled, models_map, _ in hp_runs:  # Preserve default-first hyperparameter order inside current ratio and feature set.
+                classifier_names = list(models_map.keys()) + (["StackingClassifier"] if stacking_enabled else [])  # Preserve classifier order followed by optional stacking.
+                for classifier_name in classifier_names:  # Preserve classifier order inside current augmented hyperparameter mode.
+                    evaluation_plan.append((feature_mode_name, hyperparameters_enabled, augmentation_ratio, classifier_name))  # Store one ratio-grouped augmented combination.
 
     return evaluation_plan  # Return the authoritative ordered progress plan
 
@@ -14919,13 +14961,6 @@ def run_feature_set_process_worker(process_payload: dict, status_queue: Any, sta
     try:  # Surface every child failure through both status queue and nonzero exit code
         initialize_feature_process_logger(process_payload["config"])  # Initialize append-only process-safe child logging after spawn
         task_queue = list(process_payload["tasks"])  # Copy only matrix-free descriptors into feature-local sequential order
-        if task_queue and capacity_gate is not None:  # Gate only workers that still have matrix-heavy pending work
-            print(f"[RESOURCE CAPACITY] Feature Set={process_payload['feature_set']} | Worker Index={process_payload['worker_index']} | PID={os.getpid()} | State=Waiting")  # Log visible capacity waiting without changing configured worker creation
-            sys.stdout.flush()  # Flush the waiting decision for detached execution visibility
-            capacity_gate.acquire()  # Wait for one coordinator-established safe matrix admission slot
-            capacity_acquired = True  # Record ownership immediately after successful admission
-            print(f"[RESOURCE CAPACITY] Feature Set={process_payload['feature_set']} | Worker Index={process_payload['worker_index']} | PID={os.getpid()} | State=Admitted")  # Log the exact worker admitted to matrix preparation and evaluation
-            sys.stdout.flush()  # Flush admission evidence before any large allocation path
         model_maps = build_feature_process_model_maps(process_payload["config"], process_payload["optimized_params"]) if task_queue else {}  # Rebuild estimator prototypes only when this cache-first queue contains pending work
         source_descriptor = (process_payload.get("shared_resources") or {}).get("X_train_scaled")  # Read shared source shape and dtype metadata without reopening data
         matrix_resource = source_descriptor["path"] if source_descriptor else "artifact-backed"  # Report exact backing identity without opening matrix data
@@ -14936,17 +14971,36 @@ def run_feature_set_process_worker(process_payload: dict, status_queue: Any, sta
         sys.stdout.flush()  # Flush startup evidence for detached process-tree verification
         status_queue.put({"status": "started", "feature_set": process_payload["feature_set"], "worker_index": process_payload["worker_index"], "pid": os.getpid(), "ppid": os.getppid(), "queue_size": len(task_queue), "cached_count": feature_start_status["cached"], "pending_count": len(task_queue), "matrix_resource": matrix_resource, "matrix_shape": matrix_shape, "matrix_dtype": matrix_dtype})  # Report only small startup metadata to the coordinator
         resource_state["cache_dict"] = load_cache_results(process_payload["cache_ref_file"], config=process_payload["config"], notify_discovery=False)  # Initialize the worker-local cache snapshot
-        for task in task_queue:  # Process only this feature set's pending combinations sequentially
-            active_task = task  # Record current task before any lifecycle transition
-            process_feature_process_task(task, process_payload, model_maps, resource_state, status_queue, status_state)  # Process one reserved combination without duplicating generic evaluation logic
-            active_task = None  # Clear successfully completed task identity
-        cleanup_feature_process_original_resources(resource_state["original_resources"])  # Release any final original feature matrices and shared mappings
-        resource_state["original_resources"] = None  # Clear the released original resource mapping
-        if resource_state["ratio_data"] is not None:  # Announce final active ratio closure before worker exit
-            print(f"[WORKER AUGMENTATION CLOSE] Feature Set={process_payload['feature_set']} | Worker Index={process_payload['worker_index']} | PID={os.getpid()} | Ratio={resource_state['active_ratio']}")  # Log exact final ratio ownership release
-        cleanup_feature_process_ratio_data(resource_state["ratio_data"])  # Release the final active augmentation ratio
-        resource_state["ratio_data"] = None  # Clear the released ratio mapping
-        resource_state["active_ratio"] = None  # Clear final ratio identity after mapping closure
+        phase_order = list(process_payload.get("phase_order") or dict.fromkeys(task.get("augmentation_ratio") for task in task_queue))  # Use coordinator global phases or local task phases for focused callers.
+        phase_barrier = process_payload.get("phase_barrier")  # Resolve cross-feature phase synchronization when coordinator provides it.
+        for phase_ratio in phase_order:  # Complete original phase and each augmented ratio as isolated global waves.
+            phase_tasks = [task for task in task_queue if task.get("augmentation_ratio") == phase_ratio]  # Select only pending tasks belonging to current global phase.
+            if phase_tasks and capacity_gate is not None:  # Gate matrix-heavy work separately for each phase to avoid barrier deadlock.
+                print(f"[RESOURCE CAPACITY] Feature Set={process_payload['feature_set']} | Worker Index={process_payload['worker_index']} | PID={os.getpid()} | State=Waiting | Ratio={phase_ratio}")  # Log phase-specific capacity wait.
+                sys.stdout.flush()  # Flush wait evidence before blocking.
+                capacity_gate.acquire()  # Wait for coordinator-established matrix admission.
+                capacity_acquired = True  # Record current phase admission ownership.
+                print(f"[RESOURCE CAPACITY] Feature Set={process_payload['feature_set']} | Worker Index={process_payload['worker_index']} | PID={os.getpid()} | State=Admitted | Ratio={phase_ratio}")  # Log admitted phase.
+                sys.stdout.flush()  # Flush admission evidence before allocation.
+            for task in phase_tasks:  # Process current feature set's cache-miss tasks for this phase sequentially.
+                active_task = task  # Record current task before lifecycle transition.
+                process_feature_process_task(task, process_payload, model_maps, resource_state, status_queue, status_state)  # Process one reserved combination through existing evaluation logic.
+                active_task = None  # Clear successfully completed task identity.
+            cleanup_feature_process_original_resources(resource_state["original_resources"])  # Release original resources before augmentation or next phase.
+            resource_state["original_resources"] = None  # Clear released original resource mapping.
+            cleanup_feature_process_ratio_data(resource_state["ratio_data"])  # Release current ratio mappings after final local task using them.
+            resource_state["ratio_data"] = None  # Clear released ratio mapping.
+            resource_state["active_ratio"] = None  # Clear released ratio identity.
+            if capacity_acquired:  # Release current phase admission before waiting for other workers.
+                capacity_gate.release()  # Admit another configured worker into current phase.
+                capacity_acquired = False  # Clear phase admission ownership.
+            barrier_rank = phase_barrier.wait() if phase_barrier is not None else 0  # Wait until every feature worker releases current phase resources.
+            if barrier_rank == 0 and phase_ratio is not None and process_payload.get("augmentation_shared_directory"):  # Let one synchronized worker remove current shared ratio files.
+                for entry in os.scandir(process_payload["augmentation_shared_directory"]):  # Enumerate only coordinator-owned ratio artifacts after all mappings close.
+                    if entry.is_file():  # Preserve directory ownership while deleting current ratio files and locks.
+                        os.unlink(entry.path)  # Remove current ratio descriptor, memmaps, and build lock before next ratio.
+            if phase_barrier is not None:  # Prevent next-ratio loading until synchronized shared cleanup completes.
+                phase_barrier.wait()  # Release every worker into next global phase together.
         status_queue.put({"status": "done", "feature_set": process_payload["feature_set"], "worker_index": process_payload["worker_index"], "pid": os.getpid()})  # Report small successful terminal metadata
         print(f"[WORKER DONE] Feature Set={process_payload['feature_set']} | Worker Index={process_payload['worker_index']} | PID={os.getpid()} | Queue Size={len(task_queue)}")  # Log successful persistent worker completion
         sys.stdout.flush()  # Flush terminal worker evidence before interpreter exit
@@ -15112,6 +15166,8 @@ def execute_feature_set_processes(pending_by_feature: dict, process_payload: dic
     capacity_gate = context.BoundedSemaphore(admitted_worker_count) if 0 < admitted_worker_count < pending_worker_count else None  # Create one spawn-safe gate only when resource capacity reduces active concurrency
     capacity_action = "Gated" if capacity_gate is not None else "Unchanged"  # Distinguish an enforced scheduling decision from full admission
     print(f"[RESOURCE CAPACITY] Decision={capacity_action} | Pending Workers={pending_worker_count} | Simultaneous Workers={admitted_worker_count} | Available Bytes={capacity_decision['available_bytes']} | Reserved Bytes={capacity_decision['reserve_bytes']} | Safe Available Bytes={capacity_decision['safe_available_bytes']} | Largest Estimated Worker Bytes={capacity_decision['largest_worker_bytes']} | Estimated Bytes={capacity_decision['estimated_bytes_by_feature']}")  # Log exact capacity evidence instead of silently reducing concurrency
+    phase_order = list(dict.fromkeys(task["augmentation_ratio"] for task in tasks))  # Derive original and ratio waves from authoritative canonical plan.
+    phase_barrier = context.Barrier(len(process_payload["feature_mode_names"])) if process_payload["feature_mode_names"] else None  # Synchronize configured feature workers at every phase boundary.
     status_queue = context.Queue()  # Create one small lifecycle channel for every persistent worker
     process_records = []  # Track every child for deterministic termination, joining, and closing
     failure = None  # Preserve the first surfaced child failure and traceback
@@ -15128,6 +15184,8 @@ def execute_feature_set_processes(pending_by_feature: dict, process_payload: dic
             child_payload["feature_metadata"] = process_payload["feature_metadata_by_name"][feature_set_name]  # Assign only this feature set's small names and indices
             child_payload["notification_acknowledgement"] = notification_acknowledgements[feature_set_name]  # Pass one small feature-local synchronization value without Telegram credentials or result data
             child_payload["capacity_gate"] = capacity_gate  # Share only the coordinator-owned admission semaphore with every configured worker
+            child_payload["phase_order"] = phase_order  # Give every worker identical canonical global phase order.
+            child_payload["phase_barrier"] = phase_barrier  # Prevent any worker from entering next ratio before all current-ratio work and cleanup finish.
             validate_feature_process_payload(child_payload)  # Prove no matrices, labels, DataFrames, or estimators will be pickled into the child
             worker_key = resolve_feature_set_worker_key(feature_set_name)  # Resolve configured role identity once
             process = context.Process(target=worker_target, args=(child_payload, status_queue, status_state), name=f"Stacking-{worker_key.upper()}-1")  # Build one long-lived OS process for complete feature queue
@@ -15688,38 +15746,65 @@ def orchestrate_all_combinations(input_path, dataset_name=None, config=None):
             grid_progress["evaluation_plan"] = evaluation_plan  # Reuse the authoritative plan in every evaluation section sharing this progress bar
             all_grid_results = []  # Accumulate every grid result for one consolidated export
             all_comparison_results = []  # Accumulate augmentation comparisons across both HP modes
+            orchestration_cache = load_cache_results(file, config=config, notify_discovery=False)  # Recover cache identities before any sequential augmentation load.
+            fully_cached_ratios = {ratio for ratio in augmentation_ratios if all(build_resume_cache_key("separate_files", f"Augmented@{int(ratio * 100)}%", "original_training_augmented_testing", ratio, None, feature_set, classifier, hyperparameters_enabled) in orchestration_cache for feature_set, hyperparameters_enabled, planned_ratio, classifier in evaluation_plan if planned_ratio == ratio)}  # Identify ratio groups requiring no augmented contents.
 
             print(f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}Orchestrating full grid: file=[{idx}/{total_files}] {file}, combinations={total_steps}{Style.RESET_ALL}")  # Log exact generated grid size
 
             results_original_by_hp = {}  # Retain each baseline result mapping for later ratio comparison.
             ratio_results_by_hp = {enabled: {} for enabled, _, _ in hp_runs}  # Retain ratio results by hyperparameter mode for comparison export.
-            for hyperparameters_enabled, augmentation_ratio in dict.fromkeys((item[1], item[2]) for item in evaluation_plan):  # Execute slices in first-occurrence order from canonical plan.
+            active_ratio = None  # Track one sequential augmented ratio across every compatible feature and hyperparameter group.
+            df_sampled = None  # Retain only current ratio sample until its final canonical group completes.
+            for feature_mode_name, hyperparameters_enabled, augmentation_ratio in dict.fromkeys((item[0], item[1], item[2]) for item in evaluation_plan):  # Execute canonical feature, hyperparameter, and ratio groups.
                 _, base_models, hp_params_map = next(run for run in hp_runs if run[0] == hyperparameters_enabled)  # Resolve models belonging to current canonical slice.
                 hp_label = "Optimized Hyperparameters" if hyperparameters_enabled else "Default Hyperparameters"  # Build explicit active HP label
                 send_telegram_message(TELEGRAM_BOT, [f"[SEPARATE_FILES] Starting {hp_label} grid | file: {os.path.basename(file)}"])  # Announce active HP grid
                 if augmentation_ratio is None:  # Execute original-data slice without touching augmented contents.
-                    results_original = evaluate_on_dataset(file, df_original, feature_names, ga_sel, pca_n, rfe_sel, base_models, data_source_label="Original", hyperparams_map=hp_params_map, experiment_id=generate_experiment_id(file, "original_only"), experiment_mode="original_only", augmentation_ratio=None, execution_mode_str="separate_files", attack_types_combined=None, config=config, hyperparameters_enabled=hyperparameters_enabled, grid_progress=grid_progress)  # Evaluate every feature and classifier on original data.
+                    results_original = evaluate_on_dataset(file, df_original, feature_names, ga_sel, pca_n, rfe_sel, base_models, data_source_label="Original", hyperparams_map=hp_params_map, experiment_id=generate_experiment_id(file, "original_only"), experiment_mode="original_only", augmentation_ratio=None, execution_mode_str="separate_files", attack_types_combined=None, config=config, hyperparameters_enabled=hyperparameters_enabled, grid_progress=grid_progress, feature_mode_name=feature_mode_name)  # Evaluate current canonical original feature group.
                     original_list = list(results_original.values())  # Convert baseline results for annotation and export.
                     annotate_results_with_combination_flags(original_list, fs_toggle, hyperparameters_enabled, False)  # Mark baseline grid dimensions.
                     all_grid_results.extend(original_list)  # Preserve canonical baseline row order.
-                    results_original_by_hp[hyperparameters_enabled] = results_original  # Retain matching baseline for comparisons.
+                    results_original_by_hp.setdefault(hyperparameters_enabled, {}).update(results_original)  # Accumulate every feature baseline for comparisons.
                     continue  # Advance to next canonical slice.
 
-                df_augmented = load_and_validate_augmented_data(file, df_original, config=config)  # Load augmented contents only for current augmented slice.
-                if df_augmented is None:  # Skip current ratio when augmented loading or validation fails.
-                    continue  # Advance without retaining augmented data.
-                df_sampled = sample_augmented_by_ratio(df_augmented, df_original, augmentation_ratio)  # Sample only current configured ratio.
-                del df_augmented  # Release full augmented contents before evaluation.
-                gc.collect()  # Reclaim full augmented contents while retaining current sample.
+                if augmentation_ratio in fully_cached_ratios:  # Recover complete ratio group without loading augmented contents.
+                    cached_group_results = {}  # Accumulate current canonical cached feature group.
+                    current_combination = grid_progress["current_combination"]  # Read next canonical global progress index.
+                    classifiers = [item[3] for item in evaluation_plan if item[0] == feature_mode_name and item[1] == hyperparameters_enabled and item[2] == augmentation_ratio]  # Preserve classifier order from canonical plan.
+                    for classifier_name in classifiers:  # Recover every cached classifier in current canonical group.
+                        recovered, current_combination = recover_cached_individual_classifier_result(orchestration_cache, "separate_files", f"Augmented@{int(augmentation_ratio * 100)}%", "original_training_augmented_testing", augmentation_ratio, None, feature_mode_name, classifier_name, cached_group_results, current_combination, total_steps, grid_progress["progress_bar"], hyperparameters_enabled=hyperparameters_enabled)  # Reuse production cache recovery, progress, and notification flow.
+                        if not recovered:  # Reject cache drift after complete-ratio preflight.
+                            raise RuntimeError(f"Fully cached ratio {augmentation_ratio} lost combination {feature_mode_name} / {classifier_name}")  # Preserve cache and plan consistency.
+                    grid_progress["current_combination"] = current_combination  # Advance shared progress after cached group recovery.
+                    cached_group_list = list(cached_group_results.values())  # Preserve canonical classifier insertion order.
+                    all_grid_results.extend(cached_group_list)  # Preserve cached results in canonical export order.
+                    ratio_results_by_hp[hyperparameters_enabled].setdefault(augmentation_ratio, {}).update(cached_group_results)  # Retain cached group for comparison export.
+                    continue  # Advance without opening current ratio data.
+
+                if active_ratio != augmentation_ratio:  # Load and sample only when canonical execution enters new ratio.
+                    if df_sampled is not None:  # Release completed prior-ratio sample before next ratio load.
+                        del df_sampled  # Drop prior-ratio DataFrame reference.
+                        gc.collect()  # Reclaim prior-ratio memory before loading next source.
+                        df_sampled = None  # Restore empty lifecycle state before current ratio construction.
+                    df_augmented = load_and_validate_augmented_data(file, df_original, config=config)  # Load augmented contents once for current ratio group.
+                    if df_augmented is None:  # Skip current ratio when augmented loading or validation fails.
+                        active_ratio = augmentation_ratio  # Prevent repeated failed reloads within same ratio group.
+                        continue  # Advance without retaining augmented data.
+                    df_sampled = sample_augmented_by_ratio(df_augmented, df_original, augmentation_ratio)  # Sample only current configured ratio once.
+                    del df_augmented  # Release full augmented contents before group evaluation.
+                    gc.collect()  # Reclaim full augmented contents while retaining current sample.
+                    active_ratio = augmentation_ratio  # Record reusable current ratio identity.
                 if df_sampled is None or df_sampled.empty:  # Skip ratios producing no augmented test rows.
                     continue  # Advance to next canonical slice.
-                results_ratio = evaluate_on_dataset(file, df_original, feature_names, ga_sel, pca_n, rfe_sel, base_models, data_source_label=f"Augmented@{int(augmentation_ratio * 100)}%", hyperparams_map=hp_params_map, experiment_id=generate_experiment_id(file, "original_training_augmented_testing", augmentation_ratio), experiment_mode="original_training_augmented_testing", augmentation_ratio=augmentation_ratio, execution_mode_str="separate_files", attack_types_combined=None, df_augmented_for_testing=df_sampled, config=config, hyperparameters_enabled=hyperparameters_enabled, grid_progress=grid_progress)  # Evaluate current ratio slice in canonical order.
+                results_ratio = evaluate_on_dataset(file, df_original, feature_names, ga_sel, pca_n, rfe_sel, base_models, data_source_label=f"Augmented@{int(augmentation_ratio * 100)}%", hyperparams_map=hp_params_map, experiment_id=generate_experiment_id(file, "original_training_augmented_testing", augmentation_ratio), experiment_mode="original_training_augmented_testing", augmentation_ratio=augmentation_ratio, execution_mode_str="separate_files", attack_types_combined=None, df_augmented_for_testing=df_sampled, config=config, hyperparameters_enabled=hyperparameters_enabled, grid_progress=grid_progress, feature_mode_name=feature_mode_name)  # Evaluate current canonical feature group while reusing ratio sample.
                 ratio_list = list(results_ratio.values())  # Convert current ratio results for annotation and export.
                 annotate_results_with_combination_flags(ratio_list, fs_toggle, hyperparameters_enabled, True)  # Mark active grid dimensions.
                 all_grid_results.extend(ratio_list)  # Preserve canonical augmented row order.
-                ratio_results_by_hp[hyperparameters_enabled][augmentation_ratio] = results_ratio  # Retain current ratio for matching baseline comparison.
-                del df_sampled  # Release current ratio sample after evaluation.
-                gc.collect()  # Reclaim ratio-specific memory.
+                ratio_results_by_hp[hyperparameters_enabled].setdefault(augmentation_ratio, {}).update(results_ratio)  # Accumulate every feature result under matching ratio and hyperparameter mode.
+
+            if df_sampled is not None:  # Release final ratio sample after its last canonical group.
+                del df_sampled  # Drop final augmented sample reference.
+                gc.collect()  # Reclaim final ratio memory before comparison generation.
 
             for hyperparameters_enabled, _, _ in hp_runs:  # Generate comparison rows in established hyperparameter order.
                 ratio_results = ratio_results_by_hp[hyperparameters_enabled]  # Resolve ratios belonging to current hyperparameter mode.
