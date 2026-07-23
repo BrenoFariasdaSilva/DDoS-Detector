@@ -1995,6 +1995,102 @@ def autocast(device_type: str, enabled: bool = True):
         raise
 
 
+def require_finite_tensor(tensor: torch.Tensor, tensor_name: str, args: Any, epoch: int, step: int, component: str) -> None:
+    """
+    Require a training tensor to contain only finite values.
+
+    :param tensor: Tensor whose values must be finite.
+    :param tensor_name: Diagnostic name for the tensor.
+    :param args: Runtime arguments containing the current dataset path.
+    :param epoch: One-based epoch number associated with the tensor.
+    :param step: One-based training or generation step associated with the tensor.
+    :param component: Training component that produced the tensor.
+    :return: None.
+    """
+
+    detached_tensor = tensor.detach()  # Detach tensor before diagnostic inspection
+    finite_mask = torch.isfinite(detached_tensor)  # Identify finite tensor elements
+    if bool(finite_mask.all().item()):  # Return immediately when every value is finite
+        return  # Preserve valid training behavior
+    invalid_values = detached_tensor[~finite_mask]  # Select invalid values for diagnostics
+    first_invalid = invalid_values.reshape(-1)[0].item()  # Capture first invalid value exactly
+    nan_count = int(torch.isnan(detached_tensor).sum().item())  # Count NaN values
+    positive_infinity_count = int(torch.isposinf(detached_tensor).sum().item())  # Count positive infinity values
+    negative_infinity_count = int(torch.isneginf(detached_tensor).sum().item())  # Count negative infinity values
+    dataset_name = Path(getattr(args, "csv_path", "unknown")).name  # Resolve current dataset filename
+    message = f"Non-finite tensor detected: dataset={dataset_name}, epoch={epoch}, step={step}, component={component}, value={tensor_name}, first_invalid={first_invalid}, nan={nan_count}, posinf={positive_infinity_count}, neginf={negative_infinity_count}, shape={tuple(detached_tensor.shape)}, dtype={detached_tensor.dtype}, device={detached_tensor.device}"  # Build precise failure diagnostic
+    safe_critical(message)  # Persist diagnostic through existing logging
+    raise FloatingPointError(message)  # Stop before invalid state propagates
+
+
+def require_finite_model_state(model: nn.Module, state_name: str, args: Any, epoch: int, step: int, component: str, gradients: bool = False) -> None:
+    """
+    Require model parameters or gradients to contain only finite values.
+
+    :param model: Model whose parameters or gradients must be finite.
+    :param state_name: Diagnostic name for the inspected model state.
+    :param args: Runtime arguments containing the current dataset path.
+    :param epoch: One-based epoch number associated with the model state.
+    :param step: One-based training or generation step associated with the model state.
+    :param component: Training component associated with the model state.
+    :param gradients: Inspect gradients when true, otherwise inspect parameters.
+    :return: None.
+    """
+
+    named_tensors = [(parameter_name, parameter.grad if gradients else parameter) for parameter_name, parameter in model.named_parameters()]  # Collect model tensors for one-pass validation
+    named_tensors = [(parameter_name, tensor) for parameter_name, tensor in named_tensors if tensor is not None]  # Remove unavailable gradients
+    if not named_tensors:  # Return when no model tensors are available
+        return  # Preserve valid empty-state behavior
+    finite_states = torch.stack([torch.isfinite(tensor.detach()).all() for _, tensor in named_tensors])  # Combine tensor validity flags before device synchronization
+    if bool(finite_states.all().item()):  # Return after one synchronization when all model tensors are finite
+        return  # Preserve valid model behavior
+    for parameter_name, tensor in named_tensors:  # Identify exact invalid model tensor only after aggregate failure
+        require_finite_tensor(tensor, f"{state_name}.{parameter_name}", args, epoch, step, component)  # Raise precise diagnostic for invalid model state
+
+
+def require_finite_optimizer_state(optimizer: torch.optim.Optimizer, optimizer_name: str, args: Any, epoch: int, step: int) -> None:
+    """
+    Require optimizer tensor state to contain only finite values.
+
+    :param optimizer: Optimizer whose tensor state must be finite.
+    :param optimizer_name: Diagnostic name for the optimizer.
+    :param args: Runtime arguments containing the current dataset path.
+    :param epoch: One-based epoch number associated with the optimizer state.
+    :param step: One-based training step associated with the optimizer state.
+    :return: None.
+    """
+
+    for parameter_index, parameter_state in enumerate(optimizer.state.values()):  # Iterate restored optimizer parameter states
+        for state_name, state_value in parameter_state.items():  # Iterate each optimizer state value
+            if torch.is_tensor(state_value):  # Inspect only tensor-backed optimizer state
+                require_finite_tensor(state_value, f"{optimizer_name}[{parameter_index}].{state_name}", args, epoch, step, optimizer_name)  # Reject invalid optimizer state before use
+
+
+def extract_saved_epoch(checkpoint_path: Path) -> int:
+    """
+    Extract numeric epoch from a generator checkpoint path.
+
+    :param checkpoint_path: Generator checkpoint path containing an epoch suffix.
+    :return: Numeric checkpoint epoch.
+    """
+
+    return int(checkpoint_path.stem.rsplit("epoch", 1)[-1])  # Parse numeric epoch suffix for chronological selection
+
+
+def release_cuda_memory() -> None:
+    """
+    Release unused CUDA cache after a failed model operation.
+
+    :return: None.
+    """
+
+    try:  # Attempt CUDA cache cleanup without masking original failures
+        if torch.cuda.is_available():  # Run cleanup only when CUDA is available
+            torch.cuda.empty_cache()  # Release unused cached CUDA allocations
+    except Exception as cleanup_error:  # Preserve original exception when CUDA cleanup fails
+        safe_warning(f"CUDA cleanup failed: {cleanup_error}")  # Report cleanup failure through existing logging
+
+
 def open_results_csv(results_csv_path, results_cols_cfg):
     """
     Open results CSV in append mode and return (file_obj, writer); write header if absent.
@@ -2474,7 +2570,7 @@ def normalize_args_and_setup_hardware(args: Any, config: Dict) -> tuple:
     batch_multiplier = min(8, max(1, 2 * gpu_count)) if gpu_count > 0 else 1  # Scale by 2x per GPU but cap to 8x to avoid OOM
     scaled_batch = configured_batch_size * batch_multiplier  # Compute scaled batch size once
     args.batch_size = int(scaled_batch)  # Apply scaled batch size to args
-    args.use_amp = bool(args.use_amp or (gpu_count > 0 and _torch_autocast is not None))  # Enable AMP when CUDA and autocast available
+    args.use_amp = bool(args.use_amp and gpu_count > 0 and _torch_autocast is not None)  # Honor explicit AMP configuration only when CUDA autocast is available
     suggested_workers = min(max(1, (os.cpu_count() or 1) // 2), 32)  # Suggest a conservative default for num_workers
     file_progress_prefix = getattr(args, "file_progress_prefix", f"{BackgroundColors.CYAN}[1/1]{Style.RESET_ALL}")  # Build colored prefix (default single-file)
     
@@ -2665,6 +2761,8 @@ def load_and_restore_generator_state(g_checkpoint_path: Path, device: torch.devi
         print(f"{BackgroundColors.GREEN}✓ Restored generator optimizer state{Style.RESET_ALL}")  # Confirm optimizer restoration
     if scaler is not None and "scaler_state" in g_checkpoint:  # If using AMP and scaler state saved
         scaler.load_state_dict(g_checkpoint["scaler_state"])  # Restore scaler state
+        if not math.isfinite(scaler.get_scale()) or scaler.get_scale() <= 0.0:  # Verify restored AMP scale is finite and positive
+            raise ValueError(f"Invalid AMP scaler state in {g_checkpoint_path}")  # Stop before using an invalid restored scale
         print(f"{BackgroundColors.GREEN}✓ Restored AMP scaler state{Style.RESET_ALL}")  # Confirm scaler restoration
     return g_checkpoint, start_epoch  # Return loaded checkpoint dict and starting epoch
 
@@ -2723,7 +2821,7 @@ def load_and_restore_discriminator_state(d_checkpoint_path: Path, device: torch.
             opt_D.load_state_dict(d_checkpoint["opt_D_state"])  # Restore discriminator optimizer
             print(f"{BackgroundColors.GREEN}✓ Restored discriminator optimizer state{Style.RESET_ALL}")  # Confirm optimizer restoration
     else:  # Discriminator checkpoint not found
-        print(f"{BackgroundColors.YELLOW}⚠ Warning: Discriminator checkpoint not found{Style.RESET_ALL}")  # Warn about missing discriminator
+        raise FileNotFoundError(f"Discriminator checkpoint not found: {d_checkpoint_path}")  # Prevent resume with an unpaired discriminator state
 
 
 def regenerate_missing_training_plot(csv_path_obj: Path, metrics_loaded: bool, metrics_history: Dict) -> None:
@@ -2775,10 +2873,10 @@ def resume_from_checkpoint(args, config: Dict, device: torch.device, G, D, opt_G
         checkpoint_prefix = csv_path_obj.stem  # Expected filename prefix
 
         if checkpoint_dir.exists():  # If checkpoint directory exists
-            checkpoint_files = sorted(checkpoint_dir.glob(f"{checkpoint_prefix}_generator_epoch*.pt"))  # Find matching checkpoints
+            checkpoint_files = list(checkpoint_dir.glob(f"{checkpoint_prefix}_generator_epoch*.pt"))  # Find matching checkpoints
 
             if checkpoint_files:  # If checkpoints found for this file
-                g_checkpoint_path = checkpoint_files[-1]  # Get latest checkpoint
+                g_checkpoint_path = max(checkpoint_files, key=extract_saved_epoch)  # Select latest checkpoint by numeric epoch
                 epoch_num = g_checkpoint_path.stem.split("epoch")[-1]  # Extract epoch number
                 d_checkpoint_path = checkpoint_dir / f"{checkpoint_prefix}_discriminator_epoch{epoch_num}.pt"  # Build discriminator path
 
@@ -2794,9 +2892,7 @@ def resume_from_checkpoint(args, config: Dict, device: torch.device, G, D, opt_G
                         print(f"{BackgroundColors.GREEN}✓ Resuming training from epoch {start_epoch} (step {step}){Style.RESET_ALL}")  # Confirm resume point
                     except Exception as e:  # If loading fails
                         print(f"{BackgroundColors.YELLOW}⚠ Failed to load checkpoint: {e}{Style.RESET_ALL}")  # Warn about load failure
-                        print(f"{BackgroundColors.YELLOW}⚠ Starting training from scratch{Style.RESET_ALL}")  # Notify scratch start
-                        start_epoch = 0  # Reset to start from beginning
-                        step = 0  # Reset step counter
+                        raise RuntimeError(f"Checkpoint resume failed for {csv_path_obj.name}") from e  # Stop instead of training from partially restored state
             else:  # No checkpoints found for this file
                 print(f"{BackgroundColors.CYAN}No existing checkpoints found for {csv_path_obj.name}{Style.RESET_ALL}")  # Notify no checkpoints
                 print(f"{BackgroundColors.CYAN}Starting training from scratch{Style.RESET_ALL}")  # Notify scratch start
@@ -2863,7 +2959,7 @@ def create_epoch_progress_bar(dataloader, args, epoch: int) -> tuple:
     return pbar, total_steps  # Return progress bar and batch count
 
 
-def execute_discriminator_training_steps(G, D, opt_D, scaler, real_x, labels, device: torch.device, args, config: Dict, n_classes: int) -> tuple:
+def execute_discriminator_training_steps(G, D, opt_D, scaler, real_x, labels, device: torch.device, args, config: Dict, n_classes: int, epoch: int, step: int) -> tuple:
     """
     Execute multiple discriminator training steps with gradient penalty.
 
@@ -2877,6 +2973,8 @@ def execute_discriminator_training_steps(G, D, opt_D, scaler, real_x, labels, de
     :param args: Parsed arguments namespace with critic_steps, batch_size, latent_dim, lambda_gp.
     :param config: Configuration dictionary for gradient penalty computation.
     :param n_classes: Number of label classes for conditional generation.
+    :param epoch: Current zero-based epoch index.
+    :param step: Current zero-based global training step.
     :return: Tuple of (loss_D, gp, d_real_score, d_fake_score) as tensors.
     """
 
@@ -2884,28 +2982,38 @@ def execute_discriminator_training_steps(G, D, opt_D, scaler, real_x, labels, de
     gp = torch.tensor(0.0, device=device)  # Initialize gradient penalty
     d_real_score = torch.tensor(0.0, device=device)  # Initialize real score tracker
     d_fake_score = torch.tensor(0.0, device=device)  # Initialize fake score tracker
-    for _ in range(args.critic_steps):  # Train discriminator multiple steps
+    for critic_step in range(args.critic_steps):  # Train discriminator multiple steps
         with autocast(device.type, enabled=(scaler is not None)):  # Enable AMP if available
             z = torch.randn(args.batch_size, args.latent_dim, device=device)  # Sample noise for discriminator step
             fake_x = G(z, labels).detach()  # Generate fake samples and detach for discriminator
             d_real = D(real_x, labels)  # Get discriminator score for real samples
             d_fake = D(fake_x, labels)  # Get discriminator score for fake samples
-            gp = gradient_penalty(D, real_x, fake_x, labels, device, config)  # Compute gradient penalty with config
-            loss_D = d_fake.mean() - d_real.mean() + args.lambda_gp * gp  # Calculate WGAN-GP discriminator loss
+        require_finite_tensor(fake_x, "generated_samples", args, epoch + 1, step + 1, f"discriminator[{critic_step + 1}]")  # Reject invalid generated samples before critic reuse
+        require_finite_tensor(d_real, "real_scores", args, epoch + 1, step + 1, f"discriminator[{critic_step + 1}]")  # Reject invalid real critic scores
+        require_finite_tensor(d_fake, "fake_scores", args, epoch + 1, step + 1, f"discriminator[{critic_step + 1}]")  # Reject invalid fake critic scores
+        with autocast(device.type, enabled=False):  # Keep gradient penalty and loss reduction in full precision
+            gp = gradient_penalty(D, real_x.float(), fake_x.float(), labels, device, config)  # Compute gradient penalty safely outside mixed precision
+            loss_D = d_fake.float().mean() - d_real.float().mean() + args.lambda_gp * gp  # Calculate full-precision WGAN-GP discriminator loss
+        require_finite_tensor(gp, "gradient_penalty", args, epoch + 1, step + 1, f"discriminator[{critic_step + 1}]")  # Reject invalid gradient penalty
+        require_finite_tensor(loss_D, "loss", args, epoch + 1, step + 1, f"discriminator[{critic_step + 1}]")  # Reject invalid discriminator loss before backward execution
         opt_D.zero_grad(set_to_none=True)  # Reset discriminator gradients to None for reduced memory overhead
         if scaler is not None:  # If using mixed precision
             scaler.scale(loss_D).backward()  # Scale loss and backpropagate
+            scaler.unscale_(opt_D)  # Unscale discriminator gradients before finite validation
+            require_finite_model_state(D, "gradients", args, epoch + 1, step + 1, f"discriminator[{critic_step + 1}]", gradients=True)  # Reject invalid discriminator gradients before optimizer execution
             scaler.step(opt_D)  # Update discriminator parameters with scaled gradients
             scaler.update()  # Update scaler for next iteration
         else:  # Standard precision
             loss_D.backward()  # Backpropagate discriminator loss
+            require_finite_model_state(D, "gradients", args, epoch + 1, step + 1, f"discriminator[{critic_step + 1}]", gradients=True)  # Reject invalid discriminator gradients before optimizer execution
             opt_D.step()  # Update discriminator parameters
+        require_finite_model_state(D, "parameters", args, epoch + 1, step + 1, f"discriminator[{critic_step + 1}]")  # Reject invalid discriminator parameters immediately after update
         d_real_score = d_real.mean()  # Store average real score
         d_fake_score = d_fake.mean()  # Store average fake score
     return loss_D, gp, d_real_score, d_fake_score  # Return discriminator training results
 
 
-def execute_generator_training_step(G, D, opt_G, scaler, device: torch.device, args, n_classes: int):
+def execute_generator_training_step(G, D, opt_G, scaler, device: torch.device, args, n_classes: int, epoch: int, step: int) -> torch.Tensor:
     """
     Execute a single generator training step.
 
@@ -2916,6 +3024,8 @@ def execute_generator_training_step(G, D, opt_G, scaler, device: torch.device, a
     :param device: Torch device for tensor allocation.
     :param args: Parsed arguments namespace with batch_size and latent_dim.
     :param n_classes: Number of label classes for conditional generation.
+    :param epoch: Current zero-based epoch index.
+    :param step: Current zero-based global training step.
     :return: Generator loss tensor.
     """
 
@@ -2923,15 +3033,23 @@ def execute_generator_training_step(G, D, opt_G, scaler, device: torch.device, a
         z = torch.randn(args.batch_size, args.latent_dim, device=device)  # Sample noise for generator step
         gen_labels = torch.randint(0, n_classes, (args.batch_size,), device=device)  # Sample labels for generator
         fake_x = G(z, gen_labels)  # Generate fake samples with generator
-        g_loss = -D(fake_x, gen_labels).mean()  # Calculate generator loss
+        fake_scores = D(fake_x, gen_labels)  # Score generated samples with discriminator
+    require_finite_tensor(fake_x, "generated_samples", args, epoch + 1, step + 1, "generator")  # Reject invalid generated samples before loss calculation
+    require_finite_tensor(fake_scores, "fake_scores", args, epoch + 1, step + 1, "generator")  # Reject invalid fake critic scores
+    g_loss = -fake_scores.float().mean()  # Calculate generator loss with full-precision reduction
+    require_finite_tensor(g_loss, "loss", args, epoch + 1, step + 1, "generator")  # Reject invalid generator loss before backward execution
     opt_G.zero_grad(set_to_none=True)  # Reset generator gradients to None for reduced memory overhead
     if scaler is not None:  # If using mixed precision
         scaler.scale(g_loss).backward()  # Scale loss and backpropagate
+        scaler.unscale_(opt_G)  # Unscale generator gradients before finite validation
+        require_finite_model_state(G, "gradients", args, epoch + 1, step + 1, "generator", gradients=True)  # Reject invalid generator gradients before optimizer execution
         scaler.step(opt_G)  # Update generator parameters with scaled gradients
         scaler.update()  # Update scaler for next iteration
     else:  # Standard precision
         g_loss.backward()  # Backpropagate generator loss
+        require_finite_model_state(G, "gradients", args, epoch + 1, step + 1, "generator", gradients=True)  # Reject invalid generator gradients before optimizer execution
         opt_G.step()  # Update generator parameters
+    require_finite_model_state(G, "parameters", args, epoch + 1, step + 1, "generator")  # Reject invalid generator parameters immediately after update
     return g_loss  # Return generator loss tensor
 
 
@@ -2999,9 +3117,10 @@ def run_batch_training_loop(G, D, opt_G, opt_D, scaler, device: torch.device, ar
     for batch_idx, (real_x_batch, labels_batch) in enumerate(pbar):  # Enumerate batches to obtain current batch index
         real_x = real_x_batch.to(device, non_blocking=True)  # Move real features to device with non_blocking when pinned
         labels = labels_batch.to(device, dtype=torch.long, non_blocking=True)  # Move labels to device with non_blocking when pinned
+        require_finite_tensor(real_x, "real_samples", args, epoch + 1, step + 1, "input")  # Reject invalid input samples before model execution
 
-        loss_D, gp, d_real_score, d_fake_score = execute_discriminator_training_steps(G, D, opt_D, scaler, real_x, labels, device, args, config, n_classes)  # Execute discriminator training steps with gradient penalty
-        g_loss = execute_generator_training_step(G, D, opt_G, scaler, device, args, n_classes)  # Execute single generator training step
+        loss_D, gp, d_real_score, d_fake_score = execute_discriminator_training_steps(G, D, opt_D, scaler, real_x, labels, device, args, config, n_classes, epoch, step)  # Execute discriminator training steps with gradient penalty
+        g_loss = execute_generator_training_step(G, D, opt_G, scaler, device, args, n_classes, epoch, step)  # Execute single generator training step
 
         if step % args.log_interval == 0:  # Extract scalar metrics only at log interval to avoid per-batch CUDA synchronization
             _cached_loss_D, _cached_g_loss, _cached_gp, _cached_d_real, _cached_d_fake = record_training_step_metrics(step, args, metrics_history, loss_D, g_loss, gp, d_real_score, d_fake_score)  # Record metrics and cache scalar values
@@ -3691,6 +3810,10 @@ def train(args, config: Optional[Dict] = None):
         G, D, opt_D, opt_G, scaler, fixed_noise, fixed_labels, step, start_epoch, metrics_history = create_models_and_optimizers(args, config, device, feature_dim, n_classes)  # Create models and optimizers
 
         metrics_history, start_epoch, step = resume_from_checkpoint(args, config, device, G, D, opt_G, opt_D, scaler, metrics_history, start_epoch, step)  # Resume from checkpoint if available
+        require_finite_model_state(G, "parameters", args, start_epoch, step, "generator")  # Reject invalid generator checkpoint or initialization parameters
+        require_finite_model_state(D, "parameters", args, start_epoch, step, "discriminator")  # Reject invalid discriminator checkpoint or initialization parameters
+        require_finite_optimizer_state(opt_G, "generator_optimizer", args, start_epoch, step)  # Reject invalid generator optimizer state before training
+        require_finite_optimizer_state(opt_D, "discriminator_optimizer", args, start_epoch, step)  # Reject invalid discriminator optimizer state before training
         telegram_enabled, next_notify, progress_pct = init_telegram_progress(args, config, start_epoch)  # Initialize telegram progress tracking
 
         training_start_time = time.time()  # Start persisted training duration immediately before the epoch loop
@@ -3711,6 +3834,7 @@ def train(args, config: Optional[Dict] = None):
         return (G, dataset, device)  # Return trained generator, dataset, and device for in-memory generation fallback
     except Exception as e:
         print(str(e))
+        release_cuda_memory()  # Release unused CUDA cache before propagating training failure
         send_exception_via_telegram(type(e), e, e.__traceback__)
         raise
 
@@ -4196,6 +4320,7 @@ def normalize_args_and_load_checkpoint(args, config: Dict) -> tuple:
     send_telegram_message(TELEGRAM_BOT, f"{file_progress_prefix} Starting WGAN-GP generation from {Path(args.checkpoint).name}")  # Telegram start with colored prefix
     ckpt = torch.load(args.checkpoint, map_location=device, weights_only=False)  # Load checkpoint from disk with sklearn objects
     args_ck = ckpt.get("args", {})  # Retrieve saved arguments from checkpoint
+    args._generation_epoch = int(ckpt.get("epoch", 0))  # Store checkpoint epoch for generation diagnostics
     if not getattr(args, "csv_path", None) and isinstance(args_ck, dict) and args_ck.get("csv_path"):  # Recover source CSV path from saved training arguments
         args.csv_path = args_ck.get("csv_path")  # Store recovered source CSV path on live args
     scaler = ckpt.get("scaler", None)  # Try to get scaler from checkpoint
@@ -4293,6 +4418,7 @@ def build_and_load_generator(args, config: Dict, ckpt: Dict, device: torch.devic
     else:  # Not DataParallel
         G.load_state_dict(ckpt["state_dict"] if "state_dict" in ckpt else ckpt)  # Load generator weights from checkpoint
     G.eval()  # Set generator to evaluation mode
+    require_finite_model_state(G, "parameters", args, int(ckpt.get("epoch", 0)), 0, "generation")  # Reject invalid checkpoint parameters before generation
     return G  # Return generator model ready for inference
 
 
@@ -4408,7 +4534,9 @@ def generate_batches_and_collect_results(args, G: nn.Module, device: torch.devic
             b = min(batch_size, n - i)  # Calculate current batch size
             z = torch.randn(b, args.latent_dim, device=device)  # Sample noise for batch
             y = torch.from_numpy(labels[i : i + b]).to(device, dtype=torch.long)  # Convert labels to tensor
-            fake = G(z, y).cpu().numpy()  # Generate fake samples and move to CPU
+            fake_tensor = G(z, y)  # Generate fake samples on the selected device
+            require_finite_tensor(fake_tensor, "generated_samples", args, int(getattr(args, "_generation_epoch", getattr(args, "_last_completed_epoch", 0))), (i // batch_size) + 1, "generation")  # Reject invalid generated samples before output conversion
+            fake = fake_tensor.cpu().numpy()  # Move verified generated samples to CPU
             all_fake[offset : offset + b] = fake  # Write batch directly into pre-allocated array slice
             offset += b  # Advance write offset by current batch size
     
@@ -4798,6 +4926,7 @@ def handle_generate_top_level_exception(e: Exception) -> None:
     """
 
     print(str(e))  # Print exception message to terminal
+    release_cuda_memory()  # Release unused CUDA cache before propagating generation failure
     send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full exception via Telegram
     raise e  # Re-raise the exception to propagate
 
@@ -4866,6 +4995,8 @@ def generate_from_in_memory_generator(args, config: Dict, G: nn.Module, dataset:
         n_classes = dataset.n_classes  # Get number of classes from dataset
 
         G.eval()  # Set generator to evaluation mode for deterministic inference
+        args._generation_epoch = int(getattr(args, "_last_completed_epoch", 0))  # Store completed training epoch for generation diagnostics
+        require_finite_model_state(G, "parameters", args, args._generation_epoch, 0, "generation")  # Reject invalid in-memory generator parameters before generation
 
         n_per_class, labels, n = compute_generation_counts_and_labels(args, config, class_distribution, label_encoder, n_classes)  # Compute per-class counts and label array
         notify_start_of_generation(args, n)  # Send Telegram notification about generation start
@@ -5274,9 +5405,9 @@ def dispatch_wgangp_execution_mode(args, final_config: Dict) -> None:
                 checkpoint_dir = data_aug_dir / final_config.get("paths", {}).get("checkpoint_subdir", "Checkpoints")  # Construct checkpoint directory path under Data_Augmentation
                 checkpoint_path = checkpoint_dir / f"{csv_path_obj.stem}_generator_epoch{args.epochs}.pt"  # Construct expected final-epoch checkpoint filename
                 if not checkpoint_path.exists():  # Find latest if specific epoch not found
-                    checkpoints = sorted(checkpoint_dir.glob(f"{csv_path_obj.stem}_generator_epoch*.pt"))  # Discover all matching generator checkpoints in directory
+                    checkpoints = list(checkpoint_dir.glob(f"{csv_path_obj.stem}_generator_epoch*.pt"))  # Discover all matching generator checkpoints in directory
                     if checkpoints:  # Assign latest checkpoint when at least one file exists
-                        checkpoint_path = checkpoints[-1]  # Select the last entry by sorted order as the latest checkpoint
+                        checkpoint_path = max(checkpoints, key=extract_saved_epoch)  # Select latest checkpoint by numeric epoch
                     else:  # Raise a descriptive error when no checkpoints exist at all
                         raise FileNotFoundError(f"No generator checkpoint found for {csv_path_obj.name} in {checkpoint_dir}")  # Abort with informative message
                 args.checkpoint = str(checkpoint_path)  # Assign resolved checkpoint path string to args for generation
@@ -5521,9 +5652,9 @@ def resolve_checkpoint_after_training(args: Any, config: Dict, csv_path_obj: Pat
     checkpoint_path = checkpoint_dir / f"{checkpoint_prefix}_generator_epoch{args.epochs}.pt"  # Construct expected final-epoch checkpoint filename
     
     if not checkpoint_path.exists():  # Fall back to latest checkpoint when specific epoch file is absent
-        checkpoints = sorted(checkpoint_dir.glob(f"{checkpoint_prefix}_generator_epoch*.pt"))  # Discover all matching checkpoints in directory
+        checkpoints = list(checkpoint_dir.glob(f"{checkpoint_prefix}_generator_epoch*.pt"))  # Discover all matching checkpoints in directory
         if checkpoints:  # Assign latest checkpoint when at least one file exists
-            checkpoint_path = checkpoints[-1]  # Select the last entry by sorted order as the latest checkpoint
+            checkpoint_path = max(checkpoints, key=extract_saved_epoch)  # Select latest checkpoint by numeric epoch
         else:  # No checkpoint files found on disk; signal in-memory fallback to caller
             print(f"{BackgroundColors.YELLOW}[WARNING] No generator checkpoint found for {csv_path_obj.name} in {checkpoint_dir}. Will use in-memory generator.{Style.RESET_ALL}")  # Warn about missing checkpoint and inform fallback strategy
             return None  # Return None to signal in-memory generation fallback
@@ -5823,6 +5954,7 @@ def process_dataset_path(args: Any, config: Dict, mode: str, input_path: str, re
     generating_order = config.get("wgangp", {}).get("generating_order", "off")  # Read configured generation ordering strategy
     files_to_process = apply_dataset_ordering(files_to_process, generating_order)  # Apply ordering strategy to collected file list
     total_files = len(files_to_process)  # Count total files for progress display
+    failed_files = []  # Collect per-file failures for final error propagation
     verbose_output(f"Found {total_files} CSV files in {input_path}")  # Log total discovered CSV file count for this directory
     if total_files == 0:  # Warn and return early when no CSV files are present in directory
         print(f"{BackgroundColors.YELLOW}Warning: no CSV files found in directory: {BackgroundColors.CYAN}{input_path}{Style.RESET_ALL}")  # Print actionable warning about empty directory
@@ -5838,7 +5970,12 @@ def process_dataset_path(args: Any, config: Dict, mode: str, input_path: str, re
                 send_telegram_message(TELEGRAM_BOT, f"[ERROR] Failed to process {Path(file).name}: {e}")  # Send per-file error to Telegram for remote visibility
             except Exception:  # Ignore Telegram notification failures to avoid masking the original error
                 pass  # Continue to next file even if notification fails
+            failed_files.append(f"{Path(file).name}: {e}")  # Record failure while preserving next-file processing
+            if isinstance(e, getattr(torch, "AcceleratorError", ())):  # Stop immediately when CUDA reports an unrecoverable accelerator failure
+                raise  # Propagate poisoned CUDA context instead of processing another file
             continue  # Advance to next file despite error in current file
+    if failed_files:  # Propagate aggregate failure after all discovered files were attempted
+        raise RuntimeError(f"Failed to process {len(failed_files)} of {total_files} files in {input_path}: {'; '.join(failed_files)}")  # Prevent failed batch from reporting success
 
 
 def run_batch_mode(args: Any, config: Dict, datasets: Dict, mode: str, results_suffix: str, results_cols: list) -> None:
