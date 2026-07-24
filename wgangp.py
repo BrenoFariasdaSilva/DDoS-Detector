@@ -476,7 +476,7 @@ class ConfigNamespace:
         if self.feature_dim is not None:  # If feature_dim is not None
             self.feature_dim = int(self.feature_dim)  # Cast to int
         
-        self.force_new_samples = cfg.get("generation", {}).get("force_new_samples", False)
+        self.force_regenerate_samples = cfg.get("generation", {}).get("force_regenerate_samples", False)  # Resolve forced regeneration with a false fallback
         self.num_workers = int(cfg.get("dataloader", {}).get("num_workers", 8))  # Cast to int
         self._last_training_time = 0.0  # Placeholder for last training elapsed time (set after train)
         self.file_progress_prefix = ""  # Default per-file progress prefix (set at runtime when batch processing)
@@ -780,6 +780,7 @@ def build_default_training_and_model_config() -> Dict:
             "checkpoint": None,  # Path to generator checkpoint
             "n_samples": 1.0,  # Number/percentage of samples to generate
             "label": None,  # Specific class ID to generate (None = all classes)
+            "force_regenerate_samples": False,  # Preserve missing-only generation by default
             "out_file": "generated.csv",  # Output CSV filename
             "gen_batch_size": 256,  # Generation batch size
             "feature_dim": None,  # Feature dimensionality (None = auto-detect)
@@ -905,6 +906,9 @@ def load_configuration(config_path: Optional[str] = None, cli_overrides: Optiona
                 with open(path, "r") as f:  # Open config file for reading
                     file_config = yaml.safe_load(f)  # Load YAML configuration
                 if file_config:  # If config loaded successfully
+                    generation_config = file_config.get("generation", {}) if isinstance(file_config, dict) else {}  # Read generation settings for legacy-key migration
+                    if "force_regenerate_samples" not in generation_config and "force_new_samples" in generation_config:  # Preserve old custom configurations only when new key is absent
+                        generation_config["force_regenerate_samples"] = generation_config["force_new_samples"]  # Migrate legacy forced-generation value into current setting
                     config = deep_merge(config, file_config)  # Merge with defaults
                     print(f"{BackgroundColors.GREEN}Loaded configuration from: {BackgroundColors.CYAN}{path}{Style.RESET_ALL}")  # Print success message
             except Exception as e:  # If loading fails
@@ -1231,7 +1235,8 @@ def parse_args():
         
         p.add_argument("--checkpoint", type=str, default=None, help="Generator checkpoint path")  # Add checkpoint argument
         p.add_argument("--n_samples", type=float, default=None, help="Number/percentage of samples to generate")  # Add n_samples argument
-        p.add_argument("--force_new_samples", action="store_true", help="Force generation of new samples even if output file exists")  # Add force_new_samples argument
+        p.add_argument("--force_regenerate_samples", "--force_new_samples", dest="force_regenerate_samples", action="store_true", default=None, help="Force regeneration even if generated samples already exist")  # Add explicit forced-regeneration override
+        p.add_argument("--no_force_regenerate_samples", dest="force_regenerate_samples", action="store_false", help="Disable forced regeneration and use existing generated samples")  # Add explicit forced-regeneration disable override
         p.add_argument("--gen_label", type=int, default=None, help="Specific class ID to generate")  # Add gen_label argument
         p.add_argument("--out_file", type=str, default=None, help="Output CSV filename")  # Add out_file argument
         p.add_argument("--gen_batch_size", type=int, default=None, help="Generation batch size")  # Add gen_batch_size argument
@@ -1351,7 +1356,7 @@ def apply_generation_and_data_cli_overrides(args, overrides: Dict) -> None:
     Apply generation, dataloader, and dataset CLI argument overrides.
 
     Mutates the overrides dictionary in-place with values for checkpoint,
-    n_samples, force_new_samples, gen_label, out_file, gen_batch_size,
+    n_samples, force_regenerate_samples, gen_label, out_file, gen_batch_size,
     feature_dim, num_workers, remove_zero_variance, and
     no_remove_zero_variance arguments.
 
@@ -1364,8 +1369,8 @@ def apply_generation_and_data_cli_overrides(args, overrides: Dict) -> None:
         overrides.setdefault("generation", {})["checkpoint"] = args.checkpoint  # Set checkpoint
     if args.n_samples is not None:  # If n_samples specified
         overrides.setdefault("generation", {})["n_samples"] = args.n_samples  # Set n_samples
-    if getattr(args, "force_new_samples", False):  # If force_new_samples flag set
-        overrides.setdefault("generation", {})["force_new_samples"] = True  # Set force_new_samples
+    if getattr(args, "force_regenerate_samples", None) is not None:  # Apply only an explicit forced-regeneration CLI value
+        overrides.setdefault("generation", {})["force_regenerate_samples"] = args.force_regenerate_samples  # Override configured forced regeneration
     if args.gen_label is not None:  # If gen_label specified
         overrides.setdefault("generation", {})["label"] = args.gen_label  # Set label
     if args.out_file is not None:  # If out_file specified
@@ -3370,7 +3375,7 @@ def validate_completed_generation_row(row_runtime: Dict, results_cols_cfg: list)
 
 def update_results_csv_row(results_csv_path: Path, ordered_row: list, results_cols_cfg: list, original_file: str) -> None:
     """
-    Load existing results CSV, remove all rows for original_file, append new row, and save back.
+    Load existing results CSV, replace rows for original_file, and save atomically.
 
     :param results_csv_path: Absolute path to the results CSV file.
     :param ordered_row: Ordered list of values aligned to results_cols_cfg schema.
@@ -3403,12 +3408,14 @@ def update_results_csv_row(results_csv_path: Path, ordered_row: list, results_co
                 row_original_file = row[original_file_idx] if original_file_idx >= 0 and original_file_idx < len(row) else ""  # Extract original_file value safely using precomputed index
                 if row_original_file != original_file:  # Retain rows belonging to different original files only
                     existing_rows.append(row)  # Preserve unrelated rows without modification
-        with open(results_csv_path, "w", newline="", encoding="utf-8") as wf:  # Open file in write mode to perform full rewrite
+        temporary_results_path = results_csv_path.with_suffix(f"{results_csv_path.suffix}.tmp")  # Stage complete replacement beside the destination
+        with open(temporary_results_path, "w", newline="", encoding="utf-8") as wf:  # Open temporary file for failure-safe full rewrite
             writer = csv.writer(wf)  # Create CSV writer for full rewrite operation
             writer.writerow(results_cols_cfg)  # Write schema header row first to preserve column order
             for row in existing_rows:  # Write all retained rows for other original files
                 writer.writerow(row)  # Persist each retained row in original order
             writer.writerow(ordered_row)  # Append deduplicated row for current original_file as last entry
+        os.replace(temporary_results_path, results_csv_path)  # Atomically publish complete CSV without exposing partial unrelated rows
     except Exception as _ue:  # On any failure, warn without interrupting training
         print(f"{BackgroundColors.YELLOW}Warning: could not update results CSV {results_csv_path}: {_ue}{Style.RESET_ALL}")  # Warn about CSV update failure
 
@@ -4259,26 +4266,24 @@ def evaluate_existing_augmentation_file(out_path: Path, file_prefix: str, existi
     :param file_prefix: Telegram prefix string for progress display.
     :param existing_count: Number of rows in the existing output file.
     :param expected_n: Expected number of samples based on configuration.
-    :param args: Parsed arguments namespace with force_new_samples flag.
+    :param args: Parsed arguments namespace with force_regenerate_samples flag.
     :return: True if generation should proceed, False if it should be skipped.
     """
 
-    if existing_count == expected_n and not getattr(args, "force_new_samples", False):  # Matching and no force
+    if existing_count == expected_n and not getattr(args, "force_regenerate_samples", False):  # Preserve matching-output skip unless regeneration is forced
         send_telegram_message(
             TELEGRAM_BOT,
             f"{file_prefix} Skipping Generation: {out_path.name} already exists with {existing_count} output rows (expected {expected_n}).",
         )  # Notify skip via Telegram
         return False  # Skip generation
-    if getattr(args, "force_new_samples", False):  # Forced regeneration
-        send_telegram_message(
-            TELEGRAM_BOT,
-            f"{file_prefix} Force Regeneration Requested: Removing existing {out_path.name} ({existing_count} output rows) and regenerating to {expected_n}.",
-        )  # Notify forced regeneration via Telegram
-    else:  # Count mismatch requires regeneration
-        send_telegram_message(
-            TELEGRAM_BOT,
-            f"{file_prefix} Existing {out_path.name} has {existing_count} output rows but expected {expected_n}; removing and regenerating.",
-        )  # Notify mismatch via Telegram
+    if getattr(args, "force_regenerate_samples", False):  # Bypass every existing-output skip when regeneration is explicitly forced
+        source_name = Path(getattr(args, "csv_path", out_path.name)).name  # Identify selected input file for factual logging
+        forced_message = f"{file_prefix} Force Regeneration Requested: Regenerating existing result for {source_name} ({existing_count} output rows) because regeneration was explicitly forced."  # Build concise forced-regeneration context
+        print(f"{BackgroundColors.YELLOW}{forced_message}{Style.RESET_ALL}")  # Log forced regeneration to terminal
+        safe_log("info", forced_message)  # Persist forced-regeneration context through existing logging
+        send_telegram_message(TELEGRAM_BOT, forced_message)  # Notify forced regeneration through existing Telegram flow
+        return True  # Preserve existing output until replacement generation is ready
+    send_telegram_message(TELEGRAM_BOT, f"{file_prefix} Existing {out_path.name} has {existing_count} output rows but expected {expected_n}; removing and regenerating.")  # Notify mismatch via Telegram
     try:  # Attempt to delete existing file before regeneration
         out_path.unlink()  # Delete existing file
     except Exception:  # Ignore deletion errors
@@ -4296,7 +4301,7 @@ def verify_data_augmentation_file(args, config: Optional[Dict] = None) -> bool:
     Behavior:
       - If output file does not exist: return True (proceed)
       - If output file exists and equals expected sample count: return False
-        unless `force_new_samples` is True (in that case delete and return True)
+        unless `force_regenerate_samples` is True (in that case return True)
       - If output file exists but count mismatches: delete file and return True
 
     :param args: Runtime args (must include `out_file`, `n_samples`, `checkpoint`, `csv_path`)
@@ -5405,7 +5410,7 @@ def build_config_overrides_from_kwargs(kwargs: Dict) -> Dict:
                 cli_style_overrides.setdefault("generator", {})["embed_dim"] = value
             elif key in ["d_embed_dim"]:  # Discriminator embedding dim
                 cli_style_overrides.setdefault("discriminator", {})["embed_dim"] = value
-            elif key in ["checkpoint", "n_samples", "label", "out_file", "gen_batch_size", "feature_dim"]:  # Generation params
+            elif key in ["checkpoint", "n_samples", "force_regenerate_samples", "label", "out_file", "gen_batch_size", "feature_dim"]:  # Generation params
                 cli_style_overrides.setdefault("generation", {})[key] = value
             elif key in ["num_workers"]:  # DataLoader params
                 cli_style_overrides.setdefault("dataloader", {})[key] = value
