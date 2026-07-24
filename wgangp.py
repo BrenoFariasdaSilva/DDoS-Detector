@@ -2066,6 +2066,30 @@ def require_finite_optimizer_state(optimizer: torch.optim.Optimizer, optimizer_n
                 require_finite_tensor(state_value, f"{optimizer_name}[{parameter_index}].{state_name}", args, epoch, step, optimizer_name)  # Reject invalid optimizer state before use
 
 
+def require_finite_saved_state(saved_state: Any, state_name: str, args: Any, epoch: int, component: str) -> None:
+    """
+    Require every numeric value in a saved training state to be finite.
+
+    :param saved_state: Nested saved state containing tensors or scalar values.
+    :param state_name: Diagnostic path for the saved state.
+    :param args: Runtime arguments containing the current dataset path.
+    :param epoch: Saved epoch associated with the state.
+    :param component: Training component associated with the state.
+    :return: None.
+    """
+
+    if torch.is_tensor(saved_state):  # Inspect tensor values directly
+        require_finite_tensor(saved_state, state_name, args, epoch, 0, component)  # Reject invalid saved tensor values
+    elif isinstance(saved_state, float):  # Inspect floating-point metadata
+        require_finite_tensor(torch.tensor(saved_state), state_name, args, epoch, 0, component)  # Reject invalid saved scalar values
+    elif isinstance(saved_state, dict):  # Traverse mapping values
+        for nested_name, nested_state in saved_state.items():  # Visit every nested mapping entry
+            require_finite_saved_state(nested_state, f"{state_name}.{nested_name}", args, epoch, component)  # Validate nested mapping state
+    elif isinstance(saved_state, (list, tuple)):  # Traverse sequence values
+        for nested_index, nested_state in enumerate(saved_state):  # Visit every nested sequence entry
+            require_finite_saved_state(nested_state, f"{state_name}[{nested_index}]", args, epoch, component)  # Validate nested sequence state
+
+
 def extract_saved_epoch(checkpoint_path: Path) -> int:
     """
     Extract numeric epoch from a generator checkpoint path.
@@ -2075,6 +2099,48 @@ def extract_saved_epoch(checkpoint_path: Path) -> int:
     """
 
     return int(checkpoint_path.stem.rsplit("epoch", 1)[-1])  # Parse numeric epoch suffix for chronological selection
+
+
+def select_finite_saved_pair(checkpoint_files: List[Path], checkpoint_dir: Path, checkpoint_prefix: str, csv_path_obj: Path, args: Any, scaler: Any) -> tuple:
+    """
+    Select the newest complete saved epoch whose training state is finite.
+
+    :param checkpoint_files: Generator artifact paths available for the dataset.
+    :param checkpoint_dir: Directory containing saved model artifacts.
+    :param checkpoint_prefix: Dataset-specific saved artifact prefix.
+    :param csv_path_obj: Dataset path used in diagnostics.
+    :param args: Runtime arguments containing the current dataset path.
+    :param scaler: AMP gradient scaler when mixed precision is active.
+    :return: Generator and discriminator paths for the newest usable epoch.
+    """
+
+    candidate_errors = []  # Preserve rejected saved-pair diagnostics
+    for g_candidate_path in sorted(checkpoint_files, key=extract_saved_epoch, reverse=True):  # Visit saved epochs from newest to oldest
+        epoch_num = extract_saved_epoch(g_candidate_path)  # Resolve numeric saved epoch
+        d_candidate_path = checkpoint_dir / f"{checkpoint_prefix}_discriminator_epoch{epoch_num}.pt"  # Resolve paired discriminator path
+        print(f"{BackgroundColors.CYAN}Attempting to resume from epoch {epoch_num}...{Style.RESET_ALL}")  # Notify resume attempt
+        try:  # Validate the pair before mutating live training state
+            if not d_candidate_path.exists():  # Reject an unpaired generator artifact
+                raise FileNotFoundError(f"Discriminator checkpoint not found: {d_candidate_path}")  # Preserve precise missing-pair diagnostic
+            g_candidate = torch.load(g_candidate_path, map_location="cpu", weights_only=False)  # Load generator candidate on CPU for validation
+            d_candidate = torch.load(d_candidate_path, map_location="cpu", weights_only=False)  # Load discriminator candidate on CPU for validation
+            require_finite_saved_state(g_candidate["state_dict"], "parameters", args, epoch_num, "saved_generator")  # Reject invalid generator parameters
+            require_finite_saved_state(d_candidate["state_dict"], "parameters", args, epoch_num, "saved_discriminator")  # Reject invalid discriminator parameters
+            if "opt_G_state" in g_candidate:  # Validate available generator optimizer state
+                require_finite_saved_state(g_candidate["opt_G_state"], "optimizer", args, epoch_num, "saved_generator")  # Reject invalid generator optimizer values
+            if "opt_D_state" in d_candidate:  # Validate available discriminator optimizer state
+                require_finite_saved_state(d_candidate["opt_D_state"], "optimizer", args, epoch_num, "saved_discriminator")  # Reject invalid discriminator optimizer values
+            if scaler is not None and "scaler_state" in g_candidate:  # Validate available AMP scaler state
+                require_finite_saved_state(g_candidate["scaler_state"], "scaler", args, epoch_num, "saved_generator")  # Reject invalid AMP scaler values
+            return g_candidate_path, d_candidate_path  # Return the newest finite saved pair
+        except (OSError, RuntimeError, ValueError, TypeError, KeyError, EOFError, FloatingPointError) as candidate_error:  # Handle expected saved-state failures
+            candidate_message = f"Saved epoch {epoch_num} is unusable for {csv_path_obj.name}: {candidate_error}"  # Build precise recovery diagnostic
+            candidate_errors.append(candidate_message)  # Preserve failure for terminal reporting
+            safe_warning(candidate_message)  # Persist rejected-pair diagnostic through existing logging
+            print(f"{BackgroundColors.YELLOW}⚠ {candidate_message}{Style.RESET_ALL}")  # Display rejected-pair diagnostic
+
+    failure_summary = "; ".join(candidate_errors)  # Combine all rejected-pair diagnostics
+    raise RuntimeError(f"Checkpoint resume failed for {csv_path_obj.name}: {failure_summary}")  # Prevent training from an invalid or partial state
 
 
 def release_cuda_memory() -> None:
@@ -2876,23 +2942,17 @@ def resume_from_checkpoint(args, config: Dict, device: torch.device, G, D, opt_G
             checkpoint_files = list(checkpoint_dir.glob(f"{checkpoint_prefix}_generator_epoch*.pt"))  # Find matching checkpoints
 
             if checkpoint_files:  # If checkpoints found for this file
-                g_checkpoint_path = max(checkpoint_files, key=extract_saved_epoch)  # Select latest checkpoint by numeric epoch
-                epoch_num = g_checkpoint_path.stem.split("epoch")[-1]  # Extract epoch number
-                d_checkpoint_path = checkpoint_dir / f"{checkpoint_prefix}_discriminator_epoch{epoch_num}.pt"  # Build discriminator path
-
                 print(f"{BackgroundColors.CYAN}Found existing checkpoints for {csv_path_obj.name}{Style.RESET_ALL}")  # Notify checkpoint discovery
-                print(f"{BackgroundColors.CYAN}Attempting to resume from epoch {epoch_num}...{Style.RESET_ALL}")  # Notify resume attempt
-
-                if g_checkpoint_path.exists():  # If generator checkpoint exists
-                    try:  # Try to load checkpoint
-                        g_checkpoint, start_epoch = load_and_restore_generator_state(g_checkpoint_path, device, G, opt_G, scaler)  # Load and restore generator state from checkpoint
-                        metrics_history, step, metrics_loaded = restore_metrics_from_checkpoint_or_json(g_checkpoint, checkpoint_dir, checkpoint_prefix, metrics_history, step)  # Restore metrics from checkpoint or JSON fallback
-                        load_and_restore_discriminator_state(d_checkpoint_path, device, D, opt_D)  # Load and restore discriminator state from checkpoint
-                        regenerate_missing_training_plot(csv_path_obj, metrics_loaded, metrics_history)  # Regenerate training plot if missing
-                        print(f"{BackgroundColors.GREEN}✓ Resuming training from epoch {start_epoch} (step {step}){Style.RESET_ALL}")  # Confirm resume point
-                    except Exception as e:  # If loading fails
-                        print(f"{BackgroundColors.YELLOW}⚠ Failed to load checkpoint: {e}{Style.RESET_ALL}")  # Warn about load failure
-                        raise RuntimeError(f"Checkpoint resume failed for {csv_path_obj.name}") from e  # Stop instead of training from partially restored state
+                g_checkpoint_path, d_checkpoint_path = select_finite_saved_pair(checkpoint_files, checkpoint_dir, checkpoint_prefix, csv_path_obj, args, scaler)  # Select newest usable saved pair
+                try:  # Restore the prevalidated pair into live training state
+                    g_checkpoint, start_epoch = load_and_restore_generator_state(g_checkpoint_path, device, G, opt_G, scaler)  # Load and restore generator state from saved pair
+                    metrics_history, step, metrics_loaded = restore_metrics_from_checkpoint_or_json(g_checkpoint, checkpoint_dir, checkpoint_prefix, metrics_history, step)  # Restore metrics from saved state or JSON fallback
+                    load_and_restore_discriminator_state(d_checkpoint_path, device, D, opt_D)  # Load and restore discriminator state from saved pair
+                    regenerate_missing_training_plot(csv_path_obj, metrics_loaded, metrics_history)  # Regenerate training plot if missing
+                    print(f"{BackgroundColors.GREEN}✓ Resuming training from epoch {start_epoch} (step {step}){Style.RESET_ALL}")  # Confirm resume point
+                except Exception as e:  # If restoration fails after validation
+                    print(f"{BackgroundColors.YELLOW}⚠ Failed to load checkpoint: {e}{Style.RESET_ALL}")  # Warn about load failure
+                    raise RuntimeError(f"Checkpoint resume failed for {csv_path_obj.name}") from e  # Stop instead of training from partially restored state
             else:  # No checkpoints found for this file
                 print(f"{BackgroundColors.CYAN}No existing checkpoints found for {csv_path_obj.name}{Style.RESET_ALL}")  # Notify no checkpoints
                 print(f"{BackgroundColors.CYAN}Starting training from scratch{Style.RESET_ALL}")  # Notify scratch start
