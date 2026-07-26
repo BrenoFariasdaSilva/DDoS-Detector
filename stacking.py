@@ -2999,6 +2999,72 @@ def sample_augmented_by_ratio(augmented_df, original_df, ratio):
         raise
 
 
+def sample_combined_files_by_ratio(files_list, original_sample_count, ratio, config=None):
+    """
+    Sample combined-file augmentation sources without retaining every source DataFrame together.
+
+    :param files_list: Ordered augmented dataset file paths.
+    :param original_sample_count: Original dataset row count used to size the ratio.
+    :param ratio: Requested augmentation ratio.
+    :param config: Runtime configuration dictionary.
+    :return: Deterministic uniformly sampled combined DataFrame.
+    """
+
+    if config is None:  # Use the global configuration only when no explicit configuration was supplied
+        config = CONFIG  # Preserve established configuration fallback
+    source_metadata = []  # Retain only row counts and schemas during the bounded first pass
+    common_features = None  # Build the same numeric feature intersection without retaining source frames
+    total_files = len(files_list)  # Resolve progress metadata once for both bounded passes
+    for index, file_path in enumerate(files_list, start=1):  # Inspect one preprocessed source at a time
+        source_config = dict(config)  # Isolate per-file progress metadata
+        source_config["execution"] = dict(source_config.get("execution", {}), progress_index=index, progress_total=total_files)  # Preserve established source progress reporting
+        processed = process_single_file(file_path, config=source_config)  # Apply the unchanged complete-file preprocessing semantics
+        if processed is None:  # Skip sources rejected by the established combined-file loader
+            continue  # Continue with the next compatible source
+        source_df, target_column, feature_columns = processed  # Resolve only the current source frame and compact metadata
+        common_features = set(feature_columns) if common_features is None else common_features.intersection(feature_columns)  # Match established common-feature intersection semantics
+        source_metadata.append((file_path, len(source_df), target_column))  # Retain no source rows after this pass
+        del source_df  # Release the current complete source before loading another
+        gc.collect()  # Return current-source objects before the next file load
+    if not source_metadata or not common_features:  # Reject an empty or schema-incompatible augmented source set
+        return None  # Preserve the existing failed-load signal
+    total_rows = sum(row_count for _, row_count, _ in source_metadata)  # Compute the exact preprocessed global population
+    requested_rows = max(1, int(round(float(ratio) * int(original_sample_count))))  # Preserve established ratio cardinality
+    sample_rows = min(requested_rows, total_rows)  # Cap sampling at the available augmented population
+    random_state = np.random.RandomState(42)  # Keep deterministic uniform sampling across repeated runs
+    remaining_rows = total_rows  # Track the unvisited global population for exact hypergeometric allocation
+    remaining_sample = sample_rows  # Track rows still required from later sources
+    sampled_parts = []  # Retain only requested rows rather than every complete source
+    common_feature_list = sorted(common_features)  # Preserve established combined-file feature ordering
+    for index, (file_path, row_count, target_column) in enumerate(source_metadata, start=1):  # Reload and sample one compatible source at a time
+        source_sample_count = remaining_sample if index == len(source_metadata) else int(random_state.hypergeometric(row_count, remaining_rows - row_count, remaining_sample))  # Allocate an exact uniform global sample without global row storage
+        remaining_rows -= row_count  # Remove the current source population from later allocation
+        remaining_sample -= source_sample_count  # Remove the current source contribution from later allocation
+        if source_sample_count == 0:  # Avoid reloading a source that contributes no selected rows
+            continue  # Proceed directly to the next allocated source
+        source_config = dict(config)  # Isolate second-pass progress metadata
+        source_config["execution"] = dict(source_config.get("execution", {}), progress_index=index, progress_total=total_files)  # Preserve established source progress reporting
+        processed = process_single_file(file_path, config=source_config)  # Rebuild only the current source under bounded ownership
+        if processed is None:  # Refuse silent sample corruption when a first-pass source disappears
+            raise RuntimeError(f"Augmented source became unavailable during sampling: {file_path}")  # Surface the unstable source explicitly
+        source_df, current_target_column, _ = processed  # Resolve the current source and its authoritative target
+        if len(source_df) != row_count or current_target_column != target_column:  # Require stable row count and target identity across both passes
+            raise RuntimeError(f"Augmented source changed during sampling: {file_path}")  # Prevent a non-reproducible mixed snapshot
+        sampled_source = source_df.sample(n=source_sample_count, random_state=random_state, replace=False) if source_sample_count < row_count else source_df  # Select only this source's allocated uniform rows
+        sampled_part = sampled_source[common_feature_list].copy()  # Retain only the established common numeric schema
+        sampled_part["attack_type"] = sampled_source[current_target_column].to_numpy(copy=False)  # Preserve original label values in the established final target position
+        sampled_parts.append(sampled_part)  # Retain only bounded sampled rows for final assembly
+        del source_df, sampled_source, sampled_part  # Release current complete-source references before the next load
+        gc.collect()  # Reclaim current-source memory while sampled parts remain
+    if not sampled_parts:  # Reject an unusable ratio sample
+        return None  # Preserve the existing empty-source signal
+    sampled_df = pd.concat(sampled_parts, ignore_index=True)  # Combine only the requested rows instead of the complete augmented population
+    del sampled_parts  # Release sampled part containers after final assembly
+    gc.collect()  # Reclaim intermediate sampled blocks before model artifact loading
+    verbose_output(f"{BackgroundColors.GREEN}Sampled {BackgroundColors.CYAN}{len(sampled_df)}{BackgroundColors.GREEN} augmented rows at ratio {BackgroundColors.CYAN}{ratio}{BackgroundColors.GREEN} from {BackgroundColors.CYAN}{len(source_metadata)}{BackgroundColors.GREEN} sequential sources{Style.RESET_ALL}", config=config)  # Report bounded global sampling completion
+    return sampled_df  # Return the deterministic combined ratio sample
+
+
 def build_tsne_output_directory(original_file_path, augmented_file_path):
     """
     Build output directory path for t-SNE plots preserving nested dataset structure.
@@ -6450,7 +6516,7 @@ def load_existing_model_if_available(model_name, dataset_file, dataset_name, fea
             artifact_lock.close()  # Closing the descriptor releases flock automatically
 
 
-def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, y_test, dataset_file=None, scaler=None, feature_names=None, feature_set=None, config=None, phase_metadata=None, training_ram_stats=None, fit_model=True, notification_context=None, hyperparameters_enabled: Optional[bool] = None, augmentation_ratio: Optional[float] = None):  # Evaluate one classifier with watcher metadata, RAM statistics, and notification context
+def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, y_test, dataset_file=None, scaler=None, feature_names=None, feature_set=None, config=None, phase_metadata=None, training_ram_stats=None, fit_model=True, notification_context=None, hyperparameters_enabled: Optional[bool] = None, augmentation_ratio: Optional[float] = None, precomputed_predictions: Optional[np.ndarray] = None, precomputed_prediction_seconds: float = 0.0):  # Evaluate one classifier with watcher metadata, RAM statistics, and optional bounded predictions
     """
     Trains an individual classifier and evaluates its performance on the test set.
 
@@ -6471,6 +6537,8 @@ def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, 
     :param notification_context: Exact evaluation combination label for remote notifications
     :param hyperparameters_enabled: Whether optimized hyperparameters are active, or None outside an evaluation combination.
     :param augmentation_ratio: Authoritative augmentation ratio, or None for original data.
+    :param precomputed_predictions: Optional predictions produced through bounded augmented-data batches.
+    :param precomputed_prediction_seconds: Time already spent producing bounded predictions.
     :return: Metrics tuple (acc, prec, rec, f1, fpr, fnr, elapsed_time)
     """
     
@@ -6532,10 +6600,10 @@ def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, 
             log_training_phase(feature_set, model_name, "Training", "Skipped (persisted model)", hyperparameters_enabled, augmentation_ratio)  # Record contextual loaded-model evaluation without fit.
 
         log_training_phase(feature_set, model_name, "Prediction", "Started", hyperparameters_enabled, augmentation_ratio)  # Mark contextual prediction as distinct from model training.
-        y_pred = model.predict(X_test)  # Predict the labels for the test set
+        y_pred = model.predict(X_test) if precomputed_predictions is None else np.asarray(precomputed_predictions)  # Predict normally or reuse bounded augmented-data predictions
         log_training_phase(feature_set, model_name, "Prediction", "Completed", hyperparameters_enabled, augmentation_ratio)  # Mark contextual prediction completion before metric computation.
 
-        elapsed_time = time.time() - start_time  # Calculate the total time elapsed
+        elapsed_time = time.time() - start_time + float(precomputed_prediction_seconds)  # Include bounded prediction time already completed by the augmented caller
 
         log_training_phase(feature_set, model_name, "Metrics", "Started", hyperparameters_enabled, augmentation_ratio)  # Mark contextual metric computation as separate phase.
         acc = accuracy_score(y_test, y_pred)  # Calculate Accuracy
@@ -14472,15 +14540,15 @@ def load_feature_process_ratio_frame_data(process_payload: dict, ratio: float) -
     """
 
     if process_payload["execution_mode"] == "combined_files":  # Preserve combined-files augmented source assembly semantics
-        augmented_df, _, _ = combine_files_for_combined_evaluation(process_payload["augmentation_file_paths"], config=process_payload["config"])  # Load and combine only the currently required ratio source
+        sampled_df = sample_combined_files_by_ratio(process_payload["augmentation_file_paths"], process_payload["original_sample_count"], ratio, config=process_payload["config"])  # Sample sources sequentially without constructing the complete augmented population
     else:  # Preserve separate-file augmented source loading semantics
         augmented_raw = load_augmented_dataset(process_payload["augmentation_file_paths"][0], config=process_payload["config"])  # Load the one located augmented file
         augmented_df = preprocess_dataframe(augmented_raw, remove_zero_variance=True, config=process_payload["config"]) if augmented_raw is not None else None  # Apply unchanged cleaning semantics
-    if augmented_df is None:  # Reject a failed augmentation load for the active required ratio
-        raise RuntimeError(f"Failed to load augmented data for ratio {ratio}")  # Surface ratio-specific loading failure
-    sampled_df = sample_augmented_by_ratio(augmented_df, process_payload["original_sample_count"], ratio)  # Preserve exact deterministic ratio sampling
-    del augmented_df  # Release the full augmented source before classifier prediction
-    gc.collect()  # Reclaim the full augmented source while retaining only sampled rows
+        if augmented_df is None:  # Reject a failed single-file augmentation load for the active required ratio
+            raise RuntimeError(f"Failed to load augmented data for ratio {ratio}")  # Surface ratio-specific loading failure
+        sampled_df = sample_augmented_by_ratio(augmented_df, process_payload["original_sample_count"], ratio)  # Preserve exact deterministic single-file ratio sampling
+        del augmented_df  # Release the complete single-file source before classifier prediction
+        gc.collect()  # Reclaim the complete single-file source while retaining only sampled rows
     if sampled_df is None or sampled_df.empty:  # Reject an unusable deterministic ratio sample
         raise RuntimeError(f"Augmentation ratio {ratio} produced no testing rows")  # Surface ratio-specific sample failure
     augmented_features = sampled_df.iloc[:, :-1].select_dtypes(include=np.number)  # Preserve the established positional target and numeric feature selection
@@ -14813,25 +14881,34 @@ def evaluate_feature_process_augmented_task(task: dict, process_payload: dict, r
     if artifact_bundle is None:  # Refuse augmented prediction without the required synchronized original model
         raise RuntimeError(f"Original-trained artifact unavailable for {task['feature_set']} - {task['classifier_name']}: {rejection_reason}")  # Surface the exact missing artifact reason
     loaded_model = artifact_bundle["model"]  # Resolve the persisted original-trained classifier
-    log_feature_process_combination(task, status_state, "Data transformation started")  # Announce current-ratio scaling and feature transformation
-    X_augmented_scaled = np.asarray(artifact_bundle["scaler"].transform(ratio_data["X_raw"]))  # Apply the exact persisted original-training scaler
-    if artifact_bundle["transformer"] is not None:  # Apply the exact persisted PCA transformer when this model uses components
-        X_augmented_model = np.asarray(artifact_bundle["transformer"].transform(X_augmented_scaled))  # Preserve PCA testing transformation semantics
-    elif task["feature_set"] == "Full Features":  # Keep the complete scaled matrix without materializing an identical all-column copy
-        X_augmented_model = X_augmented_scaled  # Preserve exact Full Features order and values through the existing evaluator
-    else:  # Apply the exact persisted GA or RFE feature order
-        model_feature_indices = [artifact_bundle["input_feature_names"].index(feature) for feature in artifact_bundle["model_feature_names"]]  # Resolve persisted model column positions
-        X_augmented_model = X_augmented_scaled[:, model_feature_indices]  # Materialize only the exact required feature-set columns
     y_augmented = np.asarray(ratio_data["y_encoded"], dtype=np.int64) if "y_encoded" in ratio_data else np.asarray(artifact_bundle["label_encoder"].transform(ratio_data["y_raw"]), dtype=np.int64)  # Reuse shared exact encoding or apply the persisted original-training label encoder
+    prediction_rows = max(1, int(process_payload["config"].get("stacking", {}).get("memory_management", {}).get("process_memmap_chunk_rows", 100000)))  # Reuse the established bounded row setting for augmented transformation and prediction
+    y_predicted = np.empty(len(y_augmented), dtype=np.int64)  # Retain only compact predictions while feature matrices stay batch-bounded
+    model_feature_indices = None if task["feature_set"] in {"Full Features", "PCA Components"} else [artifact_bundle["input_feature_names"].index(feature) for feature in artifact_bundle["model_feature_names"]]  # Resolve selected columns once outside the bounded loop
+    log_feature_process_combination(task, status_state, f"Bounded transformation and prediction started (Batch Rows={prediction_rows})")  # Announce the memory-bounded inference phase
+    prediction_started_at = time.time()  # Measure the complete bounded transform and prediction phase
+    for start in range(0, len(y_augmented), prediction_rows):  # Transform and predict one bounded row batch at a time
+        end = min(start + prediction_rows, len(y_augmented))  # Resolve the current bounded batch end
+        scaled_batch = np.asarray(artifact_bundle["scaler"].transform(ratio_data["X_raw"][start:end]))  # Scale only the current raw memmap slice
+        if artifact_bundle["transformer"] is not None:  # Apply the persisted PCA transformer to the current batch
+            model_batch = np.asarray(artifact_bundle["transformer"].transform(scaled_batch))  # Preserve exact PCA inference semantics without a complete dense matrix
+        elif model_feature_indices is None:  # Reuse the complete scaled batch for Full Features
+            model_batch = scaled_batch  # Avoid an identical all-column batch copy
+        else:  # Select the persisted GA or RFE feature order within the current batch
+            model_batch = scaled_batch[:, model_feature_indices]  # Materialize only selected columns for the current bounded batch
+        y_predicted[start:end] = np.asarray(loaded_model.predict(model_batch), dtype=np.int64)  # Persist compact predictions and release batch features immediately
+        del scaled_batch, model_batch  # Release current batch matrices before the next transformation
+    prediction_seconds = time.time() - prediction_started_at  # Preserve inference duration for the established execution-time metric
+    log_feature_process_combination(task, status_state, "Bounded transformation and prediction completed")  # Confirm complete bounded inference before metrics
     training_ram_stats = {}  # Hold the established loaded-model evaluation RAM record shape
-    log_feature_process_combination(task, status_state, "Prediction started")  # Announce persisted-model prediction
-    metrics = evaluate_individual_classifier(loaded_model, task["classifier_name"], None, None, X_augmented_model, y_augmented, process_payload["file"], artifact_bundle["scaler"], task["expected_feature_names"], artifact_feature_set, config=process_payload["config"], training_ram_stats=training_ram_stats, fit_model=False, notification_context=build_telegram_combination_header(task["feature_set"], task["classifier_name"], task["augmentation_ratio"], task["hyperparameters_enabled"]), hyperparameters_enabled=task["hyperparameters_enabled"], augmentation_ratio=task["augmentation_ratio"])  # Reuse unchanged loaded evaluation with serialized authoritative combination metadata.
+    log_feature_process_combination(task, status_state, "Metrics started")  # Announce persisted-model metrics after bounded prediction
+    metrics = evaluate_individual_classifier(loaded_model, task["classifier_name"], None, None, None, y_augmented, process_payload["file"], artifact_bundle["scaler"], task["expected_feature_names"], artifact_feature_set, config=process_payload["config"], training_ram_stats=training_ram_stats, fit_model=False, notification_context=build_telegram_combination_header(task["feature_set"], task["classifier_name"], task["augmentation_ratio"], task["hyperparameters_enabled"]), hyperparameters_enabled=task["hyperparameters_enabled"], augmentation_ratio=task["augmentation_ratio"], precomputed_predictions=y_predicted, precomputed_prediction_seconds=prediction_seconds)  # Reuse unchanged metrics and reporting without reconstructing a complete transformed matrix
     log_feature_process_combination(task, status_state, "Prediction and metrics completed")  # Confirm existing loaded-model phases completed
     result_entry = build_classifier_result_entry(loaded_model.__class__.__name__, process_payload["file"], process_payload["execution_mode"], process_payload["attack_types_combined"], task["feature_set"], "Individual", task["classifier_name"], task["data_source_label"], task["experiment_id"], task["experiment_mode"], task["augmentation_ratio"], task["expected_n_features"], task["expected_n_samples_train"], len(y_augmented), metrics, task["expected_feature_names"], hyperparams_map=process_payload["optimized_params"] if task["hyperparameters_enabled"] else {}, hyperparameters_enabled=task["hyperparameters_enabled"], effective_hyperparameters=serialize_effective_estimator_parameters(loaded_model))  # Build the unchanged augmented-testing result payload
     log_feature_process_combination(task, status_state, "Persistence started")  # Announce the atomic augmented result transaction
     persist_cache_result_entry(process_payload["cache_ref_file"], result_entry, cache_dict, config=process_payload["config"])  # Persist and verify this completed result immediately
     log_feature_process_combination(task, status_state, "Persistence completed")  # Confirm augmented result durability
-    del loaded_model, artifact_bundle, artifact_context, X_augmented_scaled, X_augmented_model, y_augmented, metrics, training_ram_stats  # Release model, predictions, transformed features, labels, and metrics
+    del loaded_model, artifact_bundle, artifact_context, y_augmented, y_predicted, metrics, training_ram_stats  # Release model, predictions, labels, and metrics
     gc.collect()  # Reclaim all combination-specific augmented evaluation memory
     return result_entry  # Return only the small persisted result record
 
@@ -15027,6 +15104,14 @@ def run_feature_set_process_worker(process_payload: dict, status_queue: Any, sta
             cleanup_feature_process_ratio_data(resource_state["ratio_data"])  # Release current ratio mappings after final local task using them.
             resource_state["ratio_data"] = None  # Clear released ratio mapping.
             resource_state["active_ratio"] = None  # Clear released ratio identity.
+            gc.collect()  # Reclaim all phase-owned Python objects before another worker is admitted
+            if phase_ratio is not None and sys.platform == "linux":  # Return freed glibc heap pages before releasing augmented admission
+                try:  # Keep allocator trimming best-effort across Linux C runtimes
+                    malloc_trim = getattr(ctypes.CDLL(None), "malloc_trim", None)  # Resolve glibc heap trimming when available
+                    if malloc_trim is not None:  # Skip Linux runtimes without glibc malloc trimming
+                        malloc_trim(0)  # Release free allocator pages to the operating system immediately
+                except (AttributeError, OSError):  # Preserve evaluation when allocator symbols are unavailable
+                    pass  # Continue with garbage-collected phase resources
             if capacity_acquired:  # Release current phase admission before waiting for other workers.
                 acquired_capacity_gate.release()  # Admit another configured worker into current phase.
                 acquired_capacity_gate = None  # Clear released phase gate ownership
