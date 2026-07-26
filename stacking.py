@@ -14988,6 +14988,8 @@ def run_feature_set_process_worker(process_payload: dict, status_queue: Any, sta
     resource_state: dict[str, Any] = {"original_resources": None, "ratio_data": None, "active_ratio": None, "cache_dict": {}}  # Track bounded worker resources and the latest cache snapshot
     active_task: Optional[dict] = None  # Track exact task identity for failure and abrupt-death reporting
     capacity_gate: Any = process_payload.get("capacity_gate")  # Resolve the coordinator-owned matrix-capacity admission gate
+    augmented_capacity_gate: Any = process_payload.get("augmented_capacity_gate")  # Resolve the coordinator-owned augmented artifact admission gate
+    acquired_capacity_gate: Any = None  # Track the exact phase gate owned for exception-safe release
     capacity_acquired = False  # Track admission ownership for exception-safe release
     try:  # Surface every child failure through both status queue and nonzero exit code
         configure_feature_process_parent_death(process_payload["coordinator_pid"])  # Prevent spawned work from surviving a killed detached coordinator
@@ -15007,10 +15009,12 @@ def run_feature_set_process_worker(process_payload: dict, status_queue: Any, sta
         phase_barrier = process_payload.get("phase_barrier")  # Resolve cross-feature phase synchronization when coordinator provides it.
         for phase_ratio in phase_order:  # Complete original phase and each augmented ratio as isolated global waves.
             phase_tasks = [task for task in task_queue if task.get("augmentation_ratio") == phase_ratio]  # Select only pending tasks belonging to current global phase.
-            if phase_tasks and capacity_gate is not None:  # Gate matrix-heavy work separately for each phase to avoid barrier deadlock.
+            phase_capacity_gate = augmented_capacity_gate if phase_ratio is not None and augmented_capacity_gate is not None else capacity_gate  # Serialize augmented model loading while retaining matrix-derived original capacity
+            if phase_tasks and phase_capacity_gate is not None:  # Gate matrix-heavy work separately for each phase to avoid barrier deadlock.
                 print(f"[RESOURCE CAPACITY] Feature Set={process_payload['feature_set']} | Worker Index={process_payload['worker_index']} | PID={os.getpid()} | State=Waiting | Ratio={phase_ratio}")  # Log phase-specific capacity wait.
                 sys.stdout.flush()  # Flush wait evidence before blocking.
-                capacity_gate.acquire()  # Wait for coordinator-established matrix admission.
+                phase_capacity_gate.acquire()  # Wait for coordinator-established phase admission.
+                acquired_capacity_gate = phase_capacity_gate  # Preserve the exact acquired gate for failure cleanup
                 capacity_acquired = True  # Record current phase admission ownership.
                 print(f"[RESOURCE CAPACITY] Feature Set={process_payload['feature_set']} | Worker Index={process_payload['worker_index']} | PID={os.getpid()} | State=Admitted | Ratio={phase_ratio}")  # Log admitted phase.
                 sys.stdout.flush()  # Flush admission evidence before allocation.
@@ -15024,7 +15028,8 @@ def run_feature_set_process_worker(process_payload: dict, status_queue: Any, sta
             resource_state["ratio_data"] = None  # Clear released ratio mapping.
             resource_state["active_ratio"] = None  # Clear released ratio identity.
             if capacity_acquired:  # Release current phase admission before waiting for other workers.
-                capacity_gate.release()  # Admit another configured worker into current phase.
+                acquired_capacity_gate.release()  # Admit another configured worker into current phase.
+                acquired_capacity_gate = None  # Clear released phase gate ownership
                 capacity_acquired = False  # Clear phase admission ownership.
             barrier_rank = phase_barrier.wait() if phase_barrier is not None else 0  # Wait until every feature worker releases current phase resources.
             if barrier_rank == 0 and phase_ratio is not None and process_payload.get("augmentation_shared_directory"):  # Let one synchronized worker remove current shared ratio files.
@@ -15047,7 +15052,8 @@ def run_feature_set_process_worker(process_payload: dict, status_queue: Any, sta
         cleanup_feature_process_original_resources(resource_state["original_resources"])  # Close any remaining original memmaps and owned feature files
         cleanup_feature_process_ratio_data(resource_state["ratio_data"])  # Release any remaining current-ratio augmented resources
         if capacity_acquired:  # Release only a capacity slot owned by this worker
-            capacity_gate.release()  # Admit the next configured feature worker after complete matrix cleanup
+            acquired_capacity_gate.release()  # Admit the next configured feature worker after complete matrix cleanup
+            acquired_capacity_gate = None  # Clear released phase gate ownership
             capacity_acquired = False  # Clear local ownership before logger shutdown
         try:  # Flush and close only this child process's logger handle
             if logger is not None:  # Close only an initialized child logger
@@ -15158,8 +15164,10 @@ def resolve_feature_process_worker_capacity(pending_by_feature: dict, process_pa
 
     largest_worker_bytes = max(estimated_bytes_by_feature.values(), default=0)  # Resolve a conservative uniform admission weight
     pending_worker_count = len(pending_features)  # Count configured workers with uncached tasks
+    pending_augmented_worker_count = sum(any(task.get("augmentation_ratio") is not None for task in pending_by_feature[feature_name]) for feature_name in pending_features)  # Count workers that must deserialize persisted models outside matrix-byte estimates
     admitted_worker_count = pending_worker_count if largest_worker_bytes == 0 else max(1, min(pending_worker_count, safe_available_bytes // largest_worker_bytes))  # Admit all metadata-only work or a capacity-bounded positive worker count
-    return {"pending_worker_count": pending_worker_count, "admitted_worker_count": int(admitted_worker_count), "total_bytes": total_bytes, "available_bytes": available_bytes, "reserve_bytes": reserve_bytes, "safe_available_bytes": safe_available_bytes, "largest_worker_bytes": largest_worker_bytes, "estimated_bytes_by_feature": estimated_bytes_by_feature}  # Return complete deterministic scheduling evidence
+    augmented_admitted_worker_count = min(1, pending_augmented_worker_count)  # Serialize unbounded persisted-model deserialization and prediction memory while preserving original-data concurrency
+    return {"pending_worker_count": pending_worker_count, "pending_augmented_worker_count": pending_augmented_worker_count, "admitted_worker_count": int(admitted_worker_count), "augmented_admitted_worker_count": augmented_admitted_worker_count, "total_bytes": total_bytes, "available_bytes": available_bytes, "reserve_bytes": reserve_bytes, "safe_available_bytes": safe_available_bytes, "largest_worker_bytes": largest_worker_bytes, "estimated_bytes_by_feature": estimated_bytes_by_feature}  # Return complete deterministic scheduling evidence
 
 
 def execute_feature_set_processes(pending_by_feature: dict, process_payload: dict, tasks: List[dict], cached_results: dict, process_context: Any = None, process_target: Any = None) -> dict:  # Start, monitor, join, and close one persistent process per active feature set
@@ -15196,8 +15204,9 @@ def execute_feature_set_processes(pending_by_feature: dict, process_payload: dic
     admitted_worker_count = capacity_decision["admitted_worker_count"]  # Read the deterministic simultaneous heavy-worker limit
     pending_worker_count = capacity_decision["pending_worker_count"]  # Read the number of configured workers with pending work
     capacity_gate = context.BoundedSemaphore(admitted_worker_count) if 0 < admitted_worker_count < pending_worker_count else None  # Create one spawn-safe gate only when resource capacity reduces active concurrency
+    augmented_capacity_gate = context.BoundedSemaphore(capacity_decision["augmented_admitted_worker_count"]) if 0 < capacity_decision["augmented_admitted_worker_count"] < capacity_decision["pending_augmented_worker_count"] else None  # Serialize augmented artifact loading only when multiple feature workers require it
     capacity_action = "Gated" if capacity_gate is not None else "Unchanged"  # Distinguish an enforced scheduling decision from full admission
-    print(f"[RESOURCE CAPACITY] Decision={capacity_action} | Pending Workers={pending_worker_count} | Simultaneous Workers={admitted_worker_count} | Available Bytes={capacity_decision['available_bytes']} | Reserved Bytes={capacity_decision['reserve_bytes']} | Safe Available Bytes={capacity_decision['safe_available_bytes']} | Largest Estimated Worker Bytes={capacity_decision['largest_worker_bytes']} | Estimated Bytes={capacity_decision['estimated_bytes_by_feature']}")  # Log exact capacity evidence instead of silently reducing concurrency
+    print(f"[RESOURCE CAPACITY] Decision={capacity_action} | Pending Workers={pending_worker_count} | Simultaneous Workers={admitted_worker_count} | Augmented Workers={capacity_decision['pending_augmented_worker_count']} | Simultaneous Augmented Workers={capacity_decision['augmented_admitted_worker_count']} | Available Bytes={capacity_decision['available_bytes']} | Reserved Bytes={capacity_decision['reserve_bytes']} | Safe Available Bytes={capacity_decision['safe_available_bytes']} | Largest Estimated Worker Bytes={capacity_decision['largest_worker_bytes']} | Estimated Bytes={capacity_decision['estimated_bytes_by_feature']}")  # Log exact capacity evidence instead of silently reducing concurrency
     phase_order = list(dict.fromkeys(task["augmentation_ratio"] for task in tasks))  # Derive original and ratio waves from authoritative canonical plan.
     phase_barrier = context.Barrier(len(process_payload["feature_mode_names"])) if process_payload["feature_mode_names"] else None  # Synchronize configured feature workers at every phase boundary.
     status_queue = context.Queue()  # Create one small lifecycle channel for every persistent worker
@@ -15216,6 +15225,7 @@ def execute_feature_set_processes(pending_by_feature: dict, process_payload: dic
             child_payload["feature_metadata"] = process_payload["feature_metadata_by_name"][feature_set_name]  # Assign only this feature set's small names and indices
             child_payload["notification_acknowledgement"] = notification_acknowledgements[feature_set_name]  # Pass one small feature-local synchronization value without Telegram credentials or result data
             child_payload["capacity_gate"] = capacity_gate  # Share only the coordinator-owned admission semaphore with every configured worker
+            child_payload["augmented_capacity_gate"] = augmented_capacity_gate  # Share one admission slot for persisted-model augmented evaluation
             child_payload["phase_order"] = phase_order  # Give every worker identical canonical global phase order.
             child_payload["phase_barrier"] = phase_barrier  # Prevent any worker from entering next ratio before all current-ratio work and cleanup finish.
             child_payload["coordinator_pid"] = os.getpid()  # Give the spawned worker exact parent identity for orphan prevention
