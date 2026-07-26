@@ -529,6 +529,22 @@ class FeatureSetProcessTests(unittest.TestCase):  # Group persistent feature-set
             stacking.cleanup_feature_process_directory(str(shared_directory))  # Delete coordinator-owned ratio backing after every consumer releases it
             self.assertFalse(shared_directory.exists())  # Require deterministic post-consumer ratio cleanup
 
+    def test_combined_augmentation_sampling_loads_sources_sequentially(self):  # Verify complete augmented population is never retained
+        """Verify combined augmentation uses bounded two-pass source sampling."""
+
+        with tempfile.TemporaryDirectory() as temporary_directory:  # Isolate two small combined augmentation sources
+            first_path = Path(temporary_directory) / "first.csv"  # Resolve the first augmented source
+            second_path = Path(temporary_directory) / "second.csv"  # Resolve the second augmented source
+            first_path.write_text("feature_a,feature_b,label\n1,11,A\n2,12,A\n3,13,A\n4,14,A\n", encoding="utf-8")  # Persist a valid varying first source
+            second_path.write_text("feature_a,feature_b,label\n5,15,B\n6,16,B\n7,17,B\n8,18,B\n", encoding="utf-8")  # Persist a valid varying second source
+            config = {"execution": {"low_memory": False}}  # Provide the minimal dataset loading configuration
+            with mock.patch.object(stacking, "process_single_file", wraps=stacking.process_single_file) as process_mock:  # Observe both bounded passes through the established source loader
+                sampled = stacking.sample_combined_files_by_ratio([str(first_path), str(second_path)], 8, 0.5, config=config)  # Sample half the original cardinality without a complete combined frame
+            self.assertEqual(process_mock.call_count, 4)  # Load each compatible source once for metadata and once for its allocated sample
+            self.assertEqual(sampled.shape, (4, 3))  # Preserve exact requested global cardinality and common schema
+            self.assertEqual(sampled.columns.tolist(), ["feature_a", "feature_b", "attack_type"])  # Preserve established sorted features and final target position
+            self.assertEqual(set(sampled["attack_type"]), {"A", "B"})  # Preserve labels from both uniformly allocated sources
+
     def test_shared_preprocessing_memmaps_match_sequential_features_and_labels(self):  # Verify exact scientific split and coordinator ownership
         """
         Verify shared memmaps preserve the sequential preprocessing outputs exactly.
@@ -581,19 +597,24 @@ class FeatureSetProcessTests(unittest.TestCase):  # Group persistent feature-set
             stacking.cleanup_feature_process_directory(str(shared_directory))  # Delete coordinator backing after worker release
             self.assertFalse(shared_directory.exists())  # Require deterministic final ownership cleanup
 
-    def test_augmented_full_reuses_scaled_matrix_without_all_column_copy(self):  # Verify Full augmented memory conservation
-        """Verify augmented Full passes scaler output directly to existing evaluator."""
+    def test_augmented_full_predicts_in_bounded_batches(self):  # Verify augmented Full memory conservation
+        """Verify augmented Full transforms and predicts without a complete dense feature matrix."""
 
         scaled = np.arange(12, dtype=np.float64).reshape(6, 2)  # Build deterministic complete scaled Full matrix
         scaler = mock.Mock()  # Represent persisted original-training scaler
-        scaler.transform.return_value = scaled  # Return the exact matrix whose identity must be preserved
-        artifact_bundle = {"model": object(), "scaler": scaler, "transformer": None, "input_feature_names": ["a", "b"], "model_feature_names": ["a", "b"], "label_encoder": mock.Mock()}  # Build complete Full artifact metadata
+        scaler.transform.side_effect = lambda values: scaled[:len(values)]  # Return one exact scaled matrix per bounded input batch
+        loaded_model = mock.Mock()  # Represent the persisted classifier with observable bounded predictions
+        loaded_model.predict.side_effect = lambda values: np.arange(len(values), dtype=np.int64) % 2  # Produce deterministic predictions for each bounded batch
+        artifact_bundle = {"model": loaded_model, "scaler": scaler, "transformer": None, "input_feature_names": ["a", "b"], "model_feature_names": ["a", "b"], "label_encoder": mock.Mock()}  # Build complete Full artifact metadata
         task = {"feature_set": "Full Features", "hyperparameters_enabled": False, "classifier_name": "Random Forest", "augmentation_ratio": 0.5, "expected_feature_names": ["a", "b"], "expected_n_features": 2, "expected_n_samples_train": 8, "data_source_label": "Augmented@50%_CombinedFiles", "experiment_id": "experiment", "experiment_mode": "original_training_augmented_testing"}  # Build one augmented Full task
-        payload = {"file": "dataset.csv", "cache_ref_file": "dataset.csv", "execution_mode": "combined_files", "attack_types_combined": None, "config": {}, "optimized_params": {}}  # Provide only small evaluation metadata
+        payload = {"file": "dataset.csv", "cache_ref_file": "dataset.csv", "execution_mode": "combined_files", "attack_types_combined": None, "config": {"stacking": {"memory_management": {"process_memmap_chunk_rows": 2}}}, "optimized_params": {}}  # Provide a small bounded prediction batch
         ratio_data = {"X_raw": np.ones((6, 2), dtype=np.float64), "y_encoded": np.array([0, 1, 0, 1, 0, 1], dtype=np.int64)}  # Provide one required ratio resource
         with mock.patch.object(stacking, "build_feature_process_artifact_context", return_value={}), mock.patch.object(stacking, "build_filename_safe_dataset_identity", return_value="dataset"), mock.patch.object(stacking, "load_existing_model_if_available", return_value=(artifact_bundle, None)), mock.patch.object(stacking, "evaluate_individual_classifier", return_value={"Accuracy": 1.0}) as evaluate_mock, mock.patch.object(stacking, "build_classifier_result_entry", return_value={"persisted": True}), mock.patch.object(stacking, "persist_cache_result_entry"), mock.patch.object(stacking, "log_feature_process_combination"):  # Isolate scientific evaluator input identity
             stacking.evaluate_feature_process_augmented_task(task, payload, ratio_data, object(), {}, {})  # Reuse existing augmented evaluator for Full
-        self.assertIs(evaluate_mock.call_args.args[4], scaled)  # Pass scaler output directly without an identical all-column matrix copy
+        self.assertEqual(scaler.transform.call_count, 3)  # Transform six augmented rows in three bounded batches
+        self.assertEqual(loaded_model.predict.call_count, 3)  # Predict only the same three bounded batches
+        self.assertIsNone(evaluate_mock.call_args.args[4])  # Avoid passing any complete transformed feature matrix to the evaluator
+        np.testing.assert_array_equal(evaluate_mock.call_args.kwargs["precomputed_predictions"], np.array([0, 1, 0, 1, 0, 1]))  # Preserve complete prediction order across batches
         self.assertFalse(evaluate_mock.call_args.kwargs["hyperparameters_enabled"])  # Preserve serialized default hyperparameter identity at evaluator boundary.
         self.assertEqual(evaluate_mock.call_args.kwargs["augmentation_ratio"], 0.5)  # Preserve serialized augmentation ratio at evaluator boundary.
 
