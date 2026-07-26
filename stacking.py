@@ -12165,7 +12165,7 @@ def run_stacking_evaluation_for_feature_set(name, stacking_model, X_train_df, y_
         raise
 
 
-def print_dataset_evaluation_header(data_source_label, evaluation_plan, execution_mode_str, attack_types_combined):
+def print_dataset_evaluation_header(data_source_label, evaluation_plan, execution_mode_str, attack_types_combined, cached_results=None, pending_by_feature=None):
     """
     Prints the formatted header block for a dataset evaluation run.
 
@@ -12173,6 +12173,8 @@ def print_dataset_evaluation_header(data_source_label, evaluation_plan, executio
     :param evaluation_plan: Ordered runtime combinations represented by the progress bar
     :param execution_mode_str: Execution mode shared by every listed combination
     :param attack_types_combined: Attack types shared by combined-files combinations
+    :param cached_results: Optional cached result mapping keyed by global combination ID
+    :param pending_by_feature: Optional pending task mapping keyed by feature set
     :return: None
     """
 
@@ -12188,13 +12190,36 @@ def print_dataset_evaluation_header(data_source_label, evaluation_plan, executio
         )  # Print bottom separator line for evaluation section
 
         total_combinations = len(evaluation_plan)  # Use the exact ordered plan length displayed by the progress bar
-        print(f"Evaluation plan: {total_combinations} combinations\n")  # Print the exact full-grid combination count
+        cached_results = cached_results or {}  # Normalize absent cache classification to an empty recovered block.
+        pending_by_feature = pending_by_feature or {}  # Normalize absent pending classification to a fallback pending block.
+        pending_global_ids = {task["global_id"] for tasks in pending_by_feature.values() for task in tasks}  # Preserve actual execution identities from cache partitioning.
+        recovered_global_ids = set(cached_results)  # Preserve actual recovered identities from cache partitioning.
+        if not pending_global_ids and not recovered_global_ids:  # Preserve legacy callers without precomputed cache classification.
+            pending_global_ids = set(range(1, total_combinations + 1))  # Treat the whole plan as pending when no cache classification was supplied.
+
+        print(f"Evaluation plan: {total_combinations} combinations | Recovered: {len(recovered_global_ids)} | Pending: {len(pending_global_ids)}\n")  # Print cache-aware full-grid counts.
         print(f"Execution Mode: {execution_mode_str}")  # Print the execution-mode identity shared by the plan
         if attack_types_combined:  # Print the combined attack scope when it participates in cache identity
             print(f"Attack Types: {', '.join(str(attack_type) for attack_type in attack_types_combined)}")  # Print the ordered attack-type scope once for the full plan
         print()  # Separate shared identity fields from ordered combinations
 
         for combination_index, (feature_set, hyperparameters_enabled, augmentation_ratio, classifier) in enumerate(evaluation_plan, start=1):  # Print combinations in their exact execution order
+            if combination_index not in recovered_global_ids:  # Print only combinations recovered by cache classification in this block.
+                continue  # Move to the next planned combination.
+            hyperparameter_label = "Optimized Hyperparameters" if hyperparameters_enabled else "Default Hyperparameters"  # Resolve the active hyperparameter label
+            augmentation_label = f"{augmentation_ratio * 100:g}%" if augmentation_ratio is not None else "None"  # Resolve the augmented-test ratio.
+            testing_data_label = "Augmented Data" if augmentation_ratio is not None else "Original Data"  # Resolve the isolated testing source.
+            if combination_index == min(recovered_global_ids):  # Print the block heading immediately before the first recovered combination.
+                print(f"Recovered combinations from cache: {len(recovered_global_ids)}/{total_combinations}\n")  # Print recovered count before cached plan rows.
+            print(f"[{combination_index}/{total_combinations}] Feature Set: {feature_set} | Hyperparameters: {hyperparameter_label} | Training Data: Original Data | Testing Data: {testing_data_label} | Augmented Test Ratio: {augmentation_label} | Classifier: {classifier}")  # Print one complete ordered combination identity.
+        if not recovered_global_ids:  # Keep the recovered block visible for empty or absent caches.
+            print(f"Recovered combinations from cache: 0/{total_combinations}")  # Report no cache recoveries explicitly.
+        print()  # Separate recovered and pending plan blocks.
+
+        print(f"Pending combinations to execute: {len(pending_global_ids)}/{total_combinations}\n")  # Print pending count before executable plan rows.
+        for combination_index, (feature_set, hyperparameters_enabled, augmentation_ratio, classifier) in enumerate(evaluation_plan, start=1):  # Print pending combinations in their exact execution order
+            if combination_index not in pending_global_ids:  # Print only combinations that cache partitioning left pending.
+                continue  # Move to the next planned combination.
             hyperparameter_label = "Optimized Hyperparameters" if hyperparameters_enabled else "Default Hyperparameters"  # Resolve the active hyperparameter label
             augmentation_label = f"{augmentation_ratio * 100:g}%" if augmentation_ratio is not None else "None"  # Resolve the augmented-test ratio.
             testing_data_label = "Augmented Data" if augmentation_ratio is not None else "Original Data"  # Resolve the isolated testing source.
@@ -12208,6 +12233,8 @@ def print_dataset_evaluation_header(data_source_label, evaluation_plan, executio
         telegram_summary = "\n".join([
             f"Evaluation plan: {data_source_label} Data",
             f"Total combinations: {total_combinations}",
+            f"Recovered from cache: {len(recovered_global_ids)}",
+            f"Pending execution: {len(pending_global_ids)}",
             f"Feature sets: {', '.join(feature_sets)}",
             f"Hyperparameters: {', '.join(hyperparameter_modes)}",
             "Training data: Original Data",
@@ -12494,11 +12521,6 @@ def evaluate_on_dataset(
         else:  # Reuse the complete ordered plan that created the shared full-grid progress bar
             evaluation_plan = grid_progress["evaluation_plan"]  # Reuse the authoritative full-grid plan source
 
-        if artifact_recovery_target is None and (grid_progress is None or not grid_progress.get("plan_printed", False)):
-            print_dataset_evaluation_header(data_source_label, evaluation_plan, execution_mode_str, attack_types_combined)  # Print the detailed local plan and one condensed Telegram summary.
-            if grid_progress is not None:
-                grid_progress["plan_printed"] = True  # Prevent per-ratio plan messages for the shared grid.
-
         pca_input_feature_names = [str(column) for column in df.iloc[:, :-1].select_dtypes(include=np.number).columns]  # Capture the exact ordered numeric columns consumed by scaling and PCA.
         target_column_name = str(df.columns[-1])  # Capture the positional target column used by the split flow.
         original_sample_count = int(len(df))  # Record the original sample population before splitting.
@@ -12532,6 +12554,17 @@ def evaluate_on_dataset(
                     print(f"{BackgroundColors.GREEN}Resume: loaded {BackgroundColors.CYAN}{len(cache_dict)}{BackgroundColors.GREEN} cached result(s) from previous run.{Style.RESET_ALL}")
             except Exception:
                 cache_dict = {}
+
+        if artifact_recovery_target is None and (grid_progress is None or not grid_progress.get("plan_printed", False)):
+            feature_metadata_by_name = build_feature_process_metadata(feature_names, ga_selected_features, pca_n_components, rfe_selected_features)  # Build small feature descriptors for cache-aware plan reporting
+            if all(name in feature_metadata_by_name for name in feature_mode_names):  # Use cache-aware grouping only for feature modes with compact descriptors.
+                tasks = build_feature_process_plan(evaluation_plan, feature_metadata_by_name, original_sample_count, file, execution_mode_str)  # Reuse authoritative global IDs and expected original-data shapes for plan reporting
+                cached_results, pending_by_feature = partition_evaluation_plan_by_cache(tasks, cache_dict, feature_mode_names, attack_types_combined)  # Reuse existing cache matching before plan reporting
+                print_dataset_evaluation_header(data_source_label, evaluation_plan, execution_mode_str, attack_types_combined, cached_results=cached_results, pending_by_feature=pending_by_feature)  # Print cache-aware recovered and pending plan blocks.
+            else:
+                print_dataset_evaluation_header(data_source_label, evaluation_plan, execution_mode_str, attack_types_combined)  # Preserve plan reporting for feature modes without compact descriptors.
+            if grid_progress is not None:
+                grid_progress["plan_printed"] = True  # Prevent per-ratio plan messages for the shared grid.
 
         stacking_model = build_evaluation_stacking_model(base_models, config=config) if stacking_enabled else None  # Build only an unfitted stacking prototype.
         individual_models = {key: value for key, value in base_models.items() if artifact_recovery_target is None or (artifact_recovery_target[1] != "StackingClassifier" and key == artifact_recovery_target[1])}  # Restrict recovery without retaining fitted estimators.
@@ -13784,6 +13817,14 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
         all_comparison_results = []  # Accumulate augmentation comparisons across both HP modes
         orchestration_cache = load_cache_results(combined_dataset_reference, config=config, notify_discovery=False)  # Recover cache identities before any sequential augmentation load.
         fully_cached_ratios = {ratio for ratio in augmentation_ratios if all(build_resume_cache_key("combined_files", f"Augmented@{int(ratio * 100)}%_CombinedFiles", "original_training_augmented_testing", ratio, attack_types_list, feature_set, classifier, hyperparameters_enabled) in orchestration_cache for feature_set, hyperparameters_enabled, planned_ratio, classifier in evaluation_plan if planned_ratio == ratio)}  # Identify ratio groups requiring no augmented contents.
+        feature_metadata_by_name = build_feature_process_metadata(feature_names, ga_selected_features, pca_n_components, rfe_selected_features)  # Build small feature descriptors for cache-aware plan reporting
+        if all(name in feature_metadata_by_name for name in feature_mode_names):  # Use cache-aware grouping only for feature modes with compact descriptors.
+            tasks = build_feature_process_plan(evaluation_plan, feature_metadata_by_name, original_sample_count, combined_dataset_reference, "combined_files")  # Reuse authoritative global IDs and expected original-data shapes for plan reporting
+            cached_results, pending_by_feature = partition_evaluation_plan_by_cache(tasks, orchestration_cache, feature_mode_names, attack_types_list)  # Reuse existing cache matching before plan reporting
+            print_dataset_evaluation_header("Original Combined Files", evaluation_plan, "combined_files", attack_types_list, cached_results=cached_results, pending_by_feature=pending_by_feature)  # Print cache-aware recovered and pending plan blocks
+        else:
+            print_dataset_evaluation_header("Original Combined Files", evaluation_plan, "combined_files", attack_types_list)  # Preserve plan reporting for feature modes without compact descriptors.
+        grid_progress["plan_printed"] = True  # Prevent nested evaluation calls from reprinting the full grid plan
 
         try:  # Ensure the shared progress bar is closed after the complete grid
             results_original_by_hp = {}  # Retain each baseline mapping for later ratio comparisons.
@@ -14333,6 +14374,28 @@ def partition_feature_process_tasks(tasks: List[dict], cache_dict: dict, process
             task["pending_queue_position"] = pending_position  # Store current task position within this feature's pending queue
             task["pending_queue_total"] = len(queue_tasks)  # Store dynamic initial pending denominator for detached progress logs
     return cached_results, pending_by_feature  # Return complete cache state and matrix-free pending queues
+
+
+def partition_evaluation_plan_by_cache(tasks: List[dict], cache_dict: dict, feature_mode_names: List[str], attack_types_combined: Any) -> Tuple[dict, dict]:
+    """
+    Partition planned evaluation tasks with the existing cache match rules.
+
+    :param tasks: Complete ordered task descriptor list.
+    :param cache_dict: Validated production resume cache.
+    :param feature_mode_names: Ordered feature-set names in the active plan.
+    :param attack_types_combined: Combined attack scope, or None.
+    :return: Tuple of cached result mapping and pending tasks partitioned by feature set.
+    """
+
+    cached_results = {}  # Store recoverable cache rows by global combination ID.
+    pending_by_feature = {name: [] for name in feature_mode_names}  # Preserve one pending queue per active feature set.
+    for task in tasks:  # Preserve authoritative global ordering during cache partitioning.
+        cached_result = feature_process_cache_result(task, cache_dict, attack_types_combined)  # Reuse the production cache identity and shape validation.
+        if cached_result is not None:  # Record only rows recoverable under existing rules.
+            cached_results[task["global_id"]] = cached_result  # Preserve original global ID for logging and progress semantics.
+        else:
+            pending_by_feature[task["feature_set"]].append(task)  # Preserve feature-local pending execution order.
+    return cached_results, pending_by_feature  # Return the cache-aware task split.
 
 
 def create_feature_process_temp_directory(file: str, config: Optional[dict] = None) -> str:  # Create one ownership-bearing memmap directory for the current process
@@ -15480,7 +15543,6 @@ def run_persistent_feature_set_grid(original_df: pd.DataFrame, file: str, source
     target_column = str(original_df.columns[-1])  # Preserve the established positional target identity
     label_classes = normalize_metadata_for_json(np.unique(original_df.iloc[:, -1].to_numpy(copy=False)).tolist())  # Preserve exact LabelEncoder class order as small metadata
     tasks = build_feature_process_plan(evaluation_plan, feature_metadata_by_name, original_sample_count, file, execution_mode_str)  # Build dynamic task identities without opening augmentation rows
-    print_dataset_evaluation_header(data_source_label, evaluation_plan, execution_mode_str, attack_types_combined)  # Print the complete authoritative plan before cache recovery
     cache_dict = load_cache_results(file, config=config)  # Recover primary or backup cache before worker startup
     optimized_params = {}  # Accumulate coordinator-validated optimized parameter metadata
     coordinator_model_maps = {}  # Retain small coordinator prototypes only for preflight artifact validation
@@ -15490,6 +15552,7 @@ def run_persistent_feature_set_grid(original_df: pd.DataFrame, file: str, source
             optimized_params.update(params_map)  # Preserve exact applied optimized parameters by classifier
     process_payload = {"file": file, "source_files": [str(path) for path in source_files], "attack_types_combined": attack_types_combined, "input_feature_names": [str(name) for name in feature_names], "target_column": target_column, "label_classes": label_classes, "execution_mode": execution_mode_str, "cache_ref_file": file, "config": config, "optimized_params": optimized_params, "augmentation_file_paths": [str(path) for path in augmentation_file_paths], "original_sample_count": original_sample_count, "expected_train_count": int(original_sample_count - math.ceil(original_sample_count * 0.2)), "feature_mode_names": feature_mode_names, "feature_metadata_by_name": feature_metadata_by_name}  # Build one matrix-free shared worker payload
     cached_results, pending_by_feature = partition_feature_process_tasks(tasks, cache_dict, process_payload, coordinator_model_maps)  # Mark every combination cached or pending before any child starts
+    print_dataset_evaluation_header(data_source_label, evaluation_plan, execution_mode_str, attack_types_combined, cached_results=cached_results, pending_by_feature=pending_by_feature)  # Print cache-classified recovered and pending plan blocks before worker startup
     pending_original_exists = any(task["augmentation_ratio"] is None for queue_tasks in pending_by_feature.values() for task in queue_tasks)  # Determine whether any child requires original fitting data
     pending_augmented_exists = any(task["augmentation_ratio"] is not None for queue_tasks in pending_by_feature.values() for task in queue_tasks)  # Determine whether any child requires lazy shared augmentation data
     pca_cache_context = {"execution_mode": execution_mode_str, "data_source": "Original", "experiment_mode": "original_only", "augmentation_ratio": None, "target_column": target_column, "original_sample_count": original_sample_count, "augmented_sample_count": 0, "test_size": 0.2, "random_state": 42, "stratified": True, "augmentation_merged_into_training_after_split": False, "attack_types": normalize_metadata_for_json(attack_types_combined)}  # Preserve the existing PCA split and source identity
@@ -15876,6 +15939,14 @@ def orchestrate_all_combinations(input_path, dataset_name=None, config=None):
             all_comparison_results = []  # Accumulate augmentation comparisons across both HP modes
             orchestration_cache = load_cache_results(file, config=config, notify_discovery=False)  # Recover cache identities before any sequential augmentation load.
             fully_cached_ratios = {ratio for ratio in augmentation_ratios if all(build_resume_cache_key("separate_files", f"Augmented@{int(ratio * 100)}%", "original_training_augmented_testing", ratio, None, feature_set, classifier, hyperparameters_enabled) in orchestration_cache for feature_set, hyperparameters_enabled, planned_ratio, classifier in evaluation_plan if planned_ratio == ratio)}  # Identify ratio groups requiring no augmented contents.
+            feature_metadata_by_name = build_feature_process_metadata(feature_names, ga_sel, pca_n, rfe_sel)  # Build small feature descriptors for cache-aware plan reporting
+            if all(name in feature_metadata_by_name for name in feature_mode_names):  # Use cache-aware grouping only for feature modes with compact descriptors.
+                tasks = build_feature_process_plan(evaluation_plan, feature_metadata_by_name, len(df_original), file, "separate_files")  # Reuse authoritative global IDs and expected original-data shapes for plan reporting
+                cached_results, pending_by_feature = partition_evaluation_plan_by_cache(tasks, orchestration_cache, feature_mode_names, None)  # Reuse existing cache matching before plan reporting
+                print_dataset_evaluation_header("Original", evaluation_plan, "separate_files", None, cached_results=cached_results, pending_by_feature=pending_by_feature)  # Print cache-aware recovered and pending plan blocks
+            else:
+                print_dataset_evaluation_header("Original", evaluation_plan, "separate_files", None)  # Preserve plan reporting for feature modes without compact descriptors.
+            grid_progress["plan_printed"] = True  # Prevent nested evaluation calls from reprinting the full grid plan
 
             print(f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}Orchestrating full grid: file=[{idx}/{total_files}] {file}, combinations={total_steps}{Style.RESET_ALL}")  # Log exact generated grid size
 
