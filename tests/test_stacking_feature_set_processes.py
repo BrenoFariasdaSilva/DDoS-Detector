@@ -157,6 +157,18 @@ class FeatureSetProcessTests(unittest.TestCase):  # Group persistent feature-set
         counts = {name: sum(task["feature_set"] == name for task in tasks) for name in FEATURE_SET_NAMES}  # Count every feature-local queue dynamically
         self.assertEqual(counts, {"GA Features": 80, "PCA Components": 80, "RFE Features": 80})  # Preserve this server-specific expected partition only
 
+    def test_augmented_capacity_serializes_unestimated_model_memory(self):  # Verify augmented artifact memory cannot bypass matrix-derived capacity
+        """Verify augmented workers serialize while original matrix capacity remains unchanged."""
+
+        pending = {"GA Features": [{"augmentation_ratio": 0.25}], "RFE Features": [{"augmentation_ratio": 0.25}]}  # Build two workers that require persisted model artifacts
+        payload = {"config": {"memory_watcher": {"system_memory_threshold_percent": 90}}, "original_sample_count": 100, "expected_train_count": 80, "input_feature_names": ["a", "b"], "feature_metadata_by_name": {"GA Features": {"feature_count": 2}, "RFE Features": {"feature_count": 1}}}  # Build complete small capacity metadata
+        memory_snapshot = mock.Mock(total=1000000, available=900000)  # Supply enough matrix capacity for both workers
+        with mock.patch.object(stacking.psutil, "virtual_memory", return_value=memory_snapshot):  # Isolate deterministic capacity arithmetic
+            capacity = stacking.resolve_feature_process_worker_capacity(pending, payload)  # Resolve original and augmented admission independently
+        self.assertEqual(capacity["admitted_worker_count"], 2)  # Preserve concurrent original-data feature workers
+        self.assertEqual(capacity["pending_augmented_worker_count"], 2)  # Detect both artifact-backed augmented workers
+        self.assertEqual(capacity["augmented_admitted_worker_count"], 1)  # Serialize memory-unbounded model deserialization and prediction
+
     def test_evaluation_plan_totals_follow_enabled_dimensions(self):  # Verify every plan dimension changes totals without fixed production counts
         """
         Verify plan totals follow enabled classifiers, modes, tests, ratios, and features.
