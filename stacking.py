@@ -941,6 +941,10 @@ def parse_cli_args():
         parser.add_argument("--n-jobs", dest="n_jobs", type=int, default=None, help="Override evaluation.n_jobs for estimators that support parallel fitting (-1 uses all processors; 1 is memory-safe)",)
         parser.add_argument("--feature-extraction-n-jobs", dest="feature_extraction_n_jobs", type=int, default=None, help="Override evaluation.feature_extraction_n_jobs for feature extraction/transformation stages such as PCA, not classifier training (-1 uses available CPUs; 1 is memory-safe)")  # Add the independent feature extraction thread override
         parser.add_argument("--feature-set-workers", dest="feature_set_workers", type=str, default=None, help="Persistent process counts by feature set, for example full=1,ga=1,pca=1,rfe=1; only 0 or 1 is supported")  # Add the persistent feature-set process override
+        pending_sort_group = parser.add_mutually_exclusive_group()  # Preserve absent-versus-explicit CLI semantics for pending runtime ordering
+        pending_sort_group.add_argument("--sort-pending-by-elapsed-time", dest="sort_pending_by_elapsed_time", action="store_true", help="Sort pending classifier combinations by historical elapsed_time_s within comparable groups")  # Enable runtime-based pending queue ordering
+        pending_sort_group.add_argument("--no-sort-pending-by-elapsed-time", dest="sort_pending_by_elapsed_time", action="store_false", help="Disable runtime-based pending classifier ordering")  # Disable runtime-based pending queue ordering
+        parser.set_defaults(sort_pending_by_elapsed_time=None)  # Leave config.yaml in control when neither pending-sort flag is supplied
         parser.add_argument("--training-progress-interval-minutes", dest="training_progress_interval_minutes", type=float, default=None, help="Recurring classifier training-progress interval in positive finite minutes (default: 15)")  # Add the minutes-based progress interval override
         parser.add_argument("--low-memory", dest="low_memory", action="store_true", default=False, help="Enable low memory mode for pandas operations")  # Add low memory mode CLI argument
         parser.add_argument("--dataset-file-format", type=str, default=None, dest="dataset_file_format", help="File format for dataset files: arff, csv, parquet, txt")  # Dataset file format CLI override
@@ -999,6 +1003,7 @@ def get_default_stacking_config():
             ],  # Column names for temporary cache CSV export
             "top_n_features_heatmap": 15,  # Number of top features to show in heatmap
             "combined_files_evaluation": True,  # Default: combined files evaluation enabled; False = separate files evaluation
+            "sort_pending_by_elapsed_time": False,  # Keep pending queue ordering unchanged unless runtime sorting is enabled
             "methods": {
                 "augmentation": True,  # Enable data augmentation combination by default
                 "feature_selection": True,  # Enable feature selection combination by default
@@ -1420,6 +1425,9 @@ def merge_configs(defaults, file_config, cli_args):
 
         if hasattr(cli_args, "feature_set_workers") and cli_args.feature_set_workers is not None:  # Persistent feature-set process CLI override
             config.setdefault("evaluation", {})["feature_set_workers"] = validate_feature_set_workers(cli_args.feature_set_workers, "--feature-set-workers")  # Apply the validated CLI process mapping
+
+        if hasattr(cli_args, "sort_pending_by_elapsed_time") and cli_args.sort_pending_by_elapsed_time is not None:  # Pending runtime sort CLI override
+            config.setdefault("stacking", {})["sort_pending_by_elapsed_time"] = cli_args.sort_pending_by_elapsed_time  # Apply explicit CLI ordering preference over YAML
 
         if hasattr(cli_args, "training_progress_interval_minutes") and cli_args.training_progress_interval_minutes is not None:  # Training progress interval CLI override
             config.setdefault("evaluation", {})["training_progress_interval_minutes"] = validate_training_progress_interval_minutes(cli_args.training_progress_interval_minutes, "--training-progress-interval-minutes")  # Apply the validated CLI-over-YAML interval.
@@ -14399,6 +14407,156 @@ def feature_process_cache_result(task: dict, cache_dict: Optional[dict], attack_
     return cached_result if compatible else None  # Return only a fully compatible cached result
 
 
+def resolve_runtime_elapsed_seconds(value: Any) -> Optional[float]:
+    """
+    Resolve one cache elapsed-time value for runtime ordering.
+
+    :param value: Raw elapsed_time_s value from a cache row.
+    :return: Positive finite elapsed seconds, or None when unavailable.
+    """
+
+    try:  # Parse only scalar numeric elapsed-time values.
+        elapsed_seconds = float(value)  # Normalize CSV and native numeric values.
+    except (TypeError, ValueError):  # Reject missing, textual, and malformed values.
+        return None  # Treat invalid elapsed time as unavailable.
+    if not math.isfinite(elapsed_seconds) or elapsed_seconds <= 0:  # Reject NaN, infinities, zero, and negatives.
+        return None  # Treat nonpositive or nonfinite elapsed time as unavailable.
+    return elapsed_seconds  # Return valid elapsed seconds for ordering.
+
+
+def summarize_runtime_elapsed_seconds(values: List[float]) -> Optional[float]:
+    """
+    Summarize repeated elapsed-time values deterministically.
+
+    :param values: Positive finite elapsed-time values for one runtime identity.
+    :return: Median elapsed seconds, or None when no values exist.
+    """
+
+    if not values:  # Require at least one valid historical duration.
+        return None  # Return no estimate when no valid runtime data exists.
+    ordered_values = sorted(values)  # Use deterministic ordering before median selection.
+    middle_index = len(ordered_values) // 2  # Locate the median position.
+    if len(ordered_values) % 2:  # Odd counts have one middle value.
+        return ordered_values[middle_index]  # Return the exact middle value.
+    return (ordered_values[middle_index - 1] + ordered_values[middle_index]) / 2.0  # Average the two middle values for even counts.
+
+
+def build_feature_process_task_runtime_identity(task: dict, process_payload: dict, include_shape: bool) -> tuple:
+    """
+    Build a runtime identity for one pending process task.
+
+    :param task: Matrix-free task descriptor.
+    :param process_payload: Small shared process payload.
+    :param include_shape: Whether to include feature and sample-shape metadata.
+    :return: Hashable runtime identity tuple.
+    """
+
+    dataset_identity = resolve_canonical_dataset_identity(str(process_payload["file"]), True) if task["execution_mode"] == "combined_files" else os.path.relpath(str(process_payload["file"]))  # Match result-row dataset identity semantics.
+    resume_identity = build_resume_cache_key(task["execution_mode"], task["data_source_label"], task["experiment_mode"], task["augmentation_ratio"], process_payload["attack_types_combined"], task["feature_set"], task["classifier_name"], task["hyperparameters_enabled"])  # Reuse existing cache identity dimensions.
+    runtime_identity = (dataset_identity,) + resume_identity  # Add dataset identity to the established resume key.
+    if not include_shape:  # Return the fallback identity when exact shape is not required.
+        return runtime_identity  # Return same classifier and same experiment-group identity.
+    return runtime_identity + (task["expected_n_features"], task["expected_n_samples_train"], task["expected_n_samples_test"], tuple(str(name) for name in task["expected_feature_names"]))  # Add shape and feature order for exact comparable history.
+
+
+def build_feature_process_result_runtime_identity(result_entry: dict, process_payload: dict, include_shape: bool) -> Optional[tuple]:
+    """
+    Build a runtime identity for one recovered cache result.
+
+    :param result_entry: Deserialized cache result entry.
+    :param process_payload: Small shared process payload.
+    :param include_shape: Whether to include feature and sample-shape metadata.
+    :return: Hashable runtime identity tuple, or None when required metadata is unavailable.
+    """
+
+    try:  # Read only normalized cache fields already trusted by resume loading.
+        execution_mode = str(result_entry.get("execution_mode", process_payload["execution_mode"]))  # Resolve execution mode.
+        dataset_identity = str(result_entry.get("dataset", ""))  # Resolve persisted dataset identity.
+        attack_types_raw = result_entry.get("attack_types_combined", None)  # Read serialized attack-scope metadata.
+        attack_types_value = safe_load_json(attack_types_raw) if isinstance(attack_types_raw, str) else attack_types_raw  # Decode only serialized attack-scope strings.
+        attack_types_list = attack_types_value if isinstance(attack_types_value, list) else None  # Normalize attack scope for resume identity.
+        hyperparameter_mode = str(result_entry.get("hyperparameter_mode", "Default Hyperparameters"))  # Read explicit HP mode.
+        hyperparameters_enabled = resolve_boolean_value(result_entry.get("hyperparameters_enabled", False), hyperparameter_mode == "Optimized Hyperparameters")  # Resolve HP identity.
+        resume_identity = build_resume_cache_key(execution_mode, str(result_entry.get("data_source", "")), str(result_entry.get("experiment_mode", "original_only")), result_entry.get("augmentation_ratio", None), attack_types_list, str(result_entry.get("feature_set", "")), str(result_entry.get("model_name", "")), hyperparameters_enabled)  # Reuse existing cache identity dimensions.
+        runtime_identity = (dataset_identity,) + resume_identity  # Add dataset identity to the established resume key.
+        if not include_shape:  # Return the fallback identity when exact shape is not required.
+            return runtime_identity  # Return same classifier and same experiment-group identity.
+        features_value = result_entry.get("features_list", None)  # Read canonical ordered feature metadata.
+        features_list = safe_load_json(features_value) if isinstance(features_value, str) else features_value  # Decode serialized feature lists only.
+        if not isinstance(features_list, list):  # Require ordered feature metadata for exact comparable history.
+            return None  # Skip exact-shape identity without ordered features.
+        return runtime_identity + (int(result_entry.get("n_features")), int(result_entry.get("n_samples_train")), int(result_entry.get("n_samples_test")), tuple(str(name) for name in features_list))  # Add shape and feature order for exact comparable history.
+    except Exception:  # Treat incomplete cache metadata as unusable for runtime ordering.
+        return None  # Return no runtime identity for invalid metadata.
+
+
+def sort_pending_feature_process_tasks_by_elapsed_time(pending_by_feature: dict, cache_dict: dict, process_payload: dict) -> None:
+    """
+    Sort pending process queues by historical elapsed time within comparable groups.
+
+    :param pending_by_feature: Pending tasks keyed by feature set.
+    :param cache_dict: Validated production resume cache.
+    :param process_payload: Small shared process payload.
+    :return: None.
+    """
+
+    config = process_payload.get("config", {})  # Read runtime configuration from the existing process payload.
+    if not resolve_boolean_value(config.get("stacking", {}).get("sort_pending_by_elapsed_time", False), False):  # Preserve default pending order when disabled.
+        return  # Leave queues and logs unchanged.
+
+    exact_elapsed_values: dict[tuple, List[float]] = {}  # Collect exact-shape elapsed values by runtime identity.
+    fallback_elapsed_values: dict[tuple, List[float]] = {}  # Collect same-group elapsed values by runtime identity.
+    for result_entry in (cache_dict or {}).values():  # Inspect already loaded cache rows only.
+        elapsed_seconds = resolve_runtime_elapsed_seconds(result_entry.get("elapsed_time_s", None))  # Parse valid positive finite elapsed time.
+        if elapsed_seconds is None:  # Ignore unavailable or invalid elapsed-time values.
+            continue  # Move to the next cache row.
+        exact_identity = build_feature_process_result_runtime_identity(result_entry, process_payload, True)  # Build most specific runtime identity.
+        fallback_identity = build_feature_process_result_runtime_identity(result_entry, process_payload, False)  # Build same classifier and experiment-group identity.
+        if exact_identity is not None:  # Store exact-shape history when complete metadata exists.
+            exact_elapsed_values.setdefault(exact_identity, []).append(elapsed_seconds)  # Accumulate exact elapsed seconds for median aggregation.
+        if fallback_identity is not None:  # Store same-group history when identity metadata exists.
+            fallback_elapsed_values.setdefault(fallback_identity, []).append(elapsed_seconds)  # Accumulate fallback elapsed seconds for median aggregation.
+
+    exact_estimates = {identity: summarize_runtime_elapsed_seconds(values) for identity, values in exact_elapsed_values.items()}  # Aggregate exact-shape elapsed seconds by median.
+    fallback_estimates = {identity: summarize_runtime_elapsed_seconds(values) for identity, values in fallback_elapsed_values.items()}  # Aggregate same-group elapsed seconds by median.
+    estimated_by_task_id = {}  # Store selected estimate per task object without mutating identity fields.
+    estimated_count = 0  # Count pending tasks with a valid estimate.
+    missing_count = 0  # Count pending tasks without comparable history.
+    grouping_label = "feature_set, execution_mode, data_source, experiment_mode, augmentation_ratio, hyperparameter_mode"  # Describe the preserved sort boundaries.
+
+    for feature_set_name, queue_tasks in pending_by_feature.items():  # Sort each feature-owned queue independently.
+        grouped_tasks = {}  # Preserve comparable groups within this feature queue.
+        group_order = []  # Preserve first-seen group order before per-group sorting.
+        for task in queue_tasks:  # Visit tasks in current deterministic pending order.
+            exact_identity = build_feature_process_task_runtime_identity(task, process_payload, True)  # Build exact comparable runtime identity.
+            fallback_identity = build_feature_process_task_runtime_identity(task, process_payload, False)  # Build same classifier and experiment-group identity.
+            estimate = exact_estimates.get(exact_identity, fallback_estimates.get(fallback_identity))  # Prefer exact history and fall back only within same group.
+            estimated_by_task_id[id(task)] = estimate  # Store estimate without altering task identity.
+            if estimate is None:  # Count unavailable estimates separately.
+                missing_count += 1  # Increment missing-estimate count.
+            else:  # Count valid estimates separately.
+                estimated_count += 1  # Increment estimated pending count.
+            group_key = (task["feature_set"], task["execution_mode"], task["data_source_label"], task["experiment_mode"], task["augmentation_ratio"], task["hyperparameters_enabled"])  # Preserve comparable experiment group boundaries.
+            if group_key not in grouped_tasks:  # Record first appearance of this group.
+                grouped_tasks[group_key] = []  # Initialize group task list.
+                group_order.append(group_key)  # Preserve original group order.
+            grouped_tasks[group_key].append(task)  # Add task to its comparable group.
+        reordered_tasks = []  # Build the new feature-local queue.
+        for group_key in group_order:  # Emit groups in original order.
+            group_tasks = grouped_tasks[group_key]  # Resolve tasks for this comparable group.
+            reordered_tasks.extend(sorted(group_tasks, key=lambda task: (1, 0.0) if estimated_by_task_id[id(task)] is None else (0, float(estimated_by_task_id[id(task)]))))  # Stable-sort estimated tasks first by duration.
+        pending_by_feature[feature_set_name] = reordered_tasks  # Replace only this feature-owned pending queue.
+
+    print(f"[PENDING SORT] Runtime-based pending sorting enabled | Estimated={estimated_count} | Without Estimate={missing_count} | Grouping={grouping_label}")  # Log concise runtime-sort summary.
+    for feature_set_name, queue_tasks in pending_by_feature.items():  # Log resulting order per feature queue without Telegram fanout.
+        for pending_position, task in enumerate(queue_tasks, start=1):  # Report the actual execution order after sorting.
+            estimate = estimated_by_task_id.get(id(task))  # Read the selected estimate for display.
+            estimate_label = calculate_execution_time(0, estimate) if estimate is not None else "unavailable"  # Format estimates through the existing duration formatter.
+            hp_label = "Optimized Hyperparameters" if task["hyperparameters_enabled"] else "Default Hyperparameters"  # Resolve HP mode label.
+            ratio_label = f"{task['augmentation_ratio'] * 100:g}%" if task["augmentation_ratio"] is not None else "None"  # Resolve augmentation ratio label.
+            print(f"[PENDING SORT ORDER] Feature Set={feature_set_name} | Queue={pending_position}/{len(queue_tasks)} | Global ID={task['global_id']}/{task['total_combinations']} | Classifier={task['classifier_name']} | Hyperparameters={hp_label} | Augmented Test Ratio={ratio_label} | Estimated={estimate_label}")  # Log one sorted pending row.
+
+
 def build_feature_process_artifact_context(task: dict, process_payload: dict, model_prototype: Any) -> dict:  # Build the unchanged original-model artifact identity from small metadata
     """
     Build an original-trained model artifact context for a process task.
@@ -14480,6 +14638,7 @@ def partition_feature_process_tasks(tasks: List[dict], cache_dict: dict, process
             cached_results[task["global_id"]] = cached_result  # Preserve the exact recovered row under its original global ID
         else:  # Queue only combinations that remain pending after cache and artifact validation
             pending_by_feature[task["feature_set"]].append(task)  # Preserve feature-local order without matrices or estimators
+    sort_pending_feature_process_tasks_by_elapsed_time(pending_by_feature, cache_dict, process_payload)  # Optionally reorder only pending feature queues before queue positions are assigned
     for queue_tasks in pending_by_feature.values():  # Annotate each dynamic feature-local pending queue after complete cache classification
         for pending_position, task in enumerate(queue_tasks, start=1):  # Preserve exact one-based pending queue order
             task["pending_queue_position"] = pending_position  # Store current task position within this feature's pending queue
