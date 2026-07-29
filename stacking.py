@@ -14533,6 +14533,7 @@ def sort_pending_feature_process_tasks_by_elapsed_time(pending_by_feature: dict,
     estimated_count = 0  # Count pending tasks with a valid estimate.
     missing_count = 0  # Count pending tasks without comparable history.
     grouping_label = "feature_set, execution_mode, data_source, experiment_mode, augmentation_ratio, hyperparameter_mode"  # Describe the preserved sort boundaries.
+    classifier_order_messages = []  # Accumulate concise classifier-order summaries for terminal and Telegram.
 
     for feature_set_name, queue_tasks in pending_by_feature.items():  # Sort each feature-owned queue independently.
         grouped_tasks = {}  # Preserve comparable groups within this feature queue.
@@ -14556,10 +14557,23 @@ def sort_pending_feature_process_tasks_by_elapsed_time(pending_by_feature: dict,
         reordered_tasks = []  # Build the new feature-local queue.
         for group_key in group_order:  # Emit groups in original order.
             group_tasks = grouped_tasks[group_key]  # Resolve tasks for this comparable group.
-            reordered_tasks.extend(sorted(group_tasks, key=lambda task: (1, 0.0) if estimated_by_task_id[id(task)] is None else (0, float(estimated_by_task_id[id(task)]))))  # Stable-sort estimated tasks first by duration.
+            sorted_group_tasks = sorted(group_tasks, key=lambda task: (1, 0.0) if estimated_by_task_id[id(task)] is None else (0, float(estimated_by_task_id[id(task)])))  # Stable-sort estimated tasks first by duration.
+            feature_label, _, data_label, _, group_ratio, group_hp_enabled = group_key  # Resolve comparable-group labels for order logging.
+            hp_label = "Optimized Hyperparameters" if group_hp_enabled else "Default Hyperparameters"  # Resolve HP mode label for order logging.
+            ratio_label = f"{group_ratio * 100:g}%" if group_ratio is not None else "None"  # Resolve augmentation ratio label for order logging.
+            group_label = f"Feature Set: {feature_label} | Data Source: {data_label} | Hyperparameters: {hp_label} | Augmented Test Ratio: {ratio_label}"  # Build concise comparable-group context.
+            default_order = " -> ".join(task["classifier_name"] for task in group_tasks)  # Preserve original pending classifier order.
+            sorted_order = " -> ".join(task["classifier_name"] for task in sorted_group_tasks)  # Preserve actual sorted classifier order.
+            classifier_order_messages.append(f"Default Classifiers Order [{group_label}]: {default_order}")  # Record original classifier order.
+            classifier_order_messages.append(f"New Classifiers Order (Fastest to Slowest based on Cache Results) [{group_label}]: {sorted_order}")  # Record cache-sorted classifier order.
+            reordered_tasks.extend(sorted_group_tasks)  # Append sorted tasks for this comparable group.
         pending_by_feature[feature_set_name] = reordered_tasks  # Replace only this feature-owned pending queue.
 
     print(f"[PENDING SORT] Runtime-based pending sorting enabled | Estimated={estimated_count} | Without Estimate={missing_count} | Grouping={grouping_label}")  # Log concise runtime-sort summary.
+    for order_message in classifier_order_messages:  # Print concise classifier-order summaries before detailed queue rows.
+        print(order_message)  # Emit one terminal classifier-order summary line.
+    if classifier_order_messages:  # Send the same concise classifier-order summary through Telegram once.
+        send_telegram_message(TELEGRAM_BOT, "\n".join(classifier_order_messages))  # Reuse existing guarded Telegram delivery path.
     for feature_set_name, queue_tasks in pending_by_feature.items():  # Log resulting order per feature queue without Telegram fanout.
         for pending_position, task in enumerate(queue_tasks, start=1):  # Report the actual execution order after sorting.
             estimate = estimated_by_task_id.get(id(task))  # Read the selected estimate for display.
