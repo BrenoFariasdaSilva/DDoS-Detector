@@ -12263,7 +12263,7 @@ def print_dataset_evaluation_header(data_source_label, evaluation_plan, executio
             testing_data_label = "Augmented Data" if augmentation_ratio is not None else "Original Data"  # Resolve the isolated testing source.
             if combination_index == min(recovered_global_ids):  # Print the block heading immediately before the first recovered combination.
                 print(f"Recovered combinations from cache: {len(recovered_global_ids)}/{total_combinations}\n")  # Print recovered count before cached plan rows.
-            print(f"[{combination_index}/{total_combinations}] Feature Set: {feature_set} | Hyperparameters: {hyperparameter_label} | Training Data: Original Data | Testing Data: {testing_data_label} | Augmented Test Ratio: {augmentation_label} | Classifier: {classifier}")  # Print one complete ordered combination identity.
+            print(f"[{combination_index}/{total_combinations}] Feature Set: {feature_set} | Classifier: {classifier} | Hyperparameters: {hyperparameter_label} | Augmented Test Ratio: {augmentation_label} | Training Data: Original Data | Testing Data: {testing_data_label}")  # Print one complete ordered combination identity.
         if not recovered_global_ids:  # Keep the recovered block visible for empty or absent caches.
             print(f"Recovered combinations from cache: 0/{total_combinations}")  # Report no cache recoveries explicitly.
         print()  # Separate recovered and pending plan blocks.
@@ -12275,7 +12275,7 @@ def print_dataset_evaluation_header(data_source_label, evaluation_plan, executio
             hyperparameter_label = "Optimized Hyperparameters" if hyperparameters_enabled else "Default Hyperparameters"  # Resolve the active hyperparameter label
             augmentation_label = f"{augmentation_ratio * 100:g}%" if augmentation_ratio is not None else "None"  # Resolve the augmented-test ratio.
             testing_data_label = "Augmented Data" if augmentation_ratio is not None else "Original Data"  # Resolve the isolated testing source.
-            print(f"[{combination_index}/{total_combinations}] Feature Set: {feature_set} | Hyperparameters: {hyperparameter_label} | Training Data: Original Data | Testing Data: {testing_data_label} | Augmented Test Ratio: {augmentation_label} | Classifier: {classifier}")  # Print one complete ordered combination identity.
+            print(f"[{combination_index}/{total_combinations}] Feature Set: {feature_set} | Classifier: {classifier} | Hyperparameters: {hyperparameter_label} | Augmented Test Ratio: {augmentation_label} | Training Data: Original Data | Testing Data: {testing_data_label}")  # Print one complete ordered combination identity.
 
         feature_sets = list(dict.fromkeys(combination[0] for combination in evaluation_plan))  # Preserve first-occurrence feature-set order for the Telegram summary
         hyperparameter_modes = list(dict.fromkeys("Optimized Hyperparameters" if combination[1] else "Default Hyperparameters" for combination in evaluation_plan))  # Preserve first-occurrence runnable hyperparameter order
@@ -15428,7 +15428,7 @@ def execute_feature_set_processes(pending_by_feature: dict, process_payload: dic
         if task.get("global_id") not in cached_results:  # Skip pending tasks during cache recovery reporting
             continue  # Move to next authoritative task
         prefix = format_feature_process_progress(task, status_state, pid=os.getpid())  # Build dynamic cache-first status from shared counters
-        print(f"{prefix} Cache recovery completed | Feature Set={task['feature_set']} | Classifier={task['classifier_name']} | Hyperparameters={'Optimized' if task['hyperparameters_enabled'] else 'Default'} | Testing={'Original' if task['augmentation_ratio'] is None else 'Augmented'} | Augmentation Ratio={task['augmentation_ratio']}")  # Report valid cached combination without data loading
+        print(f"{prefix} Cache recovery completed | Feature Set={task['feature_set']} | Classifier={task['classifier_name']} | Hyperparameters={'Optimized' if task['hyperparameters_enabled'] else 'Default'} | Augmentation Ratio={task['augmentation_ratio']} | Testing={'Original' if task['augmentation_ratio'] is None else 'Augmented'}")  # Report valid cached combination without data loading
         send_feature_process_result_notification(task, build_feature_process_notification_result(cached_results[task["global_id"]]), "cached", len(tasks), notified_global_ids)  # Preserve established sequential cache notification semantics without a Finished message
     initial_snapshot = read_feature_process_status(status_state)  # Read exact startup state before any child transition
     print(f"[PLAN] Global={initial_snapshot['global']} | Features={initial_snapshot['features']}")  # Log complete dynamic cached, pending, and feature-local totals
