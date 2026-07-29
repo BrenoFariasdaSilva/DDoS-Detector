@@ -12336,13 +12336,23 @@ def print_dataset_evaluation_header(data_source_label, evaluation_plan, executio
         print()  # Separate recovered and pending plan blocks.
 
         print(f"Pending combinations to execute: {len(pending_global_ids)}/{total_combinations}\n")  # Print pending count before executable plan rows.
-        for combination_index, (feature_set, hyperparameters_enabled, augmentation_ratio, classifier) in enumerate(evaluation_plan, start=1):  # Print pending combinations in their exact execution order
-            if combination_index not in pending_global_ids:  # Print only combinations that cache partitioning left pending.
-                continue  # Move to the next planned combination.
-            hyperparameter_label = "Optimized Hyperparameters" if hyperparameters_enabled else "Default Hyperparameters"  # Resolve the active hyperparameter label
-            augmentation_label = f"{augmentation_ratio * 100:g}%" if augmentation_ratio is not None else "None"  # Resolve the augmented-test ratio.
-            testing_data_label = "Augmented Data" if augmentation_ratio is not None else "Original Data"  # Resolve the isolated testing source.
-            print(f"[{combination_index}/{total_combinations}] Feature Set: {feature_set} | Classifier: {classifier} | Hyperparameters: {hyperparameter_label} | Augmented Test Ratio: {augmentation_label} | Training Data: Original Data | Testing Data: {testing_data_label}")  # Print one complete ordered combination identity.
+        sorted_pending_tasks = [task for tasks in pending_by_feature.values() for task in tasks if task.get("pending_runtime_sort_enabled")]  # Read runtime-sorted task descriptors when enabled.
+        if sorted_pending_tasks:  # Print actual runtime-sorted feature-queue order when enabled.
+            for task in sorted_pending_tasks:  # Print pending combinations in the same order handed to feature workers.
+                hyperparameter_label = "Optimized Hyperparameters" if task["hyperparameters_enabled"] else "Default Hyperparameters"  # Resolve the active hyperparameter label.
+                augmentation_label = f"{task['augmentation_ratio'] * 100:g}%" if task["augmentation_ratio"] is not None else "None"  # Resolve the augmented-test ratio.
+                testing_data_label = "Augmented Data" if task["augmentation_ratio"] is not None else "Original Data"  # Resolve the isolated testing source.
+                estimate = task.get("pending_elapsed_time_estimate_s", None)  # Read display-only historical runtime estimate.
+                estimate_label = calculate_execution_time(0, estimate) if estimate is not None else "unavailable"  # Format the estimate with the existing duration formatter.
+                print(f"[Queue {task['pending_queue_position']}/{task['pending_queue_total']} | Global ID {task['global_id']}/{total_combinations}] Feature Set: {task['feature_set']} | Classifier: {task['classifier_name']} | Hyperparameters: {hyperparameter_label} | Augmented Test Ratio: {augmentation_label} | Training Data: Original Data | Testing Data: {testing_data_label} | Estimated Historical Runtime: {estimate_label}")  # Print one runtime-sorted pending combination identity.
+        else:  # Preserve legacy pending-plan order when runtime sorting is disabled.
+            for combination_index, (feature_set, hyperparameters_enabled, augmentation_ratio, classifier) in enumerate(evaluation_plan, start=1):  # Print pending combinations in their exact execution order
+                if combination_index not in pending_global_ids:  # Print only combinations that cache partitioning left pending.
+                    continue  # Move to the next planned combination.
+                hyperparameter_label = "Optimized Hyperparameters" if hyperparameters_enabled else "Default Hyperparameters"  # Resolve the active hyperparameter label
+                augmentation_label = f"{augmentation_ratio * 100:g}%" if augmentation_ratio is not None else "None"  # Resolve the augmented-test ratio.
+                testing_data_label = "Augmented Data" if augmentation_ratio is not None else "Original Data"  # Resolve the isolated testing source.
+                print(f"[{combination_index}/{total_combinations}] Feature Set: {feature_set} | Classifier: {classifier} | Hyperparameters: {hyperparameter_label} | Augmented Test Ratio: {augmentation_label} | Training Data: Original Data | Testing Data: {testing_data_label}")  # Print one complete ordered combination identity.
 
         feature_sets = list(dict.fromkeys(combination[0] for combination in evaluation_plan))  # Preserve first-occurrence feature-set order for the Telegram summary
         hyperparameter_modes = list(dict.fromkeys("Optimized Hyperparameters" if combination[1] else "Default Hyperparameters" for combination in evaluation_plan))  # Preserve first-occurrence runnable hyperparameter order
@@ -14532,6 +14542,8 @@ def sort_pending_feature_process_tasks_by_elapsed_time(pending_by_feature: dict,
             fallback_identity = build_feature_process_task_runtime_identity(task, process_payload, False)  # Build same classifier and experiment-group identity.
             estimate = exact_estimates.get(exact_identity, fallback_estimates.get(fallback_identity))  # Prefer exact history and fall back only within same group.
             estimated_by_task_id[id(task)] = estimate  # Store estimate without altering task identity.
+            task["pending_runtime_sort_enabled"] = True  # Mark tasks whose visible pending plan should follow runtime order.
+            task["pending_elapsed_time_estimate_s"] = estimate  # Store display-only runtime estimate for plan logging.
             if estimate is None:  # Count unavailable estimates separately.
                 missing_count += 1  # Increment missing-estimate count.
             else:  # Count valid estimates separately.
