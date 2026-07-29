@@ -11513,6 +11513,58 @@ def build_feature_process_notification_result(result_entry: dict) -> dict:  # Re
     return {field: result_entry.get(field) for field in fields}  # Exclude estimators, matrices, predictions, probabilities, and feature lists
 
 
+def build_feature_process_training_start_message(task: dict, dynamic_total: int, eta_label: str) -> str:
+    """
+    Build one persistent-process classifier training-start Telegram message.
+
+    :param task: Authoritative feature-process task descriptor.
+    :param dynamic_total: Actual evaluation-plan length.
+    :param eta_label: Factual initial ETA label.
+    :return: Human-readable Telegram message body.
+    """
+
+    combination_header = build_telegram_combination_header(task["feature_set"], task["classifier_name"], task["augmentation_ratio"], task["hyperparameters_enabled"])  # Build established combination identity.
+    local_position = task.get("feature_local_position")  # Read feature-local plan position when present.
+    local_total = task.get("feature_local_total")  # Read feature-local plan total when present.
+    local_label = f"{local_position}/{local_total}" if local_position is not None and local_total is not None else "unavailable"  # Format local position without inventing missing data.
+    return f"[TRAINING START] Started classifier training | {combination_header} | Local combination: {local_label} | Global combination: {int(task['global_id'])}/{int(dynamic_total)} | Initial ETA: {eta_label}"  # Return compact start notification.
+
+
+def send_feature_process_training_start_notification(status: dict, tasks_by_global_id: dict, dynamic_total: int, notified_training_start_global_ids: set, notification_acknowledgements: dict) -> bool:
+    """
+    Send one coordinator-owned classifier training-start notification.
+
+    :param status: Worker lifecycle event from the multiprocessing queue.
+    :param tasks_by_global_id: Authoritative evaluation-plan task mapping.
+    :param dynamic_total: Actual evaluation-plan length.
+    :param notified_training_start_global_ids: Coordinator-owned training-start identity set.
+    :param notification_acknowledgements: Per-feature shared acknowledgement values.
+    :return: True when a training-start event was handled.
+    """
+
+    feature_set_name = status.get("feature_set")  # Resolve reporting feature worker identity.
+    global_id = status.get("global_id")  # Resolve original global task identity.
+    acknowledgement = notification_acknowledgements.get(feature_set_name)  # Resolve this feature worker's shared acknowledgement.
+    try:  # Guarantee worker release even when Telegram transport is unavailable.
+        task = tasks_by_global_id.get(global_id)  # Resolve event through authoritative dynamic plan.
+        if task is None or task.get("feature_set") != feature_set_name:  # Reject unknown or cross-feature start events.
+            return True  # Treat malformed start event as handled for deterministic worker release.
+        if global_id in notified_training_start_global_ids:  # Suppress duplicate start events inside one coordinator.
+            return True  # Avoid a second start delivery attempt for one combination.
+        notified_training_start_global_ids.add(global_id)  # Reserve the sole start delivery attempt before external I/O.
+        eta_label = str(status.get("initial_eta") or "unavailable")  # Use only worker-supplied factual ETA text.
+        telegram_msg = build_feature_process_training_start_message(task, dynamic_total, eta_label)  # Build message from authoritative task fields.
+        try:  # Isolate Telegram transport from scientific training.
+            send_telegram_message(TELEGRAM_BOT, telegram_msg)  # Send through the established coordinator-owned Telegram path.
+        except Exception:  # Preserve existing Telegram failure isolation under patched senders.
+            pass  # Keep training flow valid when notification delivery fails.
+        return True  # Report handled start event.
+    finally:  # Release exact feature worker after its start notification event is handled.
+        if acknowledgement is not None and global_id is not None:  # Update only a production worker acknowledgement.
+            with acknowledgement.get_lock():  # Serialize shared integer update across coordinator and child.
+                acknowledgement.value = max(int(acknowledgement.value), int(global_id))  # Advance monotonically so stale events cannot block this task.
+
+
 def send_feature_process_result_notification(task: dict, result_entry: dict, event: str, dynamic_total: int, notified_global_ids: set) -> bool:  # Send one coordinator-owned persisted-result notification at most once
     """
     Send one computed or cached persistent-process result notification.
@@ -15027,6 +15079,35 @@ def publish_feature_process_result_event(task: dict, process_payload: dict, resu
     status_queue.put({"status": "progress", "feature_set": process_payload["feature_set"], "global_id": task["global_id"], "event": event, "notification_result": notification_result, "pid": os.getpid()})  # Publish completion only after persistence and terminal status transition
 
 
+def publish_feature_process_training_start_event(task: dict, process_payload: dict, status_queue: Any) -> None:
+    """
+    Publish one classifier training-start event before expensive fitting begins.
+
+    :param task: Authoritative feature-process task descriptor.
+    :param process_payload: Small worker payload containing the active feature-set identity.
+    :param status_queue: Multiprocessing lifecycle queue.
+    :return: None.
+    """
+
+    status_queue.put({"status": "training_start", "feature_set": process_payload["feature_set"], "global_id": task["global_id"], "event": "training_start", "initial_eta": "unavailable", "pid": os.getpid()})  # Publish factual start metadata after final cache miss and before data loading or fit.
+
+
+def await_feature_process_notification_acknowledgement(task: dict, process_payload: dict) -> None:
+    """
+    Wait for coordinator notification handling before classifier fit begins.
+
+    :param task: Authoritative feature-process task descriptor.
+    :param process_payload: Small worker payload containing the acknowledgement value.
+    :return: None.
+    """
+
+    acknowledgement = process_payload.get("notification_acknowledgement")  # Resolve shared coordinator acknowledgement when present.
+    if acknowledgement is None:  # Preserve focused tests and alternate process targets without acknowledgement wiring.
+        return  # Continue without blocking outside production coordinator ownership.
+    while int(acknowledgement.value) < int(task["global_id"]):  # Wait until coordinator handles this start event.
+        time.sleep(0.01)  # Poll tiny shared state without extra threads or dependencies.
+
+
 def process_feature_process_task(task: dict, process_payload: dict, model_maps: dict, resource_state: dict, status_queue: Any, status_state: dict) -> None:  # Process one matrix-free task under a complete combination reservation
     """
     Process one feature-set task under final cache and computation serialization.
@@ -15065,6 +15146,8 @@ def process_feature_process_task(task: dict, process_payload: dict, model_maps: 
             publish_feature_process_result_event(task, process_payload, cached_result, "cached", status_queue)  # Preserve established cache notification semantics before leaving this combination
             return  # Release the reservation and move directly to the next feature-local task
         if task["augmentation_ratio"] is None:  # Load only original resources required for a pending fit
+            publish_feature_process_training_start_event(task, process_payload, status_queue)  # Publish one non-cached original-data start event before data loading or fit begins.
+            await_feature_process_notification_acknowledgement(task, process_payload)  # Let the coordinator send or isolate failure before expensive fitting starts.
             if resource_state["ratio_data"] is not None:  # Release the previous augmentation ratio before returning to original fitting
                 log_feature_process_combination(task, status_state, f"Augmentation ratio {resource_state['active_ratio']} release started")  # Announce exact previous ratio closure
                 cleanup_feature_process_ratio_data(resource_state["ratio_data"])  # Drop the previous sampled augmented rows
@@ -15339,6 +15422,7 @@ def execute_feature_set_processes(pending_by_feature: dict, process_payload: dic
     status_state = create_feature_process_status(context, tasks, pending_by_feature)  # Initialize all shared counters from dynamic plan and cache state
     tasks_by_global_id = {task["global_id"]: task for task in tasks}  # Index the authoritative dynamic plan for completion-event verification
     notified_global_ids = set()  # Track one coordinator-owned result notification attempt per combination
+    notified_training_start_global_ids = set()  # Track one coordinator-owned training-start notification attempt per non-cached combination
     notification_acknowledgements = {feature_set_name: context.Value("q", 0) for feature_set_name in process_payload["feature_mode_names"]}  # Create one monotonic acknowledgement per persistent feature worker
     for task in tasks:  # Log each valid pre-start cache result without changing already initialized counters
         if task.get("global_id") not in cached_results:  # Skip pending tasks during cache recovery reporting
@@ -15414,6 +15498,8 @@ def execute_feature_set_processes(pending_by_feature: dict, process_payload: dic
                 print(f"[COORDINATOR] Worker started | Feature Set={feature_set_name} | Worker Index={status.get('worker_index')} | PID={status.get('pid')} | PPID={status.get('ppid')} | Queue Size={status.get('queue_size')} | Cached Count={status.get('cached_count')} | Pending Count={status.get('pending_count')} | Matrix Resource={status.get('matrix_resource')} | Matrix Shape={status.get('matrix_shape')} | Matrix Dtype={status.get('matrix_dtype')}")  # Surface child startup to the coordinator log
             elif status_type == "running":  # Track exact current combination for abrupt-death status reconciliation
                 running_task_by_feature[feature_set_name] = status  # Store only small task identity metadata
+            elif status_type == "training_start":  # Send one coordinator-owned start notification before worker fitting begins
+                send_feature_process_training_start_notification(status, tasks_by_global_id, len(tasks), notified_training_start_global_ids, notification_acknowledgements)  # Deliver or isolate the start event and release the worker
             elif status_type == "progress":  # Surface one cache or computation completion from shared authoritative state
                 running_task_by_feature.pop(feature_set_name, None)  # Clear completed current-task identity
                 progress_snapshot = read_feature_process_status(status_state)  # Read consistent cross-process counters after transition
@@ -15429,6 +15515,9 @@ def execute_feature_set_processes(pending_by_feature: dict, process_payload: dic
                     empty_notification_polls += 1  # Stop after two empty transport windows
                     continue  # Poll once more or continue to sibling termination
                 empty_notification_polls = 0  # Continue draining while queued events remain available
+                if pending_status.get("status") == "training_start":  # Handle any already-queued start event before terminating siblings
+                    send_feature_process_training_start_notification(pending_status, tasks_by_global_id, len(tasks), notified_training_start_global_ids, notification_acknowledgements)  # Release a worker waiting on start notification handling
+                    continue  # Continue draining remaining queued events
                 handle_feature_process_result_notification(pending_status, tasks_by_global_id, len(tasks), notified_global_ids, notification_acknowledgements)  # Send or acknowledge any persisted result event without changing scientific status
             for record in process_records:  # Terminate only children that remain active
                 process = record["process"]  # Resolve one tracked child
