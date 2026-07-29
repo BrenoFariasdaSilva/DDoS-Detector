@@ -11455,7 +11455,7 @@ def build_classifier_result_entry(model_class, file, execution_mode_str, attack_
         raise
 
 
-def build_telegram_combination_header(name, model_name, augmentation_ratio=None, hyperparameters_enabled=False):
+def build_telegram_combination_header(name, model_name, augmentation_ratio=None, hyperparameters_enabled=False, include_model=True):
     """
     Build a Telegram combination header reflecting the current evaluation configuration.
 
@@ -11463,13 +11463,16 @@ def build_telegram_combination_header(name, model_name, augmentation_ratio=None,
     :param model_name: Model name being evaluated.
     :param augmentation_ratio: Augmentation ratio float or None when augmentation is not active.
     :param hyperparameters_enabled: Whether optimized hyperparameters are active for this run.
+    :param include_model: Whether to append the classifier name to the header.
     :return: Human-readable combination header string.
     """
     
     feature_label = "PCA" if name == "PCA Components" else name  # Normalize PCA wording for compact progress labels
     hyperparameter_label = "Optimized Hyperparameters" if hyperparameters_enabled else "Default Hyperparameters"  # Build explicit HP mode label
     augmentation_label = f"Augmented Test Ratio = {augmentation_ratio:.2f}" if augmentation_ratio is not None else "Original Test Data"  # Build the isolated testing-mode label.
-    parts = [feature_label, hyperparameter_label, augmentation_label, model_name]  # Build full progress label in the expected order
+    parts = [feature_label, hyperparameter_label, augmentation_label]  # Build configuration label in the expected order
+    if include_model:  # Add classifier name only where the caller expects legacy trailing model identity.
+        parts.append(model_name)  # Append classifier name to preserve existing default header format.
     
     return " - ".join(parts)
 
@@ -11526,11 +11529,11 @@ def build_feature_process_training_start_message(task: dict, dynamic_total: int,
     :return: Human-readable Telegram message body.
     """
 
-    combination_header = build_telegram_combination_header(task["feature_set"], task["classifier_name"], task["augmentation_ratio"], task["hyperparameters_enabled"])  # Build established combination identity.
+    combination_header = build_telegram_combination_header(task["feature_set"], task["classifier_name"], task["augmentation_ratio"], task["hyperparameters_enabled"], include_model=False)  # Build configuration identity without trailing classifier.
     local_position = task.get("feature_local_position")  # Read feature-local plan position when present.
     local_total = task.get("feature_local_total")  # Read feature-local plan total when present.
     local_label = f"{local_position}/{local_total}" if local_position is not None and local_total is not None else "unavailable"  # Format local position without inventing missing data.
-    return f"[TRAINING START] Started classifier training | {combination_header} | Local combination: {local_label} | Global combination: {int(task['global_id'])}/{int(dynamic_total)} | Initial ETA: {eta_label}"  # Return compact start notification.
+    return f"[TRAINING START] Started {task['classifier_name']} classifier training | {combination_header} | Local combination: {local_label} | Global combination: {int(task['global_id'])}/{int(dynamic_total)} | Initial ETA: {eta_label}"  # Return compact start notification.
 
 
 def build_feature_process_training_eta_message(task: dict, dynamic_total: int, eta_label: str) -> str:  # Build one classifier training-ETA Telegram message
@@ -11543,11 +11546,11 @@ def build_feature_process_training_eta_message(task: dict, dynamic_total: int, e
     :return: Human-readable Telegram message body.
     """
 
-    combination_header = build_telegram_combination_header(task["feature_set"], task["classifier_name"], task["augmentation_ratio"], task["hyperparameters_enabled"])  # Build established combination identity.
+    combination_header = build_telegram_combination_header(task["feature_set"], task["classifier_name"], task["augmentation_ratio"], task["hyperparameters_enabled"], include_model=False)  # Build configuration identity without trailing classifier.
     local_position = task.get("feature_local_position")  # Read feature-local plan position when present.
     local_total = task.get("feature_local_total")  # Read feature-local plan total when present.
     local_label = f"{local_position}/{local_total}" if local_position is not None and local_total is not None else "unavailable"  # Format local position without inventing missing data.
-    return f"[TRAINING ETA] Training ETA is now available | {combination_header} | Local combination: {local_label} | Global combination: {int(task['global_id'])}/{int(dynamic_total)} | ETA: {eta_label}"  # Return compact ETA notification.
+    return f"[TRAINING ETA] {task['classifier_name']} training ETA is now available | {combination_header} | Local combination: {local_label} | Global combination: {int(task['global_id'])}/{int(dynamic_total)} | ETA: {eta_label}"  # Return compact ETA notification.
 
 
 def send_feature_process_training_start_notification(status: dict, tasks_by_global_id: dict, dynamic_total: int, notified_training_start_global_ids: set, training_start_unavailable_global_ids: set, notification_acknowledgements: dict) -> bool:  # Send one coordinator-owned classifier training-start notification
@@ -11648,8 +11651,8 @@ def send_feature_process_result_notification(task: dict, result_entry: dict, eve
         return False  # Avoid sending stale or cross-feature result data
     notified_global_ids.add(global_id)  # Reserve the sole application-level delivery attempt before external I/O
     if event == "computed":  # Restore the historical fresh-completion wording
-        combination_header = build_telegram_combination_header(task["feature_set"], task["classifier_name"], task["augmentation_ratio"], task["hyperparameters_enabled"])  # Reuse the established sequential combination formatter
-        telegram_msg = f"Finished combination {global_id}/{int(dynamic_total)}: {combination_header} with F1: {result_entry.get('f1_score')} in {calculate_execution_time(0, result_entry.get('elapsed_time_s', 0))}"  # Use plan identity and persisted result values
+        combination_header = build_telegram_combination_header(task["feature_set"], task["classifier_name"], task["augmentation_ratio"], task["hyperparameters_enabled"], include_model=False)  # Reuse the established sequential combination formatter without trailing classifier
+        telegram_msg = f"Finished combination {global_id}/{int(dynamic_total)}: {task['classifier_name']} - {combination_header} with F1: {result_entry.get('f1_score')} in {calculate_execution_time(0, result_entry.get('elapsed_time_s', 0))}"  # Use plan identity and persisted result values
     else:  # Preserve the established sequential cache-recovery semantics
         _, telegram_msg = build_cached_telegram_result_messages(result_entry, task["feature_set"], task["classifier_name"], task["augmentation_ratio"], task["hyperparameters_enabled"], task["execution_mode"])  # Reuse the existing cache message construction
     try:  # Isolate Telegram transport from completed scientific work
