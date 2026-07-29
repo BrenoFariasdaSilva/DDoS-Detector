@@ -63,7 +63,7 @@ def interactive_terminal_attached(output_stream: Optional[Any] = None) -> bool: 
 class TrainingProgress:  # Report genuine public units or heartbeat-only activity
     """Report genuine training units or low-frequency active heartbeats."""
 
-    def __init__(self, feature_set: Optional[str], classifier_name: str, duration_formatter: Callable[[float], str], output_stream: Optional[Any] = None, total_units: Optional[int] = None, unit_label: Optional[str] = None, heartbeat: bool = False, report_interval_seconds: float = DEFAULT_TRAINING_PROGRESS_INTERVAL_SECONDS, hyperparameters_enabled: Optional[bool] = None, augmentation_ratio: Optional[float] = None):  # Initialize one training progress scope
+    def __init__(self, feature_set: Optional[str], classifier_name: str, duration_formatter: Callable[[float], str], output_stream: Optional[Any] = None, total_units: Optional[int] = None, unit_label: Optional[str] = None, heartbeat: bool = False, report_interval_seconds: float = DEFAULT_TRAINING_PROGRESS_INTERVAL_SECONDS, hyperparameters_enabled: Optional[bool] = None, augmentation_ratio: Optional[float] = None, eta_callback: Optional[Callable[[str], None]] = None):  # Initialize one training progress scope
         """
         Initialize one classifier training progress scope.
 
@@ -78,6 +78,7 @@ class TrainingProgress:  # Report genuine public units or heartbeat-only activit
         :param report_interval_seconds: Configured recurring progress interval in seconds.
         :param hyperparameters_enabled: Whether optimized hyperparameters are active, or None outside an evaluation combination.
         :param augmentation_ratio: Authoritative augmentation ratio, or None for original data.
+        :param eta_callback: Optional callback receiving the first emitted nonfinal ETA label.
         :return: None.
         """
 
@@ -101,6 +102,8 @@ class TrainingProgress:  # Report genuine public units or heartbeat-only activit
         self.report_lock = threading.Lock()  # Serialize heartbeat and callback timing inside this classifier task only.
         self.stop_event = threading.Event()  # Create a scope-owned heartbeat stop event.
         self.thread: Optional[threading.Thread] = None  # Initialize the optional heartbeat thread reference.
+        self.eta_callback = eta_callback  # Store optional ETA notification callback.
+        self.eta_callback_reported = False  # Track one ETA callback emission per training scope.
 
     def __enter__(self):  # Start one training progress scope
         """
@@ -114,6 +117,7 @@ class TrainingProgress:  # Report genuine public units or heartbeat-only activit
         self.last_report_time = self.start_time  # Schedule the first recurring record one full interval after training starts.
         self.latest_completed_units = None  # Reset retained callback state for this training scope.
         self.final_unit_reported = False  # Reset final-report state for this training scope.
+        self.eta_callback_reported = False  # Reset ETA callback state for this training scope.
         self.stop_event.clear()  # Reset the scope-owned event before an optional heartbeat thread starts.
         if self.heartbeat:  # Start a heartbeat only when no reliable internal percentage is available.
             try:  # Keep heartbeat startup failures from affecting estimator training.
@@ -211,6 +215,9 @@ class TrainingProgress:  # Report genuine public units or heartbeat-only activit
                 eta_label = self.duration_formatter(remaining_seconds)  # Format the unit-based ETA through the caller's established formatter.
                 print(f"[TRAINING] Feature Set: {self.feature_set} | Classifier: {self.classifier_name}{self.combination_fields} | {self.unit_label}: {completed}/{total} | Progress: {progress_percent:.2f}% | Elapsed: {elapsed_label} | ETA: {eta_label} | PID: {os.getpid()}", file=self.output_stream)  # Write latest contextual due or immediate final unit-completion record.
                 self.output_stream.flush()  # Flush every emitted genuine progress record immediately to detached logs.
+                if self.eta_callback is not None and not self.eta_callback_reported and not is_final and eta_label != "0s":  # Notify only on the first meaningful emitted ETA.
+                    self.eta_callback_reported = True  # Reserve the one ETA callback before external notification code.
+                    self.eta_callback(eta_label)  # Send the exact formatted ETA label to the caller.
                 self.last_report_time = now  # Advance only this classifier task's recurring-report timer.
                 if is_final:  # Mark the configured final public unit after successful output.
                     self.final_unit_reported = True  # Prevent duplicate final progress records without delaying fit completion logs.
