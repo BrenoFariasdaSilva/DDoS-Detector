@@ -304,6 +304,7 @@ stacking: # Stacking experiment settings
 
   top_n_features_heatmap: 15 # Number of top features to show in generated heatmaps and CSV exports (int)
   combined_files_evaluation: true # Default: combined files evaluation enabled. If false, runs separate_files single-file evaluation mode.
+  sort_pending_by_elapsed_time: false # When true, pending classifier queues run faster historical elapsed_time_s combinations first within comparable groups.
 
   methods: # Method toggles for stacking pipeline (overridable via CLI)
     augmentation: true # Enable data augmentation combination in pipeline
