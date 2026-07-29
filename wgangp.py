@@ -1235,8 +1235,8 @@ def parse_args():
         
         p.add_argument("--checkpoint", type=str, default=None, help="Generator checkpoint path")  # Add checkpoint argument
         p.add_argument("--n_samples", type=float, default=None, help="Number/percentage of samples to generate")  # Add n_samples argument
-        p.add_argument("--force_regenerate_samples", "--force_new_samples", dest="force_regenerate_samples", action="store_true", default=None, help="Force regeneration even if generated samples already exist")  # Add explicit forced-regeneration override
-        p.add_argument("--no_force_regenerate_samples", dest="force_regenerate_samples", action="store_false", help="Disable forced regeneration and use existing generated samples")  # Add explicit forced-regeneration disable override
+        p.add_argument("--force-regenerate-samples", "--force_regenerate_samples", "--force_new_samples", dest="force_regenerate_samples", action="store_true", default=None, help="Force regeneration even if generated samples already exist")  # Add explicit forced-regeneration override
+        p.add_argument("--no-force-regenerate-samples", "--no_force_regenerate_samples", dest="force_regenerate_samples", action="store_false", help="Disable forced regeneration and use existing generated samples")  # Add explicit forced-regeneration disable override
         p.add_argument("--gen_label", type=int, default=None, help="Specific class ID to generate")  # Add gen_label argument
         p.add_argument("--out_file", type=str, default=None, help="Output CSV filename")  # Add out_file argument
         p.add_argument("--gen_batch_size", type=int, default=None, help="Generation batch size")  # Add gen_batch_size argument
@@ -4270,10 +4270,10 @@ def evaluate_existing_augmentation_file(out_path: Path, file_prefix: str, existi
     :return: True if generation should proceed, False if it should be skipped.
     """
 
-    if existing_count == expected_n and not getattr(args, "force_regenerate_samples", False):  # Preserve matching-output skip unless regeneration is forced
+    if existing_count >= expected_n and not getattr(args, "force_regenerate_samples", False):  # Preserve sufficient-output skip unless regeneration is forced
         send_telegram_message(
             TELEGRAM_BOT,
-            f"{file_prefix} Skipping Generation: {out_path.name} already exists with {existing_count} output rows (expected {expected_n}).",
+            f"{file_prefix} Skipping Generation: {out_path.name} already exists with {existing_count} output rows (required {expected_n}).",
         )  # Notify skip via Telegram
         return False  # Skip generation
     if getattr(args, "force_regenerate_samples", False):  # Bypass every existing-output skip when regeneration is explicitly forced
@@ -4283,7 +4283,7 @@ def evaluate_existing_augmentation_file(out_path: Path, file_prefix: str, existi
         safe_log("info", forced_message)  # Persist forced-regeneration context through existing logging
         send_telegram_message(TELEGRAM_BOT, forced_message)  # Notify forced regeneration through existing Telegram flow
         return True  # Preserve existing output until replacement generation is ready
-    send_telegram_message(TELEGRAM_BOT, f"{file_prefix} Existing {out_path.name} has {existing_count} output rows but expected {expected_n}; removing and regenerating.")  # Notify mismatch via Telegram
+    send_telegram_message(TELEGRAM_BOT, f"{file_prefix} Existing {out_path.name} has {existing_count} output rows but requires {expected_n}; removing and regenerating.")  # Notify mismatch via Telegram
     try:  # Attempt to delete existing file before regeneration
         out_path.unlink()  # Delete existing file
     except Exception:  # Ignore deletion errors
@@ -5581,6 +5581,31 @@ def close_all_results_csv_handles():
             pass  # Ignore close errors
 
 
+def resolve_force_regenerate_samples_source(args: Any) -> str:
+    """
+    Resolve where the effective force-regenerate-samples value came from.
+
+    :param args: Parsed CLI arguments namespace.
+    :return: Source label for logging.
+    """
+
+    if getattr(args, "force_regenerate_samples", None) is not None:  # Prefer explicit CLI force-regeneration values.
+        return "CLI"  # Return CLI as the effective source.
+    config_path = Path(args.config) if getattr(args, "config", None) else Path("config.yaml")  # Resolve the same preferred configuration path used by load_configuration.
+    if not config_path.exists():  # Use example configuration path only when primary configuration is absent.
+        config_path = Path("config.yaml.example")  # Resolve fallback example configuration path.
+    try:  # Inspect only the loaded generation section for source logging.
+        if config_path.exists():  # Read source YAML only when an existing configuration file is present.
+            with open(config_path, "r") as config_file:  # Open selected YAML configuration file.
+                file_config = yaml.safe_load(config_file)  # Parse YAML for source detection.
+            generation_config = file_config.get("generation", {}) if isinstance(file_config, dict) else {}  # Read generation settings.
+            if "force_regenerate_samples" in generation_config or "force_new_samples" in generation_config:  # Detect configured current or legacy force-regeneration key.
+                return f"configuration ({config_path})"  # Return configuration source path.
+    except Exception:  # Fall back to default source when source detection fails.
+        pass  # Preserve configuration loading behavior.
+    return "fallback"  # Return fallback source when neither CLI nor YAML supplies the value.
+
+
 def initialize_cli_and_config() -> Dict:
     """
     Parse CLI arguments, load configuration, and set the global CONFIG variable.
@@ -5592,6 +5617,8 @@ def initialize_cli_and_config() -> Dict:
     args = parse_args()  # Parse command-line arguments from CLI
     cli_overrides = args_to_config_overrides(args)  # Convert parsed CLI args to configuration overrides dict
     config = load_configuration(config_path=args.config, cli_overrides=cli_overrides)  # Load and merge configuration from file and CLI
+    force_source = resolve_force_regenerate_samples_source(args)  # Resolve effective force-regeneration source for logging.
+    print(f"{BackgroundColors.GREEN}[CONFIG] force_regenerate_samples={BackgroundColors.CYAN}{bool(config.get('generation', {}).get('force_regenerate_samples', False))}{BackgroundColors.GREEN} | Source: {BackgroundColors.CYAN}{force_source}{Style.RESET_ALL}")  # Log effective force-regeneration value and source.
     CONFIG = config  # Persist loaded configuration in global registry
     return config  # Return merged configuration dictionary to caller
 
@@ -5700,6 +5727,61 @@ def execute_generation_with_verification(args: Any, config: Dict) -> None:
         print(f"{BackgroundColors.GREEN}Skipping generation: output file already satisfies configured n_samples.{Style.RESET_ALL}")  # Inform user that generation is skipped
 
 
+def skip_both_mode_when_augmented_output_sufficient(args: Any, config: Dict, csv_path_obj: Path, file_progress_prefix: str) -> bool:
+    """
+    Return whether both-mode training and generation can be skipped for an existing augmented output.
+
+    :param args: Argument namespace containing generation settings and output path.
+    :param config: Configuration dictionary passed to generation sizing functions.
+    :param csv_path_obj: Path object for the input CSV file being processed.
+    :param file_progress_prefix: Colored prefix string for progress display.
+    :return: True when the existing output already satisfies the requested augmented row count.
+    """
+
+    out_path = Path(getattr(args, "out_file", ""))  # Resolve the existing output path using configured per-file output logic.
+    force_regenerate = bool(getattr(args, "force_regenerate_samples", False))  # Resolve the effective force-regeneration value once for this file.
+    requested_ratio = safe_float(getattr(args, "n_samples", config.get("generation", {}).get("n_samples", 1.0)), config.get("generation", {}).get("n_samples", 1.0))  # Resolve the effective requested generation ratio or absolute count.
+    required_rows = resolve_expected_output_row_count(args, config)  # Reuse production final augmented row-count calculation.
+    original_rows = "unavailable"  # Initialize source row count for logging when source read fails.
+
+    try:  # Read source row count for skip evidence only.
+        original_rows = len(pd.read_csv(str(csv_path_obj), low_memory=False))  # Count original source rows without preprocessing side effects.
+    except Exception:  # Keep missing source count from masking normal training.
+        original_rows = "unavailable"  # Preserve unavailable source count in the skip decision log.
+
+    if force_regenerate:  # Bypass skip when regeneration is explicitly enabled.
+        message = f"{file_progress_prefix} [INFO] Force regeneration enabled; training will run for {csv_path_obj} | Output={out_path} | Existing rows=not evaluated | Required rows={required_rows} | Requested n_samples={requested_ratio} | Force regeneration={force_regenerate}"  # Build force-bypass evidence.
+        print(f"{BackgroundColors.YELLOW}{message}{Style.RESET_ALL}")  # Log force-bypass evidence before training.
+        safe_log("info", message)  # Persist force-bypass evidence through existing logger.
+        send_telegram_message(TELEGRAM_BOT, message)  # Notify force-bypass evidence through existing Telegram path.
+        return False  # Continue normal train and generate flow.
+
+    if required_rows is None or not out_path.exists():  # Continue when output is absent or required count is unavailable.
+        return False  # Proceed through normal training and generation.
+
+    try:  # Validate existing output readability and count rows.
+        existing_rows = len(pd.read_csv(out_path, low_memory=False))  # Count existing augmented output rows with the existing CSV reader behavior.
+    except Exception as read_error:  # Continue normal flow for corrupt or unreadable output.
+        message = f"{file_progress_prefix} [INFO] Existing augmented output is unreadable; training will run for {csv_path_obj} | Output={out_path} | Error={read_error} | Required rows={required_rows} | Requested n_samples={requested_ratio} | Force regeneration={force_regenerate}"  # Build unreadable-output evidence.
+        print(f"{BackgroundColors.YELLOW}{message}{Style.RESET_ALL}")  # Log unreadable-output evidence before training.
+        safe_log("info", message)  # Persist unreadable-output evidence through existing logger.
+        return False  # Proceed through normal training and generation.
+
+    message = f"{file_progress_prefix} [INFO] Existing augmented output evaluated for {csv_path_obj} | Output={out_path} | Original rows={original_rows} | Existing rows={existing_rows} | Required rows={required_rows} | Requested n_samples={requested_ratio} | Force regeneration={force_regenerate}"  # Build complete sufficiency evidence.
+    print(f"{BackgroundColors.GREEN if existing_rows >= int(required_rows) else BackgroundColors.YELLOW}{message}{Style.RESET_ALL}")  # Log sufficiency evidence before any training starts.
+    safe_log("info", message)  # Persist sufficiency evidence through existing logger.
+    send_telegram_message(TELEGRAM_BOT, message)  # Notify sufficiency evidence through existing Telegram path.
+
+    if existing_rows >= int(required_rows):  # Skip only when existing output has at least the requested final row count.
+        skip_message = f"{file_progress_prefix} [INFO] Skipping WGAN-GP training and generation for {csv_path_obj.name}: existing augmented output already satisfies requested size."  # Build skip notification.
+        print(f"{BackgroundColors.GREEN}{skip_message}{Style.RESET_ALL}")  # Log skip before returning to directory loop.
+        safe_log("info", skip_message)  # Persist skip through existing logger.
+        send_telegram_message(TELEGRAM_BOT, skip_message)  # Notify skip through existing Telegram path.
+        return True  # Skip both training and generation for this file only.
+
+    return False  # Proceed through normal training and generation for missing capacity.
+
+
 def resolve_checkpoint_after_training(args: Any, config: Dict, csv_path_obj: Path, data_aug_dir: Path) -> Optional[Path]:
     """
     Resolve the generator checkpoint path produced after training and assign it to args.
@@ -5788,6 +5870,8 @@ def run_both_mode_for_csv(args: Any, config: Dict, csv_path_obj: Path, data_aug_
 
     file_progress_prefix = getattr(args, "file_progress_prefix", f"{BackgroundColors.CYAN}[1/1]{Style.RESET_ALL}")  # Retrieve colored progress prefix from args or use default
     args._file_processing_start_time = time.time()  # Record combined per-file processing start before training begins
+    if skip_both_mode_when_augmented_output_sufficient(args, config, csv_path_obj, file_progress_prefix):  # Skip expensive work when the existing augmented output is already large enough.
+        return  # Continue with the next file in directory or batch mode.
     print(f"{BackgroundColors.GREEN}[1/2] {training_label}{Style.RESET_ALL}")  # Print training phase progress header with label
     training_result = execute_training_with_timing(args, config)  # Train model and capture in-memory artifacts for fallback generation
     checkpoint_path = resolve_checkpoint_after_training(args, config, csv_path_obj, data_aug_dir)  # Resolve generator checkpoint produced by training
