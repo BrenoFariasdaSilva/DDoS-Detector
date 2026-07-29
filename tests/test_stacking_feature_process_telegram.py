@@ -134,6 +134,19 @@ class FeatureProcessTelegramTests(unittest.TestCase):  # Verify persistent per-r
         self.assertEqual(telegram_send.call_args.args[1], "Finished combination 4/240: GA Features - Default Hyperparameters - Original Test Data - Random Forest with F1: 0.769859173861937 in 26m 3s")  # Preserve old wording with dynamic plan and persisted values
         self.assertEqual(notified, {4})  # Reserve exact original global identity
 
+    def test_training_start_message_uses_dynamic_plan_and_unavailable_eta(self):  # Verify start message identity and truthful ETA fallback
+        task = make_notification_task("PCA Components", 13, 320)  # Build one dynamic PCA task identity
+        task.update({"feature_local_position": 13, "feature_local_total": 100})  # Supply the feature-local runtime position
+        notified = set()  # Track start notification identities
+        with mock.patch.object(stacking, "send_telegram_message") as telegram_send:  # Capture coordinator-owned start notification
+            handled = stacking.send_feature_process_training_start_notification({"status": "training_start", "feature_set": "PCA Components", "global_id": 13, "initial_eta": "unavailable"}, {13: task}, 320, notified, {})  # Exercise direct coordinator start handling
+            duplicate = stacking.send_feature_process_training_start_notification({"status": "training_start", "feature_set": "PCA Components", "global_id": 13, "initial_eta": "unavailable"}, {13: task}, 320, notified, {})  # Exercise duplicate start suppression
+        self.assertTrue(handled)  # Treat the first start event as handled
+        self.assertTrue(duplicate)  # Treat duplicate start event as handled without sending
+        self.assertEqual(telegram_send.call_count, 1)  # Send exactly one start notification
+        self.assertEqual(telegram_send.call_args.args[1], "[TRAINING START] Started classifier training | PCA - Default Hyperparameters - Original Test Data - Random Forest | Local combination: 13/100 | Global combination: 13/320 | Initial ETA: unavailable")  # Preserve exact start message format
+        self.assertEqual(notified, {13})  # Reserve the exact start identity
+
     def test_cached_notifications_match_sequential_semantics(self):  # Verify cache hits remain CACHE notifications without fresh completion wording
         task = make_notification_task("RFE Features", 7, 32)  # Build one cached persistent result identity
         result_entry = make_notification_result(task, f1_score=0.66, elapsed_time_s=125)  # Build persisted cache metrics
@@ -147,6 +160,37 @@ class FeatureProcessTelegramTests(unittest.TestCase):  # Verify persistent per-r
         self.assertEqual(sequential_message, persistent_message)  # Reuse exact established cache wording and metrics
         self.assertTrue(persistent_message.startswith("[CACHE] Recovered saved result"))  # Preserve cache provenance
         self.assertNotIn("Finished combination", persistent_message)  # Never misreport cache recovery as fresh computation
+
+    def test_cached_process_task_publishes_no_training_start(self):  # Verify final cache recovery cannot emit a training-start event
+        process_context = mp.get_context("spawn")  # Build production-compatible shared counters
+        task = make_notification_task("Full Features", 1, 1)  # Build one cached Full task
+        status_state = stacking.create_feature_process_status(process_context, [task], {"Full Features": [task]})  # Initialize exact process-safe task status
+        status_queue = queue.Queue()  # Capture lifecycle events locally
+        cached_result = make_notification_result(task)  # Build one compatible cached result
+        combination_lock = mock.Mock()  # Observe reservation cleanup
+        with mock.patch.object(stacking, "acquire_feature_process_combination_lock", return_value=combination_lock), mock.patch.object(stacking, "reload_feature_process_task_cache", return_value=(cached_result, {})), mock.patch.object(stacking, "log_feature_process_combination"):  # Force final cache recovery path
+            stacking.process_feature_process_task(task, {"feature_set": "Full Features"}, {False: {"Random Forest": object()}}, {"original_resources": None, "ratio_data": None, "active_ratio": None, "cache_dict": {}}, status_queue, status_state)  # Execute production task lifecycle through cache branch
+        records = []  # Accumulate queued lifecycle events
+        while not status_queue.empty():  # Drain local queue
+            records.append(status_queue.get_nowait())  # Preserve event payload
+        self.assertFalse(any(record.get("status") == "training_start" for record in records))  # Cached branch emits no training-start notification
+        self.assertTrue(any(record.get("event") == "cached" for record in records))  # Cached branch still emits established cache notification
+
+    def test_augmented_process_task_publishes_no_training_start(self):  # Verify loaded-model augmented evaluation cannot emit training-start
+        process_context = mp.get_context("spawn")  # Build production-compatible shared counters
+        task = make_notification_task("Full Features", 1, 1, augmentation_ratio=0.5)  # Build one augmented task with no fitting phase
+        status_state = stacking.create_feature_process_status(process_context, [task], {"Full Features": [task]})  # Initialize exact process-safe task status
+        status_queue = queue.Queue()  # Capture lifecycle events locally
+        result_entry = make_notification_result(task)  # Build one simulated augmented result
+        resource_state = {"original_resources": None, "ratio_data": {"y_encoded": np.asarray([0, 1])}, "active_ratio": 0.5, "cache_dict": {}}  # Provide active ratio data to skip unrelated loading
+        combination_lock = mock.Mock()  # Observe reservation cleanup
+        with mock.patch.object(stacking, "acquire_feature_process_combination_lock", return_value=combination_lock), mock.patch.object(stacking, "reload_feature_process_task_cache", return_value=(None, {})), mock.patch.object(stacking, "evaluate_feature_process_augmented_task", return_value=result_entry), mock.patch.object(stacking, "log_feature_process_combination"):  # Isolate augmented loaded-model evaluation
+            stacking.process_feature_process_task(task, {"feature_set": "Full Features"}, {False: {"Random Forest": object()}}, resource_state, status_queue, status_state)  # Execute production task lifecycle through augmented branch
+        records = []  # Accumulate queued lifecycle events
+        while not status_queue.empty():  # Drain local queue
+            records.append(status_queue.get_nowait())  # Preserve event payload
+        self.assertFalse(any(record.get("status") == "training_start" for record in records))  # Augmented loaded-model branch emits no training-start notification
+        self.assertTrue(any(record.get("event") == "computed" for record in records))  # Augmented branch still emits established computed notification
 
     def test_notification_follows_status_and_persistence_before_cleanup(self):  # Verify required successful lifecycle order
         process_context = mp.get_context("spawn")  # Build production-compatible shared counters
