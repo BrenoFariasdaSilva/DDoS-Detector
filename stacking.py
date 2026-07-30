@@ -64,6 +64,7 @@ import argparse  # For parsing command-line arguments
 import ast  # For safely evaluating Python literals
 import atexit  # For playing a sound when the program finishes
 import concurrent.futures  # For parallel execution
+import copy  # For isolating per-run configuration without mutating caller state
 from contextlib import contextmanager  # For scoped cache file locking across threads and processes
 import ctypes  # For configuring Linux feature workers to terminate with their coordinator
 import dataframe_image as dfi  # For exporting DataFrame styled tables as PNG images
@@ -945,6 +946,7 @@ def parse_cli_args():
         pending_sort_group.add_argument("--sort-pending-by-elapsed-time", dest="sort_pending_by_elapsed_time", action="store_true", help="Sort pending classifier combinations by historical elapsed_time_s within comparable groups")  # Enable runtime-based pending queue ordering
         pending_sort_group.add_argument("--no-sort-pending-by-elapsed-time", dest="sort_pending_by_elapsed_time", action="store_false", help="Disable runtime-based pending classifier ordering")  # Disable runtime-based pending queue ordering
         parser.set_defaults(sort_pending_by_elapsed_time=None)  # Leave config.yaml in control when neither pending-sort flag is supplied
+        parser.add_argument("--experiment-runs", dest="experiment_runs", type=int, default=None, help="Total repeated runs required for every logical stacking experiment")  # Add repeated-run CLI override
         parser.add_argument("--training-progress-interval-minutes", dest="training_progress_interval_minutes", type=float, default=None, help="Recurring classifier training-progress interval in positive finite minutes (default: 15)")  # Add the minutes-based progress interval override
         parser.add_argument("--low-memory", dest="low_memory", action="store_true", default=False, help="Enable low memory mode for pandas operations")  # Add low memory mode CLI argument
         parser.add_argument("--dataset-file-format", type=str, default=None, dest="dataset_file_format", help="File format for dataset files: arff, csv, parquet, txt")  # Dataset file format CLI override
@@ -984,7 +986,7 @@ def get_default_stacking_config():
             "cache_prefix": "Cache_",  # Prefix for cached model files
             "model_export_base": "Feature_Analysis/Stacking/Models/",  # Base directory for model exports
             "results_csv_columns": [
-                "experiment_id", "experiment_mode", "execution_mode", "data_source",
+                "experiment_id", "experiment_run", "experiment_mode", "execution_mode", "data_source",
                 "dataset", "attack_types_combined", "augmentation_ratio",
                 "feature_selection_enabled", "hyperparameters_enabled", "data_augmentation_enabled", "hyperparameter_mode",
                 "feature_set", "classifier_type", "model_name", "model",
@@ -993,7 +995,7 @@ def get_default_stacking_config():
                 "cv_method", "top_features", "rfe_ranking", "hyperparameters", "features_list", "Hardware",
             ],  # Column names for results CSV export
             "cache_results_csv_columns": [
-                "experiment_id", "experiment_mode", "execution_mode", "data_source",
+                "experiment_id", "experiment_run", "experiment_mode", "execution_mode", "data_source",
                 "dataset", "attack_types_combined", "augmentation_ratio",
                 "feature_selection_enabled", "hyperparameters_enabled", "data_augmentation_enabled", "hyperparameter_mode",
                 "feature_set", "classifier_type", "model_name", "model",
@@ -1004,6 +1006,7 @@ def get_default_stacking_config():
             "top_n_features_heatmap": 15,  # Number of top features to show in heatmap
             "combined_files_evaluation": True,  # Default: combined files evaluation enabled; False = separate files evaluation
             "sort_pending_by_elapsed_time": False,  # Keep pending queue ordering unchanged unless runtime sorting is enabled
+            "experiment_runs": 1,  # Require one completed run per logical experiment by default
             "methods": {
                 "augmentation": True,  # Enable data augmentation combination by default
                 "feature_selection": True,  # Enable feature selection combination by default
@@ -1284,6 +1287,152 @@ def validate_training_progress_interval_minutes(value: Any, source: str = "evalu
     return resolved  # Return the validated minutes value without converting units here.
 
 
+def validate_experiment_runs(value: Any, source: str = "stacking.experiment_runs") -> int:
+    """
+    Validate repeated stacking experiment run count.
+
+    :param value: Configured repeated-run count.
+    :param source: User-facing setting name used in validation errors.
+    :return: Validated run count.
+    """
+
+    if isinstance(value, bool) or not isinstance(value, int):  # Require a real integer value.
+        raise ValueError(f"{source} must be an integer greater than or equal to 1")  # Reject booleans, floats, and strings.
+    if value < 1:  # Reject zero and negative run counts.
+        raise ValueError(f"{source} must be an integer greater than or equal to 1")  # Match existing configuration error style.
+    return value  # Return the validated run count.
+
+
+def get_current_experiment_run(config: Optional[dict] = None) -> int:
+    """
+    Resolve the current stacking experiment run index.
+
+    :param config: Runtime configuration dictionary.
+    :return: Current one-based run index.
+    """
+
+    if config is None:  # Use global configuration when no configuration is supplied.
+        config = CONFIG  # Preserve established global fallback.
+    return validate_experiment_runs(config.get("stacking", {}).get("experiment_run", 1), "stacking.experiment_run")  # Return validated current run.
+
+
+def derive_experiment_run_seed(base_seed: Any, experiment_run: int) -> int:
+    """
+    Derive a deterministic seed for one experiment run.
+
+    :param base_seed: Configured base random seed.
+    :param experiment_run: One-based experiment run index.
+    :return: Run-specific random seed.
+    """
+
+    if isinstance(base_seed, bool) or not isinstance(base_seed, int):  # Require the same integer seed shape used by existing configs.
+        raise ValueError("random_state must be an integer")  # Reject unsupported seed payloads.
+    run_index = validate_experiment_runs(experiment_run, "stacking.experiment_run")  # Validate the one-based run index.
+    if run_index == 1:  # Preserve existing run 1 seed behavior exactly.
+        return int(base_seed)  # Return the configured base seed unchanged.
+    return int((int(base_seed) + run_index - 1) % (2 ** 32 - 1))  # Vary later runs reproducibly.
+
+
+def build_experiment_run_config(config: dict, experiment_run: int) -> dict:
+    """
+    Build a runtime configuration for one experiment run.
+
+    :param config: Base runtime configuration dictionary.
+    :param experiment_run: One-based experiment run index.
+    :return: Isolated runtime configuration for the requested run.
+    """
+
+    run_index = validate_experiment_runs(experiment_run, "stacking.experiment_run")  # Validate the requested run index.
+    run_config = copy.deepcopy(config)  # Isolate nested seed and run metadata mutations.
+    stacking_cfg = run_config.setdefault("stacking", {})  # Resolve stacking configuration section.
+    stacking_cfg["experiment_run"] = run_index  # Store current run counter without changing logical experiment identity.
+    base_evaluation_seed = int(config.get("evaluation", {}).get("random_state", 42))  # Read configured evaluation seed before per-run derivation.
+    run_seed = derive_experiment_run_seed(base_evaluation_seed, run_index)  # Derive deterministic run-specific evaluation seed.
+    run_config.setdefault("evaluation", {})["random_state"] = run_seed  # Apply run-specific split and estimator fallback seed.
+    dataset_seed = config.get("dataset", {}).get("random_state", base_evaluation_seed)  # Read dataset seed with evaluation fallback.
+    automl_seed = config.get("automl", {}).get("random_state", base_evaluation_seed)  # Read AutoML seed with evaluation fallback.
+    tsne_seed = config.get("tsne", {}).get("random_state", base_evaluation_seed)  # Read t-SNE seed with evaluation fallback.
+    explainability_seed = config.get("explainability", {}).get("random_state", base_evaluation_seed)  # Read explainability seed with evaluation fallback.
+    run_config.setdefault("dataset", {})["random_state"] = derive_experiment_run_seed(int(base_evaluation_seed if dataset_seed is None else dataset_seed), run_index)  # Apply run-specific dataset seed.
+    run_config.setdefault("automl", {})["random_state"] = derive_experiment_run_seed(int(base_evaluation_seed if automl_seed is None else automl_seed), run_index)  # Apply run-specific AutoML seed.
+    run_config.setdefault("tsne", {})["random_state"] = derive_experiment_run_seed(int(base_evaluation_seed if tsne_seed is None else tsne_seed), run_index)  # Apply run-specific t-SNE seed.
+    run_config.setdefault("explainability", {})["random_state"] = derive_experiment_run_seed(int(base_evaluation_seed if explainability_seed is None else explainability_seed), run_index)  # Apply run-specific explainability sampling seed.
+    for model_config in run_config.get("models", {}).values():  # Update configured estimator seeds that actually expose random_state.
+        if isinstance(model_config, dict) and "random_state" in model_config:  # Preserve models without seed support.
+            model_config["random_state"] = derive_experiment_run_seed(int(model_config["random_state"]), run_index)  # Apply deterministic per-run estimator seed.
+    return run_config  # Return isolated run-specific configuration.
+
+
+def build_experiment_run_filename(filename: str, experiment_run: int, legacy: bool = False) -> str:
+    """
+    Build the run-specific CSV filename for experiment result storage.
+
+    :param filename: Base CSV filename.
+    :param experiment_run: One-based experiment run index.
+    :param legacy: Whether to return the unsuffixed legacy filename.
+    :return: Run-specific or legacy filename.
+    """
+
+    if legacy:  # Preserve the original unsuffixed filename for migration reads.
+        return filename  # Return the legacy filename unchanged.
+    run_index = validate_experiment_runs(experiment_run, "stacking.experiment_run")  # Validate the requested run index.
+    path = Path(filename)  # Use pathlib suffix parsing for the configured filename.
+    base_name = re.sub(r"_Run_\d+$", "", path.stem)  # Avoid stacking run suffixes when a caller supplies one.
+    return f"{base_name}_Run_{run_index}{path.suffix}"  # Append the visible run marker before the CSV suffix.
+
+
+def get_stacking_results_file_path(csv_path: str, config: Optional[dict] = None, experiment_run: Optional[int] = None, legacy: bool = False) -> Path:
+    """
+    Resolve the final stacking result CSV path for one experiment run.
+
+    :param csv_path: Dataset file or directory identity used for output placement.
+    :param config: Runtime configuration dictionary.
+    :param experiment_run: Optional one-based experiment run index.
+    :param legacy: Whether to resolve the unsuffixed legacy path.
+    :return: Final result CSV path.
+    """
+
+    if config is None:  # Use global configuration when no configuration is supplied.
+        config = CONFIG  # Preserve established configuration fallback.
+    run_index = get_current_experiment_run(config) if experiment_run is None else validate_experiment_runs(experiment_run, "stacking.experiment_run")  # Resolve the active run index.
+    results_filename = config.get("stacking", {}).get("results_filename", "Stacking_Classifiers_Results.csv")  # Read the configured final result filename.
+    dataset_root = resolve_dataset_root_path(str(csv_path))  # Resolve output root from file or directory input.
+    stacking_results_dir = config.get("stacking", {}).get("results_dir", "Stacking")  # Read the configured stacking result directory.
+    output_filename = build_experiment_run_filename(results_filename, run_index, legacy=legacy)  # Build the final result filename for this run.
+    return dataset_root / stacking_results_dir / output_filename  # Return the complete final result path.
+
+
+def migrate_legacy_final_results_file_for_run(csv_path: str, config: Optional[dict] = None) -> None:
+    """
+    Copy an unsuffixed final-result CSV into the run 1 filename when needed.
+
+    :param csv_path: Dataset file or directory identity used for output placement.
+    :param config: Runtime configuration dictionary.
+    :return: None.
+    """
+
+    if config is None:  # Use global configuration when no configuration is supplied.
+        config = CONFIG  # Preserve established configuration fallback.
+    if get_current_experiment_run(config) != 1:  # Legacy unsuffixed rows represent run 1 only.
+        return  # Leave later run files untouched.
+    legacy_path = get_stacking_results_file_path(csv_path, config=config, experiment_run=1, legacy=True)  # Resolve the old unsuffixed final path.
+    run_path = get_stacking_results_file_path(csv_path, config=config, experiment_run=1, legacy=False)  # Resolve the new run 1 final path.
+    if legacy_path == run_path or not legacy_path.is_file() or run_path.is_file():  # Copy only when the legacy file is the sole final result source.
+        return  # Preserve existing run 1 and unrelated files.
+    os.makedirs(run_path.parent, exist_ok=True)  # Ensure the target directory exists before staging the copy.
+    temporary_path = None  # Track the staged copy path for cleanup on failure.
+    try:  # Stage, synchronize, and publish the migrated final CSV atomically.
+        temporary_fd, temporary_path = tempfile.mkstemp(dir=str(run_path.parent), prefix=f".{run_path.name}.legacy.", suffix=".tmp")  # Allocate a same-directory migration file.
+        with os.fdopen(temporary_fd, "wb") as temporary_file, open(legacy_path, "rb") as legacy_file:  # Open source and target streams.
+            shutil.copyfileobj(legacy_file, temporary_file)  # Copy the exact legacy bytes into the staged file.
+            sync_cache_file_data(temporary_file)  # Synchronize migrated bytes before publication.
+        replace_cache_file_atomically(temporary_path, str(run_path))  # Publish the migrated run 1 final file atomically.
+        temporary_path = None  # Mark the staged file as consumed.
+        print(f"{BackgroundColors.GREEN}[LEGACY MIGRATION] Copied final results {BackgroundColors.CYAN}{legacy_path}{BackgroundColors.GREEN} -> {BackgroundColors.CYAN}{run_path}{Style.RESET_ALL}")  # Report non-destructive final migration.
+    finally:  # Remove any unconsumed migration staging file.
+        remove_cache_temporary_file(temporary_path)  # Remove a failed migration temporary file.
+
+
 FEATURE_SET_WORKER_KEYS = ("full", "ga", "pca", "rfe")  # Define the feature-set process identities supported by the persistent scheduler
 FEATURE_PROCESS_START_METHOD = "spawn"  # Select clean-interpreter feature workers without inheriting initialized native thread pools
 FEATURE_PROCESS_STATUS_FIELDS = ("total", "cached", "pending", "running", "computed", "failed", "completed")  # Define synchronized global and feature-local status fields
@@ -1355,6 +1504,7 @@ def merge_configs(defaults, file_config, cli_args):
             config["execution"]["execution_mode"] = _LEGACY_MODES.get(classification_mode, classification_mode)  # Normalize legacy mode name to canonical value before assigning
         
         if cli_args is None:  # If no CLI args
+            config.setdefault("stacking", {})["experiment_runs"] = validate_experiment_runs(config.get("stacking", {}).get("experiment_runs", 1))  # Normalize the YAML-over-default run count.
             validate_feature_extraction_n_jobs(config.get("evaluation", {}).get("feature_extraction_n_jobs", 1))  # Validate the effective file or default feature extraction setting.
             config.setdefault("evaluation", {})["feature_set_workers"] = validate_feature_set_workers(config.get("evaluation", {}).get("feature_set_workers", None))  # Normalize the effective persistent process mapping
             config["evaluation"]["training_progress_interval_minutes"] = validate_training_progress_interval_minutes(config["evaluation"].get("training_progress_interval_minutes", DEFAULT_TRAINING_PROGRESS_INTERVAL_MINUTES))  # Validate the YAML-over-default progress interval.
@@ -1429,6 +1579,9 @@ def merge_configs(defaults, file_config, cli_args):
         if hasattr(cli_args, "sort_pending_by_elapsed_time") and cli_args.sort_pending_by_elapsed_time is not None:  # Pending runtime sort CLI override
             config.setdefault("stacking", {})["sort_pending_by_elapsed_time"] = cli_args.sort_pending_by_elapsed_time  # Apply explicit CLI ordering preference over YAML
 
+        if hasattr(cli_args, "experiment_runs") and cli_args.experiment_runs is not None:  # Repeated-run CLI override
+            config.setdefault("stacking", {})["experiment_runs"] = validate_experiment_runs(cli_args.experiment_runs, "--experiment-runs")  # Apply the validated CLI-over-YAML run count.
+
         if hasattr(cli_args, "training_progress_interval_minutes") and cli_args.training_progress_interval_minutes is not None:  # Training progress interval CLI override
             config.setdefault("evaluation", {})["training_progress_interval_minutes"] = validate_training_progress_interval_minutes(cli_args.training_progress_interval_minutes, "--training-progress-interval-minutes")  # Apply the validated CLI-over-YAML interval.
 
@@ -1472,6 +1625,7 @@ def merge_configs(defaults, file_config, cli_args):
             config.setdefault("memory_watcher", {})["capture_tracemalloc"] = True  # Enable optional Python allocation reports
 
         validate_feature_extraction_n_jobs(config.get("evaluation", {}).get("feature_extraction_n_jobs", 1))  # Validate the effective feature extraction setting after CLI precedence is applied.
+        config.setdefault("stacking", {})["experiment_runs"] = validate_experiment_runs(config.get("stacking", {}).get("experiment_runs", 1))  # Normalize the final repeated-run count after CLI precedence.
         config.setdefault("evaluation", {})["feature_set_workers"] = validate_feature_set_workers(config.get("evaluation", {}).get("feature_set_workers", None))  # Normalize the final persistent process mapping after CLI precedence
         config["evaluation"]["training_progress_interval_minutes"] = validate_training_progress_interval_minutes(config["evaluation"].get("training_progress_interval_minutes", DEFAULT_TRAINING_PROGRESS_INTERVAL_MINUTES))  # Normalize the final validated progress interval after CLI precedence.
         return config  # Return final merged configuration
@@ -2098,7 +2252,7 @@ def handle_target_column_consistency(target_col_name, this_target, f, df_clean, 
     try:
         if config is None:  # If no config provided
             config = CONFIG  # Use global CONFIG
-        
+
         verbose_output(
             f"{BackgroundColors.GREEN}Verifying target column consistency for: {BackgroundColors.CYAN}{f}{Style.RESET_ALL} (target: {BackgroundColors.CYAN}{this_target}{Style.RESET_ALL})...{Style.RESET_ALL}",
             config=config
@@ -2130,7 +2284,7 @@ def intersect_features(common_features, feat_cols, config=None):
     try:
         if config is None:  # If no config provided
             config = CONFIG  # Use global CONFIG
-        
+
         verbose_output(
             f"{BackgroundColors.GREEN}Intersecting features for current file...{Style.RESET_ALL}",
             config=config
@@ -2841,6 +2995,7 @@ def generate_and_save_metric_plots(y_true, y_pred, stacking_config: dict, resolv
 
         dpi = plots_cfg.get("dpi", 1000)
         fmt = plots_cfg.get("format", "png")
+        experiment_run = validate_experiment_runs(stacking_config.get("experiment_run", 1), "stacking.experiment_run") if stacking_config is not None else 1  # Resolve run metadata for plot filenames.
 
         if not isinstance(dpi, int) or dpi <= 0:
             raise ValueError("plots.dpi must be an integer > 0")
@@ -2857,15 +3012,15 @@ def generate_and_save_metric_plots(y_true, y_pred, stacking_config: dict, resolv
 
         per = metrics.get("per_class", {})
 
-        per_class_f1_path = os.path.join(plots_dir, f"per_class_f1.{fmt}")
-        per_class_prec_path = os.path.join(plots_dir, f"per_class_precision.{fmt}")
-        per_class_rec_path = os.path.join(plots_dir, f"per_class_recall.{fmt}")
+        per_class_f1_path = os.path.join(plots_dir, f"per_class_f1_Run_{experiment_run}.{fmt}")  # Isolate per-class F1 plot by run.
+        per_class_prec_path = os.path.join(plots_dir, f"per_class_precision_Run_{experiment_run}.{fmt}")  # Isolate per-class precision plot by run.
+        per_class_rec_path = os.path.join(plots_dir, f"per_class_recall_Run_{experiment_run}.{fmt}")  # Isolate per-class recall plot by run.
 
         plot_per_class_metric(per, "f1", per_class_f1_path, dpi, fmt)
         plot_per_class_metric(per, "precision", per_class_prec_path, dpi, fmt)
         plot_per_class_metric(per, "recall", per_class_rec_path, dpi, fmt)
 
-        global_path = os.path.join(plots_dir, f"global_metrics.{fmt}")
+        global_path = os.path.join(plots_dir, f"global_metrics_Run_{experiment_run}.{fmt}")  # Isolate global metrics plot by run.
         plot_global_metrics(metrics.get("global", {}), global_path, dpi, fmt)
 
         verbose_output(f"[STACKING][PLOTS] Saved: {per_class_f1_path}, {per_class_prec_path}, {per_class_rec_path}, {global_path}")
@@ -2968,17 +3123,20 @@ def validate_augmented_dataframe(original_df, augmented_df, file_path):
         raise
 
 
-def sample_augmented_by_ratio(augmented_df, original_df, ratio):
+def sample_augmented_by_ratio(augmented_df, original_df, ratio, config=None):
     """
     Samples rows from the augmented DataFrame proportional to the original dataset size.
 
     :param augmented_df: Full augmented DataFrame to sample from
     :param original_df: Original DataFrame used to determine sample count
     :param ratio: Float ratio (e.g., 0.25 means 25% of original size)
+    :param config: Configuration dictionary (uses global CONFIG if None)
     :return: Sampled DataFrame with at most ratio * len(original_df) rows, or None on failure
     """
 
     try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
         n_original = int(original_df) if isinstance(original_df, (int, np.integer)) else len(original_df)  # Resolve original row count from dataframe or precomputed count.
         n_requested = max(1, int(round(ratio * n_original)))  # Calculate requested sample size capped at minimum 1 row
         n_available = len(augmented_df)  # Get the total number of rows available in augmented data
@@ -2996,7 +3154,7 @@ def sample_augmented_by_ratio(augmented_df, original_df, ratio):
                 f"{BackgroundColors.YELLOW}Augmented data has only {n_available} rows; requested {n_requested} (ratio={ratio}). Using all {n_available}.{Style.RESET_ALL}"
             )  # Warn that fewer rows than requested are available
 
-        sampled_df = augmented_df.sample(n=n_sample, random_state=42, replace=False)  # Randomly sample n_sample rows with fixed seed for reproducibility
+        sampled_df = augmented_df.sample(n=n_sample, random_state=config.get("evaluation", {}).get("random_state", 42), replace=False)  # Randomly sample n_sample rows with the active run seed.
 
         verbose_output(
             f"{BackgroundColors.GREEN}Sampled {BackgroundColors.CYAN}{n_sample}{BackgroundColors.GREEN} augmented rows at ratio {BackgroundColors.CYAN}{ratio}{BackgroundColors.GREEN} (original has {n_original} rows){Style.RESET_ALL}"
@@ -3041,7 +3199,7 @@ def sample_combined_files_by_ratio(files_list, original_sample_count, ratio, con
     total_rows = sum(row_count for _, row_count, _ in source_metadata)  # Compute the exact preprocessed global population
     requested_rows = max(1, int(round(float(ratio) * int(original_sample_count))))  # Preserve established ratio cardinality
     sample_rows = min(requested_rows, total_rows)  # Cap sampling at the available augmented population
-    random_state = np.random.RandomState(42)  # Keep deterministic uniform sampling across repeated runs
+    random_state = np.random.RandomState(config.get("evaluation", {}).get("random_state", 42))  # Use the active run seed for deterministic uniform sampling.
     remaining_rows = total_rows  # Track the unvisited global population for exact hypergeometric allocation
     remaining_sample = sample_rows  # Track rows still required from later sources
     sampled_parts = []  # Retain only requested rows rather than every complete source
@@ -3305,7 +3463,7 @@ def compute_and_save_tsne_plot(X_scaled, labels, output_path, title, perplexity=
         return False  # Return failure flag
 
 
-def generate_augmentation_tsne_visualization(original_file, original_df, augmented_df=None, augmentation_ratio=None, experiment_mode="original_only"):
+def generate_augmentation_tsne_visualization(original_file, original_df, augmented_df=None, augmentation_ratio=None, experiment_mode="original_only", config=None):
     """
     Generate t-SNE visualization for data augmentation experiment.
 
@@ -3314,10 +3472,13 @@ def generate_augmentation_tsne_visualization(original_file, original_df, augment
     :param augmented_df: DataFrame with augmented data (None for original-only)
     :param augmentation_ratio: Augmentation ratio (e.g., 0.50 for 50%)
     :param experiment_mode: Experiment mode string
+    :param config: Configuration dictionary (uses global CONFIG if None)
     :return: None
     """
 
     try:
+        if config is None:  # If no config provided
+            config = CONFIG  # Use global CONFIG
         verbose_output(
             f"{BackgroundColors.GREEN}Generating t-SNE visualization for augmentation experiment...{Style.RESET_ALL}"
         )  # Output verbose message for t-SNE generation
@@ -3329,9 +3490,10 @@ def generate_augmentation_tsne_visualization(original_file, original_df, augment
             )  # Print warning message
             return  # Exit function early
 
-        stacking_output_dir = get_stacking_output_dir(original_file, CONFIG)
+        stacking_output_dir = get_stacking_output_dir(original_file, config)
         tsne_output_dir = Path(stacking_output_dir) / "Plots" / "tsne_plots" / Path(original_file).stem
         tsne_output_dir.mkdir(parents=True, exist_ok=True)
+        experiment_run = get_current_experiment_run(config)  # Resolve run metadata for t-SNE filenames.
 
         combined_df = combine_and_label_augmentation_data(original_df, augmented_df)  # Prepare labeled data
 
@@ -3346,16 +3508,16 @@ def generate_augmentation_tsne_visualization(original_file, original_df, augment
         file_stem = Path(original_file).stem  # Extract filename without extension
 
         if experiment_mode == "original_only":  # Original-only experiment
-            plot_filename = f"{file_stem}_original_only_tsne.png"  # Filename for original-only plot
+            plot_filename = f"{file_stem}_original_only_tsne_Run_{experiment_run}.png"  # Filename for original-only plot
             plot_title = f"t-SNE: {file_stem} (Original Only)"  # Title for original-only plot
         else:  # Original versus augmented testing experiment
             ratio_pct = int(augmentation_ratio * 100) if augmentation_ratio else 0  # Convert ratio to percentage
-            plot_filename = f"{file_stem}_augmented_{ratio_pct}pct_tsne.png"  # Filename for augmented plot
+            plot_filename = f"{file_stem}_augmented_{ratio_pct}pct_tsne_Run_{experiment_run}.png"  # Filename for augmented plot
             plot_title = f"t-SNE: {file_stem} (Original vs {ratio_pct}% Augmented Test)"  # Title for augmented-testing plot
 
         output_path = tsne_output_dir / plot_filename  # Build full output path
 
-        compute_and_save_tsne_plot(X_scaled, labels, str(output_path), plot_title)  # Generate and save visualization
+        compute_and_save_tsne_plot(X_scaled, labels, str(output_path), plot_title, random_state=config.get("tsne", {}).get("random_state", 42))  # Generate and save visualization with active run seed
 
     except Exception as e:
         print(str(e))
@@ -3686,6 +3848,7 @@ def save_augmentation_comparison_results(file_path, comparison_results, config=N
             config = CONFIG  # Use global CONFIG
         
         augmentation_comparison_filename = config.get("stacking", {}).get("augmentation_comparison_filename", "Data_Augmentation_Comparison_Results.csv")  # Get filename from config
+        augmentation_comparison_filename = build_experiment_run_filename(augmentation_comparison_filename, get_current_experiment_run(config))  # Add the active run suffix to comparison output.
 
         if not comparison_results:  # If no results to save
             return  # Exit early
@@ -3705,6 +3868,7 @@ def save_augmentation_comparison_results(file_path, comparison_results, config=N
             "model_name",
             "data_source",
             "experiment_id",
+            "experiment_run",  # Repeated run index
             "experiment_mode",
             "augmentation_ratio",
             "n_features",
@@ -4818,6 +4982,7 @@ def scale_and_split(X, y, test_size=0.2, random_state=42, config=None):
             )  # Raise an error if X has no valid feature columns
 
         write_memory_phase_event("before_train_test_split", config=config, train_sample_count=None, test_sample_count=None, feature_count=X_values.shape[1], event_outcome="starting")  # Publish train/test split start
+        random_state = config.get("evaluation", {}).get("random_state", random_state)  # Use the active run seed while preserving the function default.
         target_values = y_series.to_numpy(copy=False)  # Reuse the original target values for stratified splitting before fitting the encoder.
         sample_indices = np.arange(target_values.shape[0], dtype=np.int64)  # Build sample index array for index-based stratified splitting
         train_idx, test_idx = train_test_split(
@@ -5302,6 +5467,8 @@ def build_optimized_hyperparameter_models(file_path: str, config: Optional[dict]
         if guarded_n_jobs == 1 and "n_jobs" in params:  # Preserve resource guard when optimized artifacts include n_jobs.
             params = {key: value for key, value in params.items() if key != "n_jobs"}  # Remove n_jobs from optimized parameters.
             print(f"{BackgroundColors.YELLOW}[RESOURCE GUARD] Stripped n_jobs from optimized hyperparameters for {BackgroundColors.CYAN}{model_name}{BackgroundColors.YELLOW} to preserve n_jobs=1 safety limit.{Style.RESET_ALL}")  # Report resource-guard parameter removal.
+        if "random_state" in params:  # Vary only optimized estimators that already expose random_state.
+            params["random_state"] = derive_experiment_run_seed(int(params["random_state"]), get_current_experiment_run(config))  # Apply the deterministic run-specific seed.
 
         try:  # Apply the optimized parameters to the classifier instance.
             model.set_params(**params)  # Apply optimized parameters.
@@ -6075,7 +6242,7 @@ def truncate_value(value):
         raise
 
 
-def build_stacking_model_artifact_context(dataset_csv_path: str, source_files: List[str], execution_mode_str: str, attack_types_combined: Any, target_column: str, model_name: str, model: Any, feature_set: str, input_feature_names: List[Any], model_feature_names: List[Any], label_classes: List[Any], transformer: Any, hyperparameters_enabled: bool) -> dict:
+def build_stacking_model_artifact_context(dataset_csv_path: str, source_files: List[str], execution_mode_str: str, attack_types_combined: Any, target_column: str, model_name: str, model: Any, feature_set: str, input_feature_names: List[Any], model_feature_names: List[Any], label_classes: List[Any], transformer: Any, hyperparameters_enabled: bool, experiment_run: int = 1, random_state: int = 42) -> dict:
     """
     Build the deterministic compatibility identity for one original-trained classifier.
 
@@ -6092,11 +6259,14 @@ def build_stacking_model_artifact_context(dataset_csv_path: str, source_files: L
     :param label_classes: Ordered classes represented by the fitted label encoder.
     :param transformer: Optional fitted or equivalently configured PCA transformer.
     :param hyperparameters_enabled: Whether optimized hyperparameters are active.
+    :param experiment_run: One-based repeated experiment run index.
+    :param random_state: Active split and estimator fallback seed.
     :return: JSON-compatible artifact compatibility context.
     """
 
     if not source_files:  # Require original source provenance for model reuse.
         raise ValueError("Classifier artifact provenance requires original source files")
+    run_index = validate_experiment_runs(experiment_run, "experiment_run")  # Validate artifact run metadata.
     source_metadata = []  # Accumulate ordered original-file metadata.
     for source_index, source_file in enumerate(source_files):
         source_path = Path(str(source_file)).expanduser().resolve()
@@ -6116,6 +6286,7 @@ def build_stacking_model_artifact_context(dataset_csv_path: str, source_files: L
         "artifact_type": "stacking_original_trained_classifier",
         "schema_version": 1,
         "training_data": "original_only",
+        "experiment_run": run_index,  # Isolate fitted artifacts by repeated-run index.
         "dataset_path": str(Path(str(dataset_csv_path)).expanduser().resolve()),
         "source_files": source_metadata,
         "execution_mode": str(execution_mode_str),
@@ -6135,7 +6306,7 @@ def build_stacking_model_artifact_context(dataset_csv_path: str, source_files: L
         "transformer": transformer_metadata,
         "pre_split_feature_removal": False,
         "test_size": 0.2,
-        "random_state": 42,
+        "random_state": int(random_state),  # Isolate fitted artifacts by active run seed.
         "stratified": True,
         "sklearn_version": str(getattr(sklearn_module, "__version__", "unknown")),
         "numpy_version": str(np.__version__),
@@ -7841,7 +8012,8 @@ def run_explainability_pipeline(model, model_name, X_test, y_test, feature_names
 
         dataset_label = get_explainability_dataset_label(dataset_file, execution_mode, config)  # Build mode-aware dataset label
         output_subdir = explainability_config.get("output_subdir", "Explainability")  # Get output subdirectory name
-        base_output_dir = Path(".") / output_subdir / execution_mode / dataset_label  # Use relative path root and mode-aware label
+        experiment_run = get_current_experiment_run(config)  # Resolve run metadata for explainability output isolation.
+        base_output_dir = Path(".") / output_subdir / execution_mode / dataset_label / f"Run_{experiment_run}"  # Use relative path root and mode-aware label
         output_dir = base_output_dir / feature_set.replace(" ", "_") / model_name.replace(" ", "_")  # Build full output directory
         output_dir = str(output_dir)  # Convert Path to string
         Path(output_dir).mkdir(parents=True, exist_ok=True)  # Ensure output directories exist before writing
@@ -8408,8 +8580,9 @@ def export_feature_artifacts(df, file_path_obj, stacking_dir, config=None):
         try:  # Attempt to export top-features CSV and heatmap
             path_is_directory = resolve_path_represents_directory(str(file_path_obj))  # Resolve whether artifact identity comes from a directory.
             dataset_base = build_filename_safe_dataset_identity(resolve_canonical_dataset_identity(str(file_path_obj), True)) if path_is_directory else file_path_obj.stem  # Resolve artifact filename identity by path scope.
-            top_csv = stacking_dir / f"{dataset_base}_top_features.csv"  # Build path for top-features CSV
-            top_png = stacking_dir / f"{dataset_base}_top_features.png"  # Build path for feature usage heatmap
+            experiment_run = get_current_experiment_run(config)  # Resolve run metadata for feature artifacts.
+            top_csv = stacking_dir / f"{dataset_base}_top_features_Run_{experiment_run}.csv"  # Build path for top-features CSV
+            top_png = stacking_dir / f"{dataset_base}_top_features_Run_{experiment_run}.png"  # Build path for feature usage heatmap
             export_top_features_csv(feature_counts_df, str(top_csv), dataset_file=str(file_path_obj))  # Export aggregated feature counts to CSV
             generate_feature_usage_heatmap(feature_counts_df, str(top_png), dataset_file=str(file_path_obj))  # Generate heatmap PNG of feature usage frequencies
         except Exception as e:
@@ -8736,6 +8909,7 @@ def flatten_and_serialize_results(results_list):
         flat_rows = []  # Initialize list to collect flattened rows
         for res in results_list:  # Iterate over each result dictionary
             row = dict(res)  # Create a mutable shallow copy of the result dictionary
+            row["experiment_run"] = validate_experiment_runs(int(row.get("experiment_run", 1)), "experiment_run")  # Persist explicit run metadata with legacy run 1 fallback.
             row["augmentation_ratio"] = resolve_persisted_augmentation_ratio(row.get("experiment_mode", "original_only"), row.get("augmentation_ratio", None))  # Normalize baseline ratio metadata before DataFrame construction.
             row["feature_selection_enabled"] = resolve_persisted_feature_selection_enabled(row.get("feature_set", ""), row.get("feature_selection_enabled", False))  # Normalize row-level feature-selection metadata.
             row["data_augmentation_enabled"] = resolve_persisted_data_augmentation_enabled(row.get("experiment_mode", "original_only"), row.get("augmentation_ratio", None), row.get("data_augmentation_enabled", False))  # Normalize row-level data-augmentation metadata.
@@ -8790,8 +8964,9 @@ def save_stacking_results(csv_path, results_list, config=None):
             print(f"{BackgroundColors.YELLOW}Warning: No results provided to save.{Style.RESET_ALL}")
             return
 
-        results_filename = config.get("stacking", {}).get("results_filename", "Stacking_Classifiers_Results.csv")  # Get results filename from config
+        migrate_legacy_final_results_file_for_run(csv_path, config=config)  # Adopt an unsuffixed run 1 final file before writing the run-specific file.
         file_path_obj = Path(csv_path)
+        output_path = get_stacking_results_file_path(str(csv_path), config=config)  # Resolve the run-specific final result path.
         dataset_root = resolve_dataset_root_path(str(csv_path))  # Resolve output root from file or directory input.
         feature_analysis_dir = dataset_root / "Feature_Analysis"  # Build Feature_Analysis path from the dataset root.
         os.makedirs(feature_analysis_dir, exist_ok=True)
@@ -8799,40 +8974,57 @@ def save_stacking_results(csv_path, results_list, config=None):
         stacking_results_dir = config.get("stacking", {}).get("results_dir", "Stacking")
         stacking_dir = dataset_root / stacking_results_dir  # Build stacking output path from the dataset root.
         os.makedirs(stacking_dir, exist_ok=True)
-        output_path = stacking_dir / results_filename
 
-        flat_rows = flatten_and_serialize_results(results_list)  # Flatten and serialize all result rows into plain dicts
+        cache_path = get_cache_file_path(str(csv_path), config=config)  # Resolve the run-specific cache path used to guard final publication.
+        backup_path = get_cache_backup_path(cache_path)  # Resolve the matching run-specific backup path.
+        with cache_file_lock(cache_path, exclusive=True):  # Serialize final export with cache writers for the same run.
+            try:  # Prefer the validated run-specific cache as the authoritative final snapshot.
+                cache_df = None  # Track validated cache rows when available.
+                if os.path.isfile(cache_path):  # Use cache rows only when the run-specific cache exists.
+                    try:  # Read the primary run-specific cache first.
+                        cache_df, _ = read_validated_cache_file(cache_path, config=config)  # Read deduplicated cache rows for this run.
+                    except Exception as primary_error:  # Fall back to backup recovery before using caller rows.
+                        print(f"{BackgroundColors.YELLOW}Warning: Final export could not use primary cache {BackgroundColors.CYAN}{cache_path}{BackgroundColors.YELLOW}: {primary_error}{Style.RESET_ALL}")  # Report primary cache export fallback.
+                if cache_df is None and os.path.isfile(backup_path):  # Use the matching backup when primary rows are unavailable.
+                    try:  # Read the backup run-specific cache.
+                        cache_df, _ = read_validated_cache_file(backup_path, config=config)  # Read backup rows for this run.
+                    except Exception as backup_error:  # Fall back to caller rows when backup is unusable.
+                        print(f"{BackgroundColors.YELLOW}Warning: Final export could not use backup cache {BackgroundColors.CYAN}{backup_path}{BackgroundColors.YELLOW}: {backup_error}{Style.RESET_ALL}")  # Report backup cache export fallback.
+                if cache_df is not None:  # Use recovered cache rows when either source validated.
+                    df = cache_df  # Promote validated cache rows to final export.
+                else:  # Fall back to the caller-provided completed rows.
+                    flat_rows = flatten_and_serialize_results(results_list)  # Flatten and serialize all result rows into plain dicts
+                    df = pd.DataFrame(flat_rows)  # Construct results DataFrame from flattened rows
+                if "top_features" not in df.columns and "features_list" in df.columns:  # Restore duplicate final-export feature column from canonical cache metadata.
+                    df["top_features"] = df["features_list"]  # Populate final top_features from canonical features_list.
+                df = reorder_and_annotate_dataframe(df, config=config)  # Reorder columns by config order and append hardware annotation
+                write_memory_phase_event("final_export", config=config, dataset_source=csv_path, output_path=str(output_path), row_count=len(df), event_outcome="starting")  # Publish final export start
+                generate_csv_and_image(df, str(output_path), is_visualizable=True, index=False, encoding="utf-8")  # Persist results CSV and generate PNG
+                write_memory_phase_event("final_export", config=config, dataset_source=csv_path, output_path=str(output_path), row_count=len(df), event_outcome="saved")  # Publish final export completion
+                print(
+                    f"\n{BackgroundColors.GREEN}Stacking classifier results successfully saved to {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}"
+                )  # Notify user of success
 
-        df = pd.DataFrame(flat_rows)  # Construct results DataFrame from flattened rows
-
-        df = reorder_and_annotate_dataframe(df, config=config)  # Reorder columns by config order and append hardware annotation
-
-        try:
-            write_memory_phase_event("final_export", config=config, dataset_source=csv_path, output_path=str(output_path), row_count=len(df), event_outcome="starting")  # Publish final export start
-            generate_csv_and_image(df, str(output_path), is_visualizable=True, index=False, encoding="utf-8")  # Persist results CSV and generate PNG
-            write_memory_phase_event("final_export", config=config, dataset_source=csv_path, output_path=str(output_path), row_count=len(df), event_outcome="saved")  # Publish final export completion
-            print(
-                f"\n{BackgroundColors.GREEN}Stacking classifier results successfully saved to {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}"
-            )  # Notify user of success
-
-            export_feature_artifacts(df, file_path_obj, stacking_dir, config=config)  # Export feature usage CSV and heatmap to the Stacking directory
-        except Exception as e:
-            write_memory_phase_event("final_export", config=config, dataset_source=csv_path, output_path=str(output_path), row_count=len(df) if 'df' in locals() else None, event_outcome=f"failed:{e}")  # Publish final export failure
-            print(
-                f"{BackgroundColors.RED}Failed to write Stacking Classifier CSV to {BackgroundColors.CYAN}{output_path}{BackgroundColors.RED}: {e}{Style.RESET_ALL}"
-            )
+                export_feature_artifacts(df, file_path_obj, stacking_dir, config=config)  # Export feature usage CSV and heatmap to the Stacking directory
+            except Exception as e:
+                write_memory_phase_event("final_export", config=config, dataset_source=csv_path, output_path=str(output_path), row_count=len(df) if 'df' in locals() else None, event_outcome=f"failed:{e}")  # Publish final export failure
+                print(
+                    f"{BackgroundColors.RED}Failed to write Stacking Classifier CSV to {BackgroundColors.CYAN}{output_path}{BackgroundColors.RED}: {e}{Style.RESET_ALL}"
+                )
     except Exception as e:
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
         raise
 
 
-def get_cache_file_path(csv_path, config=None):
+def get_cache_file_path(csv_path, config=None, experiment_run: Optional[int] = None, legacy: bool = False):
     """
     Generate the cache file path for a given dataset CSV path.
 
     :param csv_path: Path to the dataset CSV file
     :param config: Configuration dictionary (uses global CONFIG if None)
+    :param experiment_run: Optional one-based experiment run index
+    :param legacy: Whether to return the unsuffixed legacy cache filename
     :return: Path to the cache file
     """
     
@@ -8845,6 +9037,7 @@ def get_cache_file_path(csv_path, config=None):
             config=config
         )  # Output the verbose message
 
+        run_index = get_current_experiment_run(config) if experiment_run is None else validate_experiment_runs(experiment_run, "stacking.experiment_run")  # Resolve the active run index.
         cache_prefix = config.get("stacking", {}).get("cache_prefix", "CACHE_")  # Get cache prefix from config
         cache_results_subdir = config.get("stacking", {}).get("cache_results_subdir", "Cache_Results")  # Get cache results subdirectory from config
         path_is_directory = resolve_path_represents_directory(str(csv_path))  # Resolve whether cache identity comes from a directory.
@@ -8860,7 +9053,7 @@ def get_cache_file_path(csv_path, config=None):
 
         validate_output_path(stacking_output_dir, str(Path(output_dir).resolve()))  # Verify cache directory is within the stacking results directory to prevent directory traversal
         os.makedirs(output_dir, exist_ok=True)  # Ensure the cache directory exists
-        cache_filename = f"{cache_filename_prefix}{dataset_name}-Stacking_Classifiers_Results.csv"  # Build cache filename.
+        cache_filename = build_experiment_run_filename(f"{cache_filename_prefix}{dataset_name}-Stacking_Classifiers_Results.csv", run_index, legacy=legacy)  # Build run-specific cache filename.
         cache_path = os.path.join(output_dir, cache_filename)  # Full cache file path
 
         return cache_path  # Return the cache file path
@@ -9006,6 +9199,7 @@ def deserialize_cache_dataframe(df_cache: pd.DataFrame) -> dict:
             "model_name": model_name,  # Restore configured classifier identity.
             "data_source": data_source_row,  # Restore data-source metadata.
             "experiment_id": cache_row_value("experiment_id", None),  # Restore experiment identity metadata.
+            "experiment_run": validate_experiment_runs(int(cache_row_value("experiment_run", 1)), "experiment_run"),  # Restore run metadata with legacy run 1 fallback.
             "experiment_mode": experiment_mode_row,  # Restore experiment-mode metadata.
             "augmentation_ratio": aug_ratio_row,  # Restore normalized augmentation ratio metadata.
             "feature_selection_enabled": resolve_persisted_feature_selection_enabled(feature_set, cache_row_value("feature_selection_enabled", False)),  # Restore normalized feature-selection metadata.
@@ -9062,6 +9256,61 @@ def read_validated_cache_file(cache_path: str, config: Optional[dict] = None) ->
     return prepared_df, cache_dict  # Return the validated canonical rows and their resume representation.
 
 
+def migrate_legacy_cache_file_for_run(csv_path: str, config: Optional[dict] = None) -> None:
+    """
+    Copy valid unsuffixed cache or final rows into the run 1 cache file.
+
+    :param csv_path: Dataset file or directory identity used for cache placement.
+    :param config: Runtime configuration dictionary.
+    :return: None.
+    """
+
+    if config is None:  # Use global configuration when no configuration is supplied.
+        config = CONFIG  # Preserve established configuration fallback.
+    if get_current_experiment_run(config) != 1:  # Legacy unsuffixed rows represent run 1 only.
+        return  # Leave later run caches untouched.
+    cache_path = get_cache_file_path(csv_path, config=config, experiment_run=1, legacy=False)  # Resolve the run 1 cache path.
+    legacy_cache_path = get_cache_file_path(csv_path, config=config, experiment_run=1, legacy=True)  # Resolve the old unsuffixed cache path.
+    legacy_final_path = get_stacking_results_file_path(csv_path, config=config, experiment_run=1, legacy=True)  # Resolve the old unsuffixed final result path.
+    legacy_paths = [path for path in (legacy_cache_path, str(legacy_final_path)) if path != cache_path and os.path.isfile(path)]  # Collect only existing legacy sources.
+    if not legacy_paths:  # Return immediately when no legacy source exists.
+        return  # Preserve normal cache loading.
+
+    with cache_file_lock(cache_path, exclusive=True):  # Serialize migration with every run 1 cache writer.
+        backup_path = get_cache_backup_path(cache_path)  # Resolve the run 1 backup path.
+        primary_df = None  # Track a valid run 1 primary cache.
+        backup_df = None  # Track a valid run 1 backup cache.
+        if os.path.isfile(cache_path):  # Prefer the existing run 1 primary when valid.
+            try:  # Read the current primary through production validation.
+                primary_df, _ = read_validated_cache_file(cache_path, config=config)  # Accept only validated run 1 rows.
+            except Exception as exc:  # Keep invalid primary from blocking legacy adoption.
+                print(f"{BackgroundColors.YELLOW}Warning: Run 1 cache is unavailable during legacy migration at {BackgroundColors.CYAN}{cache_path}{BackgroundColors.YELLOW}: {exc}{Style.RESET_ALL}")  # Report primary validation failure.
+        if os.path.isfile(backup_path):  # Preserve backup recovery during migration.
+            try:  # Read the current backup through production validation.
+                backup_df, _ = read_validated_cache_file(backup_path, config=config)  # Accept only validated backup rows.
+            except Exception as exc:  # Keep invalid backup from blocking legacy adoption.
+                print(f"{BackgroundColors.YELLOW}Warning: Run 1 cache backup is unavailable during legacy migration at {BackgroundColors.CYAN}{backup_path}{BackgroundColors.YELLOW}: {exc}{Style.RESET_ALL}")  # Report backup validation failure.
+
+        legacy_frames = []  # Accumulate valid legacy source rows.
+        for legacy_path in legacy_paths:  # Read every valid unsuffixed legacy source.
+            try:  # Validate legacy rows through the same cache recovery path.
+                legacy_df, _ = read_validated_cache_file(legacy_path, config=config)  # Normalize legacy rows to the current schema.
+                legacy_frames.append(legacy_df)  # Retain valid legacy rows for merging.
+            except Exception as exc:  # Ignore unusable legacy sources without deleting them.
+                print(f"{BackgroundColors.YELLOW}Warning: Legacy result source is unusable at {BackgroundColors.CYAN}{legacy_path}{BackgroundColors.YELLOW}: {exc}{Style.RESET_ALL}")  # Report the unusable legacy source.
+        if not legacy_frames:  # Return when every legacy source was invalid.
+            return  # Leave existing run 1 cache unchanged.
+
+        legacy_df = prepare_cache_dataframe(pd.concat(legacy_frames, ignore_index=True), config=config)  # Dedupe overlapping legacy sources by canonical identity.
+        current_df = primary_df if primary_df is not None else backup_df  # Prefer the newest valid run 1 source.
+        combined_df = legacy_df if current_df is None else pd.concat([legacy_df, current_df], ignore_index=True)  # Keep current run 1 rows after legacy rows so they win overlaps.
+        combined_df = prepare_cache_dataframe(combined_df, config=config)  # Normalize and dedupe the migration snapshot.
+        if current_df is not None and len(combined_df) == len(prepare_cache_dataframe(current_df, config=config)):  # Skip publication when migration adds no identity.
+            return  # Preserve existing run 1 primary without rewriting.
+        persist_cache_dataframe_atomically(cache_path, combined_df, primary_df, backup_df, config=config)  # Publish the merged run 1 cache transactionally.
+        print(f"{BackgroundColors.GREEN}[LEGACY MIGRATION] Adopted legacy run 1 rows into {BackgroundColors.CYAN}{cache_path}{Style.RESET_ALL}")  # Report non-destructive cache migration.
+
+
 def load_cache_results(csv_path, config=None, notify_discovery: bool = True):  # Load cache rows with optional operator discovery notification.
     """
     Load cached results from the cache file if it exists.
@@ -9075,6 +9324,7 @@ def load_cache_results(csv_path, config=None, notify_discovery: bool = True):  #
         if config is None:  # If no config provided
             config = CONFIG  # Use global CONFIG
 
+        migrate_legacy_cache_file_for_run(csv_path, config=config)  # Adopt valid unsuffixed run 1 rows before cache lookup.
         cache_path = get_cache_file_path(csv_path, config=config)  # Get the primary cache file path.
         backup_path = get_cache_backup_path(cache_path)  # Resolve the sibling known-good backup path.
 
@@ -9126,7 +9376,7 @@ def load_cache_results(csv_path, config=None, notify_discovery: bool = True):  #
 
 def remove_cache_file(csv_path, config=None):
     """
-    Remove the cache file after successful completion.
+    Preserve the run-specific cache file after successful completion.
 
     :param csv_path: Path to the dataset CSV file
     :param config: Configuration dictionary (uses global CONFIG if None)
@@ -9140,25 +9390,11 @@ def remove_cache_file(csv_path, config=None):
         cache_path = get_cache_file_path(csv_path, config=config)  # Get the primary cache file path.
         backup_path = get_cache_backup_path(cache_path)  # Resolve the sibling backup that belongs to the same completed run.
 
-        with cache_file_lock(cache_path, exclusive=True):  # Prevent readers or writers from observing partial cache cleanup.
-            removed_paths = []  # Track removed cache artifacts for accurate reporting.
-            removal_errors = []  # Track cleanup failures without skipping the other cache artifact.
-            for artifact_path in (cache_path, backup_path):  # Remove primary and backup together after confirmed final export.
-                if not os.path.isfile(artifact_path):  # Ignore cache artifacts that are already absent.
-                    continue  # Move to the remaining cache artifact.
-                try:  # Remove one completed-run cache artifact.
-                    os.remove(artifact_path)  # Delete the stale resume artifact.
-                    removed_paths.append(artifact_path)  # Record successful removal.
-                except Exception as exc:  # Preserve cleanup failures for operator visibility.
-                    removal_errors.append((artifact_path, exc))  # Record the exact artifact and failure.
-
-            if removed_paths:  # Report every cache artifact removed after final persistence.
-                print(f"{BackgroundColors.GREEN}Cache file(s) removed: {BackgroundColors.CYAN}{', '.join(removed_paths)}{Style.RESET_ALL}")  # Print successful cleanup paths.
+        with cache_file_lock(cache_path, exclusive=True):  # Serialize with any writer using this run-specific cache path.
+            if os.path.isfile(cache_path) or os.path.isfile(backup_path):  # Preserve completed run-specific cache artifacts for future resume.
+                print(f"{BackgroundColors.GREEN}Run-specific cache preserved: {BackgroundColors.CYAN}{cache_path}{Style.RESET_ALL}")  # Report that result storage remains available.
             else:  # Preserve the established verbose cache-miss behavior.
-                verbose_output(f"{BackgroundColors.YELLOW}No cache file to remove at: {BackgroundColors.CYAN}{cache_path}{Style.RESET_ALL}", config=config)  # Report that no primary or backup existed.
-
-            for artifact_path, removal_error in removal_errors:  # Report every cleanup failure after attempting both artifacts.
-                print(f"{BackgroundColors.YELLOW}Warning: Failed to remove cache file {BackgroundColors.CYAN}{artifact_path}{BackgroundColors.YELLOW}: {removal_error}{Style.RESET_ALL}")  # Preserve nonfatal cleanup semantics.
+                verbose_output(f"{BackgroundColors.YELLOW}No cache file to preserve at: {BackgroundColors.CYAN}{cache_path}{Style.RESET_ALL}", config=config)  # Report that no primary or backup existed.
     except Exception as e:
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
@@ -9278,6 +9514,9 @@ def normalize_cache_dataframe(df: pd.DataFrame, config: Optional[dict] = None) -
     if "data_augmentation_enabled" not in normalized_df.columns:  # Add DA flag when absent.
         normalized_df["data_augmentation_enabled"] = False  # Initialize DA flag before row-level resolution.
 
+    if "experiment_run" not in normalized_df.columns:  # Add run metadata for legacy unsuffixed result rows.
+        normalized_df["experiment_run"] = 1  # Treat legacy rows as run 1 data.
+    normalized_df["experiment_run"] = normalized_df["experiment_run"].fillna(1).map(lambda value: validate_experiment_runs(int(value), "experiment_run"))  # Normalize persisted run metadata.
     normalized_df["hyperparameter_mode"] = normalized_df.apply(resolve_hyperparameter_mode_from_row, axis=1)  # Resolve HP mode deterministically for every row.
     normalized_df["hyperparameters_enabled"] = normalized_df["hyperparameter_mode"].map(lambda value: value == "Optimized Hyperparameters")  # Keep HP boolean synchronized with HP mode.
     normalized_df["augmentation_ratio"] = normalized_df.apply(lambda row: resolve_persisted_augmentation_ratio(row.get("experiment_mode", "original_only"), row.get("augmentation_ratio", None)), axis=1)  # Normalize baseline and augmented ratio metadata.
@@ -9353,6 +9592,7 @@ def validate_cache_result_payload(result_entry: dict, config: Optional[dict] = N
     row_values = row_df.iloc[0].to_dict()  # Convert the normalized row to scalar metadata for required-field validation.
     required_payload_columns = [  # List the fields required to identify and recover a completed atomic classifier result.
         "experiment_id",  # Require the existing experiment identifier for traceability.
+        "experiment_run",  # Require explicit run metadata for auditability.
         "experiment_mode",  # Require original-only versus augmented mode.
         "execution_mode",  # Require separate-files versus combined-files mode.
         "data_source",  # Require the source label that separates original and augmented rows.
@@ -9623,6 +9863,7 @@ def save_cache_result_entry(csv_path: str, result_entry: dict, config=None) -> N
         if config is None:  # If no config provided
             config = CONFIG  # Use global CONFIG
 
+        migrate_legacy_cache_file_for_run(csv_path, config=config)  # Adopt valid unsuffixed run 1 rows before appending.
         cache_path = get_cache_file_path(csv_path, config=config)  # Derive cache file path from the dataset file path
 
         flat_rows = flatten_and_serialize_results([result_entry])  # Flatten and serialize entry using same pipeline as final results
@@ -11067,11 +11308,12 @@ def build_evaluation_stacking_model(base_models, config=None):
         estimators = [
             (name, model) for name, model in base_models.items() if name != "SVM"
         ]  # Define estimators list excluding SVM which is incompatible with stacking
+        random_state = config.get("evaluation", {}).get("random_state", 42)  # Use the active run seed for stacking internals.
 
         stacking_model = StackingClassifier(
             estimators=estimators,
-            final_estimator=RandomForestClassifier(n_estimators=50, random_state=42, n_jobs=config.get("evaluation", {}).get("n_jobs", 1)),
-            cv=StratifiedKFold(n_splits=10, shuffle=True, random_state=42),
+            final_estimator=RandomForestClassifier(n_estimators=50, random_state=random_state, n_jobs=config.get("evaluation", {}).get("n_jobs", 1)),
+            cv=StratifiedKFold(n_splits=10, shuffle=True, random_state=random_state),
             n_jobs=config.get("evaluation", {}).get("n_jobs", 1),
         )  # Define the Stacking Classifier model with sequential CV folds to prevent nested loky deadlock
 
@@ -11398,7 +11640,7 @@ def iterate_feature_sets_sequentially(feature_source_arrays: dict, feature_names
             gc.collect()  # Reclaim released RFE arrays before generator completion.
 
 
-def build_classifier_result_entry(model_class, file, execution_mode_str, attack_types_combined, feature_set_name, classifier_type, model_name, data_source_label, experiment_id, experiment_mode, augmentation_ratio, n_features, n_samples_train, n_samples_test, metrics_tuple, subset_feature_names, hyperparams_map=None, hyperparameters_enabled=False, effective_hyperparameters=None):  # Build a standardized classifier result entry.
+def build_classifier_result_entry(model_class, file, execution_mode_str, attack_types_combined, feature_set_name, classifier_type, model_name, data_source_label, experiment_id, experiment_mode, augmentation_ratio, n_features, n_samples_train, n_samples_test, metrics_tuple, subset_feature_names, hyperparams_map=None, hyperparameters_enabled=False, effective_hyperparameters=None, experiment_run=1):  # Build a standardized classifier result entry.
     """
     Build a standardized result entry dictionary for classifier evaluation results.
 
@@ -11420,11 +11662,13 @@ def build_classifier_result_entry(model_class, file, execution_mode_str, attack_
     :param subset_feature_names: List of feature names used
     :param hyperparams_map: Dictionary mapping model names to hyperparameters
     :param effective_hyperparameters: Effective parameters read from the estimator evaluated for this row
+    :param experiment_run: One-based repeated experiment run index
     :return: Dictionary containing the result entry
     """
 
     try:
         acc, prec, rec, f1, fpr, fnr, elapsed = metrics_tuple[:7]  # Unpack the first 7 metrics from the tuple
+        run_index = validate_experiment_runs(experiment_run, "experiment_run")  # Validate row-level run metadata.
         dataset_identity = resolve_canonical_dataset_identity(file, True) if execution_mode_str == "combined_files" else os.path.relpath(file)  # Resolve result-row dataset identity by execution mode.
         persisted_augmentation_ratio = resolve_persisted_augmentation_ratio(experiment_mode, augmentation_ratio)  # Resolve explicit baseline or augmented ratio metadata.
         serialized_hyperparameters = serialize_result_hyperparameters(model_name, hyperparams_map=hyperparams_map, effective_hyperparameters=effective_hyperparameters)  # Resolve effective estimator parameters for CSV persistence.
@@ -11439,6 +11683,7 @@ def build_classifier_result_entry(model_class, file, execution_mode_str, attack_
             "model_name": model_name,  # Model name for result identification
             "data_source": data_source_label,  # Data source label for experiment traceability
             "experiment_id": experiment_id,  # Unique experiment identifier
+            "experiment_run": run_index,  # Persist repeated-run index for auditability.
             "experiment_mode": experiment_mode,  # Persist original-only or augmented-testing semantics.
             "augmentation_ratio": persisted_augmentation_ratio,  # Augmentation ratio with 0.0 for original-only rows
             "n_features": n_features,  # Number of features used in evaluation
@@ -11463,7 +11708,7 @@ def build_classifier_result_entry(model_class, file, execution_mode_str, attack_
         raise
 
 
-def build_telegram_combination_header(name, model_name, augmentation_ratio=None, hyperparameters_enabled=False, include_model=True):
+def build_telegram_combination_header(name, model_name, augmentation_ratio=None, hyperparameters_enabled=False, include_model=True, experiment_run=None):
     """
     Build a Telegram combination header reflecting the current evaluation configuration.
 
@@ -11472,6 +11717,7 @@ def build_telegram_combination_header(name, model_name, augmentation_ratio=None,
     :param augmentation_ratio: Augmentation ratio float or None when augmentation is not active.
     :param hyperparameters_enabled: Whether optimized hyperparameters are active for this run.
     :param include_model: Whether to append the classifier name to the header.
+    :param experiment_run: Optional one-based repeated experiment run index.
     :return: Human-readable combination header string.
     """
     
@@ -11479,6 +11725,8 @@ def build_telegram_combination_header(name, model_name, augmentation_ratio=None,
     hyperparameter_label = "Optimized Hyperparameters" if hyperparameters_enabled else "Default Hyperparameters"  # Build explicit HP mode label
     augmentation_label = f"Augmented Test Ratio = {augmentation_ratio:.2f}" if augmentation_ratio is not None else "Original Test Data"  # Build the isolated testing-mode label.
     parts = [feature_label, hyperparameter_label, augmentation_label]  # Build configuration label in the expected order
+    if experiment_run is not None:  # Add run context only when the caller provides it.
+        parts.insert(0, f"Run {validate_experiment_runs(int(experiment_run), 'experiment_run')}")  # Prefix the visible run index.
     if include_model:  # Add classifier name only where the caller expects legacy trailing model identity.
         parts.append(model_name)  # Append classifier name to preserve existing default header format.
     
@@ -11498,7 +11746,7 @@ def build_cached_telegram_result_messages(cached_result, feature_set_name, model
     :return: Tuple containing console summary and Telegram message.
     """
 
-    combination_header = build_telegram_combination_header(feature_set_name, model_name, augmentation_ratio, hyperparameters_enabled)  # Reuse the established evaluation label
+    combination_header = build_telegram_combination_header(feature_set_name, model_name, augmentation_ratio, hyperparameters_enabled, experiment_run=cached_result.get("experiment_run"))  # Reuse the established evaluation label with row run metadata.
     cached_execution_mode = cached_result.get("execution_mode", execution_mode_str)  # Resolve execution mode from the persisted row
     evaluation_mode = str(cached_execution_mode).replace("_", " ").title().replace(" ", "") if cached_execution_mode else "SeparateFiles"  # Preserve the established CamelCase mode label
     acc = cached_result.get("accuracy", "N/A")  # Recover persisted accuracy
@@ -11523,7 +11771,7 @@ def build_feature_process_notification_result(result_entry: dict) -> dict:  # Re
     :return: Small scalar-only notification result mapping.
     """
 
-    fields = ("feature_set", "hyperparameter_mode", "model_name", "execution_mode", "experiment_mode", "augmentation_ratio", "accuracy", "precision", "recall", "f1_score", "fpr", "fnr", "elapsed_time_s")  # List only fields required for identity, completion, and cache notifications
+    fields = ("feature_set", "experiment_run", "hyperparameter_mode", "model_name", "execution_mode", "experiment_mode", "augmentation_ratio", "accuracy", "precision", "recall", "f1_score", "fpr", "fnr", "elapsed_time_s")  # List only fields required for identity, completion, and cache notifications
     return {field: result_entry.get(field) for field in fields}  # Exclude estimators, matrices, predictions, probabilities, and feature lists
 
 
@@ -11537,7 +11785,7 @@ def build_feature_process_training_start_message(task: dict, dynamic_total: int,
     :return: Human-readable Telegram message body.
     """
 
-    combination_header = build_telegram_combination_header(task["feature_set"], task["classifier_name"], task["augmentation_ratio"], task["hyperparameters_enabled"], include_model=False)  # Build configuration identity without trailing classifier.
+    combination_header = build_telegram_combination_header(task["feature_set"], task["classifier_name"], task["augmentation_ratio"], task["hyperparameters_enabled"], include_model=False, experiment_run=task["experiment_run"])  # Build configuration identity without trailing classifier.
     local_position = task.get("feature_local_position")  # Read feature-local plan position when present.
     local_total = task.get("feature_local_total")  # Read feature-local plan total when present.
     local_label = f"{local_position}/{local_total}" if local_position is not None and local_total is not None else "unavailable"  # Format local position without inventing missing data.
@@ -11554,7 +11802,7 @@ def build_feature_process_training_eta_message(task: dict, dynamic_total: int, e
     :return: Human-readable Telegram message body.
     """
 
-    combination_header = build_telegram_combination_header(task["feature_set"], task["classifier_name"], task["augmentation_ratio"], task["hyperparameters_enabled"], include_model=False)  # Build configuration identity without trailing classifier.
+    combination_header = build_telegram_combination_header(task["feature_set"], task["classifier_name"], task["augmentation_ratio"], task["hyperparameters_enabled"], include_model=False, experiment_run=task["experiment_run"])  # Build configuration identity without trailing classifier.
     local_position = task.get("feature_local_position")  # Read feature-local plan position when present.
     local_total = task.get("feature_local_total")  # Read feature-local plan total when present.
     local_label = f"{local_position}/{local_total}" if local_position is not None and local_total is not None else "unavailable"  # Format local position without inventing missing data.
@@ -11652,14 +11900,14 @@ def send_feature_process_result_notification(task: dict, result_entry: dict, eve
     expected_hyperparameter_mode = "Optimized Hyperparameters" if task["hyperparameters_enabled"] else "Default Hyperparameters"  # Resolve the authoritative plan mode
     expected_augmentation_ratio = resolve_persisted_augmentation_ratio(task["experiment_mode"], task["augmentation_ratio"])  # Resolve the authoritative persisted testing ratio
     actual_augmentation_ratio = resolve_persisted_augmentation_ratio(result_entry.get("experiment_mode"), result_entry.get("augmentation_ratio"))  # Normalize the completed result ratio
-    exact_identity_matches = result_entry.get("feature_set") == task["feature_set"] and result_entry.get("model_name") == task["classifier_name"] and result_entry.get("hyperparameter_mode") == expected_hyperparameter_mode and result_entry.get("experiment_mode") == task["experiment_mode"] and actual_augmentation_ratio == expected_augmentation_ratio  # Verify fresh completion metadata against its persisted result
-    legacy_cache_identity_matches = event == "cached" and result_entry.get("feature_set") in {None, task["feature_set"]} and result_entry.get("model_name") in {None, task["classifier_name"]} and result_entry.get("hyperparameter_mode") in {None, expected_hyperparameter_mode} and result_entry.get("experiment_mode") in {None, task["experiment_mode"]} and (result_entry.get("augmentation_ratio") is None or actual_augmentation_ratio == expected_augmentation_ratio)  # Preserve accepted legacy cache notification semantics
+    exact_identity_matches = result_entry.get("experiment_run") == task["experiment_run"] and result_entry.get("feature_set") == task["feature_set"] and result_entry.get("model_name") == task["classifier_name"] and result_entry.get("hyperparameter_mode") == expected_hyperparameter_mode and result_entry.get("experiment_mode") == task["experiment_mode"] and actual_augmentation_ratio == expected_augmentation_ratio  # Verify fresh completion metadata against its persisted result
+    legacy_cache_identity_matches = event == "cached" and result_entry.get("experiment_run") in {None, task["experiment_run"]} and result_entry.get("feature_set") in {None, task["feature_set"]} and result_entry.get("model_name") in {None, task["classifier_name"]} and result_entry.get("hyperparameter_mode") in {None, expected_hyperparameter_mode} and result_entry.get("experiment_mode") in {None, task["experiment_mode"]} and (result_entry.get("augmentation_ratio") is None or actual_augmentation_ratio == expected_augmentation_ratio)  # Preserve accepted legacy cache notification semantics
     identity_matches = (exact_identity_matches or legacy_cache_identity_matches) and 1 <= global_id <= int(dynamic_total)  # Require one authoritative dynamic plan identity for every notification
     if not identity_matches:  # Isolate malformed notification metadata from scientific completion
         return False  # Avoid sending stale or cross-feature result data
     notified_global_ids.add(global_id)  # Reserve the sole application-level delivery attempt before external I/O
     if event == "computed":  # Restore the historical fresh-completion wording
-        combination_header = build_telegram_combination_header(task["feature_set"], task["classifier_name"], task["augmentation_ratio"], task["hyperparameters_enabled"], include_model=False)  # Reuse the established sequential combination formatter without trailing classifier
+        combination_header = build_telegram_combination_header(task["feature_set"], task["classifier_name"], task["augmentation_ratio"], task["hyperparameters_enabled"], include_model=False, experiment_run=task["experiment_run"])  # Reuse the established sequential combination formatter without trailing classifier
         telegram_msg = f"Finished combination {global_id}/{int(dynamic_total)}: {task['classifier_name']} - {combination_header} with F1: {result_entry.get('f1_score')} in {calculate_execution_time(0, result_entry.get('elapsed_time_s', 0))}"  # Use plan identity and persisted result values
     else:  # Preserve the established sequential cache-recovery semantics
         _, telegram_msg = build_cached_telegram_result_messages(result_entry, task["feature_set"], task["classifier_name"], task["augmentation_ratio"], task["hyperparameters_enabled"], task["execution_mode"])  # Reuse the existing cache message construction
@@ -11776,6 +12024,7 @@ def collect_classifier_results_from_futures(future_to_model, individual_models, 
             X_train_n_cols, len(y_train), len(y_test), metrics, subset_feature_names,
             hyperparams_map=hyperparams_map, hyperparameters_enabled=bool(hyperparams_map),
             effective_hyperparameters=serialize_effective_estimator_parameters(individual_models[model_name]),
+            experiment_run=get_current_experiment_run(config),  # Persist the active run on individual result rows.
         )  # Build standardized result entry for this individual classifier
         results_dict[(name, model_name)] = result_entry  # Store result keyed by (feature_set, model_name)
         progress_bar.update(1)  # Advance progress bar by one step
@@ -11852,7 +12101,7 @@ def recover_cached_individual_classifier_result(cache_dict, execution_mode_str, 
         return (False, current_combination)  # Signal cache rejection without advancing the progress counter.
 
     results_dict[(feature_set_name, model_name)] = cached_result  # Reuse cached entry without recomputation
-    combination_header = build_telegram_combination_header(feature_set_name, model_name, augmentation_ratio, hyperparameters_enabled)  # Build full recovered combination label
+    combination_header = build_telegram_combination_header(feature_set_name, model_name, augmentation_ratio, hyperparameters_enabled, experiment_run=cached_result.get("experiment_run"))  # Build full recovered combination label
     print(
         f"{BackgroundColors.YELLOW}[RESUME] Recovered combination {current_combination}/{total_steps}: {combination_header} from saved partial progress (no recomputation performed).{Style.RESET_ALL}"
     )  # Log recovered combination to stdout for visibility
@@ -11916,6 +12165,8 @@ def schedule_cached_classifier_explainability(model_prototype, model_name, X_tes
             list(label_encoder.classes_),
             transformer,
             hyperparameters_enabled,
+            get_current_experiment_run(config),  # Include the active run in cache-recovered artifact identity.
+            config.get("evaluation", {}).get("random_state", 42),  # Include the active seed in cache-recovered artifact identity.
         )  # Rebuild the exact compatibility identity before loading executable model state.
         artifact_bundle, rejection_reason = load_existing_model_if_available(model_name, file, dataset_name, artifact_feature_set, artifact_context, config=config)  # Load only a fully compatible model/preprocessing bundle.
     except Exception as artifact_error:  # An explainability artifact lookup must not invalidate already-recovered metrics.
@@ -12008,14 +12259,14 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
             active_model = clone(model)  # Clone the estimator prototype so fitted state is not retained across atomic classifiers
             artifact_feature_set = f"{name} - {'Optimized Hyperparameters' if hyperparameters_enabled else 'Default Hyperparameters'}"  # Resolve HP-isolated artifact feature-set label
             dataset_name = build_filename_safe_dataset_identity(resolve_canonical_dataset_identity(str(file), True)) if execution_mode_str == "combined_files" else os.path.basename(os.path.dirname(file))  # Resolve model export dataset folder by execution mode.
-            artifact_context = build_stacking_model_artifact_context(file, source_files, execution_mode_str, attack_types_combined, target_column, model_name, active_model, artifact_feature_set, input_feature_names, subset_feature_names, list(label_encoder.classes_), transformer, hyperparameters_enabled)  # Build ratio-independent original-training artifact identity.
-            combination_header = build_telegram_combination_header(name, model_name, augmentation_ratio, hyperparameters_enabled)  # Build full progress label for this classifier
+            artifact_context = build_stacking_model_artifact_context(file, source_files, execution_mode_str, attack_types_combined, target_column, model_name, active_model, artifact_feature_set, input_feature_names, subset_feature_names, list(label_encoder.classes_), transformer, hyperparameters_enabled, get_current_experiment_run(config), config.get("evaluation", {}).get("random_state", 42))  # Build run-specific original-training artifact identity.
+            combination_header = build_telegram_combination_header(name, model_name, augmentation_ratio, hyperparameters_enabled, experiment_run=get_current_experiment_run(config))  # Build full progress label for this classifier
             progress_bar.set_description(combination_header)  # Update progress bar with the complete active configuration
             sys.stdout.flush()  # Flush stdout before each classifier to ensure logs are visible under nohup
             phase_params_digest = get_classifier_params_digest(active_model)  # Build compact classifier parameter digest
             phase_cache_key = build_resume_cache_key(execution_mode_str, data_source_label, experiment_mode, augmentation_ratio, attack_types_combined, name, model_name, hyperparameters_enabled)  # Build cache identity source for diagnostics
             phase_cache_digest = hashlib.sha256(json.dumps(phase_cache_key, sort_keys=True, default=str).encode("utf-8")).hexdigest()  # Build stable cache identity digest
-            phase_metadata = {"dataset_identity": os.path.basename(str(file)), "dataset_source": file, "execution_mode": execution_mode_str, "attack_scope": attack_types_combined, "data_source": data_source_label, "experiment_mode": experiment_mode, "augmentation_ratio": augmentation_ratio, "feature_set_name": name, "hyperparameter_mode": "Optimized Hyperparameters" if hyperparameters_enabled else "Default Hyperparameters", "classifier_name": model_name, "classifier_params_digest": phase_params_digest, "classifier_params_reference": f"sha256:{phase_params_digest.get('digest')}", "train_sample_count": len(y_train), "test_sample_count": len(y_test), "feature_count": X_train_n_cols, "n_jobs": get_classifier_n_jobs(active_model), "cache_identity": phase_cache_digest, "cache_reference": cache_ref_file, "combination_index": current_combination, "total_combinations": total_steps}  # Build compact phase metadata for this classifier
+            phase_metadata = {"dataset_identity": os.path.basename(str(file)), "dataset_source": file, "experiment_run": get_current_experiment_run(config), "execution_mode": execution_mode_str, "attack_scope": attack_types_combined, "data_source": data_source_label, "experiment_mode": experiment_mode, "augmentation_ratio": augmentation_ratio, "feature_set_name": name, "hyperparameter_mode": "Optimized Hyperparameters" if hyperparameters_enabled else "Default Hyperparameters", "classifier_name": model_name, "classifier_params_digest": phase_params_digest, "classifier_params_reference": f"sha256:{phase_params_digest.get('digest')}", "train_sample_count": len(y_train), "test_sample_count": len(y_test), "feature_count": X_train_n_cols, "n_jobs": get_classifier_n_jobs(active_model), "cache_identity": phase_cache_digest, "cache_reference": cache_ref_file, "combination_index": current_combination, "total_combinations": total_steps}  # Build compact phase metadata for this classifier
             if memory_watcher_enabled(config):  # Add concrete matrix layout diagnostics only when the watcher is active
                 phase_metadata.update(build_array_memory_metadata("X_train", X_train_values))  # Record train matrix shape/dtype/layout
                 phase_metadata.update(build_array_memory_metadata("X_test", X_test_values))  # Record test matrix shape/dtype/layout
@@ -12052,6 +12303,7 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
                 hyperparams_map=hyperparams_map,
                 hyperparameters_enabled=hyperparameters_enabled,
                 effective_hyperparameters=effective_hyperparameters,
+                experiment_run=get_current_experiment_run(config),  # Persist the active run on individual result rows.
             )  # Build standardized result entry for this individual classifier
             write_memory_phase_event("before_cache_persist", config=config, **phase_metadata, event_outcome="starting")  # Publish cache persistence start
             log_training_phase(name, model_name, "Cache persistence", "Started", hyperparameters_enabled, augmentation_ratio)  # Mark contextual result cache persistence separately from training.
@@ -12156,7 +12408,7 @@ def run_stacking_evaluation_for_feature_set(name, stacking_model, X_train_df, y_
             resume_key = build_resume_cache_key(execution_mode_str, data_source_label, experiment_mode, augmentation_ratio, attack_types_combined, name, "StackingClassifier", hyperparameters_enabled)  # Build the full resume cache key for the stacking classifier
             if resume_key in cache_dict:  # Verify if the stacking result is already cached from a previous run
                 cached_result = cache_dict[resume_key]  # Retrieve cached stacking result entry for full resume logging
-                combination_header = build_telegram_combination_header(name, "StackingClassifier", augmentation_ratio, hyperparameters_enabled)  # Build full recovered stacking combination label
+                combination_header = build_telegram_combination_header(name, "StackingClassifier", augmentation_ratio, hyperparameters_enabled, experiment_run=cached_result.get("experiment_run"))  # Build full recovered stacking combination label
                 print(f"{BackgroundColors.YELLOW}[RESUME] Recovered combination {current_combination}/{total_steps}: {combination_header} from saved partial progress (no recomputation performed).{Style.RESET_ALL}")  # Log recovered stacking combination to stdout for visibility
 
                 cached_msg, telegram_msg = build_cached_telegram_result_messages(cached_result, name, "StackingClassifier", augmentation_ratio, hyperparameters_enabled, execution_mode_str)  # Build established recovered stacking messages from the persisted row
@@ -12188,13 +12440,13 @@ def run_stacking_evaluation_for_feature_set(name, stacking_model, X_train_df, y_
         print(
             f"  {BackgroundColors.GREEN}Training {BackgroundColors.CYAN}Stacking Classifier{BackgroundColors.GREEN}...{Style.RESET_ALL} Params: {params_snapshot}"
         )  # Announce the start of stacking classifier training and evaluation with compact parameter snapshot
-        combination_header = build_telegram_combination_header(name, "StackingClassifier", augmentation_ratio, hyperparameters_enabled)  # Build full progress label for stacking classifier
+        combination_header = build_telegram_combination_header(name, "StackingClassifier", augmentation_ratio, hyperparameters_enabled, experiment_run=get_current_experiment_run(config))  # Build full progress label for stacking classifier
         progress_bar.set_description(combination_header)  # Update progress bar with the complete active configuration
 
         phase_params_digest = get_classifier_params_digest(active_stacking_model)  # Build compact stacking parameter digest
         phase_cache_key = build_resume_cache_key(execution_mode_str, data_source_label, experiment_mode, augmentation_ratio, attack_types_combined, name, "StackingClassifier", hyperparameters_enabled)  # Build stacking cache identity source for diagnostics
         phase_cache_digest = hashlib.sha256(json.dumps(phase_cache_key, sort_keys=True, default=str).encode("utf-8")).hexdigest()  # Build stable stacking cache identity digest
-        phase_metadata = {"dataset_identity": os.path.basename(str(file)), "dataset_source": file, "execution_mode": execution_mode_str, "attack_scope": attack_types_combined, "data_source": data_source_label, "experiment_mode": experiment_mode, "augmentation_ratio": augmentation_ratio, "feature_set_name": name, "hyperparameter_mode": "Optimized Hyperparameters" if hyperparameters_enabled else "Default Hyperparameters", "classifier_name": "StackingClassifier", "classifier_params_digest": phase_params_digest, "classifier_params_reference": f"sha256:{phase_params_digest.get('digest')}", "train_sample_count": len(y_train), "test_sample_count": len(y_test), "feature_count": X_train_n_cols, "n_jobs": get_classifier_n_jobs(active_stacking_model), "cache_identity": phase_cache_digest, "cache_reference": cache_ref_file, "combination_index": current_combination, "total_combinations": total_steps}  # Build compact phase metadata for stacking
+        phase_metadata = {"dataset_identity": os.path.basename(str(file)), "dataset_source": file, "experiment_run": get_current_experiment_run(config), "execution_mode": execution_mode_str, "attack_scope": attack_types_combined, "data_source": data_source_label, "experiment_mode": experiment_mode, "augmentation_ratio": augmentation_ratio, "feature_set_name": name, "hyperparameter_mode": "Optimized Hyperparameters" if hyperparameters_enabled else "Default Hyperparameters", "classifier_name": "StackingClassifier", "classifier_params_digest": phase_params_digest, "classifier_params_reference": f"sha256:{phase_params_digest.get('digest')}", "train_sample_count": len(y_train), "test_sample_count": len(y_test), "feature_count": X_train_n_cols, "n_jobs": get_classifier_n_jobs(active_stacking_model), "cache_identity": phase_cache_digest, "cache_reference": cache_ref_file, "combination_index": current_combination, "total_combinations": total_steps}  # Build compact phase metadata for stacking
         log_training_phase(name, "StackingClassifier", "Model preparation", "Completed", hyperparameters_enabled, augmentation_ratio)  # Mark contextual preparation completion before blocking stacking fit.
         write_memory_phase_event("before_classifier_fit", config=config, **phase_metadata, event_outcome="starting")  # Publish stacking fit start
         stacking_ram_stats = {}  # Hold RAM statistics for this stacking fit only.
@@ -12221,6 +12473,7 @@ def run_stacking_evaluation_for_feature_set(name, stacking_model, X_train_df, y_
             X_train_n_cols, len(y_train), len(y_test), stacking_metrics, subset_feature_names,
             hyperparameters_enabled=hyperparameters_enabled,
             effective_hyperparameters=serialize_effective_estimator_parameters(active_stacking_model),
+            experiment_run=get_current_experiment_run(config),  # Persist the active run on stacking result rows.
         )  # Build standardized result entry for the stacking classifier
 
         write_memory_phase_event("before_cache_persist", config=config, **phase_metadata, event_outcome="starting")  # Publish stacking cache persistence start
@@ -12231,7 +12484,7 @@ def run_stacking_evaluation_for_feature_set(name, stacking_model, X_train_df, y_
 
         dataset_name = build_filename_safe_dataset_identity(resolve_canonical_dataset_identity(str(file), True)) if execution_mode_str == "combined_files" else os.path.basename(os.path.dirname(file))  # Resolve stacking export dataset folder by execution mode.
         artifact_feature_set = f"{name} - {'Optimized Hyperparameters' if hyperparameters_enabled else 'Default Hyperparameters'}"  # Keep stacking artifacts isolated by HP mode
-        artifact_context = build_stacking_model_artifact_context(file, source_files, execution_mode_str, attack_types_combined, target_column, "StackingClassifier", active_stacking_model, artifact_feature_set, input_feature_names, subset_feature_names, list(label_encoder.classes_), transformer, hyperparameters_enabled)  # Build ratio-independent original-training artifact identity.
+        artifact_context = build_stacking_model_artifact_context(file, source_files, execution_mode_str, attack_types_combined, target_column, "StackingClassifier", active_stacking_model, artifact_feature_set, input_feature_names, subset_feature_names, list(label_encoder.classes_), transformer, hyperparameters_enabled, get_current_experiment_run(config), config.get("evaluation", {}).get("random_state", 42))  # Build run-specific original-training artifact identity.
         log_training_phase(name, "StackingClassifier", "Model export", "Started", hyperparameters_enabled, augmentation_ratio)  # Mark contextual fitted stacking export separately from cache persistence.
         export_model_and_scaler(active_stacking_model, scaler, dataset_name, "StackingClassifier", feature_set=artifact_feature_set, dataset_csv_path=file, config=config, artifact_context=artifact_context, label_encoder=label_encoder, transformer=transformer)  # Atomically persist fitted stacking and preprocessing.
         log_training_phase(name, "StackingClassifier", "Model export", "Completed", hyperparameters_enabled, augmentation_ratio)  # Mark contextual stacking export completion before explainability scheduling.
@@ -12313,10 +12566,13 @@ def print_dataset_evaluation_header(data_source_label, evaluation_plan, executio
         pending_by_feature = pending_by_feature or {}  # Normalize absent pending classification to a fallback pending block.
         pending_global_ids = {task["global_id"] for tasks in pending_by_feature.values() for task in tasks}  # Preserve actual execution identities from cache partitioning.
         recovered_global_ids = set(cached_results)  # Preserve actual recovered identities from cache partitioning.
+        run_values = [task.get("experiment_run") for tasks in pending_by_feature.values() for task in tasks if task.get("experiment_run") is not None]  # Collect run metadata from pending tasks.
+        run_values.extend(result.get("experiment_run") for result in cached_results.values() if isinstance(result, dict) and result.get("experiment_run") is not None)  # Collect run metadata from recovered rows.
+        experiment_run = validate_experiment_runs(int(run_values[0]), "experiment_run") if run_values else 1  # Resolve display run metadata.
         if not pending_global_ids and not recovered_global_ids:  # Preserve legacy callers without precomputed cache classification.
             pending_global_ids = set(range(1, total_combinations + 1))  # Treat the whole plan as pending when no cache classification was supplied.
 
-        print(f"Evaluation plan: {total_combinations} combinations | Recovered: {len(recovered_global_ids)} | Pending: {len(pending_global_ids)}\n")  # Print cache-aware full-grid counts.
+        print(f"Evaluation plan: {total_combinations} combinations | Run: {experiment_run} | Recovered: {len(recovered_global_ids)} | Pending: {len(pending_global_ids)}\n")  # Print cache-aware full-grid counts.
         print(f"Execution Mode: {execution_mode_str}")  # Print the execution-mode identity shared by the plan
         if attack_types_combined:  # Print the combined attack scope when it participates in cache identity
             print(f"Attack Types: {', '.join(str(attack_type) for attack_type in attack_types_combined)}")  # Print the ordered attack-type scope once for the full plan
@@ -12361,6 +12617,7 @@ def print_dataset_evaluation_header(data_source_label, evaluation_plan, executio
 
         telegram_summary = "\n".join([
             f"Evaluation plan: {data_source_label} Data",
+            f"Experiment run: {experiment_run}",
             f"Total combinations: {total_combinations}",
             f"Recovered from cache: {len(recovered_global_ids)}",
             f"Pending execution: {len(pending_global_ids)}",
@@ -12668,7 +12925,8 @@ def evaluate_on_dataset(
             "original_sample_count": original_sample_count,  # Store the original population size before splitting.
             "augmented_sample_count": 0,  # Record that fitted preprocessing receives no augmented samples.
             "test_size": 0.2,  # Store the fixed split ratio used by prepare_evaluation_data_splits.
-            "random_state": 42,  # Store the fixed split seed used by prepare_evaluation_data_splits.
+            "random_state": config.get("evaluation", {}).get("random_state", 42),  # Store the active split seed used by prepare_evaluation_data_splits.
+            "experiment_run": get_current_experiment_run(config),  # Store the active run for fitted preprocessing isolation.
             "stratified": True,  # Store the stratified split semantics used by scale_and_split.
             "augmentation_merged_into_training_after_split": False,  # Record original-only fitted preprocessing semantics.
             "attack_types": normalize_metadata_for_json(attack_types_combined),  # Store combined-mode label scope when available.
@@ -12687,7 +12945,7 @@ def evaluate_on_dataset(
         if artifact_recovery_target is None and (grid_progress is None or not grid_progress.get("plan_printed", False)):
             feature_metadata_by_name = build_feature_process_metadata(feature_names, ga_selected_features, pca_n_components, rfe_selected_features)  # Build small feature descriptors for cache-aware plan reporting
             if all(name in feature_metadata_by_name for name in feature_mode_names):  # Use cache-aware grouping only for feature modes with compact descriptors.
-                tasks = build_feature_process_plan(evaluation_plan, feature_metadata_by_name, original_sample_count, file, execution_mode_str)  # Reuse authoritative global IDs and expected original-data shapes for plan reporting
+                tasks = build_feature_process_plan(evaluation_plan, feature_metadata_by_name, original_sample_count, file, execution_mode_str, get_current_experiment_run(config))  # Reuse authoritative global IDs and expected original-data shapes for plan reporting
                 cached_results, pending_by_feature = partition_evaluation_plan_by_cache(tasks, cache_dict, feature_mode_names, attack_types_combined)  # Reuse existing cache matching before plan reporting
                 print_dataset_evaluation_header(data_source_label, evaluation_plan, execution_mode_str, attack_types_combined, cached_results=cached_results, pending_by_feature=pending_by_feature)  # Print cache-aware recovered and pending plan blocks.
             else:
@@ -12737,10 +12995,10 @@ def evaluate_on_dataset(
                     recovered, current_combination = recover_cached_individual_classifier_result(cache_dict, execution_mode_str, data_source_label, experiment_mode, augmentation_ratio, attack_types_combined, name, model_name, all_results, current_combination, total_steps, progress_bar, hyperparameters_enabled=hyperparameters_enabled, expected_n_features=len(subset_feature_names), expected_feature_names=subset_feature_names, expected_n_samples_train=original_train_count, expected_n_samples_test=len(y_augmented_raw))
                     if recovered:
                         continue
-                    combination_header = build_telegram_combination_header(name, model_name, augmentation_ratio, hyperparameters_enabled)  # Build the exact augmented-test combination label
+                    combination_header = build_telegram_combination_header(name, model_name, augmentation_ratio, hyperparameters_enabled, experiment_run=get_current_experiment_run(config))  # Build the exact augmented-test combination label
                     progress_bar.set_description(combination_header)  # Display the exact augmented-test combination being evaluated.
                     artifact_feature_set = f"{name} - {'Optimized Hyperparameters' if hyperparameters_enabled else 'Default Hyperparameters'}"
-                    artifact_context = build_stacking_model_artifact_context(file, pca_source_files, execution_mode_str, attack_types_combined, target_column_name, model_name, model_prototype, artifact_feature_set, pca_input_feature_names, subset_feature_names, expected_label_classes, expected_transformer, hyperparameters_enabled)
+                    artifact_context = build_stacking_model_artifact_context(file, pca_source_files, execution_mode_str, attack_types_combined, target_column_name, model_name, model_prototype, artifact_feature_set, pca_input_feature_names, subset_feature_names, expected_label_classes, expected_transformer, hyperparameters_enabled, get_current_experiment_run(config), config.get("evaluation", {}).get("random_state", 42))  # Build run-specific artifact identity for augmented evaluation.
                     artifact_bundle, rejection_reason = load_existing_model_if_available(model_name, file, dataset_name, artifact_feature_set, artifact_context, config=config)
                     if artifact_bundle is None:
                         print(f"{BackgroundColors.YELLOW}[WARNING] Retraining {BackgroundColors.CYAN}{model_name}{BackgroundColors.YELLOW} on original data only because {rejection_reason}.{Style.RESET_ALL}")
@@ -12766,7 +13024,7 @@ def evaluate_on_dataset(
                     else:
                         metrics = evaluate_individual_classifier(loaded_model, model_name, None, None, X_augmented_model, y_augmented, file, artifact_bundle["scaler"], subset_feature_names, artifact_feature_set, config=config, training_ram_stats=training_ram_stats, fit_model=False, notification_context=combination_header, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio)  # Report persisted individual evaluation with authoritative combination metadata.
                         classifier_type = "Individual"
-                    result_entry = build_classifier_result_entry(loaded_model.__class__.__name__, file, execution_mode_str, attack_types_combined, name, classifier_type, model_name, data_source_label, experiment_id, experiment_mode, augmentation_ratio, len(subset_feature_names), original_train_count, len(y_augmented), metrics, subset_feature_names, hyperparams_map=hyperparams_map, hyperparameters_enabled=hyperparameters_enabled, effective_hyperparameters=serialize_effective_estimator_parameters(loaded_model))
+                    result_entry = build_classifier_result_entry(loaded_model.__class__.__name__, file, execution_mode_str, attack_types_combined, name, classifier_type, model_name, data_source_label, experiment_id, experiment_mode, augmentation_ratio, len(subset_feature_names), original_train_count, len(y_augmented), metrics, subset_feature_names, hyperparams_map=hyperparams_map, hyperparameters_enabled=hyperparameters_enabled, effective_hyperparameters=serialize_effective_estimator_parameters(loaded_model), experiment_run=get_current_experiment_run(config))  # Persist the active run on augmented result rows.
                     persist_cache_result_entry(effective_cache_ref, result_entry, cache_dict, config=config)
                     all_results[(name, model_name)] = result_entry
                     progress_bar.update(1)
@@ -13249,6 +13507,7 @@ def build_comparison_result_entry(orig_result, feature_set, classifier_type, mod
             "model_name": model_name,  # Model name
             "data_source": data_source,  # Data source label
             "experiment_id": experiment_id,  # Unique experiment identifier for traceability
+            "experiment_run": validate_experiment_runs(int(orig_result.get("experiment_run", 1)), "experiment_run"),  # Preserve repeated-run index from source result.
             "experiment_mode": experiment_mode,  # Persist original-only or augmented-testing semantics.
             "augmentation_ratio": resolve_persisted_augmentation_ratio(experiment_mode, augmentation_ratio),  # Augmentation ratio with 0.0 for original-only rows
             "n_features": n_features_override if n_features_override is not None else orig_result["n_features"],  # Number of features
@@ -13441,7 +13700,7 @@ def run_single_ratio_experiment(file, df_original_cleaned, df_augmented_cleaned,
         print(
             f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}[{ratio_idx}/{total_ratios}] Evaluating persisted original-trained models on Augmented@{ratio_pct}%{Style.RESET_ALL}"
         )  # Print progress indicator for current ratio experiment
-        df_sampled = sample_augmented_by_ratio(df_augmented_cleaned, df_original_cleaned, ratio)  # Sample augmented rows at the current ratio
+        df_sampled = sample_augmented_by_ratio(df_augmented_cleaned, df_original_cleaned, ratio, config=config)  # Sample augmented rows at the current ratio
 
         if df_sampled is None or df_sampled.empty:  # If sampling returned no valid data
             print(
@@ -13456,7 +13715,7 @@ def run_single_ratio_experiment(file, df_original_cleaned, df_augmented_cleaned,
         )  # Print sampled dataset size for transparency
 
         generate_augmentation_tsne_visualization(
-            file, df_original_cleaned, df_sampled, ratio, "original_training_augmented_testing"
+            file, df_original_cleaned, df_sampled, ratio, "original_training_augmented_testing", config=config
         )  # Generate t-SNE visualization for this augmentation ratio
 
         results_ratio = evaluate_on_dataset(
@@ -13664,7 +13923,7 @@ def run_combined_files_augmentation_ratio_experiment(reference_file, combined_fi
             f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}[{ratio_idx + 1}/{total_steps}] Evaluating with {ratio_pct}% augmented data (Combined Files Evaluation){Style.RESET_ALL}"
         )  # Print experiment step progress for this ratio
 
-        df_sampled = sample_augmented_by_ratio(combined_augmented_df, combined_files_df, ratio)  # Sample augmented data proportionally to the requested ratio
+        df_sampled = sample_augmented_by_ratio(combined_augmented_df, combined_files_df, ratio, config=config)  # Sample augmented data proportionally to the requested ratio
 
         if df_sampled is None:  # If sampling failed for this ratio
             print(
@@ -13680,7 +13939,7 @@ def run_combined_files_augmentation_ratio_experiment(reference_file, combined_fi
         )  # Print sampled dataset size for transparency
 
         generate_augmentation_tsne_visualization(
-            reference_file, combined_files_df, df_sampled, ratio, "original_training_augmented_testing"
+            reference_file, combined_files_df, df_sampled, ratio, "original_training_augmented_testing", config=config
         )  # Generate t-SNE visualization comparing original and augmented distributions
 
         results_ratio = evaluate_on_dataset(
@@ -13797,7 +14056,7 @@ def process_combined_files_augmentation_testing(reference_file, original_files_l
         combined_dataset_reference = combined_dataset_identity.rstrip("/")  # Use directory path text without trailing separator for path APIs.
 
         generate_augmentation_tsne_visualization(
-            combined_dataset_reference, combined_files_df, None, None, "original_only"  # Use directory identity for combined visualization.
+            combined_dataset_reference, combined_files_df, None, None, "original_only", config=config  # Use directory identity for combined visualization.
         )  # Generate t-SNE visualization for original combined files evaluation data only
 
         combined_augmented_df = load_and_combine_augmented_combined_files(original_files_list, config=config)  # Load and combine augmented files into a single DataFrame
@@ -13864,6 +14123,15 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
     try:
         if config is None:  # If no config provided
             config = CONFIG  # Use global CONFIG
+
+        if "experiment_run" not in config.get("stacking", {}):  # Expand logical experiments only at the outer combined-files boundary.
+            experiment_runs = validate_experiment_runs(config.get("stacking", {}).get("experiment_runs", 1))  # Resolve total requested runs.
+            for experiment_run in range(1, experiment_runs + 1):  # Execute every requested run independently.
+                run_config = build_experiment_run_config(config, experiment_run)  # Build isolated run-specific seeds and paths.
+                print(f"{BackgroundColors.BOLD}{BackgroundColors.CYAN}[EXPERIMENT RUN {experiment_run}/{experiment_runs}] Combined files dataset: {dataset_name}{Style.RESET_ALL}")  # Report run-specific combined-files progress.
+                send_telegram_message(TELEGRAM_BOT, f"[EXPERIMENT RUN {experiment_run}/{experiment_runs}] Combined files evaluation | Dataset: {dataset_name}")  # Notify run-specific combined-files progress.
+                process_combined_files_evaluation(original_files_list, combined_files_df, attack_types_list, dataset_name, config=run_config)  # Execute one run with run-specific persistence.
+            return  # Avoid re-entering the same logical grid after run expansion.
         
         verbose_output(
             f"{BackgroundColors.GREEN}Processing combined files evaluation for dataset: {BackgroundColors.CYAN}{dataset_name}{Style.RESET_ALL}",
@@ -13948,7 +14216,7 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
         fully_cached_ratios = {ratio for ratio in augmentation_ratios if all(build_resume_cache_key("combined_files", f"Augmented@{int(ratio * 100)}%_CombinedFiles", "original_training_augmented_testing", ratio, attack_types_list, feature_set, classifier, hyperparameters_enabled) in orchestration_cache for feature_set, hyperparameters_enabled, planned_ratio, classifier in evaluation_plan if planned_ratio == ratio)}  # Identify ratio groups requiring no augmented contents.
         feature_metadata_by_name = build_feature_process_metadata(feature_names, ga_selected_features, pca_n_components, rfe_selected_features)  # Build small feature descriptors for cache-aware plan reporting
         if all(name in feature_metadata_by_name for name in feature_mode_names):  # Use cache-aware grouping only for feature modes with compact descriptors.
-            tasks = build_feature_process_plan(evaluation_plan, feature_metadata_by_name, original_sample_count, combined_dataset_reference, "combined_files")  # Reuse authoritative global IDs and expected original-data shapes for plan reporting
+            tasks = build_feature_process_plan(evaluation_plan, feature_metadata_by_name, original_sample_count, combined_dataset_reference, "combined_files", get_current_experiment_run(config))  # Reuse authoritative global IDs and expected original-data shapes for plan reporting
             cached_results, pending_by_feature = partition_evaluation_plan_by_cache(tasks, orchestration_cache, feature_mode_names, attack_types_list)  # Reuse existing cache matching before plan reporting
             print_dataset_evaluation_header("Original Combined Files", evaluation_plan, "combined_files", attack_types_list, cached_results=cached_results, pending_by_feature=pending_by_feature)  # Print cache-aware recovered and pending plan blocks
         else:
@@ -13987,7 +14255,7 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
                         if combined_augmented_df is None:  # Skip current ratio when augmented recombination fails.
                             active_ratio = augmentation_ratio  # Prevent repeated failed reloads inside same ratio group.
                             continue  # Advance to next canonical group.
-                        df_sampled = sample_augmented_by_ratio(combined_augmented_df, original_sample_count, augmentation_ratio)  # Sample current configured ratio deterministically once.
+                        df_sampled = sample_augmented_by_ratio(combined_augmented_df, original_sample_count, augmentation_ratio, config=config)  # Sample current configured ratio deterministically once.
                         del combined_augmented_df  # Release full augmented contents before group evaluation.
                         gc.collect()  # Reclaim full augmented contents while retaining current sample.
                         active_ratio = augmentation_ratio  # Record reusable current ratio identity.
@@ -14149,7 +14417,7 @@ def process_single_file_evaluation(file, combined_df, combined_file_for_features
         
         if test_data_augmentation:  # If data augmentation testing is enabled
             generate_augmentation_tsne_visualization(
-                file, df_original_cleaned, None, None, "original_only"
+                file, df_original_cleaned, None, None, "original_only", config=config
             )  # Generate t-SNE visualization for original data only
 
         total_steps = 1 + (len(augmentation_ratios) if test_data_augmentation else 0)  # Calculate total evaluation steps
@@ -14357,7 +14625,7 @@ def build_feature_process_metadata(feature_names: List[Any], ga_selected_feature
     }  # Complete the supported descriptor mapping
 
 
-def build_feature_process_plan(evaluation_plan: List[Tuple[str, bool, Optional[float], str]], feature_metadata: dict, original_sample_count: int, file: str, execution_mode_str: str) -> List[dict]:  # Enrich the authoritative plan with stable global and feature-local identities
+def build_feature_process_plan(evaluation_plan: List[Tuple[str, bool, Optional[float], str]], feature_metadata: dict, original_sample_count: int, file: str, execution_mode_str: str, experiment_run: int = 1) -> List[dict]:  # Enrich the authoritative plan with stable global and feature-local identities
     """
     Build small persistent-process task descriptors from the authoritative plan.
 
@@ -14366,12 +14634,14 @@ def build_feature_process_plan(evaluation_plan: List[Tuple[str, bool, Optional[f
     :param original_sample_count: Original cleaned dataset row count.
     :param file: Dataset file or directory identity used for experiment IDs.
     :param execution_mode_str: Separate-files or combined-files execution mode.
+    :param experiment_run: One-based repeated experiment run index.
     :return: Ordered small task descriptors preserving every original combination identity.
     """
 
     feature_totals = {name: sum(1 for planned_name, _, _, _ in evaluation_plan if planned_name == name) for name in feature_metadata}  # Count dynamic feature-local queue totals
     feature_positions = {name: 0 for name in feature_metadata}  # Track feature-local positions in original global order
     experiment_ids = {}  # Reuse one experiment ID per hyperparameter and testing mode slice
+    run_index = validate_experiment_runs(experiment_run, "stacking.experiment_run")  # Resolve run metadata for every task descriptor.
     expected_original_test_count = int(math.ceil(original_sample_count * 0.2))  # Mirror the fixed train-test split test cardinality
     expected_train_count = int(original_sample_count - expected_original_test_count)  # Mirror the fixed train-test split training cardinality
     tasks = []  # Accumulate enriched descriptors in authoritative global order
@@ -14390,7 +14660,7 @@ def build_feature_process_plan(evaluation_plan: List[Tuple[str, bool, Optional[f
             identity_mode = "combined_files_original_only" if execution_mode_str == "combined_files" and augmentation_ratio is None else ("combined_files_original_training_augmented_testing" if execution_mode_str == "combined_files" else experiment_mode)  # Preserve the established experiment-ID mode text
             experiment_ids[experiment_key] = generate_experiment_id(file, identity_mode, augmentation_ratio)  # Generate the existing traceability identity
         descriptor = feature_metadata[feature_set_name]  # Resolve small feature metadata for this combination
-        tasks.append({"feature_set": feature_set_name, "worker_key": resolve_feature_set_worker_key(feature_set_name), "global_id": global_index, "total_combinations": len(evaluation_plan), "feature_local_position": feature_positions[feature_set_name], "feature_local_total": feature_totals[feature_set_name], "hyperparameters_enabled": bool(hyperparameters_enabled), "augmentation_ratio": augmentation_ratio, "classifier_name": classifier_name, "experiment_mode": experiment_mode, "data_source_label": data_source_label, "experiment_id": experiment_ids[experiment_key], "execution_mode": execution_mode_str, "expected_n_features": descriptor["feature_count"], "expected_feature_names": list(descriptor["feature_names"]), "expected_n_samples_train": expected_train_count, "expected_n_samples_test": expected_test_count, "requires_model_artifact": False})  # Store one matrix-free task descriptor
+        tasks.append({"feature_set": feature_set_name, "worker_key": resolve_feature_set_worker_key(feature_set_name), "global_id": global_index, "total_combinations": len(evaluation_plan), "feature_local_position": feature_positions[feature_set_name], "feature_local_total": feature_totals[feature_set_name], "hyperparameters_enabled": bool(hyperparameters_enabled), "augmentation_ratio": augmentation_ratio, "classifier_name": classifier_name, "experiment_mode": experiment_mode, "data_source_label": data_source_label, "experiment_id": experiment_ids[experiment_key], "experiment_run": run_index, "execution_mode": execution_mode_str, "expected_n_features": descriptor["feature_count"], "expected_feature_names": list(descriptor["feature_names"]), "expected_n_samples_train": expected_train_count, "expected_n_samples_test": expected_test_count, "requires_model_artifact": False})  # Store one matrix-free task descriptor
     return tasks  # Return the complete authoritative task sequence
 
 
@@ -14620,7 +14890,7 @@ def build_feature_process_artifact_context(task: dict, process_payload: dict, mo
 
     transformer = PCA(n_components=int(task["expected_n_features"])) if task["feature_set"] == "PCA Components" else None  # Build the equivalent configured PCA identity when required
     artifact_feature_set = f"{task['feature_set']} - {'Optimized Hyperparameters' if task['hyperparameters_enabled'] else 'Default Hyperparameters'}"  # Preserve the existing model slot identity
-    return build_stacking_model_artifact_context(process_payload["file"], process_payload["source_files"], process_payload["execution_mode"], process_payload["attack_types_combined"], process_payload["target_column"], task["classifier_name"], model_prototype, artifact_feature_set, process_payload["input_feature_names"], task["expected_feature_names"], process_payload["label_classes"], transformer, task["hyperparameters_enabled"])  # Reuse the existing deterministic artifact identity builder
+    return build_stacking_model_artifact_context(process_payload["file"], process_payload["source_files"], process_payload["execution_mode"], process_payload["attack_types_combined"], process_payload["target_column"], task["classifier_name"], model_prototype, artifact_feature_set, process_payload["input_feature_names"], task["expected_feature_names"], process_payload["label_classes"], transformer, task["hyperparameters_enabled"], task["experiment_run"], process_payload["config"].get("evaluation", {}).get("random_state", 42))  # Reuse the run-specific deterministic artifact identity builder
 
 
 def feature_process_model_artifact_valid(task: dict, process_payload: dict, model_prototype: Any) -> bool:  # Validate a required original-trained model pair without loading it
@@ -14930,7 +15200,7 @@ def load_feature_process_ratio_frame_data(process_payload: dict, ratio: float) -
         augmented_df = preprocess_dataframe(augmented_raw, remove_zero_variance=True, config=process_payload["config"]) if augmented_raw is not None else None  # Apply unchanged cleaning semantics
         if augmented_df is None:  # Reject a failed single-file augmentation load for the active required ratio
             raise RuntimeError(f"Failed to load augmented data for ratio {ratio}")  # Surface ratio-specific loading failure
-        sampled_df = sample_augmented_by_ratio(augmented_df, process_payload["original_sample_count"], ratio)  # Preserve exact deterministic single-file ratio sampling
+        sampled_df = sample_augmented_by_ratio(augmented_df, process_payload["original_sample_count"], ratio, config=process_payload["config"])  # Preserve exact deterministic single-file ratio sampling
         del augmented_df  # Release the complete single-file source before classifier prediction
         gc.collect()  # Reclaim the complete single-file source while retaining only sampled rows
     if sampled_df is None or sampled_df.empty:  # Reject an unusable deterministic ratio sample
@@ -15209,7 +15479,7 @@ def log_feature_process_combination(task: dict, status_state: dict, message: str
     hp_label = "Optimized Hyperparameters" if task["hyperparameters_enabled"] else "Default Hyperparameters"  # Resolve the active hyperparameter mode
     testing_label = "Original" if task["augmentation_ratio"] is None else "Augmented"  # Resolve the active testing mode
     prefix = format_feature_process_progress(task, status_state)  # Build complete dynamic status and process identity
-    print(f"{prefix} Feature Set={task['feature_set']} | Classifier={task['classifier_name']} | Hyperparameters={hp_label} | Testing={testing_label} | Augmentation Ratio={ratio_label} | {message}")  # Write one complete durable process record
+    print(f"{prefix} Run={task['experiment_run']} | Feature Set={task['feature_set']} | Classifier={task['classifier_name']} | Hyperparameters={hp_label} | Testing={testing_label} | Augmentation Ratio={ratio_label} | {message}")  # Write one complete durable process record
     sys.stdout.flush()  # Flush every lifecycle record for detached SSH observability
 
 
@@ -15231,13 +15501,13 @@ def evaluate_feature_process_original_task(task: dict, process_payload: dict, re
     artifact_feature_set = f"{task['feature_set']} - {'Optimized Hyperparameters' if task['hyperparameters_enabled'] else 'Default Hyperparameters'}"  # Preserve the existing model slot identity
     artifact_context = build_feature_process_artifact_context(task, process_payload, active_model)  # Build unchanged original-model provenance
     dataset_name = build_filename_safe_dataset_identity(resolve_canonical_dataset_identity(str(process_payload["file"]), True)) if process_payload["execution_mode"] == "combined_files" else os.path.basename(os.path.dirname(process_payload["file"]))  # Resolve the established model artifact directory
-    phase_metadata = {"dataset_identity": os.path.basename(str(process_payload["file"])), "dataset_source": process_payload["file"], "execution_mode": process_payload["execution_mode"], "attack_scope": process_payload["attack_types_combined"], "data_source": task["data_source_label"], "experiment_mode": task["experiment_mode"], "augmentation_ratio": task["augmentation_ratio"], "feature_set_name": task["feature_set"], "hyperparameter_mode": "Optimized Hyperparameters" if task["hyperparameters_enabled"] else "Default Hyperparameters", "classifier_name": task["classifier_name"], "train_sample_count": len(resources["y_train"]), "test_sample_count": len(resources["y_test"]), "feature_count": task["expected_n_features"], "n_jobs": get_classifier_n_jobs(active_model), "combination_index": task["global_id"], "total_combinations": task["total_combinations"]}  # Build compact existing watcher metadata without matrices
+    phase_metadata = {"dataset_identity": os.path.basename(str(process_payload["file"])), "dataset_source": process_payload["file"], "experiment_run": task["experiment_run"], "execution_mode": process_payload["execution_mode"], "attack_scope": process_payload["attack_types_combined"], "data_source": task["data_source_label"], "experiment_mode": task["experiment_mode"], "augmentation_ratio": task["augmentation_ratio"], "feature_set_name": task["feature_set"], "hyperparameter_mode": "Optimized Hyperparameters" if task["hyperparameters_enabled"] else "Default Hyperparameters", "classifier_name": task["classifier_name"], "train_sample_count": len(resources["y_train"]), "test_sample_count": len(resources["y_test"]), "feature_count": task["expected_n_features"], "n_jobs": get_classifier_n_jobs(active_model), "combination_index": task["global_id"], "total_combinations": task["total_combinations"]}  # Build compact existing watcher metadata without matrices
     training_ram_stats = {}  # Hold only this classifier's bounded RAM statistics
     training_eta_callback = lambda eta_label: publish_feature_process_training_eta_event(task, process_payload, status_queue, eta_label)  # Publish the first emitted factual progress ETA through the coordinator.
     log_feature_process_combination(task, status_state, "Fit started")  # Announce the blocking fit before existing heartbeat or unit progress begins
-    metrics = evaluate_individual_classifier(active_model, task["classifier_name"], resources["X_train"], resources["y_train"], resources["X_test"], resources["y_test"], process_payload["file"], resources["scaler"], task["expected_feature_names"], artifact_feature_set, config=process_payload["config"], phase_metadata=phase_metadata, training_ram_stats=training_ram_stats, fit_model=True, notification_context=build_telegram_combination_header(task["feature_set"], task["classifier_name"], None, task["hyperparameters_enabled"]), hyperparameters_enabled=task["hyperparameters_enabled"], augmentation_ratio=task["augmentation_ratio"], training_eta_callback=training_eta_callback)  # Reuse unchanged evaluation with serialized authoritative combination metadata.
+    metrics = evaluate_individual_classifier(active_model, task["classifier_name"], resources["X_train"], resources["y_train"], resources["X_test"], resources["y_test"], process_payload["file"], resources["scaler"], task["expected_feature_names"], artifact_feature_set, config=process_payload["config"], phase_metadata=phase_metadata, training_ram_stats=training_ram_stats, fit_model=True, notification_context=build_telegram_combination_header(task["feature_set"], task["classifier_name"], None, task["hyperparameters_enabled"], experiment_run=task["experiment_run"]), hyperparameters_enabled=task["hyperparameters_enabled"], augmentation_ratio=task["augmentation_ratio"], training_eta_callback=training_eta_callback)  # Reuse unchanged evaluation with serialized authoritative combination metadata.
     log_feature_process_combination(task, status_state, "Prediction and metrics completed")  # Announce completion of existing prediction and metric phases
-    result_entry = build_classifier_result_entry(active_model.__class__.__name__, process_payload["file"], process_payload["execution_mode"], process_payload["attack_types_combined"], task["feature_set"], "Individual", task["classifier_name"], task["data_source_label"], task["experiment_id"], task["experiment_mode"], None, task["expected_n_features"], len(resources["y_train"]), len(resources["y_test"]), metrics, task["expected_feature_names"], hyperparams_map=process_payload["optimized_params"] if task["hyperparameters_enabled"] else {}, hyperparameters_enabled=task["hyperparameters_enabled"], effective_hyperparameters=serialize_effective_estimator_parameters(active_model))  # Build the unchanged cache and export result payload
+    result_entry = build_classifier_result_entry(active_model.__class__.__name__, process_payload["file"], process_payload["execution_mode"], process_payload["attack_types_combined"], task["feature_set"], "Individual", task["classifier_name"], task["data_source_label"], task["experiment_id"], task["experiment_mode"], None, task["expected_n_features"], len(resources["y_train"]), len(resources["y_test"]), metrics, task["expected_feature_names"], hyperparams_map=process_payload["optimized_params"] if task["hyperparameters_enabled"] else {}, hyperparameters_enabled=task["hyperparameters_enabled"], effective_hyperparameters=serialize_effective_estimator_parameters(active_model), experiment_run=task["experiment_run"])  # Build the run-scoped cache and export result payload
     log_feature_process_combination(task, status_state, "Persistence started")  # Announce the atomic result transaction
     persist_cache_result_entry(process_payload["cache_ref_file"], result_entry, cache_dict, config=process_payload["config"])  # Persist and verify this completed result immediately through the process-safe cache transaction
     export_model_and_scaler(active_model, resources["scaler"], dataset_name, task["classifier_name"], feature_set=artifact_feature_set, dataset_csv_path=process_payload["file"], config=process_payload["config"], artifact_context=artifact_context, label_encoder=resources["label_encoder"], transformer=resources["transformer"])  # Persist the fitted model and preprocessing through the existing process-safe model transaction
@@ -15288,9 +15558,9 @@ def evaluate_feature_process_augmented_task(task: dict, process_payload: dict, r
     log_feature_process_combination(task, status_state, "Bounded transformation and prediction completed")  # Confirm complete bounded inference before metrics
     training_ram_stats = {}  # Hold the established loaded-model evaluation RAM record shape
     log_feature_process_combination(task, status_state, "Metrics started")  # Announce persisted-model metrics after bounded prediction
-    metrics = evaluate_individual_classifier(loaded_model, task["classifier_name"], None, None, None, y_augmented, process_payload["file"], artifact_bundle["scaler"], task["expected_feature_names"], artifact_feature_set, config=process_payload["config"], training_ram_stats=training_ram_stats, fit_model=False, notification_context=build_telegram_combination_header(task["feature_set"], task["classifier_name"], task["augmentation_ratio"], task["hyperparameters_enabled"]), hyperparameters_enabled=task["hyperparameters_enabled"], augmentation_ratio=task["augmentation_ratio"], precomputed_predictions=y_predicted, precomputed_prediction_seconds=prediction_seconds)  # Reuse unchanged metrics and reporting without reconstructing a complete transformed matrix
+    metrics = evaluate_individual_classifier(loaded_model, task["classifier_name"], None, None, None, y_augmented, process_payload["file"], artifact_bundle["scaler"], task["expected_feature_names"], artifact_feature_set, config=process_payload["config"], training_ram_stats=training_ram_stats, fit_model=False, notification_context=build_telegram_combination_header(task["feature_set"], task["classifier_name"], task["augmentation_ratio"], task["hyperparameters_enabled"], experiment_run=task["experiment_run"]), hyperparameters_enabled=task["hyperparameters_enabled"], augmentation_ratio=task["augmentation_ratio"], precomputed_predictions=y_predicted, precomputed_prediction_seconds=prediction_seconds)  # Reuse unchanged metrics and reporting without reconstructing a complete transformed matrix
     log_feature_process_combination(task, status_state, "Prediction and metrics completed")  # Confirm existing loaded-model phases completed
-    result_entry = build_classifier_result_entry(loaded_model.__class__.__name__, process_payload["file"], process_payload["execution_mode"], process_payload["attack_types_combined"], task["feature_set"], "Individual", task["classifier_name"], task["data_source_label"], task["experiment_id"], task["experiment_mode"], task["augmentation_ratio"], task["expected_n_features"], task["expected_n_samples_train"], len(y_augmented), metrics, task["expected_feature_names"], hyperparams_map=process_payload["optimized_params"] if task["hyperparameters_enabled"] else {}, hyperparameters_enabled=task["hyperparameters_enabled"], effective_hyperparameters=serialize_effective_estimator_parameters(loaded_model))  # Build the unchanged augmented-testing result payload
+    result_entry = build_classifier_result_entry(loaded_model.__class__.__name__, process_payload["file"], process_payload["execution_mode"], process_payload["attack_types_combined"], task["feature_set"], "Individual", task["classifier_name"], task["data_source_label"], task["experiment_id"], task["experiment_mode"], task["augmentation_ratio"], task["expected_n_features"], task["expected_n_samples_train"], len(y_augmented), metrics, task["expected_feature_names"], hyperparams_map=process_payload["optimized_params"] if task["hyperparameters_enabled"] else {}, hyperparameters_enabled=task["hyperparameters_enabled"], effective_hyperparameters=serialize_effective_estimator_parameters(loaded_model), experiment_run=task["experiment_run"])  # Build the run-scoped augmented-testing result payload
     log_feature_process_combination(task, status_state, "Persistence started")  # Announce the atomic augmented result transaction
     persist_cache_result_entry(process_payload["cache_ref_file"], result_entry, cache_dict, config=process_payload["config"])  # Persist and verify this completed result immediately
     log_feature_process_combination(task, status_state, "Persistence completed")  # Confirm augmented result durability
@@ -15923,7 +16193,7 @@ def run_persistent_feature_set_grid(original_df: pd.DataFrame, file: str, source
     original_sample_count = int(len(original_df))  # Record exact cleaned original population before releasing the DataFrame
     target_column = str(original_df.columns[-1])  # Preserve the established positional target identity
     label_classes = normalize_metadata_for_json(np.unique(original_df.iloc[:, -1].to_numpy(copy=False)).tolist())  # Preserve exact LabelEncoder class order as small metadata
-    tasks = build_feature_process_plan(evaluation_plan, feature_metadata_by_name, original_sample_count, file, execution_mode_str)  # Build dynamic task identities without opening augmentation rows
+    tasks = build_feature_process_plan(evaluation_plan, feature_metadata_by_name, original_sample_count, file, execution_mode_str, get_current_experiment_run(config))  # Build dynamic task identities without opening augmentation rows
     cache_dict = load_cache_results(file, config=config)  # Recover primary or backup cache before worker startup
     optimized_params = {}  # Accumulate coordinator-validated optimized parameter metadata
     coordinator_model_maps = {}  # Retain small coordinator prototypes only for preflight artifact validation
@@ -15936,7 +16206,7 @@ def run_persistent_feature_set_grid(original_df: pd.DataFrame, file: str, source
     print_dataset_evaluation_header(data_source_label, evaluation_plan, execution_mode_str, attack_types_combined, cached_results=cached_results, pending_by_feature=pending_by_feature)  # Print cache-classified recovered and pending plan blocks before worker startup
     pending_original_exists = any(task["augmentation_ratio"] is None for queue_tasks in pending_by_feature.values() for task in queue_tasks)  # Determine whether any child requires original fitting data
     pending_augmented_exists = any(task["augmentation_ratio"] is not None for queue_tasks in pending_by_feature.values() for task in queue_tasks)  # Determine whether any child requires lazy shared augmentation data
-    pca_cache_context = {"execution_mode": execution_mode_str, "data_source": "Original", "experiment_mode": "original_only", "augmentation_ratio": None, "target_column": target_column, "original_sample_count": original_sample_count, "augmented_sample_count": 0, "test_size": 0.2, "random_state": 42, "stratified": True, "augmentation_merged_into_training_after_split": False, "attack_types": normalize_metadata_for_json(attack_types_combined)}  # Preserve the existing PCA split and source identity
+    pca_cache_context = {"execution_mode": execution_mode_str, "data_source": "Original", "experiment_mode": "original_only", "augmentation_ratio": None, "target_column": target_column, "original_sample_count": original_sample_count, "augmented_sample_count": 0, "test_size": 0.2, "random_state": config.get("evaluation", {}).get("random_state", 42), "experiment_run": get_current_experiment_run(config), "stratified": True, "augmentation_merged_into_training_after_split": False, "attack_types": normalize_metadata_for_json(attack_types_combined)}  # Preserve the run-specific PCA split and source identity
     try:  # Keep shared resources alive until every child has exited
         if pending_original_exists:  # Prepare shared original arrays only when at least one uncached fit requires them
             shared_resources = create_feature_process_shared_resources(original_df, file, config)  # Split once and persist exact read-only matrices and labels
@@ -16182,7 +16452,7 @@ def execute_combined_files_augmentation(files_to_process, combined_df, attack_ty
                 print(f"{BackgroundColors.YELLOW}Failed to combine augmented files for combined files evaluation combo {suffix}. Skipping.{Style.RESET_ALL}")  # Warn
             else:  # Proceed with ratio experiments
                 for ratio in config.get("stacking", {}).get("augmentation_ratios", [0.25, 0.50, 0.75, 1.00]):  # For each augmentation ratio
-                    df_sampled = sample_augmented_by_ratio(combined_aug_df, combined_df, ratio)  # Sample augmented data
+                    df_sampled = sample_augmented_by_ratio(combined_aug_df, combined_df, ratio, config=config)  # Sample augmented data
                     if df_sampled is None:  # If sampling failed
                         print(f"{BackgroundColors.YELLOW}Sampling failed for ratio {ratio} in combo {suffix}. Skipping ratio.{Style.RESET_ALL}")  # Warn
                         continue  # Next ratio
@@ -16280,6 +16550,15 @@ def orchestrate_all_combinations(input_path, dataset_name=None, config=None):
     if config is None:  # If no config provided
         config = CONFIG  # Use global CONFIG
 
+    if "experiment_run" not in config.get("stacking", {}):  # Expand logical experiments only at the outer separate-files boundary.
+        experiment_runs = validate_experiment_runs(config.get("stacking", {}).get("experiment_runs", 1))  # Resolve total requested runs.
+        for experiment_run in range(1, experiment_runs + 1):  # Execute every requested run independently.
+            run_config = build_experiment_run_config(config, experiment_run)  # Build isolated run-specific seeds and paths.
+            print(f"{BackgroundColors.BOLD}{BackgroundColors.CYAN}[EXPERIMENT RUN {experiment_run}/{experiment_runs}] Separate files input: {input_path}{Style.RESET_ALL}")  # Report run-specific separate-files progress.
+            send_telegram_message(TELEGRAM_BOT, f"[EXPERIMENT RUN {experiment_run}/{experiment_runs}] Separate files evaluation | Input: {input_path}")  # Notify run-specific separate-files progress.
+            orchestrate_all_combinations(input_path, dataset_name=dataset_name, config=run_config)  # Execute one run with run-specific persistence.
+        return  # Avoid re-entering the same logical grid after run expansion.
+
     files_to_process = determine_files_to_process(config.get("execution", {}).get("csv_file", None), input_path, config=config)  # Determine files
 
     methods_cfg = config.get("stacking", {}).get("methods", {})  # Retrieve method toggles from config
@@ -16322,7 +16601,7 @@ def orchestrate_all_combinations(input_path, dataset_name=None, config=None):
             fully_cached_ratios = {ratio for ratio in augmentation_ratios if all(build_resume_cache_key("separate_files", f"Augmented@{int(ratio * 100)}%", "original_training_augmented_testing", ratio, None, feature_set, classifier, hyperparameters_enabled) in orchestration_cache for feature_set, hyperparameters_enabled, planned_ratio, classifier in evaluation_plan if planned_ratio == ratio)}  # Identify ratio groups requiring no augmented contents.
             feature_metadata_by_name = build_feature_process_metadata(feature_names, ga_sel, pca_n, rfe_sel)  # Build small feature descriptors for cache-aware plan reporting
             if all(name in feature_metadata_by_name for name in feature_mode_names):  # Use cache-aware grouping only for feature modes with compact descriptors.
-                tasks = build_feature_process_plan(evaluation_plan, feature_metadata_by_name, len(df_original), file, "separate_files")  # Reuse authoritative global IDs and expected original-data shapes for plan reporting
+                tasks = build_feature_process_plan(evaluation_plan, feature_metadata_by_name, len(df_original), file, "separate_files", get_current_experiment_run(config))  # Reuse authoritative global IDs and expected original-data shapes for plan reporting
                 cached_results, pending_by_feature = partition_evaluation_plan_by_cache(tasks, orchestration_cache, feature_mode_names, None)  # Reuse existing cache matching before plan reporting
                 print_dataset_evaluation_header("Original", evaluation_plan, "separate_files", None, cached_results=cached_results, pending_by_feature=pending_by_feature)  # Print cache-aware recovered and pending plan blocks
             else:
@@ -16370,7 +16649,7 @@ def orchestrate_all_combinations(input_path, dataset_name=None, config=None):
                     if df_augmented is None:  # Skip current ratio when augmented loading or validation fails.
                         active_ratio = augmentation_ratio  # Prevent repeated failed reloads within same ratio group.
                         continue  # Advance without retaining augmented data.
-                    df_sampled = sample_augmented_by_ratio(df_augmented, df_original, augmentation_ratio)  # Sample only current configured ratio once.
+                    df_sampled = sample_augmented_by_ratio(df_augmented, df_original, augmentation_ratio, config=config)  # Sample only current configured ratio once.
                     del df_augmented  # Release full augmented contents before group evaluation.
                     gc.collect()  # Reclaim full augmented contents while retaining current sample.
                     active_ratio = augmentation_ratio  # Record reusable current ratio identity.
