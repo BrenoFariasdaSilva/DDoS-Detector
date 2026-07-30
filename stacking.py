@@ -1303,6 +1303,38 @@ def validate_experiment_runs(value: Any, source: str = "stacking.experiment_runs
     return value  # Return the validated run count.
 
 
+def parse_persisted_experiment_run_value(value: Any, source: str = "experiment_run") -> int:
+    """
+    Parse one persisted experiment run value without lossy conversion.
+
+    :param value: Persisted CSV scalar value.
+    :param source: User-facing source label used in validation errors.
+    :return: Validated run index.
+    """
+
+    if value is None:  # Reject missing persisted run values.
+        raise ValueError(f"{source} must be an integer greater than or equal to 1")  # Raise the same run validation contract.
+    if isinstance(value, bool) or isinstance(value, np.bool_):  # Reject boolean CSV values explicitly.
+        raise ValueError(f"{source} must be an integer greater than or equal to 1")  # Prevent bool from passing as an integer.
+    if isinstance(value, (int, np.integer)):  # Accept native and NumPy integer scalars.
+        return validate_experiment_runs(int(value), source)  # Validate the parsed integer.
+    if isinstance(value, (float, np.floating)):  # Inspect float scalars read by pandas from CSV files.
+        if not math.isfinite(float(value)) or not float(value).is_integer():  # Reject NaN, infinity, and fractional values.
+            raise ValueError(f"{source} must be an integer greater than or equal to 1")  # Avoid truncating invalid numeric values.
+        return validate_experiment_runs(int(value), source)  # Accept only integer-valued floats produced by CSV typing.
+    if isinstance(value, str):  # Parse text values that originate from CSV cells.
+        text_value = value.strip()  # Normalize surrounding whitespace without altering content.
+        if not re.fullmatch(r"[+-]?\d+", text_value):  # Accept only exact integer text.
+            raise ValueError(f"{source} must be an integer greater than or equal to 1")  # Reject fractional, boolean, empty, and malformed text.
+        return validate_experiment_runs(int(text_value), source)  # Validate the exact integer text.
+    try:  # Detect pandas missing scalar sentinels for less common dtypes.
+        if pd.isna(value):  # Treat pandas NA and NaT as invalid persisted run metadata.
+            raise ValueError(f"{source} must be an integer greater than or equal to 1")  # Reject missing persisted values.
+    except TypeError:  # Preserve the generic invalid-type failure for container-like values.
+        pass  # Continue to the final validation failure.
+    raise ValueError(f"{source} must be an integer greater than or equal to 1")  # Reject unsupported persisted value types.
+
+
 def get_current_experiment_run(config: Optional[dict] = None) -> int:
     """
     Resolve the current stacking experiment run index.
@@ -1431,6 +1463,358 @@ def migrate_legacy_final_results_file_for_run(csv_path: str, config: Optional[di
         print(f"{BackgroundColors.GREEN}[LEGACY MIGRATION] Copied final results {BackgroundColors.CYAN}{legacy_path}{BackgroundColors.GREEN} -> {BackgroundColors.CYAN}{run_path}{Style.RESET_ALL}")  # Report non-destructive final migration.
     finally:  # Remove any unconsumed migration staging file.
         remove_cache_temporary_file(temporary_path)  # Remove a failed migration temporary file.
+
+
+def parse_result_storage_run_index(file_path: str, legacy_path: str) -> int:
+    """
+    Parse the run index encoded by one result-storage filename.
+
+    :param file_path: Cache or final-result CSV path.
+    :param legacy_path: Unsuffixed legacy CSV path for the same dataset and storage kind.
+    :return: One-based run index encoded by the filename.
+    """
+
+    path_name = Path(str(file_path)).name  # Read the current result-storage filename.
+    legacy_name = Path(str(legacy_path)).name  # Read the matching unsuffixed filename.
+    if path_name == legacy_name:  # Treat the original unsuffixed file as run 1.
+        return 1  # Return the legacy run index.
+    candidate_name = path_name[:-4] if path_name.endswith(".bak") else path_name  # Remove the existing backup suffix before filename parsing.
+    legacy_file = Path(legacy_name)  # Parse the configured legacy filename once.
+    pattern = rf"{re.escape(legacy_file.stem)}_Run_(\d+){re.escape(legacy_file.suffix)}"  # Build the exact run-specific filename pattern.
+    match = re.fullmatch(pattern, candidate_name)  # Match only files that belong to this dataset and storage kind.
+    if match is None:  # Reject unrelated filenames in the relevant output directory.
+        raise ValueError(f"Result-storage filename does not match expected run pattern: {path_name}")  # Surface the unexpected filename.
+    return validate_experiment_runs(parse_persisted_experiment_run_value(match.group(1), "filename experiment_run"), "filename experiment_run")  # Return the validated filename run.
+
+
+def discover_result_storage_files(legacy_path: str) -> List[Tuple[Path, int, bool]]:
+    """
+    Discover legacy and run-specific result-storage CSV files.
+
+    :param legacy_path: Unsuffixed legacy CSV path for one dataset and storage kind.
+    :return: Existing matching primary or backup paths with run index and legacy marker.
+    """
+
+    legacy_file = Path(str(legacy_path))  # Normalize the configured unsuffixed path.
+    discovered = []  # Accumulate matching files only.
+    legacy_backup = Path(get_cache_backup_path(str(legacy_file)))  # Resolve the matching legacy backup file.
+    if legacy_file.is_file():  # Include the unsuffixed legacy source when present.
+        discovered.append((legacy_file, 1, True))  # Record legacy input as run 1.
+    if legacy_backup.is_file():  # Include backup-only legacy storage as active run 1 input.
+        discovered.append((legacy_backup, 1, True))  # Record legacy backup input as run 1.
+    if legacy_file.parent.is_dir():  # Scan only the relevant output directory.
+        for candidate in legacy_file.parent.iterdir():  # Inspect sibling files for run-specific names.
+            candidate_name = candidate.name[:-4] if candidate.name.endswith(".bak") else candidate.name  # Parse backups by their primary CSV name.
+            if not candidate.is_file() or candidate.name in {legacy_file.name, legacy_backup.name} or not candidate_name.endswith(legacy_file.suffix):  # Skip nonfiles, legacy inputs, and nonmatching siblings.
+                continue  # Move to the next sibling.
+            try:  # Keep discovery restricted to exact matching run-specific filenames.
+                run_index = parse_result_storage_run_index(str(candidate), str(legacy_file))  # Parse the run encoded in this filename.
+            except ValueError:  # Ignore unrelated CSVs in the same output directory.
+                continue  # Move to the next sibling.
+            discovered.append((candidate, run_index, False))  # Record one run-specific result-storage file.
+    discovered.sort(key=lambda item: (item[1], item[2], item[0].name))  # Keep deterministic migration order.
+    return discovered  # Return every relevant existing primary CSV.
+
+
+def normalize_experiment_run_column(df: pd.DataFrame, expected_experiment_run: int, source_path: str) -> pd.DataFrame:
+    """
+    Normalize and validate the experiment_run column for one result file.
+
+    :param df: Result DataFrame loaded from disk.
+    :param expected_experiment_run: Run index encoded by the source filename.
+    :param source_path: Source CSV path used in validation errors.
+    :return: DataFrame with a validated experiment_run column.
+    """
+
+    run_index = validate_experiment_runs(expected_experiment_run, "filename experiment_run")  # Validate the filename-derived run.
+    normalized_df = df.copy()  # Preserve caller-owned DataFrames.
+    normalized_df.columns = normalized_df.columns.str.strip()  # Normalize header whitespace before column lookup.
+    if "experiment_run" not in normalized_df.columns:  # Add the missing run column from the filename.
+        normalized_df["experiment_run"] = run_index  # Assign every row to the file's run.
+    else:  # Validate every persisted run value when the column exists.
+        normalized_df["experiment_run"] = normalized_df["experiment_run"].map(lambda value: parse_persisted_experiment_run_value(value, f"{source_path} experiment_run"))  # Parse each scalar without truncation.
+        conflicts = sorted({int(value) for value in normalized_df["experiment_run"].tolist() if int(value) != run_index})  # Collect filename conflicts.
+        if conflicts:  # Reject files containing rows from another run.
+            raise ValueError(f"{source_path} contains experiment_run values {conflicts} but filename requires {run_index}")  # Surface the inconsistent persisted data.
+    return normalized_df  # Return rows with a validated run column.
+
+
+def normalize_final_results_dataframe(df: pd.DataFrame, config: Optional[dict], expected_experiment_run: int, source_path: str) -> pd.DataFrame:
+    """
+    Normalize one final-result CSV to the current run-aware schema.
+
+    :param df: Final-result DataFrame loaded from disk.
+    :param config: Runtime configuration dictionary.
+    :param expected_experiment_run: Run index encoded by the source filename.
+    :param source_path: Source CSV path used in validation errors.
+    :return: Normalized final-result DataFrame.
+    """
+
+    if config is None:  # Use global configuration when no configuration is supplied.
+        config = CONFIG  # Preserve established configuration fallback.
+    normalized_df = normalize_experiment_run_column(df, expected_experiment_run, source_path)  # Apply filename-derived run metadata.
+    cache_like_df = normalize_cache_dataframe(normalized_df, config=config, expected_experiment_run=expected_experiment_run)  # Reuse cache schema migration for identity validation.
+    deserialize_cache_dataframe(deduplicate_cache_dataframe(cache_like_df))  # Prove canonical identities are recoverable.
+    normalized_df["_cache_identity"] = [build_cache_identity_from_row(row) for _, row in cache_like_df.iterrows()]  # Attach canonical identities for final-file dedupe.
+    normalized_df = normalized_df.drop_duplicates(subset=["_cache_identity"], keep="last").drop(columns=["_cache_identity"])  # Keep the newest row per logical experiment.
+    final_columns = get_stacking_results_csv_columns(config)  # Resolve configured final column order.
+    for column in final_columns:  # Preserve configured schema columns after migration.
+        if column not in normalized_df.columns:  # Add absent final columns without deleting historical extras.
+            normalized_df[column] = None  # Initialize missing final values.
+    normalized_df = reorder_and_annotate_dataframe(normalized_df, config=config)  # Apply final CSV ordering and hardware metadata.
+    return normalized_df  # Return normalized final-result rows.
+
+
+def read_validated_final_results_file(final_path: str, config: Optional[dict] = None, expected_experiment_run: Optional[int] = None) -> pd.DataFrame:
+    """
+    Read and validate one final-result CSV file.
+
+    :param final_path: Final-result CSV path.
+    :param config: Runtime configuration dictionary.
+    :param expected_experiment_run: Run index encoded by the filename.
+    :return: Normalized final-result DataFrame.
+    """
+
+    if config is None:  # Use global configuration when no configuration is supplied.
+        config = CONFIG  # Preserve established configuration fallback.
+    run_index = get_current_experiment_run(config) if expected_experiment_run is None else validate_experiment_runs(expected_experiment_run, "filename experiment_run")  # Resolve expected row run.
+    raw_df = pd.read_csv(final_path)  # Load the CSV source with pandas.
+    normalized_df = normalize_final_results_dataframe(raw_df, config, run_index, final_path)  # Normalize and validate final rows.
+    if normalized_df.empty:  # Reject empty final result files as unusable migration sources.
+        raise ValueError("Final-result file produced no recoverable result entries")  # Surface invalid final-result content.
+    return normalized_df  # Return normalized final rows.
+
+
+def write_final_results_dataframe_temporary(final_path: str, result_df: pd.DataFrame, config: Optional[dict], expected_experiment_run: int, purpose: str) -> str:
+    """
+    Stage one normalized final-result CSV transaction.
+
+    :param final_path: Destination final-result CSV path.
+    :param result_df: Complete final-result snapshot to stage.
+    :param config: Runtime configuration dictionary.
+    :param expected_experiment_run: Run index encoded by the destination filename.
+    :param purpose: Short transaction purpose label.
+    :return: Validated temporary file path.
+    """
+
+    if config is None:  # Use global configuration when no configuration is supplied.
+        config = CONFIG  # Preserve established configuration fallback.
+    final_dir = os.path.dirname(os.path.abspath(final_path))  # Resolve the destination directory.
+    os.makedirs(final_dir, exist_ok=True)  # Ensure the directory exists before staging.
+    prepared_df = normalize_final_results_dataframe(result_df, config, expected_experiment_run, final_path)  # Canonicalize the final snapshot before serialization.
+    temporary_fd, temporary_path = tempfile.mkstemp(dir=final_dir, prefix=f".{os.path.basename(final_path)}.{purpose}.", suffix=".tmp")  # Allocate a same-directory transaction file.
+    temporary_file = None  # Track descriptor ownership during serialization.
+    try:  # Serialize, synchronize, and re-read the staged final CSV.
+        temporary_file = os.fdopen(temporary_fd, "w", encoding="utf-8", newline="")  # Transfer the descriptor to a text stream.
+        temporary_fd = -1  # Mark the descriptor as owned by the stream.
+        with temporary_file:  # Close the temporary stream deterministically.
+            temporary_file.write(prepared_df.to_csv(index=False, header=True))  # Serialize the final-result snapshot.
+            sync_cache_file_data(temporary_file)  # Synchronize staged bytes before validation.
+        validated_df = read_validated_final_results_file(temporary_path, config=config, expected_experiment_run=expected_experiment_run)  # Prove the staged file is readable.
+        expected_identities = [build_cache_identity_from_row(row) for _, row in normalize_cache_dataframe(prepared_df, config=config, expected_experiment_run=expected_experiment_run).iterrows()]  # Build identities from the authoritative snapshot.
+        validated_identities = [build_cache_identity_from_row(row) for _, row in normalize_cache_dataframe(validated_df, config=config, expected_experiment_run=expected_experiment_run).iterrows()]  # Build identities from the staged file.
+        if expected_identities != validated_identities:  # Reject identity loss or reordering across serialization.
+            raise ValueError("Temporary final-result validation did not preserve every resume identity")  # Prevent publication of inconsistent final results.
+        return temporary_path  # Return the staged file ready for replacement.
+    except Exception:  # Preserve the original staging failure.
+        if temporary_fd >= 0:  # Close the raw descriptor when the stream did not take ownership.
+            try:  # Avoid masking the persistence error.
+                os.close(temporary_fd)  # Close the raw temporary descriptor.
+            except OSError:  # Ignore already-closed descriptors.
+                pass  # Preserve the original failure.
+        remove_cache_temporary_file(temporary_path)  # Remove incomplete staged content.
+        raise  # Surface the staging or validation error.
+
+
+def persist_final_results_dataframe_atomically(final_path: str, result_df: pd.DataFrame, primary_df: Optional[pd.DataFrame], backup_df: Optional[pd.DataFrame], config: Optional[dict] = None, expected_experiment_run: Optional[int] = None) -> None:
+    """
+    Persist one final-result snapshot with transactional backup preservation.
+
+    :param final_path: Destination final-result CSV path.
+    :param result_df: Complete final-result snapshot to publish.
+    :param primary_df: Existing validated primary snapshot, or None.
+    :param backup_df: Existing validated backup snapshot, or None.
+    :param config: Runtime configuration dictionary.
+    :param expected_experiment_run: Run index encoded by the destination filename.
+    :return: None.
+    """
+
+    if config is None:  # Use global configuration when no configuration is supplied.
+        config = CONFIG  # Preserve established configuration fallback.
+    run_index = get_current_experiment_run(config) if expected_experiment_run is None else validate_experiment_runs(expected_experiment_run, "filename experiment_run")  # Resolve expected row run.
+    backup_path = get_cache_backup_path(final_path)  # Reuse the established sibling backup naming convention.
+    backup_existed = os.path.isfile(backup_path)  # Record whether rollback must preserve a prior backup.
+    primary_temporary = None  # Track the staged primary snapshot.
+    backup_temporary = None  # Track the staged backup snapshot.
+    rollback_temporary = None  # Track the saved prior backup snapshot.
+    backup_published = False  # Record whether backup rollback may be required.
+    try:  # Stage every file before replacing recoverable destinations.
+        primary_temporary = write_final_results_dataframe_temporary(final_path, result_df, config, run_index, "primary")  # Stage and validate the primary final snapshot.
+        backup_candidate = primary_df if primary_df is not None else result_df  # Preserve a valid prior primary, otherwise mirror the authoritative snapshot.
+        if backup_df is not None:  # Preserve the previous known-good backup before replacing it.
+            rollback_temporary = write_final_results_dataframe_temporary(final_path, backup_df, config, run_index, "rollback")  # Stage rollback content.
+        backup_temporary = write_final_results_dataframe_temporary(final_path, backup_candidate, config, run_index, "backup")  # Stage the intended backup content.
+        replace_cache_file_atomically(backup_temporary, backup_path)  # Publish the backup before replacing the primary.
+        backup_temporary = None  # Mark backup staging as consumed.
+        backup_published = True  # Record that rollback may be needed.
+        replace_cache_file_atomically(primary_temporary, final_path)  # Publish the normalized final result atomically.
+        primary_temporary = None  # Mark primary staging as consumed.
+    except Exception:  # Roll back backup publication and surface the original failure.
+        if backup_published:  # Restore the prior backup state when this transaction changed it.
+            try:  # Keep rollback degradation from masking the primary failure.
+                if rollback_temporary is not None:  # Restore the saved prior backup.
+                    replace_cache_file_atomically(rollback_temporary, backup_path)  # Publish rollback backup content.
+                    rollback_temporary = None  # Mark rollback staging as consumed.
+                elif not backup_existed and os.path.isfile(backup_path):  # Restore first-write absence.
+                    os.unlink(backup_path)  # Remove the backup created by the failed transaction.
+                    sync_cache_parent_directory(backup_path)  # Synchronize removal metadata where supported.
+            except Exception as rollback_error:  # Report rollback degradation explicitly.
+                print(f"{BackgroundColors.YELLOW}Warning: Final-result backup rollback could not restore the pre-transaction state at {BackgroundColors.CYAN}{backup_path}{BackgroundColors.YELLOW}: {rollback_error}{Style.RESET_ALL}")  # Report recoverability degradation.
+        raise  # Surface the original persistence error.
+    finally:  # Remove every unconsumed transaction file.
+        remove_cache_temporary_file(primary_temporary)  # Remove unpublished primary staging.
+        remove_cache_temporary_file(backup_temporary)  # Remove unpublished backup staging.
+        remove_cache_temporary_file(rollback_temporary)  # Remove unused rollback staging.
+
+
+def migrate_cache_storage_for_reference(csv_path: str, config: Optional[dict] = None) -> None:
+    """
+    Normalize cache CSV files for one dataset reference before planning.
+
+    :param csv_path: Dataset file or directory identity used for cache placement.
+    :param config: Runtime configuration dictionary.
+    :return: None.
+    """
+
+    if config is None:  # Use global configuration when no configuration is supplied.
+        config = CONFIG  # Preserve established configuration fallback.
+    legacy_path = Path(get_cache_file_path(csv_path, config=config, experiment_run=1, legacy=True))  # Resolve the old unsuffixed cache path.
+    discovered = discover_result_storage_files(str(legacy_path))  # Discover relevant legacy and run-specific cache files.
+    grouped_runs = sorted({run_index for _, run_index, _ in discovered})  # Resolve every run with existing cache storage.
+    for run_index in grouped_runs:  # Normalize each run-specific cache independently.
+        target_path = Path(get_cache_file_path(csv_path, config=config, experiment_run=run_index, legacy=False))  # Resolve the destination run-specific cache.
+        backup_path = Path(get_cache_backup_path(str(target_path)))  # Resolve the destination backup cache.
+        source_paths = []  # Accumulate sources in recovery precedence order.
+        legacy_backup = Path(get_cache_backup_path(str(legacy_path)))  # Resolve the optional legacy backup source.
+        if run_index == 1 and legacy_path.is_file():  # Include the unsuffixed cache only as run 1.
+            source_paths.append(legacy_path)  # Read legacy cache before current run storage.
+        if run_index == 1 and legacy_backup.is_file():  # Include legacy backup even when the legacy primary is missing.
+            source_paths.append(legacy_backup)  # Read legacy backup before run-specific storage.
+        if backup_path.is_file():  # Include existing run-specific backup before primary.
+            source_paths.append(backup_path)  # Preserve backup recovery semantics.
+        if target_path.is_file():  # Include existing run-specific primary last.
+            source_paths.append(target_path)  # Let primary rows win duplicate identities.
+        source_frames = []  # Accumulate valid normalized sources.
+        primary_df = None  # Track the validated target primary.
+        backup_df = None  # Track the validated target backup.
+        with cache_file_lock(str(target_path), exclusive=True):  # Serialize migration with writers for this run.
+            for source_path in source_paths:  # Read every source under the target lock.
+                try:  # Validate each source through the production cache reader.
+                    source_df, _ = read_validated_cache_file(str(source_path), config=config, expected_experiment_run=run_index)  # Normalize missing run columns from the filename.
+                except Exception as exc:  # Exclude unusable or conflicting files from the merge.
+                    print(f"{BackgroundColors.YELLOW}Warning: Cache migration skipped unusable source {BackgroundColors.CYAN}{source_path}{BackgroundColors.YELLOW}: {exc}{Style.RESET_ALL}")  # Report the exact source failure.
+                    continue  # Continue with remaining recovery sources.
+                if source_path == target_path:  # Remember the valid primary for backup preservation.
+                    primary_df = source_df  # Store validated primary rows.
+                elif source_path == backup_path:  # Remember the valid backup for rollback preservation.
+                    backup_df = source_df  # Store validated backup rows.
+                source_frames.append(source_df)  # Retain valid rows for merging.
+            if not source_frames:  # Leave storage untouched when no valid source exists.
+                continue  # Move to the next run.
+            merged_df = prepare_cache_dataframe(pd.concat(source_frames, ignore_index=True), config=config, expected_experiment_run=run_index)  # Merge and dedupe by canonical identity.
+            persist_cache_dataframe_atomically(str(target_path), merged_df, primary_df, backup_df, config=config, expected_experiment_run=run_index)  # Publish normalized cache and backup atomically.
+            print(f"{BackgroundColors.GREEN}[STARTUP MIGRATION] Normalized cache results for run {run_index}: {BackgroundColors.CYAN}{target_path}{Style.RESET_ALL}")  # Report cache migration.
+
+
+def migrate_final_storage_for_reference(csv_path: str, config: Optional[dict] = None) -> None:
+    """
+    Normalize final-result CSV files for one dataset reference before planning.
+
+    :param csv_path: Dataset file or directory identity used for final-result placement.
+    :param config: Runtime configuration dictionary.
+    :return: None.
+    """
+
+    if config is None:  # Use global configuration when no configuration is supplied.
+        config = CONFIG  # Preserve established configuration fallback.
+    legacy_path = get_stacking_results_file_path(csv_path, config=config, experiment_run=1, legacy=True)  # Resolve the old unsuffixed final-result path.
+    discovered = discover_result_storage_files(str(legacy_path))  # Discover relevant legacy and run-specific final files.
+    grouped_runs = sorted({run_index for _, run_index, _ in discovered})  # Resolve every run with existing final-result storage.
+    for run_index in grouped_runs:  # Normalize each run-specific final file independently.
+        target_path = get_stacking_results_file_path(csv_path, config=config, experiment_run=run_index, legacy=False)  # Resolve the destination run-specific final file.
+        backup_path = Path(get_cache_backup_path(str(target_path)))  # Resolve the final-result backup path.
+        source_paths = []  # Accumulate sources in recovery precedence order.
+        legacy_backup = Path(get_cache_backup_path(str(legacy_path)))  # Resolve the optional legacy final backup source.
+        if run_index == 1 and legacy_path.is_file():  # Include the unsuffixed final only as run 1.
+            source_paths.append(legacy_path)  # Read legacy final before current run storage.
+        if run_index == 1 and legacy_backup.is_file():  # Include legacy backup even when the legacy primary is missing.
+            source_paths.append(legacy_backup)  # Read legacy backup before run-specific storage.
+        if backup_path.is_file():  # Include existing run-specific backup before primary.
+            source_paths.append(backup_path)  # Preserve backup recovery semantics.
+        if target_path.is_file():  # Include existing run-specific primary last.
+            source_paths.append(target_path)  # Let primary rows win duplicate identities.
+        source_frames = []  # Accumulate valid normalized final sources.
+        primary_df = None  # Track the validated target primary.
+        backup_df = None  # Track the validated target backup.
+        with cache_file_lock(str(target_path), exclusive=True):  # Serialize migration with final writers for this run.
+            for source_path in source_paths:  # Read every source under the target lock.
+                try:  # Validate each source through the final-result reader.
+                    source_df = read_validated_final_results_file(str(source_path), config=config, expected_experiment_run=run_index)  # Normalize missing run columns from the filename.
+                except Exception as exc:  # Exclude unusable or conflicting files from the merge.
+                    print(f"{BackgroundColors.YELLOW}Warning: Final-result migration skipped unusable source {BackgroundColors.CYAN}{source_path}{BackgroundColors.YELLOW}: {exc}{Style.RESET_ALL}")  # Report the exact source failure.
+                    continue  # Continue with remaining recovery sources.
+                if source_path == target_path:  # Remember the valid primary for backup preservation.
+                    primary_df = source_df  # Store validated primary rows.
+                elif source_path == backup_path:  # Remember the valid backup for rollback preservation.
+                    backup_df = source_df  # Store validated backup rows.
+                source_frames.append(source_df)  # Retain valid rows for merging.
+            if not source_frames:  # Leave storage untouched when no valid source exists.
+                continue  # Move to the next run.
+            merged_df = normalize_final_results_dataframe(pd.concat(source_frames, ignore_index=True), config, run_index, str(target_path))  # Merge and dedupe final rows by canonical identity.
+            persist_final_results_dataframe_atomically(str(target_path), merged_df, primary_df, backup_df, config=config, expected_experiment_run=run_index)  # Publish normalized final and backup atomically.
+            print(f"{BackgroundColors.GREEN}[STARTUP MIGRATION] Normalized final results for run {run_index}: {BackgroundColors.CYAN}{target_path}{Style.RESET_ALL}")  # Report final-result migration.
+
+
+def migrate_result_storage_files_for_reference(csv_path: str, config: Optional[dict] = None) -> None:
+    """
+    Normalize cache and final-result CSV files for one dataset reference.
+
+    :param csv_path: Dataset file or directory identity used for result placement.
+    :param config: Runtime configuration dictionary.
+    :return: None.
+    """
+
+    if config is None:  # Use global configuration when no configuration is supplied.
+        config = CONFIG  # Preserve established configuration fallback.
+    migrate_cache_storage_for_reference(csv_path, config=config)  # Normalize cache storage before cache lookup.
+    migrate_final_storage_for_reference(csv_path, config=config)  # Normalize final-result storage before final publication.
+
+
+def migrate_experiment_result_files_for_startup(input_path: str, files_to_process: List[str], execution_mode: str, config: Optional[dict] = None) -> None:
+    """
+    Normalize active experiment result files before scheduling begins.
+
+    :param input_path: Dataset path currently being processed.
+    :param files_to_process: Ordered dataset files selected for the active execution.
+    :param execution_mode: Resolved execution mode.
+    :param config: Runtime configuration dictionary.
+    :return: None.
+    """
+
+    if config is None:  # Use global configuration when no configuration is supplied.
+        config = CONFIG  # Preserve established configuration fallback.
+    references = []  # Accumulate dataset references relevant to this execution mode.
+    if execution_mode in ("both", "separate_files"):  # Include every separate-file result store used by this execution.
+        references.extend((str(file_path), config) for file_path in files_to_process)  # Add file-scoped cache and final stores.
+    if execution_mode in ("both", "combined_files") and files_to_process:  # Include the combined directory result store used by this execution.
+        combined_reference = resolve_combined_files_dataset_identity(files_to_process).rstrip("/")  # Derive the combined result reference before planning.
+        combined_config = copy.deepcopy(config)  # Isolate the combined final filename override.
+        combined_stacking_config = dict(combined_config.get("stacking", {}))  # Copy stacking settings for the override.
+        combined_stacking_config["results_filename"] = combined_stacking_config.get("combined_files_results_filename", "Stacking_Classifiers_CombinedFiles_Results.csv")  # Use the combined final CSV base.
+        combined_config["stacking"] = combined_stacking_config  # Store the isolated combined stacking config.
+        references.append((combined_reference, combined_config))  # Add combined cache and final stores.
+    for reference_path, reference_config in references:  # Normalize every active storage reference once.
+        migrate_result_storage_files_for_reference(reference_path, config=reference_config)  # Complete migration before any plan construction.
 
 
 FEATURE_SET_WORKER_KEYS = ("full", "ga", "pca", "rfe")  # Define the feature-set process identities supported by the persistent scheduler
@@ -8909,7 +9293,7 @@ def flatten_and_serialize_results(results_list):
         flat_rows = []  # Initialize list to collect flattened rows
         for res in results_list:  # Iterate over each result dictionary
             row = dict(res)  # Create a mutable shallow copy of the result dictionary
-            row["experiment_run"] = validate_experiment_runs(int(row.get("experiment_run", 1)), "experiment_run")  # Persist explicit run metadata with legacy run 1 fallback.
+            row["experiment_run"] = parse_persisted_experiment_run_value(row.get("experiment_run", 1), "experiment_run")  # Persist explicit run metadata with legacy run 1 fallback.
             row["augmentation_ratio"] = resolve_persisted_augmentation_ratio(row.get("experiment_mode", "original_only"), row.get("augmentation_ratio", None))  # Normalize baseline ratio metadata before DataFrame construction.
             row["feature_selection_enabled"] = resolve_persisted_feature_selection_enabled(row.get("feature_set", ""), row.get("feature_selection_enabled", False))  # Normalize row-level feature-selection metadata.
             row["data_augmentation_enabled"] = resolve_persisted_data_augmentation_enabled(row.get("experiment_mode", "original_only"), row.get("augmentation_ratio", None), row.get("data_augmentation_enabled", False))  # Normalize row-level data-augmentation metadata.
@@ -8964,7 +9348,6 @@ def save_stacking_results(csv_path, results_list, config=None):
             print(f"{BackgroundColors.YELLOW}Warning: No results provided to save.{Style.RESET_ALL}")
             return
 
-        migrate_legacy_final_results_file_for_run(csv_path, config=config)  # Adopt an unsuffixed run 1 final file before writing the run-specific file.
         file_path_obj = Path(csv_path)
         output_path = get_stacking_results_file_path(str(csv_path), config=config)  # Resolve the run-specific final result path.
         dataset_root = resolve_dataset_root_path(str(csv_path))  # Resolve output root from file or directory input.
@@ -8975,6 +9358,7 @@ def save_stacking_results(csv_path, results_list, config=None):
         stacking_dir = dataset_root / stacking_results_dir  # Build stacking output path from the dataset root.
         os.makedirs(stacking_dir, exist_ok=True)
 
+        run_index = get_current_experiment_run(config)  # Resolve the active run for final publication.
         cache_path = get_cache_file_path(str(csv_path), config=config)  # Resolve the run-specific cache path used to guard final publication.
         backup_path = get_cache_backup_path(cache_path)  # Resolve the matching run-specific backup path.
         with cache_file_lock(cache_path, exclusive=True):  # Serialize final export with cache writers for the same run.
@@ -8982,12 +9366,12 @@ def save_stacking_results(csv_path, results_list, config=None):
                 cache_df = None  # Track validated cache rows when available.
                 if os.path.isfile(cache_path):  # Use cache rows only when the run-specific cache exists.
                     try:  # Read the primary run-specific cache first.
-                        cache_df, _ = read_validated_cache_file(cache_path, config=config)  # Read deduplicated cache rows for this run.
+                        cache_df, _ = read_validated_cache_file(cache_path, config=config, expected_experiment_run=run_index)  # Read deduplicated cache rows for this run.
                     except Exception as primary_error:  # Fall back to backup recovery before using caller rows.
                         print(f"{BackgroundColors.YELLOW}Warning: Final export could not use primary cache {BackgroundColors.CYAN}{cache_path}{BackgroundColors.YELLOW}: {primary_error}{Style.RESET_ALL}")  # Report primary cache export fallback.
                 if cache_df is None and os.path.isfile(backup_path):  # Use the matching backup when primary rows are unavailable.
                     try:  # Read the backup run-specific cache.
-                        cache_df, _ = read_validated_cache_file(backup_path, config=config)  # Read backup rows for this run.
+                        cache_df, _ = read_validated_cache_file(backup_path, config=config, expected_experiment_run=run_index)  # Read backup rows for this run.
                     except Exception as backup_error:  # Fall back to caller rows when backup is unusable.
                         print(f"{BackgroundColors.YELLOW}Warning: Final export could not use backup cache {BackgroundColors.CYAN}{backup_path}{BackgroundColors.YELLOW}: {backup_error}{Style.RESET_ALL}")  # Report backup cache export fallback.
                 if cache_df is not None:  # Use recovered cache rows when either source validated.
@@ -9199,7 +9583,7 @@ def deserialize_cache_dataframe(df_cache: pd.DataFrame) -> dict:
             "model_name": model_name,  # Restore configured classifier identity.
             "data_source": data_source_row,  # Restore data-source metadata.
             "experiment_id": cache_row_value("experiment_id", None),  # Restore experiment identity metadata.
-            "experiment_run": validate_experiment_runs(int(cache_row_value("experiment_run", 1)), "experiment_run"),  # Restore run metadata with legacy run 1 fallback.
+            "experiment_run": parse_persisted_experiment_run_value(cache_row_value("experiment_run", 1), "experiment_run"),  # Restore run metadata with legacy run 1 fallback.
             "experiment_mode": experiment_mode_row,  # Restore experiment-mode metadata.
             "augmentation_ratio": aug_ratio_row,  # Restore normalized augmentation ratio metadata.
             "feature_selection_enabled": resolve_persisted_feature_selection_enabled(feature_set, cache_row_value("feature_selection_enabled", False)),  # Restore normalized feature-selection metadata.
@@ -9228,12 +9612,13 @@ def deserialize_cache_dataframe(df_cache: pd.DataFrame) -> dict:
     return cache_dict  # Return all validated and deserialized cache entries.
 
 
-def read_validated_cache_file(cache_path: str, config: Optional[dict] = None) -> Tuple[pd.DataFrame, dict]:
+def read_validated_cache_file(cache_path: str, config: Optional[dict] = None, expected_experiment_run: Optional[int] = None) -> Tuple[pd.DataFrame, dict]:
     """
     Read, normalize, and deserialize one cache file before it is trusted.
 
     :param cache_path: Cache CSV path to validate.
     :param config: Configuration dictionary, or None to use the global configuration.
+    :param expected_experiment_run: Run index encoded by the source filename.
     :return: Prepared DataFrame and production resume dictionary.
     """
 
@@ -9248,7 +9633,8 @@ def read_validated_cache_file(cache_path: str, config: Optional[dict] = None) ->
     missing_identity_columns = {"feature_set", "model_name"} - source_columns  # Require the established minimum resume identity fields.
     if missing_identity_columns:  # Reject unrelated or structurally invalid CSV files.
         raise ValueError(f"Cache file is missing identity columns: {sorted(missing_identity_columns)}")  # Surface exact structural damage.
-    prepared_df = prepare_cache_dataframe(raw_df, config=config)  # Normalize legacy and current schemas through the production path.
+    run_index = get_current_experiment_run(config) if expected_experiment_run is None else validate_experiment_runs(expected_experiment_run, "filename experiment_run")  # Resolve expected row run.
+    prepared_df = prepare_cache_dataframe(raw_df, config=config, expected_experiment_run=run_index, source_path=cache_path)  # Normalize legacy and current schemas through the production path.
     cache_dict = deserialize_cache_dataframe(prepared_df)  # Prove every normalized row can be deserialized by resume logic.
     if not cache_dict:  # Reject content that produced no recoverable resume entries.
         raise ValueError("Cache file produced no recoverable result entries")  # Surface invalid deserialization to recovery logic.
@@ -9324,9 +9710,9 @@ def load_cache_results(csv_path, config=None, notify_discovery: bool = True):  #
         if config is None:  # If no config provided
             config = CONFIG  # Use global CONFIG
 
-        migrate_legacy_cache_file_for_run(csv_path, config=config)  # Adopt valid unsuffixed run 1 rows before cache lookup.
         cache_path = get_cache_file_path(csv_path, config=config)  # Get the primary cache file path.
         backup_path = get_cache_backup_path(cache_path)  # Resolve the sibling known-good backup path.
+        run_index = get_current_experiment_run(config)  # Resolve the active run for cache validation.
 
         with cache_file_lock(cache_path, exclusive=False):  # Hold a shared process-safe lock across primary and backup validation.
             primary_exists = os.path.isfile(cache_path)  # Record whether the primary cache is available.
@@ -9345,7 +9731,7 @@ def load_cache_results(csv_path, config=None, notify_discovery: bool = True):  #
             primary_error = None  # Preserve the primary validation failure for accurate recovery reporting.
             if primary_exists:  # Attempt the primary cache before considering its backup.
                 try:  # Read and deserialize the complete primary cache.
-                    _, cache_dict = read_validated_cache_file(cache_path, config=config)  # Validate the primary through production schema and resume logic.
+                    _, cache_dict = read_validated_cache_file(cache_path, config=config, expected_experiment_run=run_index)  # Validate the primary through production schema and resume logic.
                     print(f"{BackgroundColors.GREEN}Loaded cached results from: {BackgroundColors.CYAN}{cache_path}{Style.RESET_ALL}")  # Confirm successful primary recovery.
                     return cache_dict  # Return all primary cache entries.
                 except Exception as exc:  # Preserve corruption, truncation, permission, and schema failures for fallback reporting.
@@ -9358,7 +9744,7 @@ def load_cache_results(csv_path, config=None, notify_discovery: bool = True):  #
             backup_error = None  # Preserve the backup validation failure when recovery is impossible.
             if backup_exists:  # Attempt recovery only when the sibling backup exists.
                 try:  # Read and deserialize the complete backup cache.
-                    _, cache_dict = read_validated_cache_file(backup_path, config=config)  # Validate the backup through the same production path.
+                    _, cache_dict = read_validated_cache_file(backup_path, config=config, expected_experiment_run=run_index)  # Validate the backup through the same production path.
                     print(f"{BackgroundColors.GREEN}[CACHE RECOVERY] Loaded {BackgroundColors.CYAN}{len(cache_dict)}{BackgroundColors.GREEN} cached result(s) from valid backup: {BackgroundColors.CYAN}{backup_path}{Style.RESET_ALL}")  # Clearly report successful backup recovery.
                     return cache_dict  # Preserve every valid recovered entry without rewriting the primary during a read.
                 except Exception as exc:  # Preserve the exact backup failure for accurate cache-miss reporting.
@@ -9472,12 +9858,14 @@ def build_cache_identity_from_row(row: Any) -> tuple:
     )  # Return the existing resume identity tuple.
 
 
-def normalize_cache_dataframe(df: pd.DataFrame, config: Optional[dict] = None) -> pd.DataFrame:
+def normalize_cache_dataframe(df: pd.DataFrame, config: Optional[dict] = None, expected_experiment_run: Optional[int] = None, source_path: str = "cache dataframe") -> pd.DataFrame:
     """
     Normalize cache rows from current and legacy temporary cache schemas.
 
     :param df: Cache DataFrame to normalize.
     :param config: Configuration dictionary, or None to use the global configuration.
+    :param expected_experiment_run: Run index encoded by the source filename.
+    :param source_path: Source CSV path used in validation errors.
     :return: Cache DataFrame using the canonical temporary cache schema.
     """
 
@@ -9514,9 +9902,8 @@ def normalize_cache_dataframe(df: pd.DataFrame, config: Optional[dict] = None) -
     if "data_augmentation_enabled" not in normalized_df.columns:  # Add DA flag when absent.
         normalized_df["data_augmentation_enabled"] = False  # Initialize DA flag before row-level resolution.
 
-    if "experiment_run" not in normalized_df.columns:  # Add run metadata for legacy unsuffixed result rows.
-        normalized_df["experiment_run"] = 1  # Treat legacy rows as run 1 data.
-    normalized_df["experiment_run"] = normalized_df["experiment_run"].fillna(1).map(lambda value: validate_experiment_runs(int(value), "experiment_run"))  # Normalize persisted run metadata.
+    run_index = get_current_experiment_run(config) if expected_experiment_run is None else validate_experiment_runs(expected_experiment_run, "filename experiment_run")  # Resolve filename-aware run metadata.
+    normalized_df = normalize_experiment_run_column(normalized_df, run_index, source_path)  # Add or validate persisted run metadata without lossy conversion.
     normalized_df["hyperparameter_mode"] = normalized_df.apply(resolve_hyperparameter_mode_from_row, axis=1)  # Resolve HP mode deterministically for every row.
     normalized_df["hyperparameters_enabled"] = normalized_df["hyperparameter_mode"].map(lambda value: value == "Optimized Hyperparameters")  # Keep HP boolean synchronized with HP mode.
     normalized_df["augmentation_ratio"] = normalized_df.apply(lambda row: resolve_persisted_augmentation_ratio(row.get("experiment_mode", "original_only"), row.get("augmentation_ratio", None)), axis=1)  # Normalize baseline and augmented ratio metadata.
@@ -9551,16 +9938,18 @@ def deduplicate_cache_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     return deduped_df  # Return deduplicated cache rows.
 
 
-def prepare_cache_dataframe(df: pd.DataFrame, config: Optional[dict] = None) -> pd.DataFrame:
+def prepare_cache_dataframe(df: pd.DataFrame, config: Optional[dict] = None, expected_experiment_run: Optional[int] = None, source_path: str = "cache dataframe") -> pd.DataFrame:
     """
     Normalize, deduplicate, and order temporary cache rows.
 
     :param df: Cache DataFrame to prepare for reading or writing.
     :param config: Configuration dictionary, or None to use the global configuration.
+    :param expected_experiment_run: Run index encoded by the source filename.
+    :param source_path: Source CSV path used in validation errors.
     :return: Prepared cache DataFrame using the canonical schema.
     """
 
-    normalized_df = normalize_cache_dataframe(df, config=config)  # Normalize current and legacy cache schemas.
+    normalized_df = normalize_cache_dataframe(df, config=config, expected_experiment_run=expected_experiment_run, source_path=source_path)  # Normalize current and legacy cache schemas.
     deduped_df = deduplicate_cache_dataframe(normalized_df)  # Remove duplicate rows by resume identity.
     ordered_df = deduped_df[get_cache_results_csv_columns(config)]  # Enforce canonical cache column order.
 
@@ -9583,7 +9972,8 @@ def validate_cache_result_payload(result_entry: dict, config: Optional[dict] = N
     if not flat_rows:  # Reject empty serialization before touching the cache file.
         raise ValueError("Cache result serialization produced no rows")  # Raise a persistence-blocking validation error.
 
-    row_df = prepare_cache_dataframe(pd.DataFrame([flat_rows[0]]), config=config)  # Normalize the row through the production cache schema.
+    row_run = parse_persisted_experiment_run_value(flat_rows[0].get("experiment_run", get_current_experiment_run(config)), "experiment_run")  # Resolve row run without lossy conversion.
+    row_df = prepare_cache_dataframe(pd.DataFrame([flat_rows[0]]), config=config, expected_experiment_run=row_run, source_path="cache result row")  # Normalize the row through the production cache schema.
     cache_columns = get_cache_results_csv_columns(config)  # Resolve the canonical temporary cache column order.
     missing_columns = [column for column in cache_columns if column not in row_df.columns]  # Locate missing canonical cache columns.
     if missing_columns:  # Reject rows that cannot satisfy the configured cache schema.
@@ -9682,7 +10072,7 @@ def remove_cache_temporary_file(temporary_path: Optional[str]) -> None:
         pass  # Leave cleanup best-effort without masking the transaction error.
 
 
-def write_cache_dataframe_temporary(cache_path: str, cache_df: pd.DataFrame, config: Optional[dict], purpose: str) -> str:
+def write_cache_dataframe_temporary(cache_path: str, cache_df: pd.DataFrame, config: Optional[dict], purpose: str, expected_experiment_run: Optional[int] = None) -> str:
     """
     Serialize and validate one cache DataFrame in a same-directory temporary file.
 
@@ -9690,6 +10080,7 @@ def write_cache_dataframe_temporary(cache_path: str, cache_df: pd.DataFrame, con
     :param cache_df: Complete cache DataFrame to serialize.
     :param config: Configuration dictionary, or None to use the global configuration.
     :param purpose: Short transaction purpose used in the temporary filename.
+    :param expected_experiment_run: Run index encoded by the destination filename.
     :return: Validated temporary cache path.
     """
 
@@ -9698,7 +10089,8 @@ def write_cache_dataframe_temporary(cache_path: str, cache_df: pd.DataFrame, con
 
     cache_dir = os.path.dirname(os.path.abspath(cache_path))  # Resolve the destination directory for same-filesystem replacement.
     os.makedirs(cache_dir, exist_ok=True)  # Ensure the cache directory exists before staging data.
-    prepared_df = prepare_cache_dataframe(cache_df, config=config)  # Canonicalize the complete transaction snapshot before serialization.
+    run_index = get_current_experiment_run(config) if expected_experiment_run is None else validate_experiment_runs(expected_experiment_run, "filename experiment_run")  # Resolve expected row run.
+    prepared_df = prepare_cache_dataframe(cache_df, config=config, expected_experiment_run=run_index, source_path=cache_path)  # Canonicalize the complete transaction snapshot before serialization.
     temporary_fd, temporary_path = tempfile.mkstemp(dir=cache_dir, prefix=f".{os.path.basename(cache_path)}.{purpose}.", suffix=".tmp")  # Allocate a unique same-directory transaction file.
     temporary_file = None  # Track descriptor ownership during serialization failure handling.
 
@@ -9708,7 +10100,7 @@ def write_cache_dataframe_temporary(cache_path: str, cache_df: pd.DataFrame, con
         with temporary_file:  # Close the temporary file deterministically after synchronization.
             temporary_file.write(prepared_df.to_csv(index=False, header=True))  # Serialize the complete canonical cache snapshot.
             sync_cache_file_data(temporary_file)  # Flush and synchronize every staged byte before validation.
-        validated_df, validated_cache = read_validated_cache_file(temporary_path, config=config)  # Prove the staged file can be parsed and deserialized.
+        validated_df, validated_cache = read_validated_cache_file(temporary_path, config=config, expected_experiment_run=run_index)  # Prove the staged file can be parsed and deserialized.
         expected_identities = [build_cache_identity_from_row(row) for _, row in prepared_df.iterrows()]  # Build deterministic identities from the authoritative snapshot.
         validated_identities = [build_cache_identity_from_row(row) for _, row in validated_df.iterrows()]  # Build deterministic identities from the deserialized temporary file.
         if expected_identities != validated_identities or len(validated_cache) != len(set(expected_identities)):  # Reject truncation, reordering, duplication, or identity loss.
@@ -9737,7 +10129,7 @@ def replace_cache_file_atomically(temporary_path: str, destination_path: str) ->
     sync_cache_parent_directory(destination_path)  # Synchronize the updated directory entry where supported.
 
 
-def persist_cache_dataframe_atomically(cache_path: str, cache_df: pd.DataFrame, primary_df: Optional[pd.DataFrame], backup_df: Optional[pd.DataFrame], config: Optional[dict] = None) -> None:
+def persist_cache_dataframe_atomically(cache_path: str, cache_df: pd.DataFrame, primary_df: Optional[pd.DataFrame], backup_df: Optional[pd.DataFrame], config: Optional[dict] = None, expected_experiment_run: Optional[int] = None) -> None:
     """
     Persist one authoritative cache snapshot with transactional backup preservation.
 
@@ -9746,12 +10138,14 @@ def persist_cache_dataframe_atomically(cache_path: str, cache_df: pd.DataFrame, 
     :param primary_df: Existing validated primary snapshot, or None when unavailable.
     :param backup_df: Existing validated backup snapshot, or None when unavailable.
     :param config: Configuration dictionary, or None to use the global configuration.
+    :param expected_experiment_run: Run index encoded by the destination filename.
     :return: None.
     """
 
     if config is None:  # Use global configuration when no configuration is provided.
         config = CONFIG  # Assign the global configuration reference.
 
+    run_index = get_current_experiment_run(config) if expected_experiment_run is None else validate_experiment_runs(expected_experiment_run, "filename experiment_run")  # Resolve expected row run.
     backup_path = get_cache_backup_path(cache_path)  # Resolve the sibling known-good backup destination.
     backup_existed = os.path.isfile(backup_path)  # Record whether rollback must preserve a pre-existing backup inode.
     primary_temporary = None  # Track the staged authoritative primary snapshot.
@@ -9760,13 +10154,13 @@ def persist_cache_dataframe_atomically(cache_path: str, cache_df: pd.DataFrame, 
     backup_published = False  # Record whether this transaction changed the backup destination.
 
     try:  # Stage every required file before changing a recoverable destination.
-        primary_temporary = write_cache_dataframe_temporary(cache_path, cache_df, config, "primary")  # Stage and validate the new authoritative snapshot.
-        backup_candidate = primary_df if primary_df is not None else (cache_df if backup_df is None else None)  # Preserve a valid prior primary, or seed the first known-good backup.
+        primary_temporary = write_cache_dataframe_temporary(cache_path, cache_df, config, "primary", expected_experiment_run=run_index)  # Stage and validate the new authoritative snapshot.
+        backup_candidate = primary_df if primary_df is not None else cache_df  # Preserve a valid prior primary, otherwise mirror the authoritative snapshot.
 
         if backup_candidate is not None:  # Update the backup only from content already proven valid.
             if backup_df is not None:  # Stage the current known-good backup before replacing it.
-                rollback_temporary = write_cache_dataframe_temporary(cache_path, backup_df, config, "rollback")  # Preserve the exact recoverable backup state for rollback.
-            backup_temporary = write_cache_dataframe_temporary(cache_path, backup_candidate, config, "backup")  # Stage and validate the intended backup content.
+                rollback_temporary = write_cache_dataframe_temporary(cache_path, backup_df, config, "rollback", expected_experiment_run=run_index)  # Preserve the exact recoverable backup state for rollback.
+            backup_temporary = write_cache_dataframe_temporary(cache_path, backup_candidate, config, "backup", expected_experiment_run=run_index)  # Stage and validate the intended backup content.
             replace_cache_file_atomically(backup_temporary, backup_path)  # Atomically publish the known-good backup before replacing the primary.
             backup_temporary = None  # Mark the backup staging path as consumed by atomic replacement.
             backup_published = True  # Record that primary failure now requires backup rollback.
@@ -9863,15 +10257,15 @@ def save_cache_result_entry(csv_path: str, result_entry: dict, config=None) -> N
         if config is None:  # If no config provided
             config = CONFIG  # Use global CONFIG
 
-        migrate_legacy_cache_file_for_run(csv_path, config=config)  # Adopt valid unsuffixed run 1 rows before appending.
         cache_path = get_cache_file_path(csv_path, config=config)  # Derive cache file path from the dataset file path
+        run_index = get_current_experiment_run(config)  # Resolve the active run for cache writes.
 
         flat_rows = flatten_and_serialize_results([result_entry])  # Flatten and serialize entry using same pipeline as final results
         if not flat_rows:  # If serialization produced no rows
             return  # Exit without writing anything
 
         row_dict = flat_rows[0]  # Extract the single flattened row dictionary
-        row_df = prepare_cache_dataframe(pd.DataFrame([row_dict]), config=config)  # Normalize the new row to the canonical cache schema
+        row_df = prepare_cache_dataframe(pd.DataFrame([row_dict]), config=config, expected_experiment_run=run_index, source_path=cache_path)  # Normalize the new row to the canonical cache schema
 
         try:  # Merge and persist under one lock spanning the complete read-modify-write transaction.
             with cache_file_lock(cache_path, exclusive=True):  # Prevent stale snapshots and concurrent replacement across threads and processes.
@@ -9883,13 +10277,13 @@ def save_cache_result_entry(csv_path: str, result_entry: dict, config=None) -> N
 
                 if os.path.isfile(cache_path):  # Validate the existing primary before it can influence the backup.
                     try:  # Read and deserialize the existing primary cache.
-                        primary_df, _ = read_validated_cache_file(cache_path, config=config)  # Accept only fully validated primary content.
+                        primary_df, _ = read_validated_cache_file(cache_path, config=config, expected_experiment_run=run_index)  # Accept only fully validated primary content.
                     except Exception as exc:  # Exclude corrupt, truncated, unreadable, or invalid primary content.
                         primary_error = exc  # Preserve the exact primary validation failure.
 
                 if os.path.isfile(backup_path):  # Validate the existing backup independently from the primary.
                     try:  # Read and deserialize the existing backup cache.
-                        backup_df, _ = read_validated_cache_file(backup_path, config=config)  # Accept only fully validated backup content.
+                        backup_df, _ = read_validated_cache_file(backup_path, config=config, expected_experiment_run=run_index)  # Accept only fully validated backup content.
                     except Exception as exc:  # Exclude invalid backup content from authoritative merging and rollback.
                         backup_error = exc  # Preserve the exact backup validation failure.
 
@@ -9904,8 +10298,8 @@ def save_cache_result_entry(csv_path: str, result_entry: dict, config=None) -> N
                         print(f"{BackgroundColors.YELLOW}Warning: Starting a new cache because no valid existing cache could be recovered. Primary error: {primary_error}. Backup error: {backup_error}.{Style.RESET_ALL}")  # Log both validation outcomes accurately.
 
                 combined_df = row_df.copy() if existing_df.empty else pd.concat([existing_df, row_df], ignore_index=True)  # Merge the new atomic result with the latest locked authoritative snapshot.
-                combined_df = prepare_cache_dataframe(combined_df, config=config)  # Normalize, deduplicate, and order the complete merged cache.
-                persist_cache_dataframe_atomically(cache_path, combined_df, primary_df, backup_df, config=config)  # Publish primary and backup through the centralized transaction path.
+                combined_df = prepare_cache_dataframe(combined_df, config=config, expected_experiment_run=run_index, source_path=cache_path)  # Normalize, deduplicate, and order the complete merged cache.
+                persist_cache_dataframe_atomically(cache_path, combined_df, primary_df, backup_df, config=config, expected_experiment_run=run_index)  # Publish primary and backup through the centralized transaction path.
         except Exception as e:  # If any cache write operation fails
             verbose_output(
                 f"{BackgroundColors.YELLOW}Warning: Failed to save result to cache {BackgroundColors.CYAN}{cache_path}{BackgroundColors.YELLOW}: {e}{Style.RESET_ALL}",
@@ -11726,7 +12120,7 @@ def build_telegram_combination_header(name, model_name, augmentation_ratio=None,
     augmentation_label = f"Augmented Test Ratio = {augmentation_ratio:.2f}" if augmentation_ratio is not None else "Original Test Data"  # Build the isolated testing-mode label.
     parts = [feature_label, hyperparameter_label, augmentation_label]  # Build configuration label in the expected order
     if experiment_run is not None:  # Add run context only when the caller provides it.
-        parts.insert(0, f"Run {validate_experiment_runs(int(experiment_run), 'experiment_run')}")  # Prefix the visible run index.
+        parts.insert(0, f"Run {parse_persisted_experiment_run_value(experiment_run, 'experiment_run')}")  # Prefix the visible run index.
     if include_model:  # Add classifier name only where the caller expects legacy trailing model identity.
         parts.append(model_name)  # Append classifier name to preserve existing default header format.
     
@@ -12568,7 +12962,7 @@ def print_dataset_evaluation_header(data_source_label, evaluation_plan, executio
         recovered_global_ids = set(cached_results)  # Preserve actual recovered identities from cache partitioning.
         run_values = [task.get("experiment_run") for tasks in pending_by_feature.values() for task in tasks if task.get("experiment_run") is not None]  # Collect run metadata from pending tasks.
         run_values.extend(result.get("experiment_run") for result in cached_results.values() if isinstance(result, dict) and result.get("experiment_run") is not None)  # Collect run metadata from recovered rows.
-        experiment_run = validate_experiment_runs(int(run_values[0]), "experiment_run") if run_values else 1  # Resolve display run metadata.
+        experiment_run = parse_persisted_experiment_run_value(run_values[0], "experiment_run") if run_values else 1  # Resolve display run metadata.
         if not pending_global_ids and not recovered_global_ids:  # Preserve legacy callers without precomputed cache classification.
             pending_global_ids = set(range(1, total_combinations + 1))  # Treat the whole plan as pending when no cache classification was supplied.
 
@@ -13507,7 +13901,7 @@ def build_comparison_result_entry(orig_result, feature_set, classifier_type, mod
             "model_name": model_name,  # Model name
             "data_source": data_source,  # Data source label
             "experiment_id": experiment_id,  # Unique experiment identifier for traceability
-            "experiment_run": validate_experiment_runs(int(orig_result.get("experiment_run", 1)), "experiment_run"),  # Preserve repeated-run index from source result.
+            "experiment_run": parse_persisted_experiment_run_value(orig_result.get("experiment_run", 1), "experiment_run"),  # Preserve repeated-run index from source result.
             "experiment_mode": experiment_mode,  # Persist original-only or augmented-testing semantics.
             "augmentation_ratio": resolve_persisted_augmentation_ratio(experiment_mode, augmentation_ratio),  # Augmentation ratio with 0.0 for original-only rows
             "n_features": n_features_override if n_features_override is not None else orig_result["n_features"],  # Number of features
@@ -16908,6 +17302,7 @@ def process_files_in_path(input_path, dataset_name, config=None):
         write_memory_phase_event("before_combined_file_discovery", config=config, dataset_source=input_path, dataset_identity=dataset_name, event_outcome="starting")  # Publish file discovery start
         files_to_process = determine_files_to_process(csv_file, input_path, config=config)  # Determine which files to process
         write_memory_phase_event("after_combined_file_discovery", config=config, dataset_source=input_path, dataset_identity=dataset_name, source_file_count=len(files_to_process), source_files=[os.path.basename(str(path)) for path in files_to_process], event_outcome="completed")  # Publish file discovery completion
+        migrate_experiment_result_files_for_startup(input_path, files_to_process, execution_mode, config=config)  # Normalize active result storage before any experiment planning.
 
         local_dataset_name = dataset_name or get_dataset_name(input_path)  # Use provided dataset name or infer from path
 
