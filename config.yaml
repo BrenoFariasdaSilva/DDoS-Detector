@@ -305,6 +305,7 @@ stacking: # Stacking experiment settings
   top_n_features_heatmap: 15 # Number of top features to show in generated heatmaps and CSV exports (int)
   combined_files_evaluation: true # Default: combined files evaluation enabled. If false, runs separate_files single-file evaluation mode.
   sort_pending_by_elapsed_time: false # When true, pending classifier queues run faster historical elapsed_time_s combinations first within comparable groups.
+  experiment_runs: 1 # Total repeated runs required for every logical experiment.
 
   methods: # Method toggles for stacking pipeline (overridable via CLI)
     augmentation: true # Enable data augmentation combination in pipeline
@@ -357,6 +358,7 @@ stacking: # Stacking experiment settings
 
   results_csv_columns: # Column ordering for final results CSV export
     - "experiment_id" # Unique experiment identifier (timestamp-based)
+    - "experiment_run" # One-based repeated experiment run index
     - "experiment_mode" # Experiment type: "original_only" or "original_plus_augmented"
     - "execution_mode" # Execution mode: "separate_files" or "combined_files"
     - "data_source" # Data source label: original, augmented, or combined
@@ -390,6 +392,7 @@ stacking: # Stacking experiment settings
 
   cache_results_csv_columns: # Column ordering for temporary cache CSV export
     - "experiment_id" # Unique experiment identifier (timestamp-based)
+    - "experiment_run" # One-based repeated experiment run index
     - "experiment_mode" # Experiment type: "original_only" or "original_plus_augmented"
     - "execution_mode" # Execution mode: "separate_files" or "combined_files"
     - "data_source" # Data source label: original, augmented, or combined
