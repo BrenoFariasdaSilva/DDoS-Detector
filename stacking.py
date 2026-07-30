@@ -14516,6 +14516,7 @@ def sort_pending_feature_process_tasks_by_elapsed_time(pending_by_feature: dict,
 
     exact_elapsed_values: dict[tuple, List[float]] = {}  # Collect exact-shape elapsed values by runtime identity.
     fallback_elapsed_values: dict[tuple, List[float]] = {}  # Collect same-group elapsed values by runtime identity.
+    classifier_elapsed_values: dict[str, List[float]] = {}  # Collect classifier-level elapsed values from the same valid cache rows.
     for result_entry in (cache_dict or {}).values():  # Inspect already loaded cache rows only.
         elapsed_seconds = resolve_runtime_elapsed_seconds(result_entry.get("elapsed_time_s", None))  # Parse valid positive finite elapsed time.
         if elapsed_seconds is None:  # Ignore unavailable or invalid elapsed-time values.
@@ -14526,11 +14527,17 @@ def sort_pending_feature_process_tasks_by_elapsed_time(pending_by_feature: dict,
             exact_elapsed_values.setdefault(exact_identity, []).append(elapsed_seconds)  # Accumulate exact elapsed seconds for median aggregation.
         if fallback_identity is not None:  # Store same-group history when identity metadata exists.
             fallback_elapsed_values.setdefault(fallback_identity, []).append(elapsed_seconds)  # Accumulate fallback elapsed seconds for median aggregation.
+        classifier_name = str(result_entry.get("model_name", "")).strip()  # Resolve the canonical classifier name from cache metadata.
+        if classifier_name:  # Store classifier averages only for named classifiers.
+            classifier_elapsed_values.setdefault(classifier_name, []).append(elapsed_seconds)  # Accumulate valid classifier elapsed seconds for arithmetic mean logging.
 
     exact_estimates = {identity: summarize_runtime_elapsed_seconds(values) for identity, values in exact_elapsed_values.items()}  # Aggregate exact-shape elapsed seconds by median.
     fallback_estimates = {identity: summarize_runtime_elapsed_seconds(values) for identity, values in fallback_elapsed_values.items()}  # Aggregate same-group elapsed seconds by median.
+    classifier_average_estimates = {classifier_name: sum(values) / len(values) for classifier_name, values in classifier_elapsed_values.items() if values}  # Build classifier-level arithmetic means for fallback and logging.
+    canonical_classifier_order = {classifier_name: order for order, classifier_name in enumerate(dict.fromkeys(task["classifier_name"] for tasks in pending_by_feature.values() for task in tasks))}  # Preserve current classifier order for deterministic ties.
     estimated_by_task_id = {}  # Store selected estimate per task object without mutating identity fields.
-    estimated_count = 0  # Count pending tasks with a valid estimate.
+    specific_estimated_count = 0  # Count pending tasks with an exact or same-group estimate.
+    classifier_average_estimated_count = 0  # Count pending tasks using classifier-level average fallback.
     missing_count = 0  # Count pending tasks without comparable history.
     grouping_label = "feature_set, execution_mode, data_source, experiment_mode, augmentation_ratio, hyperparameter_mode"  # Describe the preserved sort boundaries.
     classifier_order_messages = []  # Accumulate concise classifier-order summaries for terminal and Telegram.
@@ -14541,14 +14548,20 @@ def sort_pending_feature_process_tasks_by_elapsed_time(pending_by_feature: dict,
         for task in queue_tasks:  # Visit tasks in current deterministic pending order.
             exact_identity = build_feature_process_task_runtime_identity(task, process_payload, True)  # Build exact comparable runtime identity.
             fallback_identity = build_feature_process_task_runtime_identity(task, process_payload, False)  # Build same classifier and experiment-group identity.
-            estimate = exact_estimates.get(exact_identity, fallback_estimates.get(fallback_identity))  # Prefer exact history and fall back only within same group.
+            estimate = exact_estimates.get(exact_identity, fallback_estimates.get(fallback_identity))  # Prefer exact history and same-group history.
+            estimate_source = "specific" if estimate is not None else "missing"  # Track whether classifier average fallback is needed.
+            if estimate is None and task["classifier_name"] in classifier_average_estimates:  # Use classifier average only when no specific estimate exists.
+                estimate = classifier_average_estimates[task["classifier_name"]]  # Reuse the logged classifier average as final fallback.
+                estimate_source = "classifier_average"  # Mark classifier-average fallback use.
             estimated_by_task_id[id(task)] = estimate  # Store estimate without altering task identity.
             task["pending_runtime_sort_enabled"] = True  # Mark tasks whose visible pending plan should follow runtime order.
             task["pending_elapsed_time_estimate_s"] = estimate  # Store display-only runtime estimate for plan logging.
             if estimate is None:  # Count unavailable estimates separately.
                 missing_count += 1  # Increment missing-estimate count.
-            else:  # Count valid estimates separately.
-                estimated_count += 1  # Increment estimated pending count.
+            elif estimate_source == "classifier_average":  # Count classifier-average fallback estimates separately.
+                classifier_average_estimated_count += 1  # Increment classifier-average estimate count.
+            else:  # Count exact or same-group estimates separately.
+                specific_estimated_count += 1  # Increment specific estimate count.
             group_key = (task["feature_set"], task["execution_mode"], task["data_source_label"], task["experiment_mode"], task["augmentation_ratio"], task["hyperparameters_enabled"])  # Preserve comparable experiment group boundaries.
             if group_key not in grouped_tasks:  # Record first appearance of this group.
                 grouped_tasks[group_key] = []  # Initialize group task list.
@@ -14569,7 +14582,19 @@ def sort_pending_feature_process_tasks_by_elapsed_time(pending_by_feature: dict,
             reordered_tasks.extend(sorted_group_tasks)  # Append sorted tasks for this comparable group.
         pending_by_feature[feature_set_name] = reordered_tasks  # Replace only this feature-owned pending queue.
 
-    print(f"[PENDING SORT] Runtime-based pending sorting enabled | Estimated={estimated_count} | Without Estimate={missing_count} | Grouping={grouping_label}")  # Log concise runtime-sort summary.
+    print(f"[PENDING SORT] Runtime-based pending sorting enabled | Specific Estimates={specific_estimated_count} | Classifier Average Estimates={classifier_average_estimated_count} | Without Estimate={missing_count} | Grouping={grouping_label}")  # Log concise runtime-sort summary.
+    sorted_classifier_averages = sorted(classifier_average_estimates.items(), key=lambda item: (item[1], canonical_classifier_order.get(item[0], len(canonical_classifier_order)), item[0]))  # Sort classifier averages from fastest to slowest with deterministic ties.
+    if sorted_classifier_averages:  # Print one classifier-average summary immediately after the main pending-sort summary.
+        classifier_average_parts = [f"{classifier_name}={calculate_execution_time(0, average_seconds)} ({average_seconds:.0f}s, Samples={len(classifier_elapsed_values[classifier_name])})" for classifier_name, average_seconds in sorted_classifier_averages]  # Format every classifier average through the existing duration formatter.
+        classifier_average_line = f"[PENDING SORT] Classifier average runtimes from cache, fastest to slowest: {' -> '.join(classifier_average_parts)}"  # Build the concise classifier-average summary.
+        if len(classifier_average_line) <= 1000:  # Keep one-line output when it remains readable.
+            print(classifier_average_line)  # Emit the complete ordered average summary.
+        else:  # Split long summaries into consecutive ordered classifier lines.
+            print("[PENDING SORT] Classifier average runtimes from cache, fastest to slowest:")  # Emit the ordered average heading.
+            for classifier_name, average_seconds in sorted_classifier_averages:  # Emit one average per classifier in sorted order.
+                print(f"[PENDING SORT] {classifier_name}={calculate_execution_time(0, average_seconds)} ({average_seconds:.0f}s, Samples={len(classifier_elapsed_values[classifier_name])})")  # Emit one formatted classifier average.
+    else:  # Report absence of valid classifier-average data once.
+        print("[PENDING SORT] No valid classifier runtime averages available from cache.")  # Emit factual no-average summary.
     for order_message in classifier_order_messages:  # Print concise classifier-order summaries before detailed queue rows.
         print(order_message)  # Emit one terminal classifier-order summary line.
     if classifier_order_messages:  # Send the same concise classifier-order summary through Telegram once.
