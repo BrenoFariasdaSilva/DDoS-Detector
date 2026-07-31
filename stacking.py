@@ -17584,7 +17584,14 @@ def log_resolved_configuration(config: dict) -> None:
             print(f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}[INFO] Dataset path override (CLI): {BackgroundColors.CYAN}{dataset_path_cli}{Style.RESET_ALL}")  # Log CLI dataset path override
         else:  # Dataset path is from config.yaml or default
             print(f"{BackgroundColors.GREEN}[INFO] Dataset path source: {BackgroundColors.CYAN}config.yaml (default){Style.RESET_ALL}")  # Log config-based dataset path
-
+        
+        available_classifiers = ["Random Forest", "SVM", "XGBoost", "Logistic Regression", "KNN", "Nearest Centroid", "Gradient Boosting", "LightGBM", "MLP (Neural Net)", "FT-Transformer"]  # Mirror the classifier identities and order exposed by the model factory
+        configured_classifiers = config.get("stacking", {}).get("enabled_classifiers", None)  # Read the optional classifier filter with model-factory fallback semantics
+        enabled_classifiers = [name for name in available_classifiers if name != "FT-Transformer"] if configured_classifiers is None else [name for name in available_classifiers if name in list(dict.fromkeys(configured_classifiers))]  # Match model-factory defaults while requiring explicit FT-Transformer selection
+        disabled_classifiers = [name for name in available_classifiers if name not in enabled_classifiers]  # Resolve classifiers excluded from the model factory
+        print(f"{BackgroundColors.GREEN}[INFO] Enabled classifiers: {BackgroundColors.CYAN}{', '.join(enabled_classifiers) if enabled_classifiers else 'None'}{Style.RESET_ALL}")  # Log classifiers selected for startup execution
+        print(f"{BackgroundColors.GREEN}[INFO] Disabled classifiers: {BackgroundColors.CYAN}{', '.join(disabled_classifiers) if disabled_classifiers else 'None'}{Style.RESET_ALL}")  # Log classifiers excluded from startup execution
+        
         print(f"{BackgroundColors.GREEN}[INFO] Method toggle — Feature Selection: {BackgroundColors.CYAN}{fs_enabled}{Style.RESET_ALL}")  # Log feature selection toggle state
         print(f"{BackgroundColors.GREEN}[INFO] Method toggle — Hyperparameter Optimization: {BackgroundColors.CYAN}{hp_enabled}{Style.RESET_ALL}")  # Log hyperparameter optimization toggle state
         print(f"{BackgroundColors.GREEN}[INFO] Method toggle — Data Augmentation: {BackgroundColors.CYAN}{da_enabled}{Style.RESET_ALL}")  # Log data augmentation toggle state
