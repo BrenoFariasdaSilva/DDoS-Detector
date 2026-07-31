@@ -5516,15 +5516,6 @@ def get_models(config=None):
         enabled_names = list(filtered_models.keys())  # Collect names of enabled classifiers for logging
         disabled_names = [k for k in models if k not in filtered_models]  # Collect names of disabled classifiers for logging
 
-        verbose_output(
-            f"[DEBUG] Enabled classifiers: {enabled_names}",
-            config=config
-        )  # Output the list of enabled classifiers
-        verbose_output(
-            f"[DEBUG] Disabled classifiers: {disabled_names}",
-            config=config
-        )  # Output the list of disabled classifiers
-
         return filtered_models  # Return filtered models dictionary, may be empty if all names were invalid or list was empty
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
