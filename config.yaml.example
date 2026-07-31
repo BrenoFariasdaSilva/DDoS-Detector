@@ -337,6 +337,7 @@ stacking: # Stacking experiment settings
     - LightGBM
     - MLP (Neural Net)
     - FT-Transformer
+    - Tabular ResNet
 
   cache_prefix: "Cache_" # Prefix for cached preprocessing artifacts
   model_export_base: "Stacking/Models/" # Base directory for model exports
@@ -505,6 +506,36 @@ models: # Model hyperparameters for classifiers
       n_heads: ["categorical", [2, 4, 8]] # Attention head choices compatible with token choices
       dropout: ["float", 0.0, 0.3] # Dropout range
       ffn_multiplier: ["categorical", [2.0, 4.0]] # Feed-forward multiplier choices
+      learning_rate: ["float_log", 0.0001, 0.003] # Learning-rate range
+      weight_decay: ["float_log", 0.000001, 0.001] # Weight-decay range
+      patience: ["int", 2, 6] # Early-stopping patience range
+
+  tabular_resnet: # Tabular ResNet hyperparameters controlled by stacking.enabled_classifiers
+    epochs: 20 # Maximum mini-batch training epochs
+    batch_size: 1024 # Training and internal-validation batch size
+    hidden_width: 128 # Hidden representation width
+    n_blocks: 3 # Residual block count
+    normalization: "batch_norm" # Normalization layer: batch_norm, layer_norm, or none
+    activation: "relu" # Activation function: relu, gelu, or silu
+    dropout: 0.1 # Dropout probability
+    learning_rate: 0.001 # AdamW learning rate
+    weight_decay: 0.00001 # AdamW weight decay
+    patience: 3 # Internal-validation early-stopping patience
+    validation_fraction: 0.1 # Fraction derived only from training rows for early stopping
+    min_delta: 0.0001 # Minimum internal-validation loss improvement
+    device: "auto" # Device selection: auto, cuda, mps, or cpu
+    prediction_batch_size: 4096 # Bounded inference batch size
+    data_loader_workers: 0 # Batch loading worker count; zero avoids cross-process array duplication
+    torch_threads: 1 # Native PyTorch CPU threads per Tabular ResNet process
+    random_state: 42 # Deterministic model, split, and batch-order seed
+    search_space: # Bounded AutoML ranges used only when Tabular ResNet is explicitly enabled
+      epochs: ["int", 5, 30] # Epoch range
+      batch_size: ["categorical", [256, 512, 1024, 2048]] # Training batch choices
+      hidden_width: ["categorical", [64, 128, 256]] # Hidden width choices
+      n_blocks: ["int", 1, 5] # Residual block range
+      normalization: ["categorical", ["batch_norm", "layer_norm", "none"]] # Normalization choices
+      activation: ["categorical", ["relu", "gelu", "silu"]] # Activation choices
+      dropout: ["float", 0.0, 0.4] # Dropout range
       learning_rate: ["float_log", 0.0001, 0.003] # Learning-rate range
       weight_decay: ["float_log", 0.000001, 0.001] # Weight-decay range
       patience: ["int", 2, 6] # Early-stopping patience range
