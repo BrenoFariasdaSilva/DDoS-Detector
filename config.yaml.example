@@ -339,6 +339,7 @@ stacking: # Stacking experiment settings
     - FT-Transformer
     - Tabular ResNet
     - ResNet18
+    - AutoEncoder
 
   cache_prefix: "Cache_" # Prefix for cached preprocessing artifacts
   model_export_base: "Stacking/Models/" # Base directory for model exports
@@ -579,6 +580,48 @@ models: # Model hyperparameters for classifiers
       weight_decay: ["float_log", 0.000001, 0.001] # Weight-decay range
       optimizer: ["categorical", ["adamw", "adam"]] # Optimizer choices
       class_weight: ["categorical", ["none", "balanced"]] # Class-weight choices
+      patience: ["int", 2, 5] # Early-stopping patience range
+
+  autoencoder: # Supervised Autoencoder hyperparameters controlled by stacking.enabled_classifiers
+    training_strategy: "joint" # Training strategy: joint supervised reconstruction and classification
+    epochs: 20 # Maximum joint mini-batch training epochs
+    batch_size: 1024 # Training and internal-validation batch size
+    encoder_hidden_dims: [128, 64] # Encoder hidden dimensions
+    decoder_hidden_dims: [] # Empty list mirrors encoder hidden dimensions in reverse order
+    latent_dim: null # Explicit latent dimension; null uses latent_ratio
+    latent_ratio: 0.25 # Deterministic latent bottleneck ratio when latent_dim is null
+    classifier_hidden_dims: [64] # Classification-head hidden dimensions
+    activation: "relu" # Activation function: relu, gelu, or silu
+    normalization: "batch_norm" # Normalization layer: batch_norm, layer_norm, or none
+    dropout: 0.1 # Dropout probability
+    denoising_noise: 0.0 # Training-only Gaussian input noise level
+    reconstruction_loss: "mse" # Reconstruction loss: mse or mae
+    reconstruction_loss_weight: 0.5 # Reconstruction objective weight
+    classification_loss_weight: 1.0 # Multiclass classification objective weight
+    learning_rate: 0.001 # AdamW learning rate
+    weight_decay: 0.00001 # AdamW weight decay
+    patience: 3 # Internal-validation early-stopping patience
+    validation_fraction: 0.1 # Fraction derived only from training rows for early stopping
+    min_delta: 0.0001 # Minimum internal-validation loss improvement
+    device: "auto" # Device selection: auto, cuda, mps, or cpu
+    allow_device_fallback: true # Fall back to CPU when requested accelerator is unavailable
+    prediction_batch_size: 4096 # Bounded inference batch size
+    data_loader_workers: 0 # Zero preserves CPU-backed array and memmap streaming
+    torch_threads: 1 # Native PyTorch CPU threads per Autoencoder process
+    random_state: 42 # Deterministic model, split, and batch-order seed
+    search_space: # Bounded AutoML ranges used only when Autoencoder is explicitly enabled
+      epochs: ["int", 5, 20] # Epoch range
+      batch_size: ["categorical", [512, 1024, 2048]] # Training batch choices
+      encoder_hidden_dims: ["categorical", [[128, 64], [256, 128]]] # Encoder width choices
+      latent_ratio: ["categorical", [0.125, 0.25, 0.5]] # Latent ratio choices
+      classifier_hidden_dims: ["categorical", [[64], [128]]] # Classification-head width choices
+      activation: ["categorical", ["relu", "gelu", "silu"]] # Activation choices
+      normalization: ["categorical", ["batch_norm", "layer_norm", "none"]] # Normalization choices
+      dropout: ["float", 0.0, 0.3] # Dropout range
+      denoising_noise: ["float", 0.0, 0.1] # Denoising noise range
+      reconstruction_loss_weight: ["float", 0.1, 1.0] # Reconstruction objective weight range
+      learning_rate: ["float_log", 0.0001, 0.003] # Learning-rate range
+      weight_decay: ["float_log", 0.000001, 0.001] # Weight-decay range
       patience: ["int", 2, 5] # Early-stopping patience range
 
   stacking_meta: # Meta-estimator for stacking classifier
