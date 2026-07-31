@@ -142,6 +142,7 @@ from tqdm import tqdm  # For progress bars
 from typing import Any, Callable, Optional, List, Tuple, cast  # For optional and collection typing hints
 from xgboost import XGBClassifier  # For XGBoost classifier
 from ft_transformer import FTTransformerClassifier  # Import the standalone sklearn-compatible FT-Transformer classifier
+from tabular_resnet import TabularResNetClassifier  # Import the standalone sklearn-compatible Tabular ResNet classifier
 from training_progress import DEFAULT_TRAINING_PROGRESS_INTERVAL_MINUTES, TrainingProgress, XGBoostProgressCallback, format_training_combination_fields, format_training_feature_set, interactive_terminal_attached  # Import reusable training progress infrastructure.
 
 
@@ -1060,6 +1061,7 @@ def get_default_models_config():
             "lightgbm": {"force_row_wise": True, "min_gain_to_split": 0.01, "random_state": 42, "verbosity": -1},  # LightGBM default parameters
             "mlp": {"hidden_layer_sizes": (100,), "max_iter": 500, "random_state": 42},  # MLP Neural Net default parameters
             "ft_transformer": {"epochs": 20, "batch_size": 1024, "token_dim": 32, "n_blocks": 2, "n_heads": 4, "dropout": 0.1, "ffn_multiplier": 2.0, "learning_rate": 0.001, "weight_decay": 0.00001, "patience": 3, "validation_fraction": 0.1, "min_delta": 0.0001, "activation": "gelu", "device": "auto", "prediction_batch_size": 4096, "torch_threads": 1, "random_state": 42, "search_space": {"epochs": ("int", 5, 30), "batch_size": ("categorical", [256, 512, 1024, 2048]), "token_dim": ("categorical", [16, 32, 64]), "n_blocks": ("int", 1, 4), "n_heads": ("categorical", [2, 4, 8]), "dropout": ("float", 0.0, 0.3), "ffn_multiplier": ("categorical", [2.0, 4.0]), "learning_rate": ("float_log", 0.0001, 0.003), "weight_decay": ("float_log", 0.000001, 0.001), "patience": ("int", 2, 6)}},  # FT-Transformer defaults and bounded AutoML search controls
+            "tabular_resnet": {"epochs": 20, "batch_size": 1024, "hidden_width": 128, "n_blocks": 3, "normalization": "batch_norm", "activation": "relu", "dropout": 0.1, "learning_rate": 0.001, "weight_decay": 0.00001, "patience": 3, "validation_fraction": 0.1, "min_delta": 0.0001, "device": "auto", "prediction_batch_size": 4096, "data_loader_workers": 0, "torch_threads": 1, "random_state": 42, "search_space": {"epochs": ("int", 5, 30), "batch_size": ("categorical", [256, 512, 1024, 2048]), "hidden_width": ("categorical", [64, 128, 256]), "n_blocks": ("int", 1, 5), "normalization": ("categorical", ["batch_norm", "layer_norm", "none"]), "activation": ("categorical", ["relu", "gelu", "silu"]), "dropout": ("float", 0.0, 0.4), "learning_rate": ("float_log", 0.0001, 0.003), "weight_decay": ("float_log", 0.000001, 0.001), "patience": ("int", 2, 6)}},  # Tabular ResNet defaults and bounded AutoML search controls
             "stacking_meta": {"n_estimators": 50, "random_state": 42},  # Stacking meta-estimator default parameters
         }  # Return default models configuration
     except Exception as e:
@@ -5444,6 +5446,7 @@ def get_models(config=None):
         lgb_params = config.get("models", {}).get("lightgbm", {})  # LightGBM params
         mlp_params = config.get("models", {}).get("mlp", {})  # MLP params
         ft_params = config.get("models", {}).get("ft_transformer", {})  # FT-Transformer params
+        resnet_params = config.get("models", {}).get("tabular_resnet", {})  # Tabular ResNet params
 
         models = {  # Build full models dictionary with all classifiers
             "Random Forest": RandomForestClassifier(
@@ -5487,12 +5490,13 @@ def get_models(config=None):
                 random_state=mlp_params.get("random_state", random_state)
             ),
             "FT-Transformer": FTTransformerClassifier(epochs=ft_params.get("epochs", 20), batch_size=ft_params.get("batch_size", 1024), token_dim=ft_params.get("token_dim", 32), n_blocks=ft_params.get("n_blocks", 2), n_heads=ft_params.get("n_heads", 4), dropout=ft_params.get("dropout", 0.1), ffn_multiplier=ft_params.get("ffn_multiplier", 2.0), learning_rate=ft_params.get("learning_rate", 0.001), weight_decay=ft_params.get("weight_decay", 0.00001), patience=ft_params.get("patience", 3), validation_fraction=ft_params.get("validation_fraction", 0.1), min_delta=ft_params.get("min_delta", 0.0001), activation=ft_params.get("activation", "gelu"), device=ft_params.get("device", "auto"), prediction_batch_size=ft_params.get("prediction_batch_size", 4096), torch_threads=ft_params.get("torch_threads", 1), random_state=ft_params.get("random_state", random_state)),  # Build dynamic sklearn-compatible FT-Transformer prototype
+            "Tabular ResNet": TabularResNetClassifier(epochs=resnet_params.get("epochs", 20), batch_size=resnet_params.get("batch_size", 1024), hidden_width=resnet_params.get("hidden_width", 128), n_blocks=resnet_params.get("n_blocks", 3), normalization=resnet_params.get("normalization", "batch_norm"), activation=resnet_params.get("activation", "relu"), dropout=resnet_params.get("dropout", 0.1), learning_rate=resnet_params.get("learning_rate", 0.001), weight_decay=resnet_params.get("weight_decay", 0.00001), patience=resnet_params.get("patience", 3), validation_fraction=resnet_params.get("validation_fraction", 0.1), min_delta=resnet_params.get("min_delta", 0.0001), device=resnet_params.get("device", "auto"), prediction_batch_size=resnet_params.get("prediction_batch_size", 4096), data_loader_workers=resnet_params.get("data_loader_workers", 0), torch_threads=resnet_params.get("torch_threads", 1), random_state=resnet_params.get("random_state", random_state)),  # Build dynamic sklearn-compatible Tabular ResNet prototype
         }
 
         classifiers_list = config.get("stacking", {}).get("enabled_classifiers", None)  # Read optional classifier filter list from config
 
         if classifiers_list is None:  # If no classifier filter key is present, preserve original behavior
-            return {name: model for name, model in models.items() if name != "FT-Transformer"}  # Preserve the original nine-classifier default without enabling FT-Transformer
+            return {name: model for name, model in models.items() if name not in ("FT-Transformer", "Tabular ResNet")}  # Preserve the original nine-classifier default without enabling expensive neural models
 
         unique_classifiers = list(dict.fromkeys(classifiers_list))  # Deduplicate classifiers list while preserving insertion order
         filtered_models = {k: v for k, v in models.items() if k in unique_classifiers}  # Retain only classifiers whose names appear in the filter list
@@ -9170,7 +9174,7 @@ def serialize_effective_estimator_parameters(model: Any) -> str:
     except Exception:  # Fall back to deterministic model identity when parameter extraction fails.
         params = {"estimator_class": f"{model.__class__.__module__}.{model.__class__.__name__}"}  # Store deterministic estimator class identity.
 
-    if hasattr(model, "training_config_"):  # Include fitted device and effective FT-Transformer training outcome when available
+    if hasattr(model, "training_config_"):  # Include fitted device and effective neural training outcome when available
         params = dict(params)  # Copy estimator parameters before adding fitted audit metadata
         params["effective_training_configuration"] = getattr(model, "training_config_")  # Record selected device, epochs, validation, and batch controls
     normalized_params = normalize_metadata_for_json(params)  # Normalize parameters into JSON-compatible values.
@@ -10319,7 +10323,7 @@ def save_cache_result_entry(csv_path: str, result_entry: dict, config=None) -> N
         raise  # Re-raise the exception to allow upstream handling if necessary
 
 
-def get_automl_search_spaces(config: Optional[dict] = None):  # Include FT-Transformer search only when explicitly enabled
+def get_automl_search_spaces(config: Optional[dict] = None):  # Include neural classifier searches only when explicitly enabled
     """
     Return hyperparameter search space definitions for all AutoML candidate models.
 
@@ -10407,7 +10411,9 @@ def get_automl_search_spaces(config: Optional[dict] = None):  # Include FT-Trans
         enabled_classifiers = active_config.get("stacking", {}).get("enabled_classifiers", []) if isinstance(active_config, dict) else []  # Read explicit classifier selection
         if "FT-Transformer" in enabled_classifiers:  # Add expensive FT-Transformer trials only after explicit selection
             search_spaces["FT-Transformer"] = dict(active_config.get("models", {}).get("ft_transformer", {}).get("search_space", {}))  # Reuse bounded configurable FT-Transformer ranges
-        return search_spaces  # Return existing spaces plus explicitly enabled FT-Transformer space
+        if "Tabular ResNet" in enabled_classifiers:  # Add expensive Tabular ResNet trials only after explicit selection
+            search_spaces["Tabular ResNet"] = dict(active_config.get("models", {}).get("tabular_resnet", {}).get("search_space", {}))  # Reuse bounded configurable Tabular ResNet ranges
+        return search_spaces  # Return existing spaces plus explicitly enabled neural spaces
     except Exception as e:
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
@@ -10501,6 +10507,12 @@ def create_model_from_params(model_name, params, config=None):
             ft_defaults.update(clean_params)  # Apply bounded trial parameters over configured defaults
             ft_defaults["random_state"] = automl_random_state  # Use the active deterministic AutoML seed
             return FTTransformerClassifier(**ft_defaults)  # Create sklearn-compatible FT-Transformer instance
+        elif model_name == "Tabular ResNet":  # Tabular ResNet classifier
+            resnet_defaults = dict(config.get("models", {}).get("tabular_resnet", {}))  # Copy configured Tabular ResNet defaults
+            resnet_defaults.pop("search_space", None)  # Remove search metadata before estimator construction
+            resnet_defaults.update(clean_params)  # Apply bounded trial parameters over configured defaults
+            resnet_defaults["random_state"] = automl_random_state  # Use the active deterministic AutoML seed
+            return TabularResNetClassifier(**resnet_defaults)  # Create sklearn-compatible Tabular ResNet instance
         else:  # Unknown model type
             raise ValueError(f"Unknown AutoML model name: {model_name}")  # Raise error for unknown model
     except Exception as e:
@@ -10570,7 +10582,7 @@ def automl_objective(trial, X_train, y_train, cv_folds, config=None):
         if config is None:  # If no config provided
             config = CONFIG  # Use global CONFIG
 
-        search_spaces = get_automl_search_spaces(config=config)  # Get existing spaces plus explicitly enabled FT-Transformer search
+        search_spaces = get_automl_search_spaces(config=config)  # Get existing spaces plus explicitly enabled neural searches
         model_names = list(search_spaces.keys())  # Get list of available model names
 
         model_name = trial.suggest_categorical("model_name", model_names)  # Select model type via trial
@@ -17585,9 +17597,9 @@ def log_resolved_configuration(config: dict) -> None:
         else:  # Dataset path is from config.yaml or default
             print(f"{BackgroundColors.GREEN}[INFO] Dataset path source: {BackgroundColors.CYAN}config.yaml (default){Style.RESET_ALL}")  # Log config-based dataset path
         
-        available_classifiers = ["Random Forest", "SVM", "XGBoost", "Logistic Regression", "KNN", "Nearest Centroid", "Gradient Boosting", "LightGBM", "MLP (Neural Net)", "FT-Transformer"]  # Mirror the classifier identities and order exposed by the model factory
+        available_classifiers = ["Random Forest", "SVM", "XGBoost", "Logistic Regression", "KNN", "Nearest Centroid", "Gradient Boosting", "LightGBM", "MLP (Neural Net)", "FT-Transformer", "Tabular ResNet"]  # Mirror the classifier identities and order exposed by the model factory
         configured_classifiers = config.get("stacking", {}).get("enabled_classifiers", None)  # Read the optional classifier filter with model-factory fallback semantics
-        enabled_classifiers = [name for name in available_classifiers if name != "FT-Transformer"] if configured_classifiers is None else [name for name in available_classifiers if name in list(dict.fromkeys(configured_classifiers))]  # Match model-factory defaults while requiring explicit FT-Transformer selection
+        enabled_classifiers = [name for name in available_classifiers if name not in ("FT-Transformer", "Tabular ResNet")] if configured_classifiers is None else [name for name in available_classifiers if name in list(dict.fromkeys(configured_classifiers))]  # Match model-factory defaults while requiring explicit neural selection
         disabled_classifiers = [name for name in available_classifiers if name not in enabled_classifiers]  # Resolve classifiers excluded from the model factory
         print(f"{BackgroundColors.GREEN}[INFO] Enabled classifiers: {BackgroundColors.CYAN}{', '.join(enabled_classifiers) if enabled_classifiers else 'None'}{Style.RESET_ALL}")  # Log classifiers selected for startup execution
         print(f"{BackgroundColors.GREEN}[INFO] Disabled classifiers: {BackgroundColors.CYAN}{', '.join(disabled_classifiers) if disabled_classifiers else 'None'}{Style.RESET_ALL}")  # Log classifiers excluded from startup execution
@@ -17656,9 +17668,9 @@ def build_telegram_pipeline_summary(config: Optional[dict], dataset_path: Option
         methods_cfg = stacking_cfg.get("methods", {})
         feature_sets_cfg = stacking_cfg.get("feature_sets_config", {})
 
-        available_classifiers = ["Random Forest", "SVM", "XGBoost", "Logistic Regression", "KNN", "Nearest Centroid", "Gradient Boosting", "LightGBM", "MLP (Neural Net)", "FT-Transformer"]  # Mirror the classifier identities and order exposed by the model factory
+        available_classifiers = ["Random Forest", "SVM", "XGBoost", "Logistic Regression", "KNN", "Nearest Centroid", "Gradient Boosting", "LightGBM", "MLP (Neural Net)", "FT-Transformer", "Tabular ResNet"]  # Mirror the classifier identities and order exposed by the model factory
         configured_classifiers = stacking_cfg.get("enabled_classifiers", None)  # Read the optional classifier filter with model-factory fallback semantics
-        enabled_classifiers = [name for name in available_classifiers if name != "FT-Transformer"] if configured_classifiers is None else [name for name in available_classifiers if name in list(dict.fromkeys(configured_classifiers))]  # Match model-factory defaults while requiring explicit FT-Transformer selection
+        enabled_classifiers = [name for name in available_classifiers if name not in ("FT-Transformer", "Tabular ResNet")] if configured_classifiers is None else [name for name in available_classifiers if name in list(dict.fromkeys(configured_classifiers))]  # Match model-factory defaults while requiring explicit neural selection
         disabled_classifiers = [name for name in available_classifiers if name not in enabled_classifiers]  # Resolve classifiers excluded from this execution
         feature_methods = []
         if feature_sets_cfg.get("use_full", True):
