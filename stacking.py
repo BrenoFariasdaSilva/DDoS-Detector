@@ -141,6 +141,7 @@ from threadpoolctl import threadpool_limits  # For narrowly limiting BLAS and Op
 from tqdm import tqdm  # For progress bars
 from typing import Any, Callable, Optional, List, Tuple, cast  # For optional and collection typing hints
 from xgboost import XGBClassifier  # For XGBoost classifier
+from ft_transformer import FTTransformerClassifier  # Import the standalone sklearn-compatible FT-Transformer classifier
 from training_progress import DEFAULT_TRAINING_PROGRESS_INTERVAL_MINUTES, TrainingProgress, XGBoostProgressCallback, format_training_combination_fields, format_training_feature_set, interactive_terminal_attached  # Import reusable training progress infrastructure.
 
 
@@ -1058,6 +1059,7 @@ def get_default_models_config():
             "gradient_boosting": {"random_state": 42},  # Gradient Boosting default parameters
             "lightgbm": {"force_row_wise": True, "min_gain_to_split": 0.01, "random_state": 42, "verbosity": -1},  # LightGBM default parameters
             "mlp": {"hidden_layer_sizes": (100,), "max_iter": 500, "random_state": 42},  # MLP Neural Net default parameters
+            "ft_transformer": {"epochs": 20, "batch_size": 1024, "token_dim": 32, "n_blocks": 2, "n_heads": 4, "dropout": 0.1, "ffn_multiplier": 2.0, "learning_rate": 0.001, "weight_decay": 0.00001, "patience": 3, "validation_fraction": 0.1, "min_delta": 0.0001, "activation": "gelu", "device": "auto", "prediction_batch_size": 4096, "torch_threads": 1, "random_state": 42, "search_space": {"epochs": ("int", 5, 30), "batch_size": ("categorical", [256, 512, 1024, 2048]), "token_dim": ("categorical", [16, 32, 64]), "n_blocks": ("int", 1, 4), "n_heads": ("categorical", [2, 4, 8]), "dropout": ("float", 0.0, 0.3), "ffn_multiplier": ("categorical", [2.0, 4.0]), "learning_rate": ("float_log", 0.0001, 0.003), "weight_decay": ("float_log", 0.000001, 0.001), "patience": ("int", 2, 6)}},  # FT-Transformer defaults and bounded AutoML search controls
             "stacking_meta": {"n_estimators": 50, "random_state": 42},  # Stacking meta-estimator default parameters
         }  # Return default models configuration
     except Exception as e:
@@ -5441,6 +5443,7 @@ def get_models(config=None):
         gb_params = config.get("models", {}).get("gradient_boosting", {})  # Gradient Boosting params
         lgb_params = config.get("models", {}).get("lightgbm", {})  # LightGBM params
         mlp_params = config.get("models", {}).get("mlp", {})  # MLP params
+        ft_params = config.get("models", {}).get("ft_transformer", {})  # FT-Transformer params
 
         models = {  # Build full models dictionary with all classifiers
             "Random Forest": RandomForestClassifier(
@@ -5483,12 +5486,13 @@ def get_models(config=None):
                 max_iter=mlp_params.get("max_iter", 500),
                 random_state=mlp_params.get("random_state", random_state)
             ),
+            "FT-Transformer": FTTransformerClassifier(epochs=ft_params.get("epochs", 20), batch_size=ft_params.get("batch_size", 1024), token_dim=ft_params.get("token_dim", 32), n_blocks=ft_params.get("n_blocks", 2), n_heads=ft_params.get("n_heads", 4), dropout=ft_params.get("dropout", 0.1), ffn_multiplier=ft_params.get("ffn_multiplier", 2.0), learning_rate=ft_params.get("learning_rate", 0.001), weight_decay=ft_params.get("weight_decay", 0.00001), patience=ft_params.get("patience", 3), validation_fraction=ft_params.get("validation_fraction", 0.1), min_delta=ft_params.get("min_delta", 0.0001), activation=ft_params.get("activation", "gelu"), device=ft_params.get("device", "auto"), prediction_batch_size=ft_params.get("prediction_batch_size", 4096), torch_threads=ft_params.get("torch_threads", 1), random_state=ft_params.get("random_state", random_state)),  # Build dynamic sklearn-compatible FT-Transformer prototype
         }
 
         classifiers_list = config.get("stacking", {}).get("enabled_classifiers", None)  # Read optional classifier filter list from config
 
         if classifiers_list is None:  # If no classifier filter key is present, preserve original behavior
-            return models  # Return full models dictionary with no filtering applied
+            return {name: model for name, model in models.items() if name != "FT-Transformer"}  # Preserve the original nine-classifier default without enabling FT-Transformer
 
         unique_classifiers = list(dict.fromkeys(classifiers_list))  # Deduplicate classifiers list while preserving insertion order
         filtered_models = {k: v for k, v in models.items() if k in unique_classifiers}  # Retain only classifiers whose names appear in the filter list
@@ -9166,6 +9170,9 @@ def serialize_effective_estimator_parameters(model: Any) -> str:
     except Exception:  # Fall back to deterministic model identity when parameter extraction fails.
         params = {"estimator_class": f"{model.__class__.__module__}.{model.__class__.__name__}"}  # Store deterministic estimator class identity.
 
+    if hasattr(model, "training_config_"):  # Include fitted device and effective FT-Transformer training outcome when available
+        params = dict(params)  # Copy estimator parameters before adding fitted audit metadata
+        params["effective_training_configuration"] = getattr(model, "training_config_")  # Record selected device, epochs, validation, and batch controls
     normalized_params = normalize_metadata_for_json(params)  # Normalize parameters into JSON-compatible values.
     return json.dumps(normalized_params, sort_keys=True, allow_nan=False)  # Return deterministic valid JSON.
 
@@ -10312,15 +10319,16 @@ def save_cache_result_entry(csv_path: str, result_entry: dict, config=None) -> N
         raise  # Re-raise the exception to allow upstream handling if necessary
 
 
-def get_automl_search_spaces():
+def get_automl_search_spaces(config: Optional[dict] = None):  # Include FT-Transformer search only when explicitly enabled
     """
     Return hyperparameter search space definitions for all AutoML candidate models.
 
+    :param config: Configuration dictionary using global CONFIG when None.
     :return: Dictionary mapping model names to their search space configurations.
     """
     
     try:
-        return {  # Dictionary of model search spaces
+        search_spaces = {  # Build existing model search spaces without changing their defaults
             "Random Forest": {  # Random Forest search space
                 "n_estimators": ("int", 50, 500),  # Number of trees range
                 "max_depth": ("int_or_none", 3, 50),  # Max depth range or None
@@ -10394,7 +10402,12 @@ def get_automl_search_spaces():
                 "weights": ("categorical", ["uniform", "distance"]),  # Weight function
                 "metric": ("categorical", ["euclidean", "manhattan", "minkowski"]),  # Distance metric
             },
-        }  # Return full search space dictionary
+        }  # Complete existing AutoML search spaces
+        active_config = config if config is not None else CONFIG  # Resolve runtime configuration without changing direct-call behavior
+        enabled_classifiers = active_config.get("stacking", {}).get("enabled_classifiers", []) if isinstance(active_config, dict) else []  # Read explicit classifier selection
+        if "FT-Transformer" in enabled_classifiers:  # Add expensive FT-Transformer trials only after explicit selection
+            search_spaces["FT-Transformer"] = dict(active_config.get("models", {}).get("ft_transformer", {}).get("search_space", {}))  # Reuse bounded configurable FT-Transformer ranges
+        return search_spaces  # Return existing spaces plus explicitly enabled FT-Transformer space
     except Exception as e:
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
@@ -10482,6 +10495,12 @@ def create_model_from_params(model_name, params, config=None):
             return DecisionTreeClassifier(random_state=automl_random_state, **clean_params)  # Create DT instance
         elif model_name == "KNN":  # K-Nearest Neighbors classifier
             return KNeighborsClassifier(n_jobs=n_jobs, **clean_params)  # Create KNN instance
+        elif model_name == "FT-Transformer":  # FT-Transformer classifier
+            ft_defaults = dict(config.get("models", {}).get("ft_transformer", {}))  # Copy configured FT-Transformer defaults
+            ft_defaults.pop("search_space", None)  # Remove search metadata before estimator construction
+            ft_defaults.update(clean_params)  # Apply bounded trial parameters over configured defaults
+            ft_defaults["random_state"] = automl_random_state  # Use the active deterministic AutoML seed
+            return FTTransformerClassifier(**ft_defaults)  # Create sklearn-compatible FT-Transformer instance
         else:  # Unknown model type
             raise ValueError(f"Unknown AutoML model name: {model_name}")  # Raise error for unknown model
     except Exception as e:
@@ -10551,7 +10570,7 @@ def automl_objective(trial, X_train, y_train, cv_folds, config=None):
         if config is None:  # If no config provided
             config = CONFIG  # Use global CONFIG
 
-        search_spaces = get_automl_search_spaces()  # Get all model search spaces
+        search_spaces = get_automl_search_spaces(config=config)  # Get existing spaces plus explicitly enabled FT-Transformer search
         model_names = list(search_spaces.keys())  # Get list of available model names
 
         model_name = trial.suggest_categorical("model_name", model_names)  # Select model type via trial
@@ -17630,9 +17649,9 @@ def build_telegram_pipeline_summary(config: Optional[dict], dataset_path: Option
         methods_cfg = stacking_cfg.get("methods", {})
         feature_sets_cfg = stacking_cfg.get("feature_sets_config", {})
 
-        available_classifiers = ["Random Forest", "SVM", "XGBoost", "Logistic Regression", "KNN", "Nearest Centroid", "Gradient Boosting", "LightGBM", "MLP (Neural Net)"]  # Mirror the classifier identities and order exposed by the model factory
+        available_classifiers = ["Random Forest", "SVM", "XGBoost", "Logistic Regression", "KNN", "Nearest Centroid", "Gradient Boosting", "LightGBM", "MLP (Neural Net)", "FT-Transformer"]  # Mirror the classifier identities and order exposed by the model factory
         configured_classifiers = stacking_cfg.get("enabled_classifiers", None)  # Read the optional classifier filter with model-factory fallback semantics
-        enabled_classifiers = list(available_classifiers) if configured_classifiers is None else [name for name in available_classifiers if name in list(dict.fromkeys(configured_classifiers))]  # Resolve classifiers that the model factory will instantiate
+        enabled_classifiers = [name for name in available_classifiers if name != "FT-Transformer"] if configured_classifiers is None else [name for name in available_classifiers if name in list(dict.fromkeys(configured_classifiers))]  # Match model-factory defaults while requiring explicit FT-Transformer selection
         disabled_classifiers = [name for name in available_classifiers if name not in enabled_classifiers]  # Resolve classifiers excluded from this execution
         feature_methods = []
         if feature_sets_cfg.get("use_full", True):
