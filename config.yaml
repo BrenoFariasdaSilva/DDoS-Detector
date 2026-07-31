@@ -338,6 +338,7 @@ stacking: # Stacking experiment settings
     - MLP (Neural Net)
     - FT-Transformer
     - Tabular ResNet
+    - ResNet18
 
   cache_prefix: "Cache_" # Prefix for cached preprocessing artifacts
   model_export_base: "Stacking/Models/" # Base directory for model exports
@@ -539,6 +540,46 @@ models: # Model hyperparameters for classifiers
       learning_rate: ["float_log", 0.0001, 0.003] # Learning-rate range
       weight_decay: ["float_log", 0.000001, 0.001] # Weight-decay range
       patience: ["int", 2, 6] # Early-stopping patience range
+
+  resnet18: # One-dimensional ResNet18 hyperparameters controlled by stacking.enabled_classifiers
+    architecture_variant: "resnet18_1d" # Factual tabular feature-axis architecture variant
+    epochs: 20 # Maximum mini-batch training epochs
+    batch_size: 1024 # Training and internal-validation batch size
+    initial_channels: 32 # Short-feature-safe stem channel width
+    stage_widths: [32, 64, 128, 256] # Four residual-stage widths
+    kernel_size: 3 # Odd padding-safe one-dimensional convolution kernel size
+    normalization: "batch_norm" # Normalization layer: batch_norm, group_norm, or none
+    activation: "relu" # Activation function: relu, gelu, or silu
+    dropout: 0.1 # Dropout probability
+    learning_rate: 0.001 # Optimizer learning rate
+    weight_decay: 0.00001 # Optimizer weight decay
+    optimizer: "adamw" # Optimizer: adamw, adam, or sgd
+    class_weight: "none" # Class weighting: none or balanced
+    patience: 3 # Internal-validation early-stopping patience
+    validation_fraction: 0.1 # Fraction derived only from training rows for early stopping
+    min_delta: 0.0001 # Minimum internal-validation loss improvement
+    device: "auto" # Device selection: auto, cuda, mps, or cpu
+    allow_device_fallback: true # Fall back to CPU when requested accelerator is unavailable
+    prediction_batch_size: 4096 # Bounded inference batch size
+    data_loader_workers: 0 # Zero preserves CPU-backed array and memmap streaming
+    mixed_precision: false # CUDA-only mixed precision
+    gradient_clip_norm: null # Optional gradient clipping norm
+    torch_threads: 1 # Native PyTorch CPU threads per ResNet18 process
+    random_state: 42 # Deterministic model, split, and batch-order seed
+    search_space: # Bounded AutoML ranges used only when ResNet18 is explicitly enabled
+      epochs: ["int", 5, 20] # Epoch range
+      batch_size: ["categorical", [512, 1024, 2048]] # Training batch choices
+      initial_channels: ["categorical", [16, 32, 64]] # Stem channel choices
+      stage_widths: ["categorical", [[16, 32, 64, 128], [32, 64, 128, 256]]] # Stage-width choices
+      kernel_size: ["categorical", [3, 5]] # Kernel-size choices
+      normalization: ["categorical", ["batch_norm", "group_norm", "none"]] # Normalization choices
+      activation: ["categorical", ["relu", "gelu", "silu"]] # Activation choices
+      dropout: ["float", 0.0, 0.3] # Dropout range
+      learning_rate: ["float_log", 0.0001, 0.003] # Learning-rate range
+      weight_decay: ["float_log", 0.000001, 0.001] # Weight-decay range
+      optimizer: ["categorical", ["adamw", "adam"]] # Optimizer choices
+      class_weight: ["categorical", ["none", "balanced"]] # Class-weight choices
+      patience: ["int", 2, 5] # Early-stopping patience range
 
   stacking_meta: # Meta-estimator for stacking classifier
     n_estimators: 50 # Number of estimators for stacking meta-estimator
