@@ -340,6 +340,7 @@ stacking: # Stacking experiment settings
     - Tabular ResNet
     - ResNet18
     - AutoEncoder
+    - LSTM
 
   cache_prefix: "Cache_" # Prefix for cached preprocessing artifacts
   model_export_base: "Stacking/Models/" # Base directory for model exports
@@ -622,6 +623,56 @@ models: # Model hyperparameters for classifiers
       reconstruction_loss_weight: ["float", 0.1, 1.0] # Reconstruction objective weight range
       learning_rate: ["float_log", 0.0001, 0.003] # Learning-rate range
       weight_decay: ["float_log", 0.000001, 0.001] # Weight-decay range
+      patience: ["int", 2, 5] # Early-stopping patience range
+
+  lstm: # Supervised LSTM hyperparameters controlled by stacking.enabled_classifiers
+    sequence_length: 8 # Required timestep count for upstream partition-local windows
+    sequence_stride: 1 # Sequence-window stride recorded in artifacts and model parameters
+    minimum_group_length: 8 # Minimum upstream group length required before windowing
+    chronological_field: null # Chronological metadata field is not retained by current row-wise stacking inputs
+    group_fields: [] # Grouping metadata fields are not retained by current row-wise stacking inputs
+    label_strategy: "final_timestep" # Predict label of final timestep in each sequence
+    mixed_label_window_policy: "keep" # Upstream policy metadata for mixed-label windows
+    incomplete_window_policy: "drop" # Upstream policy for incomplete windows
+    trusted_sequence_input: false # Require verified pre-windowed 3D tensors before fitting
+    hidden_size: 128 # LSTM hidden size
+    num_layers: 1 # Recurrent layer count
+    bidirectional: false # Default causal unidirectional recurrence
+    dropout: 0.1 # Dropout probability
+    normalization: "layer_norm" # Classification-head normalization: layer_norm or none
+    classifier_hidden_dims: [64] # Classification-head hidden dimensions
+    activation: "relu" # Activation function: relu, gelu, or silu
+    epochs: 20 # Maximum mini-batch training epochs
+    batch_size: 1024 # Training and internal-validation batch size
+    learning_rate: 0.001 # Optimizer learning rate
+    weight_decay: 0.00001 # Optimizer weight decay
+    optimizer: "adamw" # Optimizer: adamw, adam, or sgd
+    class_weight: "none" # Class weighting: none or balanced
+    patience: 3 # Internal-validation early-stopping patience
+    validation_fraction: 0.1 # Fraction derived only from training sequences for early stopping
+    min_delta: 0.0001 # Minimum internal-validation loss improvement
+    device: "auto" # Device selection: auto, cuda, mps, or cpu
+    allow_device_fallback: true # Fall back to CPU when requested accelerator is unavailable
+    prediction_batch_size: 4096 # Bounded inference batch size
+    data_loader_workers: 0 # Zero preserves CPU-backed sequence array and memmap streaming
+    mixed_precision: false # CUDA-only mixed precision
+    gradient_clip_norm: null # Optional gradient clipping norm
+    torch_threads: 1 # Native PyTorch CPU threads per LSTM process
+    random_state: 42 # Deterministic model, split, and batch-order seed
+    sequence_source_row_count: null # Optional upstream source-row count metadata
+    discarded_prefix_rows: null # Optional upstream discarded-prefix metadata
+    mixed_label_windows: null # Optional upstream mixed-label-window metadata
+    skipped_groups: null # Optional upstream skipped-group metadata
+    search_space: # Bounded AutoML ranges used only when LSTM is explicitly enabled
+      epochs: ["int", 5, 20] # Epoch range
+      batch_size: ["categorical", [512, 1024, 2048]] # Training batch choices
+      hidden_size: ["categorical", [64, 128, 256]] # LSTM hidden-size choices
+      num_layers: ["int", 1, 2] # Recurrent-layer range
+      dropout: ["float", 0.0, 0.3] # Dropout range
+      learning_rate: ["float_log", 0.0001, 0.003] # Learning-rate range
+      weight_decay: ["float_log", 0.000001, 0.001] # Weight-decay range
+      gradient_clip_norm: ["categorical", [null, 1.0, 5.0]] # Gradient clipping choices
+      class_weight: ["categorical", ["none", "balanced"]] # Class-weight choices
       patience: ["int", 2, 5] # Early-stopping patience range
 
   stacking_meta: # Meta-estimator for stacking classifier
