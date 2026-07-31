@@ -271,7 +271,7 @@ class ResNet18Classifier(ClassifierMixin, BaseEstimator):  # Expose ResNet18 thr
         torch.manual_seed(int(self.random_state))  # Seed CPU and active backend initialization
         if torch.cuda.is_available():  # Seed available CUDA devices
             torch.cuda.manual_seed_all(int(self.random_state))  # Make CUDA initialization reproducible
-        torch.use_deterministic_algorithms(True, warn_only=True)  # Request deterministic kernels with backend fallback
+        torch.use_deterministic_algorithms(False)  # Allow nondeterministic CUDA kernels without reproducibility warnings
         network = self.build_network(self.n_features_in_, int(self.classes_.shape[0])).to(effective_device)  # Allocate model parameters on selected device
         optimizer = self.build_optimizer(network)  # Build configured optimizer
         loss_function = self.build_loss_function(encoded_labels[train_indices], int(self.classes_.shape[0]), effective_device)  # Build current-training loss without test rows
