@@ -336,6 +336,7 @@ stacking: # Stacking experiment settings
     - Gradient Boosting
     - LightGBM
     - MLP (Neural Net)
+    - FT-Transformer
 
   cache_prefix: "Cache_" # Prefix for cached preprocessing artifacts
   model_export_base: "Stacking/Models/" # Base directory for model exports
@@ -477,6 +478,36 @@ models: # Model hyperparameters for classifiers
     hidden_layer_sizes: [100] # Hidden layer sizes (list[int])
     max_iter: 500 # Maximum training iterations (int)
     random_state: 42 # Random seed for reproducibility
+
+  ft_transformer: # FT-Transformer hyperparameters controlled by stacking.enabled_classifiers
+    epochs: 20 # Maximum mini-batch training epochs
+    batch_size: 1024 # Training and internal-validation batch size
+    token_dim: 32 # Numeric feature token dimension
+    n_blocks: 2 # Transformer encoder block count
+    n_heads: 4 # Attention head count; token_dim must be divisible by this value
+    dropout: 0.1 # Transformer dropout probability
+    ffn_multiplier: 2.0 # Feed-forward width multiplier
+    learning_rate: 0.001 # AdamW learning rate
+    weight_decay: 0.00001 # AdamW weight decay
+    patience: 3 # Internal-validation early-stopping patience
+    validation_fraction: 0.1 # Fraction derived only from training rows for early stopping
+    min_delta: 0.0001 # Minimum internal-validation loss improvement
+    activation: "gelu" # Transformer feed-forward activation: gelu or relu
+    device: "auto" # Device selection: auto, cuda, mps, or cpu
+    prediction_batch_size: 4096 # Bounded inference batch size
+    torch_threads: 1 # Native PyTorch CPU threads per FT-Transformer process
+    random_state: 42 # Deterministic model, split, and batch-order seed
+    search_space: # Bounded AutoML ranges used only when FT-Transformer is explicitly enabled
+      epochs: ["int", 5, 30] # Epoch range
+      batch_size: ["categorical", [256, 512, 1024, 2048]] # Training batch choices
+      token_dim: ["categorical", [16, 32, 64]] # Token dimension choices
+      n_blocks: ["int", 1, 4] # Transformer block range
+      n_heads: ["categorical", [2, 4, 8]] # Attention head choices compatible with token choices
+      dropout: ["float", 0.0, 0.3] # Dropout range
+      ffn_multiplier: ["categorical", [2.0, 4.0]] # Feed-forward multiplier choices
+      learning_rate: ["float_log", 0.0001, 0.003] # Learning-rate range
+      weight_decay: ["float_log", 0.000001, 0.001] # Weight-decay range
+      patience: ["int", 2, 6] # Early-stopping patience range
 
   stacking_meta: # Meta-estimator for stacking classifier
     n_estimators: 50 # Number of estimators for stacking meta-estimator
