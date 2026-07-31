@@ -181,7 +181,7 @@ class TabularResNetClassifier(ClassifierMixin, BaseEstimator):  # Expose Tabular
         torch.manual_seed(int(self.random_state))  # Seed CPU and active backend initialization
         if torch.cuda.is_available():  # Seed available CUDA devices
             torch.cuda.manual_seed_all(int(self.random_state))  # Make CUDA initialization reproducible
-        torch.use_deterministic_algorithms(True, warn_only=True)  # Request deterministic kernels with backend fallback
+        torch.use_deterministic_algorithms(False)  # Allow nondeterministic CUDA kernels without reproducibility warnings
         network = self.build_network(self.n_features_in_, int(self.classes_.shape[0])).to(effective_device)  # Allocate model parameters on selected device
         optimizer = torch.optim.AdamW(network.parameters(), lr=float(self.learning_rate), weight_decay=float(self.weight_decay))  # Build configured optimizer
         loss_function = nn.CrossEntropyLoss()  # Use multiclass cross-entropy
