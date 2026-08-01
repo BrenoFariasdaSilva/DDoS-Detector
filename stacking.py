@@ -946,7 +946,7 @@ def parse_cli_args():
         parser.set_defaults(enable_explainability=None)  # Preserve the YAML/default setting when neither explainability flag is provided.
         parser.add_argument("--n-jobs", dest="n_jobs", type=int, default=None, help="Override evaluation.n_jobs for estimators that support parallel fitting (-1 uses all processors; 1 is memory-safe)",)
         parser.add_argument("--feature-extraction-n-jobs", dest="feature_extraction_n_jobs", type=int, default=None, help="Override evaluation.feature_extraction_n_jobs for feature extraction/transformation stages such as PCA, not classifier training (-1 uses available CPUs; 1 is memory-safe)")  # Add the independent feature extraction thread override
-        parser.add_argument("--feature-set-workers", dest="feature_set_workers", type=str, default=None, help="Persistent process counts by feature set, for example full=1,ga=1,pca=1,rfe=1; only 0 or 1 is supported")  # Add the persistent feature-set process override
+        parser.add_argument("--feature-set-workers", dest="feature_set_workers", type=str, default=None, help="Persistent process counts by feature set, for example full=1,ga=1,pca=1,rfe=1,extra_trees=1; only 0 or 1 is supported")  # Add the persistent feature-set process override
         pending_sort_group = parser.add_mutually_exclusive_group()  # Preserve absent-versus-explicit CLI semantics for pending runtime ordering
         pending_sort_group.add_argument("--sort-pending-by-elapsed-time", dest="sort_pending_by_elapsed_time", action="store_true", help="Sort pending classifier combinations by historical elapsed_time_s within comparable groups")  # Enable runtime-based pending queue ordering
         pending_sort_group.add_argument("--no-sort-pending-by-elapsed-time", dest="sort_pending_by_elapsed_time", action="store_false", help="Disable runtime-based pending classifier ordering")  # Disable runtime-based pending queue ordering
@@ -956,7 +956,7 @@ def parse_cli_args():
         parser.add_argument("--low-memory", dest="low_memory", action="store_true", default=False, help="Enable low memory mode for pandas operations")  # Add low memory mode CLI argument
         parser.add_argument("--dataset-file-format", type=str, default=None, dest="dataset_file_format", help="File format for dataset files: arff, csv, parquet, txt")  # Dataset file format CLI override
         parser.add_argument("--augmentation-file-format", type=str, default=None, dest="augmentation_file_format", help="File format for augmentation files: arff, csv, parquet, txt")  # Augmentation file format CLI override
-        parser.add_argument("--feature-sets", type=str, default=None, dest="feature_sets", help="Comma-separated feature set strategies to enable: full,pca,rfe,ga (overrides config toggles)")  # Feature set strategies CLI override
+        parser.add_argument("--feature-sets", type=str, default=None, dest="feature_sets", help="Comma-separated feature set strategies to enable: full,pca,rfe,ga,extra_trees (overrides config toggles)")  # Feature set strategies CLI override
         parser.add_argument("--features", type=str, default=None, dest="explicit_features", help="Comma-separated explicit feature names")  # Explicit feature list CLI override
         parser.add_argument("--enable-memory-watcher", dest="enable_memory_watcher", action="store_true", default=None, help="Enable low-overhead memory watcher diagnostics")  # Enable watcher diagnostics via CLI
         parser.add_argument("--disable-memory-watcher", dest="enable_memory_watcher", action="store_false", help="Disable memory watcher diagnostics")  # Disable watcher diagnostics via CLI
@@ -1032,6 +1032,7 @@ def get_default_stacking_config():
                 "use_pca": True,  # Enable PCA Components strategy (dimensionality reduction)
                 "use_rfe": True,  # Enable RFE Features strategy (recursive feature elimination)
                 "use_ga": True,  # Enable GA Features strategy (genetic algorithm selection)
+                "use_extra_trees": True,  # Enable Extra Trees Features strategy (Extra-Trees-20 selection)
                 "explicit_features": [],  # Optional explicit feature list; when non-empty, added as an additional "Explicit Features" set alongside all enabled strategies. Use this carefully, as when analyzing multiple datasets, you must put features common between the datasets.
             },  # Configurable feature set strategies for evaluation
             "memory_management": {
@@ -1142,11 +1143,12 @@ def get_default_config():
                 ],
             },
         },
+        "extra_trees": {"selection": {"n_features_to_select": 20}, "model": {"n_estimators": 200, "random_state": 42, "n_jobs": 1, "criterion": "gini", "max_features": "sqrt"}, "export": {"results_dir": "Feature_Analysis/Extra_Trees", "results_filename": "Extra_Trees_Results.csv"}},  # Extra Trees feature-selection defaults used by stacking and extratrees.py
         "stacking": get_default_stacking_config(),  # Stacking pipeline configuration section
         "evaluation": {
             "n_jobs": 1,
             "feature_extraction_n_jobs": 1,  # Use one thread for feature extraction by default without changing classifier training parallelism
-            "feature_set_workers": {"full": 0, "ga": 0, "pca": 0, "rfe": 0},  # Keep persistent feature-set multiprocessing disabled unless explicitly configured
+            "feature_set_workers": {"full": 0, "ga": 0, "pca": 0, "rfe": 0, "extra_trees": 0},  # Keep persistent feature-set multiprocessing disabled unless explicitly configured
             "training_progress_interval_minutes": DEFAULT_TRAINING_PROGRESS_INTERVAL_MINUTES,  # Rate-limit recurring classifier progress per training task
             "threads_limit": 2,
             "cv_folds": 10,
@@ -1827,7 +1829,7 @@ def migrate_experiment_result_files_for_startup(input_path: str, files_to_proces
         migrate_result_storage_files_for_reference(reference_path, config=reference_config)  # Complete migration before any plan construction.
 
 
-FEATURE_SET_WORKER_KEYS = ("full", "ga", "pca", "rfe")  # Define the feature-set process identities supported by the persistent scheduler
+FEATURE_SET_WORKER_KEYS = ("full", "ga", "pca", "rfe", "extra_trees")  # Define the feature-set process identities supported by the persistent scheduler
 FEATURE_PROCESS_START_METHOD = "spawn"  # Select clean-interpreter feature workers without inheriting initialized native thread pools
 FEATURE_PROCESS_STATUS_FIELDS = ("total", "cached", "pending", "running", "computed", "failed", "completed")  # Define synchronized global and feature-local status fields
 FEATURE_PROCESS_STATUS_INDEX = {name: index for index, name in enumerate(FEATURE_PROCESS_STATUS_FIELDS)}  # Resolve compact shared-array positions by status name
@@ -1839,7 +1841,7 @@ def validate_feature_set_workers(value: Any, source: str = "evaluation.feature_s
 
     :param value: Mapping or comma-separated feature-set worker specification.
     :param source: User-facing setting name used in validation errors.
-    :return: Dictionary containing validated Full, GA, PCA, and RFE process counts.
+    :return: Dictionary containing validated Full, GA, PCA, RFE, and Extra Trees process counts.
     """
 
     if value is None:  # Preserve disabled sequential execution when no setting is supplied
@@ -1847,7 +1849,7 @@ def validate_feature_set_workers(value: Any, source: str = "evaluation.feature_s
     if isinstance(value, str):  # Parse the CLI comma-separated representation
         entries = [entry.strip() for entry in value.split(",") if entry.strip()]  # Normalize non-empty key-value entries
         if not entries:  # Reject an empty CLI specification
-            raise ValueError(f"{source} must contain full, ga, pca, or rfe assignments")  # Raise a descriptive empty-value error
+            raise ValueError(f"{source} must contain full, ga, pca, rfe, or extra_trees assignments")  # Raise a descriptive empty-value error
         parsed_value = {}  # Accumulate parsed CLI assignments
         for entry in entries:  # Parse every requested feature-set count
             if entry.count("=") != 1:  # Require one unambiguous key-value separator
@@ -1989,7 +1991,7 @@ def merge_configs(defaults, file_config, cli_args):
             config.setdefault("stacking", {})["augmentation_file_format"] = cli_args.augmentation_file_format  # Apply augmentation file format override to config
 
         if hasattr(cli_args, "feature_sets") and cli_args.feature_sets is not None:  # Feature set strategies CLI override
-            allowed = {"full", "pca", "rfe", "ga"}  # Valid strategy identifier names
+            allowed = {"full", "pca", "rfe", "ga", "extra_trees"}  # Valid strategy identifier names
             strategies = {s.strip().lower() for s in cli_args.feature_sets.split(",") if s.strip()}  # Parse and normalize comma-separated strategy names
             invalid = strategies - allowed  # Identify any unrecognized strategy names
             if invalid:  # If any invalid strategy names were provided
@@ -1999,6 +2001,7 @@ def merge_configs(defaults, file_config, cli_args):
             fsc["use_pca"] = "pca" in strategies  # Set PCA toggle from parsed strategies
             fsc["use_rfe"] = "rfe" in strategies  # Set RFE toggle from parsed strategies
             fsc["use_ga"] = "ga" in strategies  # Set GA toggle from parsed strategies
+            fsc["use_extra_trees"] = "extra_trees" in strategies  # Set Extra Trees toggle from parsed strategies
 
         if hasattr(cli_args, "explicit_features") and cli_args.explicit_features is not None:  # Explicit features CLI override
             explicit_list = [f.strip() for f in cli_args.explicit_features.split(",") if f.strip()]  # Parse and strip comma-separated feature names
@@ -4803,14 +4806,120 @@ def extract_recursive_feature_elimination_features(file_path, config=None):
         raise
 
 
+def extract_extra_trees_features(file_path: str, config: Optional[dict] = None) -> Optional[List[str]]:
+    """
+    Extract selected Extra Trees features from the ranked results CSV.
+
+    :param file_path: Full path to the current CSV file or dataset directory being processed.
+    :param config: Configuration dictionary, using CONFIG when omitted.
+    :return: Ranked selected Extra Trees feature names, or None when disabled.
+    """
+
+    try:  # Preserve repository error-reporting contract
+        if config is None:  # Use global configuration when omitted
+            config = CONFIG  # Assign global config fallback
+
+        feature_sets_config = config.get("stacking", {}).get("feature_sets_config", {})  # Read feature-set toggles
+        if not feature_sets_config.get("use_extra_trees", True):  # Skip extraction when Extra Trees is disabled
+            return None  # Return absent feature list for disabled mode
+
+        extra_trees_config = config.get("extra_trees", {})  # Read Extra Trees configuration
+        selection_config = extra_trees_config.get("selection", {})  # Read selected-count configuration
+        export_config = extra_trees_config.get("export", {})  # Read Extra Trees export configuration
+        expected_count = int(selection_config.get("n_features_to_select", 20))  # Resolve expected Extra-Trees-20 count
+        if expected_count < 1:  # Reject invalid selected-feature counts before artifact loading
+            raise ValueError("extra_trees.selection.n_features_to_select must be greater than or equal to 1")  # Raise selected-count validation error
+        results_filename = str(export_config.get("results_filename", "Extra_Trees_Results.csv"))  # Resolve configured results filename
+        extra_trees_results_path = find_feature_file(file_path, f"Extra_Trees/{results_filename}", config=config)  # Resolve Extra Trees feature-ranking CSV
+
+        if extra_trees_results_path is None:  # Fail clearly when enabled but artifact is absent
+            raise FileNotFoundError(f"Extra Trees results file not found for dataset containing {file_path}")  # Raise explicit missing-artifact error
+
+        low_memory = config.get("execution", {}).get("low_memory", False)  # Read low-memory CSV mode
+        df = pd.read_csv(extra_trees_results_path, low_memory=low_memory)  # Load the ranked Extra Trees result file
+        df.columns = df.columns.str.strip()  # Normalize result column names
+
+        required_columns = ["feature_name", "extra_trees_importance", "importance_rank", "selected"]  # Define required named schema
+        missing_columns = [column for column in required_columns if column not in df.columns]  # Identify missing schema columns
+        if missing_columns:  # Reject malformed results instead of positional fallback
+            raise ValueError(f"Extra Trees results file missing required columns: {missing_columns}")  # Raise schema error
+        if df.empty:  # Reject empty ranked result files
+            raise ValueError(f"Extra Trees results file is empty: {extra_trees_results_path}")  # Raise empty-file error
+
+        if df["feature_name"].isna().any():  # Reject missing selected-feature names
+            raise ValueError("Extra Trees results contain missing feature_name values")  # Raise feature-name error
+        if df["extra_trees_importance"].isna().any():  # Reject missing importance values
+            raise ValueError("Extra Trees results contain missing extra_trees_importance values")  # Raise importance error
+        if df["importance_rank"].isna().any():  # Reject missing rank values
+            raise ValueError("Extra Trees results contain missing importance_rank values")  # Raise rank error
+        if df["selected"].isna().any():  # Reject missing selected-state values
+            raise ValueError("Extra Trees results contain missing selected values")  # Raise selected-mask error
+
+        df = df.copy()  # Copy ranked rows before normalization
+        df["feature_name"] = df["feature_name"].astype(str).str.strip()  # Normalize feature-name strings
+        if (df["feature_name"] == "").any():  # Reject empty feature names
+            raise ValueError("Extra Trees results contain empty feature_name values")  # Raise empty-name error
+        df["extra_trees_importance"] = pd.to_numeric(df["extra_trees_importance"], errors="raise")  # Normalize importance values
+        df["importance_rank"] = pd.to_numeric(df["importance_rank"], errors="raise").astype(int)  # Normalize integer ranks
+        selected_text = df["selected"].astype(str).str.strip().str.lower()  # Normalize selected-state strings
+        valid_selected_values = {"true", "false", "1", "0", "yes", "no", "selected", "not selected"}  # Define supported selected-state values
+        invalid_selected_values = set(selected_text.unique()) - valid_selected_values  # Identify unsupported selected-state values
+        if invalid_selected_values:  # Reject ambiguous selected-state encoding
+            raise ValueError(f"Extra Trees results contain invalid selected values: {sorted(invalid_selected_values)}")  # Raise selected-mask schema error
+        df["selected"] = selected_text.isin({"true", "1", "yes", "selected"})  # Convert selected-state values to boolean mask
+
+        if "dataset_path" in df.columns:  # Verify dataset-path ownership when available
+            stored_paths = [str(value).strip() for value in df["dataset_path"].dropna().unique() if str(value).strip()]  # Collect stored dataset paths
+            if stored_paths:  # Apply ownership validation only when metadata exists
+                file_resolved = Path(file_path).expanduser().resolve()  # Resolve active dataset path
+                ownership_valid = False  # Track whether any stored path matches the active dataset scope
+                for stored_path in stored_paths:  # Compare every stored dataset path
+                    stored_resolved = Path(stored_path).expanduser().resolve()  # Resolve stored dataset path relative to cwd
+                    if stored_resolved == file_resolved or stored_resolved.is_relative_to(file_resolved if file_resolved.is_dir() else file_resolved.parent):  # Accept same file or file under active directory
+                        ownership_valid = True  # Mark metadata ownership as valid
+                        break  # Stop after first valid ownership match
+                if not ownership_valid:  # Reject results from another dataset scope
+                    raise ValueError(f"Extra Trees results belong to {stored_paths}, not {file_path}")  # Raise ownership mismatch
+        elif "dataset" in df.columns:  # Fall back to dataset stem validation when path metadata is absent
+            expected_names = {Path(file_path).stem, Path(file_path).name, Path(file_path).parent.name}  # Resolve accepted dataset identity tokens
+            dataset_names = {str(value).strip() for value in df["dataset"].dropna().unique() if str(value).strip()}  # Collect stored dataset identifiers
+            if dataset_names and dataset_names.isdisjoint(expected_names):  # Reject mismatched dataset identities
+                raise ValueError(f"Extra Trees results dataset values {sorted(dataset_names)} do not match {sorted(expected_names)}")  # Raise ownership mismatch
+
+        selected_rows = df[df["selected"]].sort_values(["importance_rank", "extra_trees_importance"], ascending=[True, False], kind="mergesort")  # Preserve ranked selected-feature order
+        actual_count = int(len(selected_rows))  # Count selected rows
+        if actual_count != expected_count:  # Enforce exact configured selection size
+            raise ValueError(f"Extra Trees selected {actual_count} features but expected {expected_count}")  # Raise selection-count mismatch
+        if "actual_selected_feature_count" in df.columns and int(pd.to_numeric(df["actual_selected_feature_count"].dropna().iloc[0], errors="raise")) != actual_count:  # Validate recorded actual count when present
+            raise ValueError("Extra Trees actual_selected_feature_count does not match selected rows")  # Raise recorded-count mismatch
+        if "configured_selected_feature_count" in df.columns and int(pd.to_numeric(df["configured_selected_feature_count"].dropna().iloc[0], errors="raise")) != expected_count:  # Validate recorded configured count when present
+            raise ValueError("Extra Trees configured_selected_feature_count does not match configuration")  # Raise configured-count mismatch
+
+        selected_features = selected_rows["feature_name"].tolist()  # Convert selected names to ordered list
+        if len(selected_features) != len(set(selected_features)):  # Reject duplicate selected features
+            raise ValueError("Extra Trees selected features contain duplicates")  # Raise duplicate-feature error
+        excluded_names = {"unnamed 0", "unnamed_0", "flow id", "flow_id", "source ip", "source_ip", "destination ip", "destination_ip", "timestamp"}  # Define leakage-prone selected-name identities
+        blocked_features = [feature for feature in selected_features if sanitize_feature_name(feature) in excluded_names]  # Identify selected metadata columns
+        if blocked_features:  # Reject leakage-prone selected columns
+            raise ValueError(f"Extra Trees selected excluded metadata columns: {blocked_features}")  # Raise leakage-column error
+
+        verbose_output(f"{BackgroundColors.GREEN}Extra Trees Features successfully loaded for {BackgroundColors.CYAN}{os.path.basename(str(file_path))}{BackgroundColors.GREEN}. Total features: {BackgroundColors.CYAN}{len(selected_features)}{Style.RESET_ALL}", config=config)  # Log successful Extra Trees load
+        verbose_output(f"{BackgroundColors.GREEN}Extra Trees Selected Features: {BackgroundColors.CYAN}{selected_features}{Style.RESET_ALL}", config=config)  # Log selected Extra Trees features
+        return selected_features  # Return ranked selected names
+    except Exception as e:  # Preserve repository exception reporting
+        print(str(e))  # Print error to terminal for server logs
+        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
+        raise  # Re-raise to prevent silent Full Features fallback
+
+
 def load_feature_selection_results(file_path, config=None):
     """
-    Load GA, RFE and PCA feature selection artifacts for a given dataset file and
+    Load GA, RFE, PCA, and Extra Trees feature selection artifacts for a given dataset file and
     print concise status messages.
 
     :param file_path: Path to the dataset CSV being processed.
     :param config: Configuration dictionary (uses global CONFIG if None)
-    :return: Tuple (ga_selected_features, pca_n_components, rfe_selected_features)
+    :return: Tuple (ga_selected_features, pca_n_components, rfe_selected_features, extra_trees_selected_features)
     """
     
     try:
@@ -4862,7 +4971,11 @@ def load_feature_selection_results(file_path, config=None):
                 f"{BackgroundColors.YELLOW}Proceeding without RFE features for {BackgroundColors.CYAN}{os.path.basename(file_path)}{Style.RESET_ALL}"
             )
 
-        return ga_selected_features, pca_n_components, rfe_selected_features  # Return the extracted features
+        extra_trees_selected_features = extract_extra_trees_features(file_path, config=config)  # Extract Extra Trees features
+        if not extra_trees_selected_features:  # Report disabled or absent Extra Trees feature mode
+            print(f"{BackgroundColors.YELLOW}Proceeding without Extra Trees features for {BackgroundColors.CYAN}{os.path.basename(str(file_path))}{Style.RESET_ALL}")  # Log Extra Trees absence
+
+        return ga_selected_features, pca_n_components, rfe_selected_features, extra_trees_selected_features  # Return the extracted features
     except Exception as e:
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
@@ -11669,15 +11782,16 @@ def run_automl_pipeline(file, df, feature_names, data_source_label="Original", c
         raise
 
 
-def sanitize_and_verify_feature_selections(ga_selected_features, rfe_selected_features, feature_names, config=None):
+def sanitize_and_verify_feature_selections(ga_selected_features, rfe_selected_features, extra_trees_selected_features, feature_names, config=None):  # Sanitize selector artifacts before matrix slicing
     """
-    Sanitize and verify GA and RFE feature selections against available features.
+    Sanitize and verify GA, RFE, and Extra Trees feature selections against available features.
 
     :param ga_selected_features: Features selected by genetic algorithm
     :param rfe_selected_features: Features selected by RFE
+    :param extra_trees_selected_features: Features selected by Extra Trees
     :param feature_names: List of available feature names
     :param config: Configuration dictionary (uses global CONFIG if None)
-    :return: Tuple of (sanitized_ga_features, sanitized_rfe_features)
+    :return: Tuple of (sanitized_ga_features, sanitized_rfe_features, sanitized_extra_trees_features)
     """
 
     try:
@@ -11688,6 +11802,8 @@ def sanitize_and_verify_feature_selections(ga_selected_features, rfe_selected_fe
             ga_selected_features = sanitize_feature_names(ga_selected_features)  # Sanitize GA feature names
         if rfe_selected_features:  # If RFE features are provided
             rfe_selected_features = sanitize_feature_names(rfe_selected_features)  # Sanitize RFE feature names
+        if extra_trees_selected_features:  # If Extra Trees features are provided
+            extra_trees_selected_features = sanitize_feature_names(extra_trees_selected_features)  # Sanitize Extra Trees feature names
 
         try:  # Verify GA features exist in dataset
             if ga_selected_features:  # If GA features remain after sanitization
@@ -11703,7 +11819,14 @@ def sanitize_and_verify_feature_selections(ga_selected_features, rfe_selected_fe
             verbose_output(str(e), config=config)  # Log warning about missing RFE features
             rfe_selected_features = []  # Reset RFE features to empty list
 
-        return ga_selected_features, rfe_selected_features  # Return cleaned and verified feature selections
+        try:  # Verify Extra Trees features exist in dataset
+            if extra_trees_selected_features:  # If Extra Trees features remain after sanitization
+                extra_trees_selected_features = verify_selected_features_exist(extra_trees_selected_features, feature_names, "Extra Trees")  # Verify Extra Trees features exist
+        except ValueError as e:  # All Extra Trees features missing from dataset
+            verbose_output(str(e), config=config)  # Log warning about missing Extra Trees features
+            extra_trees_selected_features = []  # Reset Extra Trees features to empty list
+
+        return ga_selected_features, rfe_selected_features, extra_trees_selected_features  # Return cleaned and verified feature selections
     except Exception as e:
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
@@ -11782,12 +11905,12 @@ def build_evaluation_stacking_model(base_models, config=None):
         raise
 
 
-def assemble_feature_sets(X_train_scaled, X_test_scaled, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, file, feature_sets_config=None, config=None):
+def assemble_feature_sets(X_train_scaled, X_test_scaled, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, extra_trees_selected_features, file, feature_sets_config=None, config=None):  # Build enabled feature representations
     """
     Build feature sets dictionary from configurable feature selection strategies.
 
     Supports an additive explicit feature set alongside independent per-strategy
-    toggles (full, GA, PCA, RFE). When explicit_features is non-empty it is
+    toggles (full, GA, PCA, RFE, Extra Trees). When explicit_features is non-empty it is
     included as an additional entry; all strategy toggles remain fully independent.
     To evaluate ONLY the explicit feature set the caller must disable all toggles.
 
@@ -11797,6 +11920,7 @@ def assemble_feature_sets(X_train_scaled, X_test_scaled, feature_names, ga_selec
     :param ga_selected_features: GA selected features
     :param pca_n_components: Number of PCA components
     :param rfe_selected_features: RFE selected features
+    :param extra_trees_selected_features: Extra Trees selected features
     :param file: Path to dataset file (for PCA artifact lookup)
     :param feature_sets_config: Optional dict controlling which strategies to use
     :param config: Configuration dictionary (uses global CONFIG if None)
@@ -11815,9 +11939,10 @@ def assemble_feature_sets(X_train_scaled, X_test_scaled, feature_names, ga_selec
         use_ga = feature_sets_config.get("use_ga", True)  # Toggle for GA features strategy (default: enabled)
         use_pca = feature_sets_config.get("use_pca", True)  # Toggle for PCA features strategy (default: enabled)
         use_rfe = feature_sets_config.get("use_rfe", True)  # Toggle for RFE features strategy (default: enabled)
+        use_extra_trees = feature_sets_config.get("use_extra_trees", True)  # Toggle for Extra Trees features strategy (default: enabled)
 
         verbose_output(
-            f"{BackgroundColors.GREEN}Feature strategies enabled: Full={use_full}, PCA={use_pca}, RFE={use_rfe}, GA={use_ga}.{Style.RESET_ALL}", config=config
+            f"{BackgroundColors.GREEN}Feature strategies enabled: Full={use_full}, PCA={use_pca}, RFE={use_rfe}, GA={use_ga}, ExtraTrees={use_extra_trees}.{Style.RESET_ALL}", config=config
         )  # Log which feature strategies are active for this evaluation
 
         feature_sets = {}  # Initialize empty feature sets dictionary
@@ -11890,6 +12015,12 @@ def assemble_feature_sets(X_train_scaled, X_test_scaled, feature_names, ga_selec
         else:  # GA strategy is disabled
             X_train_ga, X_test_ga, ga_actual_features = None, None, []  # Skip GA subset computation when strategy is disabled
 
+        if use_extra_trees:  # Compute Extra Trees subset only when Extra Trees strategy is enabled
+            X_train_extra_trees, extra_trees_actual_features = get_feature_subset(X_train_scaled, extra_trees_selected_features, feature_names)  # Get Extra Trees feature subset for training
+            X_test_extra_trees, _ = get_feature_subset(X_test_scaled, extra_trees_selected_features, feature_names)  # Get Extra Trees feature subset for testing
+        else:  # Extra Trees strategy is disabled
+            X_train_extra_trees, X_test_extra_trees, extra_trees_actual_features = None, None, []  # Skip Extra Trees subset computation when strategy is disabled
+
         if use_rfe:  # Compute RFE subset only when RFE strategy is enabled
             X_train_rfe, rfe_actual_features = get_feature_subset(X_train_scaled, rfe_selected_features, feature_names)  # Get RFE feature subset for training
             X_test_rfe, _ = get_feature_subset(X_test_scaled, rfe_selected_features, feature_names)  # Get RFE feature subset for testing
@@ -11903,6 +12034,14 @@ def assemble_feature_sets(X_train_scaled, X_test_scaled, feature_names, ga_selec
                 feature_signatures.add(ga_signature)  # Register GA feature identity
             else:  # Duplicate GA feature set
                 print(f"{BackgroundColors.YELLOW}[WARNING] GA Features skipped because it is equivalent to an existing feature-set mode.{Style.RESET_ALL}")  # Report duplicate feature-set suppression
+
+        if use_extra_trees and X_train_extra_trees is not None and X_train_extra_trees.shape[1] > 0:  # Include Extra Trees subset only when the artifact produced usable features
+            extra_trees_signature = ("features", tuple(sorted(sanitize_feature_name(f) for f in extra_trees_actual_features)))  # Build order-insensitive Extra Trees feature identity
+            if extra_trees_signature not in feature_signatures:  # Add Extra Trees only when it is semantically distinct
+                feature_sets["Extra Trees Features"] = (X_train_extra_trees, X_test_extra_trees, extra_trees_actual_features)  # Extra Trees subset with actual selected names
+                feature_signatures.add(extra_trees_signature)  # Register Extra Trees feature identity
+            else:  # Duplicate Extra Trees feature set
+                print(f"{BackgroundColors.YELLOW}[WARNING] Extra Trees Features skipped because it is equivalent to an existing feature-set mode.{Style.RESET_ALL}")  # Report duplicate feature-set suppression
 
         if use_pca and X_train_pca is not None and X_test_pca is not None:  # Include PCA components only when transformation produced both matrices
             pca_signature = ("pca", int(X_train_pca.shape[1]))  # Build transformed component-space identity
@@ -11934,7 +12073,7 @@ def assemble_feature_sets(X_train_scaled, X_test_scaled, feature_names, ga_selec
         raise
 
 
-def iterate_feature_sets_sequentially(feature_source_arrays: dict, feature_names: List[Any], ga_selected_features: Any, pca_n_components: Any, rfe_selected_features: Any, file: str, feature_sets_config: dict, config: Optional[dict], scaler: Any = None, source_files: Optional[List[str]] = None, pca_cache_context: Optional[dict] = None, pca_input_feature_names: Optional[List[Any]] = None) -> Any:  # Yield feature matrices while carrying exact PCA cache provenance.
+def iterate_feature_sets_sequentially(feature_source_arrays: dict, feature_names: List[Any], ga_selected_features: Any, pca_n_components: Any, rfe_selected_features: Any, extra_trees_selected_features: Any, file: str, feature_sets_config: dict, config: Optional[dict], scaler: Any = None, source_files: Optional[List[str]] = None, pca_cache_context: Optional[dict] = None, pca_input_feature_names: Optional[List[Any]] = None) -> Any:  # Yield feature matrices while carrying exact PCA cache provenance.
     """
     Yield feature-set matrices one at a time.
 
@@ -11943,6 +12082,7 @@ def iterate_feature_sets_sequentially(feature_source_arrays: dict, feature_names
     :param ga_selected_features: GA-selected feature list or None.
     :param pca_n_components: PCA component count or None.
     :param rfe_selected_features: RFE-selected feature list or None.
+    :param extra_trees_selected_features: Extra Trees-selected feature list or None.
     :param file: Dataset path used for PCA artifact loading.
     :param feature_sets_config: Feature-set strategy configuration.
     :param config: Runtime configuration dictionary.
@@ -11963,8 +12103,9 @@ def iterate_feature_sets_sequentially(feature_source_arrays: dict, feature_names
     use_ga = feature_sets_config.get("use_ga", True)  # Resolve GA strategy toggle.
     use_pca = feature_sets_config.get("use_pca", True)  # Resolve PCA strategy toggle.
     use_rfe = feature_sets_config.get("use_rfe", True)  # Resolve RFE strategy toggle.
+    use_extra_trees = feature_sets_config.get("use_extra_trees", True)  # Resolve Extra Trees strategy toggle.
     feature_signatures: set[Tuple[str, Any]] = set()  # Track semantic feature-set identities for duplicate suppression.
-    pending_mode_count = len(list_grid_feature_modes(ga_selected_features, pca_n_components, rfe_selected_features, feature_names, config=config))  # Count modes to decide whether source matrices are still needed after Full Features.
+    pending_mode_count = len(list_grid_feature_modes(ga_selected_features, pca_n_components, rfe_selected_features, extra_trees_selected_features, feature_names, config=config))  # Count modes to decide whether source matrices are still needed after Full Features.
     X_train_rfe = None  # Reserve the RFE training subset for use after PCA evaluation.
     X_test_rfe = None  # Reserve the RFE testing subset for use after PCA evaluation.
     rfe_actual_features = []  # Preserve the resolved RFE feature order beside the staged matrices.
@@ -12011,7 +12152,24 @@ def iterate_feature_sets_sequentially(feature_source_arrays: dict, feature_names
             else:  # Report duplicate explicit mode suppression.
                 print(f"{BackgroundColors.YELLOW}[WARNING] Explicit Features skipped because it is equivalent to an existing feature-set mode.{Style.RESET_ALL}")  # Log duplicate explicit mode.
 
-    if use_ga:  # Resolve GA feature mode after explicit features.
+    if use_extra_trees:  # Resolve Extra Trees feature mode after explicit features.
+        X_train_extra_trees, extra_trees_actual_features = get_feature_subset(feature_source_arrays["X_train_scaled"], extra_trees_selected_features, feature_names)  # Materialize Extra Trees training subset for this mode.
+        X_test_extra_trees, _ = get_feature_subset(feature_source_arrays["X_test_scaled"], extra_trees_selected_features, feature_names)  # Materialize Extra Trees test subset for this mode.
+        if X_train_extra_trees is not None and X_train_extra_trees.shape[1] > 0:  # Yield Extra Trees only when at least one feature exists.
+            extra_trees_signature = ("features", tuple(sorted(sanitize_feature_name(feature) for feature in extra_trees_actual_features)))  # Build Extra Trees feature identity.
+            if extra_trees_signature not in feature_signatures:  # Suppress duplicate Extra Trees mode.
+                feature_signatures.add(extra_trees_signature)  # Register Extra Trees feature identity.
+                try:
+                    yield "Extra Trees Features", X_train_extra_trees, X_test_extra_trees, extra_trees_actual_features, None  # Yield Extra Trees feature matrices.
+                finally:
+                    del X_train_extra_trees, X_test_extra_trees  # Release Extra Trees subset arrays after caller finishes or aborts this mode.
+                    gc.collect()  # Reclaim Extra Trees subset memory before the next feature mode.
+            else:  # Report duplicate Extra Trees mode suppression.
+                print(f"{BackgroundColors.YELLOW}[WARNING] Extra Trees Features skipped because it is equivalent to an existing feature-set mode.{Style.RESET_ALL}")  # Log duplicate Extra Trees mode.
+                del X_train_extra_trees, X_test_extra_trees  # Release duplicate Extra Trees subset arrays immediately.
+                gc.collect()  # Reclaim duplicate Extra Trees subset memory.
+
+    if use_ga:  # Resolve GA feature mode after Extra Trees features.
         X_train_ga, ga_actual_features = get_feature_subset(feature_source_arrays["X_train_scaled"], ga_selected_features, feature_names)  # Materialize GA training subset for this mode.
         X_test_ga, _ = get_feature_subset(feature_source_arrays["X_test_scaled"], ga_selected_features, feature_names)  # Materialize GA test subset for this mode.
         if X_train_ga is not None and X_train_ga.shape[1] > 0:  # Yield GA only when at least one feature exists.
@@ -13306,6 +13464,7 @@ def evaluate_on_dataset(
     source_files=None,  # Preserve ordered dataset provenance for PCA cache validation.
     artifact_recovery_target=None,
     feature_mode_name=None,
+    extra_trees_selected_features=None,  # Preserve optional Extra Trees feature selection artifact without breaking legacy positional calls.
 ):
     """
     Train on original data or evaluate persisted original-trained models on augmented data.
@@ -13315,6 +13474,7 @@ def evaluate_on_dataset(
     :param ga_selected_features: GA selected features
     :param pca_n_components: Number of PCA components
     :param rfe_selected_features: RFE selected features
+    :param extra_trees_selected_features: Extra Trees selected features
     :param base_models: Dictionary of base models to evaluate
     :param data_source_label: Label for the original or augmented testing source
     :param hyperparams_map: Dictionary mapping model names to hyperparameter dicts
@@ -13346,15 +13506,15 @@ def evaluate_on_dataset(
         if artifact_recovery_target is not None:
             stacking_enabled = artifact_recovery_target[1] == "StackingClassifier"  # Restrict recovery to the missing classifier identity.
 
-        ga_selected_features, rfe_selected_features = sanitize_and_verify_feature_selections(
-            ga_selected_features, rfe_selected_features, feature_names, config=config
-        )  # Sanitize and verify GA/RFE feature selections against available features
+        ga_selected_features, rfe_selected_features, extra_trees_selected_features = sanitize_and_verify_feature_selections(
+            ga_selected_features, rfe_selected_features, extra_trees_selected_features, feature_names, config=config
+        )  # Sanitize and verify GA/RFE/Extra Trees feature selections against available features
 
         feature_sets_config = dict(config.get("stacking", {}).get("feature_sets_config", {}))  # Copy feature strategy config so grid-specific enforcement cannot mutate global configuration
         if not config.get("stacking", {}).get("methods", {}).get("feature_selection", True):  # Feature selection disabled: only the full-feature baseline may be generated
-            feature_sets_config = {"use_full": True, "use_pca": False, "use_rfe": False, "use_ga": False, "explicit_features": []}  # Suppress every selection strategy without mutating CLI/config state
+            feature_sets_config = {"use_full": True, "use_pca": False, "use_rfe": False, "use_ga": False, "use_extra_trees": False, "explicit_features": []}  # Suppress every selection strategy without mutating CLI/config state
 
-        feature_mode_names = [artifact_recovery_target[0]] if artifact_recovery_target is not None else list_grid_feature_modes(ga_selected_features, pca_n_components, rfe_selected_features, feature_names, config=config)  # Resolve the full plan or one missing artifact mode.
+        feature_mode_names = [artifact_recovery_target[0]] if artifact_recovery_target is not None else list_grid_feature_modes(ga_selected_features, pca_n_components, rfe_selected_features, extra_trees_selected_features, feature_names, config=config)  # Resolve the full plan or one missing artifact mode.
         if feature_mode_name is not None:  # Restrict sequential execution to one canonical feature-set group when requested.
             if feature_mode_name not in feature_mode_names:  # Reject scheduling identities absent from actual assembled feature modes.
                 raise ValueError(f"Unknown evaluation feature mode: {feature_mode_name}")  # Surface canonical plan and execution mismatch.
@@ -13401,7 +13561,7 @@ def evaluate_on_dataset(
                 cache_dict = {}
 
         if artifact_recovery_target is None and (grid_progress is None or not grid_progress.get("plan_printed", False)):
-            feature_metadata_by_name = build_feature_process_metadata(feature_names, ga_selected_features, pca_n_components, rfe_selected_features)  # Build small feature descriptors for cache-aware plan reporting
+            feature_metadata_by_name = build_feature_process_metadata(feature_names, ga_selected_features, pca_n_components, rfe_selected_features, extra_trees_selected_features)  # Build small feature descriptors for cache-aware plan reporting
             if all(name in feature_metadata_by_name for name in feature_mode_names):  # Use cache-aware grouping only for feature modes with compact descriptors.
                 tasks = build_feature_process_plan(evaluation_plan, feature_metadata_by_name, original_sample_count, file, execution_mode_str, get_current_experiment_run(config))  # Reuse authoritative global IDs and expected original-data shapes for plan reporting
                 cached_results, pending_by_feature = partition_evaluation_plan_by_cache(tasks, cache_dict, feature_mode_names, attack_types_combined)  # Reuse existing cache matching before plan reporting
@@ -13443,6 +13603,7 @@ def evaluate_on_dataset(
                 "GA Features": [feature_lookup[sanitize_feature_name(feature)] for feature in (ga_selected_features or []) if sanitize_feature_name(feature) in feature_lookup],
                 "PCA Components": [f"PC{index + 1}" for index in range(min(int(pca_n_components or 0), len(pca_input_feature_names)))],
                 "RFE Features": [feature_lookup[sanitize_feature_name(feature)] for feature in (rfe_selected_features or []) if sanitize_feature_name(feature) in feature_lookup],
+                "Extra Trees Features": [feature_lookup[sanitize_feature_name(feature)] for feature in (extra_trees_selected_features or []) if sanitize_feature_name(feature) in feature_lookup],
             }
             dataset_name = build_filename_safe_dataset_identity(resolve_canonical_dataset_identity(str(file), True)) if execution_mode_str == "combined_files" else os.path.basename(os.path.dirname(file))
             evaluation_models = list(individual_models.items()) + ([('StackingClassifier', stacking_model)] if stacking_enabled else [])
@@ -13460,7 +13621,7 @@ def evaluate_on_dataset(
                     artifact_bundle, rejection_reason = load_existing_model_if_available(model_name, file, dataset_name, artifact_feature_set, artifact_context, config=config)
                     if artifact_bundle is None:
                         print(f"{BackgroundColors.YELLOW}[WARNING] Retraining {BackgroundColors.CYAN}{model_name}{BackgroundColors.YELLOW} on original data only because {rejection_reason}.{Style.RESET_ALL}")
-                        recovery_results = evaluate_on_dataset(file, df, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, base_models, data_source_label="Original", hyperparams_map=hyperparams_map, experiment_id=generate_experiment_id(file, "original_only"), experiment_mode="original_only", augmentation_ratio=None, execution_mode_str=execution_mode_str, attack_types_combined=attack_types_combined, config=config, cache_ref_file=cache_ref_file, hyperparameters_enabled=hyperparameters_enabled, source_files=pca_source_files, artifact_recovery_target=(name, model_name))
+                        recovery_results = evaluate_on_dataset(file, df, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, base_models, data_source_label="Original", hyperparams_map=hyperparams_map, experiment_id=generate_experiment_id(file, "original_only"), experiment_mode="original_only", augmentation_ratio=None, execution_mode_str=execution_mode_str, attack_types_combined=attack_types_combined, config=config, cache_ref_file=cache_ref_file, hyperparameters_enabled=hyperparameters_enabled, source_files=pca_source_files, artifact_recovery_target=(name, model_name), extra_trees_selected_features=extra_trees_selected_features)
                         del recovery_results
                         gc.collect()
                         artifact_bundle, rejection_reason = load_existing_model_if_available(model_name, file, dataset_name, artifact_feature_set, artifact_context, config=config)
@@ -13508,7 +13669,7 @@ def evaluate_on_dataset(
         del df  # Release the original dataframe after split and scaling before classifier fitting.
         gc.collect()  # Reclaim released dataframe memory before feature-set materialization.
 
-        feature_sets_iter = iterate_feature_sets_sequentially(feature_source_arrays, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, file, feature_sets_config, config, scaler=scaler, source_files=pca_source_files, pca_cache_context=pca_cache_context, pca_input_feature_names=pca_input_feature_names)  # Create the lazy feature-set iterator with exact PCA source, feature, scaler, and split provenance.
+        feature_sets_iter = iterate_feature_sets_sequentially(feature_source_arrays, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, extra_trees_selected_features, file, feature_sets_config, config, scaler=scaler, source_files=pca_source_files, pca_cache_context=pca_cache_context, pca_input_feature_names=pca_input_feature_names)  # Create the lazy feature-set iterator with exact PCA source, feature, scaler, and split provenance.
         for idx, (name, X_train_subset, X_test_subset, subset_feature_names_list, transformer) in enumerate(feature_sets_iter, start=1):  # Evaluate one materialized feature set at a time
             if feature_mode_name is not None and name != feature_mode_name:  # Skip feature matrices outside current canonical sequential group.
                 continue  # Advance without evaluating an out-of-group feature set.
@@ -13748,7 +13909,7 @@ def locate_and_verify_artifacts(file_path, config=None):
 
     :param file_path: Path to the dataset CSV file
     :param config: Configuration dictionary (uses global CONFIG if None)
-    :return: Dict with keys: 'ga', 'pca', 'rfe', 'hyperparams', 'augmented_file'
+    :return: Dict with keys: 'ga', 'pca', 'rfe', 'extra_trees', 'hyperparams', 'augmented_file'
     """
     
     try:
@@ -13785,6 +13946,16 @@ def locate_and_verify_artifacts(file_path, config=None):
             print(f"{BackgroundColors.YELLOW}Warning: RFE extraction failed for {file_path}: {e}{Style.RESET_ALL}")  # Warn on failure
             rfe_sel = None  # Normalize to None
         artifacts["rfe"] = rfe_sel  # Store RFE selection (or None)
+
+        extra_trees_sel = None  # Placeholder for Extra Trees selected features
+        try:  # Attempt Extra Trees artifact extraction
+            extra_trees_sel = extract_extra_trees_features(file_path, config=config)  # Try extracting Extra Trees features
+        except Exception as e:  # Handle Extra Trees extraction failures according to enablement
+            if config.get("stacking", {}).get("feature_sets_config", {}).get("use_extra_trees", True):  # Preserve enabled Extra Trees as a required artifact
+                raise  # Re-raise enabled Extra Trees artifact errors
+            print(f"{BackgroundColors.YELLOW}Warning: Extra Trees extraction failed for {file_path}: {e}{Style.RESET_ALL}")  # Warn on disabled-mode extraction failure
+            extra_trees_sel = None  # Normalize to None
+        artifacts["extra_trees"] = extra_trees_sel  # Store Extra Trees selection (or None)
 
         hyperparams = None  # Placeholder for hyperparameters mapping
         try:
@@ -14128,7 +14299,7 @@ def load_and_validate_augmented_data(file, df_original_cleaned, config=None):
         raise
 
 
-def run_single_ratio_experiment(file, df_original_cleaned, df_augmented_cleaned, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, base_models, hp_params_map, ratio, ratio_idx, total_ratios, config=None):
+def run_single_ratio_experiment(file, df_original_cleaned, df_augmented_cleaned, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, extra_trees_selected_features, base_models, hp_params_map, ratio, ratio_idx, total_ratios, config=None):  # Run one augmented ratio with all enabled feature artifacts
     """
     Executes a single ratio-based augmentation experiment by sampling, visualizing, and evaluating.
 
@@ -14182,7 +14353,7 @@ def run_single_ratio_experiment(file, df_original_cleaned, df_augmented_cleaned,
             hyperparams_map=hp_params_map, experiment_id=experiment_id,
             experiment_mode="original_training_augmented_testing", augmentation_ratio=ratio,
             execution_mode_str="separate_files", attack_types_combined=None,
-            df_augmented_for_testing=df_sampled, config=config,
+            df_augmented_for_testing=df_sampled, config=config, extra_trees_selected_features=extra_trees_selected_features,
         )  # Evaluate persisted original-trained classifiers on augmented samples only.
 
         del df_sampled  # Release sampled augmented data to free memory after evaluation
@@ -14195,7 +14366,7 @@ def run_single_ratio_experiment(file, df_original_cleaned, df_augmented_cleaned,
         raise
 
 
-def process_augmented_data_evaluation(file, df_original_cleaned, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, base_models, hp_params_map, results_original, config=None):
+def process_augmented_data_evaluation(file, df_original_cleaned, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, extra_trees_selected_features, base_models, hp_params_map, results_original, config=None):  # Run ratio-based augmented evaluation
     """
     Handles complete augmented data evaluation workflow with ratio-based experiments.
     For each ratio in config.get("stacking", {}).get("augmentation_ratios", [0.25, 0.50, 0.75, 1.00]), samples augmented data proportionally,
@@ -14207,6 +14378,7 @@ def process_augmented_data_evaluation(file, df_original_cleaned, feature_names, 
     :param ga_selected_features: Features selected by genetic algorithm
     :param pca_n_components: Number of PCA components
     :param rfe_selected_features: Features selected by RFE
+    :param extra_trees_selected_features: Features selected by Extra Trees
     :param base_models: Dictionary of base models
     :param hp_params_map: Hyperparameters mapping
     :param results_original: Results from original data evaluation
@@ -14248,7 +14420,7 @@ def process_augmented_data_evaluation(file, df_original_cleaned, feature_names, 
         for ratio_idx, ratio in enumerate(augmentation_ratios, start=1):  # Iterate over each augmentation ratio
             results_ratio = run_single_ratio_experiment(
                 file, df_original_cleaned, df_augmented_cleaned, feature_names,
-                ga_selected_features, pca_n_components, rfe_selected_features,
+                ga_selected_features, pca_n_components, rfe_selected_features, extra_trees_selected_features,
                 base_models, hp_params_map, ratio, ratio_idx, len(augmentation_ratios), config
             )  # Execute the experiment for this specific ratio
 
@@ -14349,7 +14521,7 @@ def save_combined_files_augmentation_comparison(results_original, all_ratio_resu
         raise
 
 
-def run_combined_files_augmentation_ratio_experiment(reference_file, combined_files_df, combined_augmented_df, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, base_models, hp_params_map, attack_types_list, ratio, ratio_idx, total_steps, dataset_name, config=None):
+def run_combined_files_augmentation_ratio_experiment(reference_file, combined_files_df, combined_augmented_df, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, extra_trees_selected_features, base_models, hp_params_map, attack_types_list, ratio, ratio_idx, total_steps, dataset_name, config=None):  # Run one combined-files augmented ratio
     """
     Runs a single ratio-based augmentation experiment for combined files evaluation and returns the results.
 
@@ -14360,6 +14532,7 @@ def run_combined_files_augmentation_ratio_experiment(reference_file, combined_fi
     :param ga_selected_features: List of features selected by the genetic algorithm
     :param pca_n_components: Number of PCA components or None if PCA is disabled
     :param rfe_selected_features: List of features selected by RFE or None if disabled
+    :param extra_trees_selected_features: List of features selected by Extra Trees or None if disabled
     :param base_models: Dictionary mapping model names to model objects
     :param hp_params_map: Dictionary mapping model names to hyperparameter dicts
     :param attack_types_list: List of unique attack type labels for combined files evaluation
@@ -14406,7 +14579,7 @@ def run_combined_files_augmentation_ratio_experiment(reference_file, combined_fi
             hyperparams_map=hp_params_map, experiment_id=experiment_id,
             experiment_mode="original_training_augmented_testing", augmentation_ratio=ratio,
             execution_mode_str="combined_files", attack_types_combined=attack_types_list,
-            df_augmented_for_testing=df_sampled, config=config,
+            df_augmented_for_testing=df_sampled, config=config, extra_trees_selected_features=extra_trees_selected_features,
         )  # Evaluate persisted original-trained classifiers on augmented samples only.
 
         return results_ratio  # Return evaluation results for this ratio
@@ -14530,7 +14703,7 @@ def process_combined_files_augmentation_testing(reference_file, original_files_l
         for ratio_idx, ratio in enumerate(augmentation_ratios, start=1):  # Iterate over each augmentation ratio
             results_ratio = run_combined_files_augmentation_ratio_experiment(
                 combined_dataset_reference, combined_files_df, combined_augmented_df, feature_names,  # Use directory identity for ratio evaluation.
-                ga_selected_features, pca_n_components, rfe_selected_features, base_models,
+                ga_selected_features, pca_n_components, rfe_selected_features, extra_trees_selected_features, base_models,
                 hp_params_map, attack_types_list, ratio, ratio_idx, total_steps, dataset_name, config=config,
             )  # Run evaluation for this ratio and retrieve results or None if sampling failed
             if results_ratio is None:  # If this ratio experiment failed at the sampling stage
@@ -14613,7 +14786,7 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
         print(f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}\n")  # Print closing separator
         send_telegram_message(TELEGRAM_BOT, f"Starting combined files evaluation | Dataset: {dataset_name} | Attack types: {len(attack_types_list)}")  # Send only the combined-files stage transition after the startup configuration
 
-        ga_selected_features, pca_n_components, rfe_selected_features = load_feature_selection_results(
+        ga_selected_features, pca_n_components, rfe_selected_features, extra_trees_selected_features = load_feature_selection_results(
             reference_file, config=config
         )  # Load feature selection results
 
@@ -14623,9 +14796,10 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
             ga_selected_features = None  # Suppress GA features when feature selection is disabled
             pca_n_components = None  # Suppress PCA components when feature selection is disabled
             rfe_selected_features = None  # Suppress RFE features when feature selection is disabled
+            extra_trees_selected_features = None  # Suppress Extra Trees features when feature selection is disabled
         
         feature_names = [col for col in combined_files_df.columns if col != 'attack_type']  # Get feature column names
-        ga_selected_features, rfe_selected_features = sanitize_and_verify_feature_selections(ga_selected_features, rfe_selected_features, feature_names, config=config)  # Normalize artifacts before grid counting so the denominator matches assembled feature modes
+        ga_selected_features, rfe_selected_features, extra_trees_selected_features = sanitize_and_verify_feature_selections(ga_selected_features, rfe_selected_features, extra_trees_selected_features, feature_names, config=config)  # Normalize artifacts before grid counting so the denominator matches assembled feature modes
         
         verbose_output(
             f"{BackgroundColors.GREEN}Combined files evaluation dataset features: {BackgroundColors.CYAN}{len(feature_names)} features{Style.RESET_ALL}",
@@ -14647,10 +14821,10 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
         augmented_files_list = load_augmented_files_for_combined_evaluation(original_files_list, config=config) if augmentation_enabled else []  # Resolve augmented file paths without loading their dataframes
         augmentation_file_paths = [path for path in augmented_files_list if path is not None]  # Filter missing augmented-file placeholders before deferred loading
         augmentation_ratios = config.get("stacking", {}).get("augmentation_ratios", [0.25, 0.50, 0.75, 1.00]) if augmentation_file_paths else []  # Generate ratio modes only when augmentation files exist
-        feature_mode_names = list_grid_feature_modes(ga_selected_features, pca_n_components, rfe_selected_features, feature_names, config=config)  # Resolve actual feature modes in evaluation order
+        feature_mode_names = list_grid_feature_modes(ga_selected_features, pca_n_components, rfe_selected_features, extra_trees_selected_features, feature_names, config=config)  # Resolve actual feature modes in evaluation order
         evaluation_plan = build_evaluation_plan(hp_runs, [None] + list(augmentation_ratios), feature_mode_names, methods_cfg.get("stacking", True))  # Build the exact default-first, original-first full-grid order
         if persistent_feature_set_processes_enabled(feature_mode_names, config=config):  # Route the complete cache-first grid through persistent OS processes when explicitly enabled
-            persistent_results, persistent_comparisons = run_persistent_feature_set_grid(combined_files_df_holder.pop(), combined_dataset_reference, original_files_list, attack_types_list, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, hp_runs, augmentation_file_paths, list(augmentation_ratios), evaluation_plan, "combined_files", "Original Combined Files", config)  # Execute one generic Full, GA, PCA, and RFE worker path without matrix pickling
+            persistent_results, persistent_comparisons = run_persistent_feature_set_grid(combined_files_df_holder.pop(), combined_dataset_reference, original_files_list, attack_types_list, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, hp_runs, augmentation_file_paths, list(augmentation_ratios), evaluation_plan, "combined_files", "Original Combined Files", config, extra_trees_selected_features=extra_trees_selected_features)  # Execute one generic Full, GA, PCA, RFE, and Extra Trees worker path without matrix pickling
             feature_analysis_dir = save_combined_files_results_to_csv(combined_dataset_reference, persistent_results, config=config)  # Save every globally ordered result only after complete child success
             if persistent_comparisons:  # Preserve the existing combined augmentation comparison artifact
                 save_combined_files_augmentation_comparison(None, None, feature_analysis_dir, config=config, comparison_results=persistent_comparisons)  # Save unchanged comparison metrics for both HP modes
@@ -14672,7 +14846,7 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
         all_comparison_results = []  # Accumulate augmentation comparisons across both HP modes
         orchestration_cache = load_cache_results(combined_dataset_reference, config=config, notify_discovery=False)  # Recover cache identities before any sequential augmentation load.
         fully_cached_ratios = {ratio for ratio in augmentation_ratios if all(build_resume_cache_key("combined_files", f"Augmented@{int(ratio * 100)}%_CombinedFiles", "original_training_augmented_testing", ratio, attack_types_list, feature_set, classifier, hyperparameters_enabled) in orchestration_cache for feature_set, hyperparameters_enabled, planned_ratio, classifier in evaluation_plan if planned_ratio == ratio)}  # Identify ratio groups requiring no augmented contents.
-        feature_metadata_by_name = build_feature_process_metadata(feature_names, ga_selected_features, pca_n_components, rfe_selected_features)  # Build small feature descriptors for cache-aware plan reporting
+        feature_metadata_by_name = build_feature_process_metadata(feature_names, ga_selected_features, pca_n_components, rfe_selected_features, extra_trees_selected_features)  # Build small feature descriptors for cache-aware plan reporting
         if all(name in feature_metadata_by_name for name in feature_mode_names):  # Use cache-aware grouping only for feature modes with compact descriptors.
             tasks = build_feature_process_plan(evaluation_plan, feature_metadata_by_name, original_sample_count, combined_dataset_reference, "combined_files", get_current_experiment_run(config))  # Reuse authoritative global IDs and expected original-data shapes for plan reporting
             cached_results, pending_by_feature = partition_evaluation_plan_by_cache(tasks, orchestration_cache, feature_mode_names, attack_types_list)  # Reuse existing cache matching before plan reporting
@@ -14724,7 +14898,7 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
                         del df_sampled  # Release current ratio sample.
                         gc.collect()  # Reclaim skipped ratio data.
                         continue  # Advance to next canonical slice.
-                    results_ratio = evaluate_on_dataset(combined_dataset_reference, ratio_original_df, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, base_models, data_source_label=f"Augmented@{int(augmentation_ratio * 100)}%_CombinedFiles", hyperparams_map=hp_params_map, experiment_id=generate_experiment_id(combined_dataset_reference, "combined_files_original_training_augmented_testing", augmentation_ratio), experiment_mode="original_training_augmented_testing", augmentation_ratio=augmentation_ratio, execution_mode_str="combined_files", attack_types_combined=attack_types_list, df_augmented_for_testing=df_sampled, config=config, hyperparameters_enabled=hyperparameters_enabled, grid_progress=grid_progress, source_files=original_files_list, feature_mode_name=feature_mode_name)  # Evaluate current canonical feature group while reusing ratio sample.
+                    results_ratio = evaluate_on_dataset(combined_dataset_reference, ratio_original_df, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, base_models, data_source_label=f"Augmented@{int(augmentation_ratio * 100)}%_CombinedFiles", hyperparams_map=hp_params_map, experiment_id=generate_experiment_id(combined_dataset_reference, "combined_files_original_training_augmented_testing", augmentation_ratio), experiment_mode="original_training_augmented_testing", augmentation_ratio=augmentation_ratio, execution_mode_str="combined_files", attack_types_combined=attack_types_list, df_augmented_for_testing=df_sampled, config=config, hyperparameters_enabled=hyperparameters_enabled, grid_progress=grid_progress, source_files=original_files_list, feature_mode_name=feature_mode_name, extra_trees_selected_features=extra_trees_selected_features)  # Evaluate current canonical feature group while reusing ratio sample.
                     ratio_results_list = list(results_ratio.values())  # Convert current ratio results for annotation and export.
                     annotate_results_with_combination_flags(ratio_results_list, methods_cfg.get("feature_selection", True), hyperparameters_enabled, True)  # Mark active grid dimensions.
                     all_grid_results.extend(ratio_results_list)  # Preserve canonical augmented result order.
@@ -14749,6 +14923,7 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
                     hyperparameters_enabled=hyperparameters_enabled, grid_progress=grid_progress,
                     source_files=original_files_list,  # Preserve the ordered original CSV provenance used to build this combined dataset.
                     feature_mode_name=feature_mode_name,  # Evaluate only current canonical original feature group.
+                    extra_trees_selected_features=extra_trees_selected_features,  # Preserve Extra Trees feature order for this combined slice.
                 )  # Evaluate the no-augmentation feature/classifier slice
                 del original_df_for_run_holder  # Release the empty HP slice transfer holder after evaluation returns.
                 gc.collect()  # Reclaim any released original-only dataframe references before augmentation handling.
@@ -14857,7 +15032,7 @@ def process_single_file_evaluation(file, combined_df, combined_file_for_features
         print_file_processing_header(file, config=config)  # Print formatted header
 
         file_for_features = combined_file_for_features if file == "combined" else file  # Determine which file to use for feature selection metadata
-        ga_selected_features, pca_n_components, rfe_selected_features = load_feature_selection_results(
+        ga_selected_features, pca_n_components, rfe_selected_features, extra_trees_selected_features = load_feature_selection_results(
             file_for_features, config=config
         )  # Load feature selection results
 
@@ -14886,7 +15061,7 @@ def process_single_file_evaluation(file, combined_df, combined_file_for_features
             file, df_original_cleaned, feature_names, ga_selected_features, pca_n_components,
             rfe_selected_features, base_models, data_source_label="Original", hyperparams_map=hp_params_map,
             experiment_id=original_experiment_id, experiment_mode="original_only", augmentation_ratio=None,
-            execution_mode_str="separate_files", attack_types_combined=None, config=config,
+            execution_mode_str="separate_files", attack_types_combined=None, config=config, extra_trees_selected_features=extra_trees_selected_features,
         )  # Evaluate on original data with experiment traceability metadata and explicit config propagation
 
         original_results_list = list(results_original.values())  # Convert results dict to list
@@ -14903,7 +15078,7 @@ def process_single_file_evaluation(file, combined_df, combined_file_for_features
         if test_data_augmentation:  # If data augmentation testing is enabled
             process_augmented_data_evaluation(
                 file, df_original_cleaned, feature_names, ga_selected_features, pca_n_components,
-                rfe_selected_features, base_models, hp_params_map, results_original, config=config
+                rfe_selected_features, extra_trees_selected_features, base_models, hp_params_map, results_original, config=config
             )  # Process augmented data evaluation workflow
     except Exception as e:
         print(str(e))
@@ -14935,13 +15110,14 @@ def annotate_results_with_combination_flags(results_list, feature_selection_enab
         raise
 
 
-def list_grid_feature_modes(ga_selected_features: Optional[List[Any]], pca_n_components: Optional[int], rfe_selected_features: Optional[List[Any]], feature_names: List[Any], config: Optional[dict] = None) -> List[str]:
+def list_grid_feature_modes(ga_selected_features: Optional[List[Any]], pca_n_components: Optional[int], rfe_selected_features: Optional[List[Any]], extra_trees_selected_features: Optional[List[Any]], feature_names: List[Any], config: Optional[dict] = None) -> List[str]:  # List canonical feature modes
     """
     List the feature modes that the sequential evaluation iterator will generate.
 
     :param ga_selected_features: Selected feature names produced by GA, if available
     :param pca_n_components: Number of PCA components to use, if available
     :param rfe_selected_features: Selected feature names produced by RFE, if available
+    :param extra_trees_selected_features: Selected feature names produced by Extra Trees, if available
     :param feature_names: List of available feature names in the dataset
     :param config: Optional configuration dictionary; uses global CONFIG when None
     :return: Ordered feature mode names that will be generated
@@ -14970,6 +15146,12 @@ def list_grid_feature_modes(ga_selected_features: Optional[List[Any]], pca_n_com
         if explicit_signature not in feature_signatures:  # Count explicit only when semantically distinct
             feature_signatures.add(explicit_signature)  # Register explicit feature identity
             feature_modes.append("Explicit Features")  # Add the distinct explicit feature mode
+
+    if feature_sets_config.get("use_extra_trees", True) and extra_trees_selected_features:  # Count Extra Trees only when enabled and backed by a non-empty artifact
+        extra_trees_signature = ("features", tuple(sorted(sanitize_feature_name(name) for name in extra_trees_selected_features)))  # Build Extra Trees feature identity
+        if extra_trees_signature not in feature_signatures:  # Count Extra Trees only when semantically distinct
+            feature_signatures.add(extra_trees_signature)  # Register Extra Trees feature identity
+            feature_modes.append("Extra Trees Features")  # Add the distinct Extra Trees feature mode
 
     if feature_sets_config.get("use_ga", True) and ga_selected_features:  # Count GA only when enabled and backed by a non-empty artifact
         ga_signature = ("features", tuple(sorted(sanitize_feature_name(name) for name in ga_selected_features)))  # Build GA feature identity
@@ -15027,12 +15209,12 @@ def resolve_feature_set_worker_key(feature_set_name: str) -> str:  # Resolve one
     Resolve a runtime feature-set name to its configured process key.
 
     :param feature_set_name: Runtime feature-set display name.
-    :return: Configured worker key for Full, GA, PCA, or RFE.
+    :return: Configured worker key for Full, GA, PCA, RFE, or Extra Trees.
     """
 
-    key_by_name = {"Full Features": "full", "GA Features": "ga", "PCA Components": "pca", "RFE Features": "rfe"}  # Map supported runtime identities to configuration keys
+    key_by_name = {"Full Features": "full", "GA Features": "ga", "PCA Components": "pca", "RFE Features": "rfe", "Extra Trees Features": "extra_trees"}  # Map supported runtime identities to configuration keys
     if feature_set_name not in key_by_name:  # Reject unsupported persistent feature-set identities
-        raise ValueError(f"Persistent feature-set processes support only Full Features, GA Features, PCA Components, and RFE Features, not {feature_set_name}")  # Report the unsupported runtime identity
+        raise ValueError(f"Persistent feature-set processes support only Full Features, GA Features, PCA Components, RFE Features, and Extra Trees Features, not {feature_set_name}")  # Report the unsupported runtime identity
     return key_by_name[feature_set_name]  # Return the configured process key
 
 
@@ -15059,7 +15241,7 @@ def persistent_feature_set_processes_enabled(feature_mode_names: List[str], conf
     return True  # Enable one persistent process per active feature set
 
 
-def build_feature_process_metadata(feature_names: List[Any], ga_selected_features: Any, pca_n_components: Any, rfe_selected_features: Any) -> dict:  # Build ordered feature identities and indices without materializing matrices
+def build_feature_process_metadata(feature_names: List[Any], ga_selected_features: Any, pca_n_components: Any, rfe_selected_features: Any, extra_trees_selected_features: Any) -> dict:  # Build ordered feature identities and indices without materializing matrices
     """
     Build feature-set metadata without materializing feature matrices.
 
@@ -15067,6 +15249,7 @@ def build_feature_process_metadata(feature_names: List[Any], ga_selected_feature
     :param ga_selected_features: Ordered GA-selected feature names.
     :param pca_n_components: Selected PCA component count.
     :param rfe_selected_features: Ordered RFE-selected feature names.
+    :param extra_trees_selected_features: Ordered Extra Trees-selected feature names.
     :return: Mapping of runtime feature-set names to small metadata descriptors.
     """
 
@@ -15074,12 +15257,14 @@ def build_feature_process_metadata(feature_names: List[Any], ga_selected_feature
     feature_index = {feature: index for index, feature in enumerate(normalized_feature_names)}  # Build one deterministic positional lookup
     ga_names = [str(feature) for feature in (ga_selected_features or []) if str(feature) in feature_index]  # Preserve valid GA feature order
     rfe_names = [str(feature) for feature in (rfe_selected_features or []) if str(feature) in feature_index]  # Preserve valid RFE feature order
+    extra_trees_names = [str(feature) for feature in (extra_trees_selected_features or []) if str(feature) in feature_index]  # Preserve valid Extra Trees feature order
     pca_count = min(int(pca_n_components or 0), len(normalized_feature_names))  # Resolve the exact effective PCA component count
     return {  # Return small descriptors for every supported persistent feature set
         "Full Features": {"feature_names": normalized_feature_names, "indices": list(range(len(normalized_feature_names))), "feature_count": len(normalized_feature_names)},  # Describe the unchanged full input columns
         "GA Features": {"feature_names": ga_names, "indices": [feature_index[name] for name in ga_names], "feature_count": len(ga_names)},  # Describe GA input columns
         "PCA Components": {"feature_names": [f"PC{index + 1}" for index in range(pca_count)], "indices": None, "feature_count": pca_count},  # Describe PCA output components
         "RFE Features": {"feature_names": rfe_names, "indices": [feature_index[name] for name in rfe_names], "feature_count": len(rfe_names)},  # Describe RFE input columns
+        "Extra Trees Features": {"feature_names": extra_trees_names, "indices": [feature_index[name] for name in extra_trees_names], "feature_count": len(extra_trees_names)},  # Describe Extra Trees input columns
     }  # Complete the supported descriptor mapping
 
 
@@ -15613,7 +15798,7 @@ def prepare_feature_process_original_resources(process_payload: dict) -> dict:  
             gc.collect()  # Reclaim transient PCA output memory before classifier fitting
             X_train_feature = open_feature_process_array(train_descriptor)  # Reopen PCA training output read-only
             X_test_feature = open_feature_process_array(test_descriptor)  # Reopen PCA testing output read-only
-        else:  # Materialize the configured GA or RFE columns directly to worker-owned memmaps
+        else:  # Materialize the configured selected columns directly to worker-owned memmaps
             temp_dir = create_feature_process_temp_directory(process_payload["file"], config=process_payload["config"])  # Create selected-feature worker-owned backing
             X_train_feature = materialize_feature_process_subset(X_train_source, feature_metadata["indices"], temp_dir, "X_train_feature", chunk_rows)  # Materialize exact ordered training columns in bounded slices
             X_test_feature = materialize_feature_process_subset(X_test_source, feature_metadata["indices"], temp_dir, "X_test_feature", chunk_rows)  # Materialize exact ordered testing columns in bounded slices
@@ -16008,7 +16193,7 @@ def evaluate_feature_process_augmented_task(task: dict, process_payload: dict, r
             model_batch = np.asarray(artifact_bundle["transformer"].transform(scaled_batch))  # Preserve exact PCA inference semantics without a complete dense matrix
         elif model_feature_indices is None:  # Reuse the complete scaled batch for Full Features
             model_batch = scaled_batch  # Avoid an identical all-column batch copy
-        else:  # Select the persisted GA or RFE feature order within the current batch
+        else:  # Select the persisted feature order within the current batch
             model_batch = scaled_batch[:, model_feature_indices]  # Materialize only selected columns for the current bounded batch
         y_predicted[start:end] = np.asarray(loaded_model.predict(model_batch), dtype=np.int64)  # Persist compact predictions and release batch features immediately
         del scaled_batch, model_batch  # Release current batch matrices before the next transformation
@@ -16618,7 +16803,7 @@ def collect_feature_process_results(tasks: List[dict], process_payload: dict) ->
     return ordered_results, comparison_results  # Return exact global results and existing comparison output
 
 
-def run_persistent_feature_set_grid(original_df: pd.DataFrame, file: str, source_files: List[str], attack_types_combined: Any, feature_names: List[Any], ga_selected_features: Any, pca_n_components: Any, rfe_selected_features: Any, hp_runs: List[Tuple[bool, dict, dict]], augmentation_file_paths: List[str], augmentation_ratios: List[float], evaluation_plan: List[Tuple[str, bool, Optional[float], str]], execution_mode_str: str, data_source_label: str, config: dict) -> Tuple[List[dict], List[dict]]:  # Coordinate one cache-first persistent feature-set grid
+def run_persistent_feature_set_grid(original_df: pd.DataFrame, file: str, source_files: List[str], attack_types_combined: Any, feature_names: List[Any], ga_selected_features: Any, pca_n_components: Any, rfe_selected_features: Any, hp_runs: List[Tuple[bool, dict, dict]], augmentation_file_paths: List[str], augmentation_ratios: List[float], evaluation_plan: List[Tuple[str, bool, Optional[float], str]], execution_mode_str: str, data_source_label: str, config: dict, extra_trees_selected_features: Any = None) -> Tuple[List[dict], List[dict]]:  # Coordinate one cache-first persistent feature-set grid
     """
     Coordinate one complete cache-first persistent feature-set grid.
 
@@ -16630,6 +16815,7 @@ def run_persistent_feature_set_grid(original_df: pd.DataFrame, file: str, source
     :param ga_selected_features: Ordered GA-selected feature names.
     :param pca_n_components: Selected PCA component count.
     :param rfe_selected_features: Ordered RFE-selected feature names.
+    :param extra_trees_selected_features: Ordered Extra Trees-selected feature names.
     :param hp_runs: Ordered default and optimized estimator mappings.
     :param augmentation_file_paths: Located augmented source paths.
     :param augmentation_ratios: Ordered configured testing ratios.
@@ -16647,7 +16833,7 @@ def run_persistent_feature_set_grid(original_df: pd.DataFrame, file: str, source
         raise ValueError("Persistent feature-set grid invoked while evaluation.feature_set_workers is disabled")  # Preserve explicit sequential fallback ownership
     if config.get("stacking", {}).get("methods", {}).get("stacking", True):  # Limit this production process path to individual classifier queues
         raise ValueError("Persistent feature-set processes require stacking.methods.stacking=false")  # Reject unsupported stacking-classifier scheduling explicitly
-    feature_metadata_by_name = build_feature_process_metadata(feature_names, ga_selected_features, pca_n_components, rfe_selected_features)  # Build small ordered feature descriptors without matrices
+    feature_metadata_by_name = build_feature_process_metadata(feature_names, ga_selected_features, pca_n_components, rfe_selected_features, extra_trees_selected_features)  # Build small ordered feature descriptors without matrices
     original_sample_count = int(len(original_df))  # Record exact cleaned original population before releasing the DataFrame
     target_column = str(original_df.columns[-1])  # Preserve the established positional target identity
     label_classes = normalize_metadata_for_json(np.unique(original_df.iloc[:, -1].to_numpy(copy=False)).tolist())  # Preserve exact LabelEncoder class order as small metadata
@@ -16736,7 +16922,7 @@ def save_results_with_optional_suffix(file, results_list, suffix, base_filename_
         raise
 
 
-def orchestrate_binary_combination(file, ga_sel, pca_n, rfe_sel, base_models, hp_params_map, hyperparameters_enabled, feature_selection_enabled, data_augmentation_enabled, suffix, config=None):
+def orchestrate_binary_combination(file, ga_sel, pca_n, rfe_sel, extra_trees_sel, base_models, hp_params_map, hyperparameters_enabled, feature_selection_enabled, data_augmentation_enabled, suffix, config=None):  # Orchestrate one legacy separate-file grid slice
     """
     Orchestrate evaluation for a single separate files evaluation combination of FS/HP/DA flags.
 
@@ -16781,6 +16967,7 @@ def orchestrate_binary_combination(file, ga_sel, pca_n, rfe_sel, base_models, hp
                 experiment_mode="original_only", augmentation_ratio=None,
                 execution_mode_str="separate_files", attack_types_combined=None,
                 df_augmented_for_testing=None, config=config, hyperparameters_enabled=hyperparameters_enabled,
+                extra_trees_selected_features=extra_trees_sel,  # Preserve Extra Trees feature order for legacy separate-files evaluation.
             )  # Evaluate original-only separate files evaluation with explicit config propagation
         except Exception as e:  # If evaluation fails
             print(f"{BackgroundColors.RED}Evaluation failed for {file} combo {suffix}: {e}{Style.RESET_ALL}")  # Log error
@@ -16797,7 +16984,7 @@ def orchestrate_binary_combination(file, ga_sel, pca_n, rfe_sel, base_models, hp
         if data_augmentation_enabled:  # If DA requested and available
             try:  # Protect augmentation processing
                 process_augmented_data_evaluation(
-                    file, df_original, feature_names, ga_sel, pca_n, rfe_sel, base_models,
+                    file, df_original, feature_names, ga_sel, pca_n, rfe_sel, extra_trees_sel, base_models,
                     hp_params_map if hyperparameters_enabled else {}, results, config=config,
                 )  # Process augmented evaluations
             except Exception as e:  # If augmentation fails
@@ -16820,7 +17007,7 @@ def orchestrate_binary_combination(file, ga_sel, pca_n, rfe_sel, base_models, hp
         raise
 
 
-def execute_original_combined_files_evaluation(files_to_process, ga_sel, pca_n, rfe_sel, base_models, hp_params_map, hyperparameters_enabled, feature_selection_enabled, suffix, config):
+def execute_original_combined_files_evaluation(files_to_process, ga_sel, pca_n, rfe_sel, extra_trees_sel, base_models, hp_params_map, hyperparameters_enabled, feature_selection_enabled, suffix, config):  # Execute one legacy original combined-files grid slice
     """
     Combine files for combined files evaluation, evaluate the original-only dataset, annotate results, and persist them to disk.
 
@@ -16863,6 +17050,7 @@ def execute_original_combined_files_evaluation(files_to_process, ga_sel, pca_n, 
             df_augmented_for_testing=None,
             cache_ref_file=combined_dataset_reference, config=config, hyperparameters_enabled=hyperparameters_enabled,  # Use directory identity for cache resume.
             source_files=files_to_process,  # Preserve ordered original CSV provenance for legacy combined evaluation.
+            extra_trees_selected_features=extra_trees_sel,  # Preserve Extra Trees feature order for legacy combined evaluation.
         )  # Evaluate combined files evaluation original dataset with directory cache reference and explicit config propagation
     except Exception as e:  # If evaluation fails
         print(f"{BackgroundColors.RED}Combined files evaluation failed for combo {suffix}: {e}{Style.RESET_ALL}")  # Error
@@ -16878,7 +17066,7 @@ def execute_original_combined_files_evaluation(files_to_process, ga_sel, pca_n, 
     return "ok", (combined_df, attack_types, feature_names)  # Return success with data payload
 
 
-def execute_combined_files_augmentation(files_to_process, combined_df, attack_types, feature_names, ga_sel, pca_n, rfe_sel, base_models, hp_params_map, hyperparameters_enabled, feature_selection_enabled, suffix, config):
+def execute_combined_files_augmentation(files_to_process, combined_df, attack_types, feature_names, ga_sel, pca_n, rfe_sel, extra_trees_sel, base_models, hp_params_map, hyperparameters_enabled, feature_selection_enabled, suffix, config):  # Execute legacy combined-files augmented ratios
     """
     Run augmented data experiments for each configured augmentation ratio using the combined files evaluation dataset.
 
@@ -16925,6 +17113,7 @@ def execute_combined_files_augmentation(files_to_process, combined_df, attack_ty
                             df_augmented_for_testing=df_sampled,
                             cache_ref_file=combined_dataset_reference, config=config, hyperparameters_enabled=hyperparameters_enabled,  # Use directory identity for cache resume.
                             source_files=list(files_to_process),  # Preserve only original training-source provenance.
+                            extra_trees_selected_features=extra_trees_sel,  # Preserve Extra Trees feature order for legacy augmented evaluation.
                         )  # Evaluate persisted original-trained models on augmented samples.
                     except Exception as e:  # If evaluation failed
                         print(f"{BackgroundColors.YELLOW}Augmented evaluation failed for ratio {ratio} combo {suffix}: {e}{Style.RESET_ALL}")  # Warn
@@ -16942,7 +17131,7 @@ def execute_combined_files_augmentation(files_to_process, combined_df, attack_ty
     return None  # Signal success
 
 
-def orchestrate_combined_files_combination(files_to_process, ga_sel, pca_n, rfe_sel, base_models, hp_params_map, hyperparameters_enabled, feature_selection_enabled, data_augmentation_enabled, suffix, config=None):
+def orchestrate_combined_files_combination(files_to_process, ga_sel, pca_n, rfe_sel, extra_trees_sel, base_models, hp_params_map, hyperparameters_enabled, feature_selection_enabled, data_augmentation_enabled, suffix, config=None):  # Orchestrate one legacy combined-files grid slice
     """
     Orchestrate evaluation for a single combined files evaluation combination of FS/HP/DA flags.
 
@@ -16964,7 +17153,7 @@ def orchestrate_combined_files_combination(files_to_process, ga_sel, pca_n, rfe_
         if config is None:  # If no config provided
             config = CONFIG  # Use global CONFIG
 
-        status, data = execute_original_combined_files_evaluation(files_to_process, ga_sel, pca_n, rfe_sel, base_models, hp_params_map, hyperparameters_enabled, feature_selection_enabled, suffix, config)  # Combine files, evaluate original dataset, and persist results
+        status, data = execute_original_combined_files_evaluation(files_to_process, ga_sel, pca_n, rfe_sel, extra_trees_sel, base_models, hp_params_map, hyperparameters_enabled, feature_selection_enabled, suffix, config)  # Combine files, evaluate original dataset, and persist results
         if status != "ok":  # If evaluation did not succeed
             return status  # Propagate flow control signal to caller
 
@@ -16975,7 +17164,7 @@ def orchestrate_combined_files_combination(files_to_process, ga_sel, pca_n, rfe_
         combined_df, attack_types, feature_names = data  # Unpack evaluation results payload
 
         if data_augmentation_enabled:  # If augmentation requested
-            augmentation_signal = execute_combined_files_augmentation(files_to_process, combined_df, attack_types, feature_names, ga_sel, pca_n, rfe_sel, base_models, hp_params_map, hyperparameters_enabled, feature_selection_enabled, suffix, config)  # Run augmented experiments for all configured ratios
+            augmentation_signal = execute_combined_files_augmentation(files_to_process, combined_df, attack_types, feature_names, ga_sel, pca_n, rfe_sel, extra_trees_sel, base_models, hp_params_map, hyperparameters_enabled, feature_selection_enabled, suffix, config)  # Run augmented experiments for all configured ratios
             if augmentation_signal is not None:  # If augmentation returned a flow control signal
                 return augmentation_signal  # Propagate signal to caller
 
@@ -17034,11 +17223,12 @@ def orchestrate_all_combinations(input_path, dataset_name=None, config=None):
             ga_sel = artifacts.get("ga") if fs_toggle else None  # Use GA artifact only when feature selection is enabled
             pca_n = artifacts.get("pca") if fs_toggle else None  # Use PCA artifact only when feature selection is enabled
             rfe_sel = artifacts.get("rfe") if fs_toggle else None  # Use RFE artifact only when feature selection is enabled
+            extra_trees_sel = artifacts.get("extra_trees") if fs_toggle else None  # Use Extra Trees artifact only when feature selection is enabled
 
             df_original, feature_names = load_and_preprocess_dataset(file, None, config=config)  # Load the original dataset once for every grid slice
             if df_original is None:  # Skip files that cannot be loaded
                 continue  # Move to the next file
-            ga_sel, rfe_sel = sanitize_and_verify_feature_selections(ga_sel, rfe_sel, feature_names, config=config)  # Normalize artifacts before grid counting so the denominator matches assembled feature modes
+            ga_sel, rfe_sel, extra_trees_sel = sanitize_and_verify_feature_selections(ga_sel, rfe_sel, extra_trees_sel, feature_names, config=config)  # Normalize artifacts before grid counting so the denominator matches assembled feature modes
 
             default_models = get_models(config=config)  # Create an untouched default/current parameter model map
             hp_runs = [(False, default_models, {})]  # Default hyperparameters always form the first complete grid
@@ -17048,7 +17238,7 @@ def orchestrate_all_combinations(input_path, dataset_name=None, config=None):
                     hp_runs.append((True, optimized_models, optimized_params))  # Keep optimized models isolated from default model objects
 
             augmentation_ratios = config.get("stacking", {}).get("augmentation_ratios", [0.25, 0.50, 0.75, 1.00]) if augmentation_requested and artifacts.get("augmented_file") else []  # Plan ratio modes from discovered paths without loading augmented contents.
-            feature_mode_names = list_grid_feature_modes(ga_sel, pca_n, rfe_sel, feature_names, config=config)  # Resolve actual feature modes in evaluation order
+            feature_mode_names = list_grid_feature_modes(ga_sel, pca_n, rfe_sel, extra_trees_sel, feature_names, config=config)  # Resolve actual feature modes in evaluation order
             evaluation_plan = build_evaluation_plan(hp_runs, [None] + list(augmentation_ratios), feature_mode_names, stacking_enabled)  # Build the exact default-first, original-first full-grid order
             total_steps = len(evaluation_plan)  # Use the ordered runtime plan as the exact full-grid denominator
             grid_progress = create_grid_progress(total_steps, f"{os.path.basename(file)} Grid")  # Share one counter across every HP and augmentation mode
@@ -17057,7 +17247,7 @@ def orchestrate_all_combinations(input_path, dataset_name=None, config=None):
             all_comparison_results = []  # Accumulate augmentation comparisons across both HP modes
             orchestration_cache = load_cache_results(file, config=config, notify_discovery=False)  # Recover cache identities before any sequential augmentation load.
             fully_cached_ratios = {ratio for ratio in augmentation_ratios if all(build_resume_cache_key("separate_files", f"Augmented@{int(ratio * 100)}%", "original_training_augmented_testing", ratio, None, feature_set, classifier, hyperparameters_enabled) in orchestration_cache for feature_set, hyperparameters_enabled, planned_ratio, classifier in evaluation_plan if planned_ratio == ratio)}  # Identify ratio groups requiring no augmented contents.
-            feature_metadata_by_name = build_feature_process_metadata(feature_names, ga_sel, pca_n, rfe_sel)  # Build small feature descriptors for cache-aware plan reporting
+            feature_metadata_by_name = build_feature_process_metadata(feature_names, ga_sel, pca_n, rfe_sel, extra_trees_sel)  # Build small feature descriptors for cache-aware plan reporting
             if all(name in feature_metadata_by_name for name in feature_mode_names):  # Use cache-aware grouping only for feature modes with compact descriptors.
                 tasks = build_feature_process_plan(evaluation_plan, feature_metadata_by_name, len(df_original), file, "separate_files", get_current_experiment_run(config))  # Reuse authoritative global IDs and expected original-data shapes for plan reporting
                 cached_results, pending_by_feature = partition_evaluation_plan_by_cache(tasks, orchestration_cache, feature_mode_names, None)  # Reuse existing cache matching before plan reporting
@@ -17077,7 +17267,7 @@ def orchestrate_all_combinations(input_path, dataset_name=None, config=None):
                 hp_label = "Optimized Hyperparameters" if hyperparameters_enabled else "Default Hyperparameters"  # Build explicit active HP label
                 send_telegram_message(TELEGRAM_BOT, [f"[SEPARATE_FILES] Starting {hp_label} grid | file: {os.path.basename(file)}"])  # Announce active HP grid
                 if augmentation_ratio is None:  # Execute original-data slice without touching augmented contents.
-                    results_original = evaluate_on_dataset(file, df_original, feature_names, ga_sel, pca_n, rfe_sel, base_models, data_source_label="Original", hyperparams_map=hp_params_map, experiment_id=generate_experiment_id(file, "original_only"), experiment_mode="original_only", augmentation_ratio=None, execution_mode_str="separate_files", attack_types_combined=None, config=config, hyperparameters_enabled=hyperparameters_enabled, grid_progress=grid_progress, feature_mode_name=feature_mode_name)  # Evaluate current canonical original feature group.
+                    results_original = evaluate_on_dataset(file, df_original, feature_names, ga_sel, pca_n, rfe_sel, base_models, data_source_label="Original", hyperparams_map=hp_params_map, experiment_id=generate_experiment_id(file, "original_only"), experiment_mode="original_only", augmentation_ratio=None, execution_mode_str="separate_files", attack_types_combined=None, config=config, hyperparameters_enabled=hyperparameters_enabled, grid_progress=grid_progress, feature_mode_name=feature_mode_name, extra_trees_selected_features=extra_trees_sel)  # Evaluate current canonical original feature group.
                     original_list = list(results_original.values())  # Convert baseline results for annotation and export.
                     annotate_results_with_combination_flags(original_list, fs_toggle, hyperparameters_enabled, False)  # Mark baseline grid dimensions.
                     all_grid_results.extend(original_list)  # Preserve canonical baseline row order.
@@ -17113,7 +17303,7 @@ def orchestrate_all_combinations(input_path, dataset_name=None, config=None):
                     active_ratio = augmentation_ratio  # Record reusable current ratio identity.
                 if df_sampled is None or df_sampled.empty:  # Skip ratios producing no augmented test rows.
                     continue  # Advance to next canonical slice.
-                results_ratio = evaluate_on_dataset(file, df_original, feature_names, ga_sel, pca_n, rfe_sel, base_models, data_source_label=f"Augmented@{int(augmentation_ratio * 100)}%", hyperparams_map=hp_params_map, experiment_id=generate_experiment_id(file, "original_training_augmented_testing", augmentation_ratio), experiment_mode="original_training_augmented_testing", augmentation_ratio=augmentation_ratio, execution_mode_str="separate_files", attack_types_combined=None, df_augmented_for_testing=df_sampled, config=config, hyperparameters_enabled=hyperparameters_enabled, grid_progress=grid_progress, feature_mode_name=feature_mode_name)  # Evaluate current canonical feature group while reusing ratio sample.
+                results_ratio = evaluate_on_dataset(file, df_original, feature_names, ga_sel, pca_n, rfe_sel, base_models, data_source_label=f"Augmented@{int(augmentation_ratio * 100)}%", hyperparams_map=hp_params_map, experiment_id=generate_experiment_id(file, "original_training_augmented_testing", augmentation_ratio), experiment_mode="original_training_augmented_testing", augmentation_ratio=augmentation_ratio, execution_mode_str="separate_files", attack_types_combined=None, df_augmented_for_testing=df_sampled, config=config, hyperparameters_enabled=hyperparameters_enabled, grid_progress=grid_progress, feature_mode_name=feature_mode_name, extra_trees_selected_features=extra_trees_sel)  # Evaluate current canonical feature group while reusing ratio sample.
                 ratio_list = list(results_ratio.values())  # Convert current ratio results for annotation and export.
                 annotate_results_with_combination_flags(ratio_list, fs_toggle, hyperparameters_enabled, True)  # Mark active grid dimensions.
                 all_grid_results.extend(ratio_list)  # Preserve canonical augmented row order.
@@ -17652,12 +17842,14 @@ def log_resolved_configuration(config: dict) -> None:
         pca_flag = feature_sets_cfg.get("use_pca", True)  # Resolve PCA Components flag from feature sets config
         rfe_flag = feature_sets_cfg.get("use_rfe", True)  # Resolve RFE Features flag from feature sets config
         ga_flag = feature_sets_cfg.get("use_ga", True)  # Resolve GA Features flag from feature sets config
+        extra_trees_flag = feature_sets_cfg.get("use_extra_trees", True)  # Resolve Extra Trees Features flag from feature sets config
         explicit_features = feature_sets_cfg.get("explicit_features", [])  # Retrieve explicit features list from feature sets config
 
         print(f"{BackgroundColors.GREEN}[INFO] Feature set — Full Features: {BackgroundColors.CYAN}{full_features_flag}{Style.RESET_ALL}")  # Log Full Features state
         print(f"{BackgroundColors.GREEN}[INFO] Feature set — PCA Components: {BackgroundColors.CYAN}{pca_flag}{Style.RESET_ALL}")  # Log PCA Components state
         print(f"{BackgroundColors.GREEN}[INFO] Feature set — RFE Features: {BackgroundColors.CYAN}{rfe_flag}{Style.RESET_ALL}")  # Log RFE Features state
         print(f"{BackgroundColors.GREEN}[INFO] Feature set — GA Features: {BackgroundColors.CYAN}{ga_flag}{Style.RESET_ALL}")  # Log GA Features state
+        print(f"{BackgroundColors.GREEN}[INFO] Feature set — Extra Trees Features: {BackgroundColors.CYAN}{extra_trees_flag}{Style.RESET_ALL}")  # Log Extra Trees Features state
         if explicit_features:  # If explicit features list is non-empty
             print(f"{BackgroundColors.GREEN}[INFO] Feature set — Explicit Features: Enabled ({BackgroundColors.CYAN}{len(explicit_features)} features{BackgroundColors.GREEN}){Style.RESET_ALL}")  # Log explicit features enabled with count
         else:  # If explicit features list is empty or not provided
@@ -17714,6 +17906,8 @@ def build_telegram_pipeline_summary(config: Optional[dict], dataset_path: Option
             feature_methods.append("RFE")
         if feature_sets_cfg.get("use_ga", True):
             feature_methods.append("GA")
+        if feature_sets_cfg.get("use_extra_trees", True):  # Include Extra Trees in startup feature-method summary
+            feature_methods.append("Extra Trees")  # Report Extra Trees as an enabled feature-selection method
 
         explicit_features = feature_sets_cfg.get("explicit_features", []) or []
         if explicit_features:
@@ -17738,7 +17932,7 @@ def build_telegram_pipeline_summary(config: Optional[dict], dataset_path: Option
             f"Enabled classifiers: {', '.join(enabled_classifiers) if enabled_classifiers else 'None'}",  # Report classifiers instantiated by the model factory
             f"Disabled classifiers: {', '.join(disabled_classifiers) if disabled_classifiers else 'None'}",  # Report classifiers excluded from the model factory
             f"Feature selection methods: {', '.join(feature_methods) if feature_methods else 'None'}",  # Report the configured feature-set strategies
-            f"Feature-set workers: full={feature_set_workers['full']}, ga={feature_set_workers['ga']}, pca={feature_set_workers['pca']}, rfe={feature_set_workers['rfe']} | start method: {FEATURE_PROCESS_START_METHOD}",  # Report process isolation configuration
+            f"Feature-set workers: full={feature_set_workers['full']}, ga={feature_set_workers['ga']}, pca={feature_set_workers['pca']}, rfe={feature_set_workers['rfe']}, extra_trees={feature_set_workers['extra_trees']} | start method: {FEATURE_PROCESS_START_METHOD}",  # Report process isolation configuration
             f"Test data augmentation: {'ON' if test_data_augmentation else 'OFF'}",  # Report the independent augmented-test toggle
         ]
 
