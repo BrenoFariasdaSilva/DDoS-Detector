@@ -32,10 +32,20 @@ from sklearn.ensemble import ExtraTreesClassifier  # Fit Extra Trees feature imp
 from sklearn.metrics import accuracy_score, confusion_matrix, f1_score, precision_score, recall_score  # Compute selector diagnostics
 from sklearn.model_selection import StratifiedKFold, train_test_split  # Split before selector fitting and optional CV diagnostics
 
+try:  # Import optional Telegram utilities
+    import telegram_bot as telegram_module  # Configure Telegram message prefixes consistently with stacking.py
+    from telegram_bot import TelegramBot, send_exception_via_telegram, send_telegram_message  # Reuse existing Telegram delivery path
+except Exception:  # Keep Extra Trees usable when Telegram dependencies are unavailable
+    telegram_module = None  # Disable Telegram module integration
+    TelegramBot = None  # Disable Telegram bot construction
+    send_exception_via_telegram = None  # Disable Telegram exception forwarding
+    send_telegram_message = None  # Disable Telegram message delivery
+
 
 NON_FEATURE_COLUMNS = ("Unnamed: 0", "Flow ID", "Source IP", "Destination IP", "Timestamp")  # Define leakage-prone metadata columns
 TARGET_COLUMN_ALIASES = ("Label", "label", "attack_type", "Attack Type", "Class", "class", "Target", "target")  # Define common target column names
 DEFAULT_RESULTS_CSV_COLUMNS = ("timestamp", "tool", "run_index", "model", "dataset", "dataset_path", "hyperparameters", "cv_method", "train_test_split", "scaling", "cv_accuracy", "cv_precision", "cv_recall", "cv_f1_score", "cv_fpr", "cv_fnr", "test_accuracy", "test_precision", "test_recall", "test_f1_score", "test_fpr", "test_fnr", "feature_extraction_time_s", "training_time_s", "testing_time_s", "elapsed_run_time", "hardware", "best_features", "union_features_across_runs", "rfe_ranking", "feature_name", "original_feature_index", "extra_trees_importance", "importance_rank", "selected", "configured_selected_feature_count", "actual_selected_feature_count", "n_estimators", "random_state", "n_jobs", "n_train", "n_test", "source_feature_count", "eligible_feature_count", "target_column", "excluded_columns")  # Define default configurable export header
+TELEGRAM_BOT = None  # Store optional Telegram bot instance for script-level notifications
 
 
 class BackgroundColors:  # Match project color constants
@@ -638,6 +648,57 @@ def print_extra_trees_summary(csv_output: Path, selected_count: int, eligible_co
     print(f"{BackgroundColors.GREEN}{'=' * 80}{Style.RESET_ALL}\n")  # Print summary separator
 
 
+def calculate_execution_time(start_time: datetime.datetime, finish_time: datetime.datetime) -> str:
+    """
+    Format elapsed execution time.
+
+    :param start_time: Program start datetime.
+    :param finish_time: Program finish datetime.
+    :return: Human-readable elapsed execution time.
+    """
+
+    total_seconds = int(round((finish_time - start_time).total_seconds()))  # Convert elapsed duration to whole seconds
+    total_seconds = max(total_seconds, 0)  # Prevent negative output from clock drift
+    hours, remainder = divmod(total_seconds, 3600)  # Split elapsed hours
+    minutes, seconds = divmod(remainder, 60)  # Split elapsed minutes and seconds
+    return f"{hours:02d}h {minutes:02d}m {seconds:02d}s"  # Return formatted runtime
+
+
+def setup_telegram_bot(config: dict) -> Any:
+    """
+    Set up the Telegram bot for Extra Trees notifications.
+
+    :param config: Effective configuration dictionary.
+    :return: Telegram bot instance or None.
+    """
+
+    if not config.get("telegram", {}).get("enabled", True):  # Respect shared Telegram enablement
+        return None  # Skip Telegram setup when disabled
+    if TelegramBot is None or telegram_module is None:  # Skip Telegram setup when imports failed
+        return None  # Return no bot when Telegram support is unavailable
+    print(f"{BackgroundColors.GREEN}Setting up Telegram bot for messages...{Style.RESET_ALL}")  # Match stacking.py setup log
+    bot = TelegramBot()  # Initialize the shared Telegram bot implementation
+    telegram_module.TELEGRAM_DEVICE_INFO = f"{telegram_module.get_local_ip()} - {platform.system()}"  # Set device prefix like stacking.py
+    telegram_module.RUNNING_CODE = os.path.basename(__file__)  # Set script name prefix like stacking.py
+    telegram_module.TELEGRAM_BOT = bot  # Share bot with Telegram exception handler
+    return bot  # Return configured Telegram bot
+
+
+def send_telegram_notice(bot: Any, messages: Any) -> None:
+    """
+    Send an Extra Trees Telegram notification when available.
+
+    :param bot: Telegram bot instance or None.
+    :param messages: Message text or list of message strings.
+    :return: None.
+    """
+
+    if send_telegram_message is None:  # Skip notification when Telegram support is unavailable
+        return None  # Return without side effects
+    send_telegram_message(bot, messages)  # Reuse existing guarded Telegram delivery
+    return None  # Return explicit None
+
+
 def run_extra_trees_feature_selection(config: dict, csv_path: str) -> Path:
     """
     Run Extra Trees feature selection and persist results.
@@ -671,12 +732,29 @@ def main() -> None:
     :return: None.
     """
     
+    start_time = datetime.datetime.now()  # Record program start time
+    print(
+        f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}Extra Trees for Feature Selection{BackgroundColors.GREEN} Program!{Style.RESET_ALL}\n"
+    )  # Output the welcome message
+    
     cli_args = parse_cli_args()  # Parse CLI arguments
     config = get_config(cli_args)  # Resolve effective configuration
     dataset_path = config.get("execution", {}).get("dataset_path")  # Resolve dataset path
     if not dataset_path:  # Validate dataset path
         raise ValueError("execution.dataset_path must be provided")  # Raise explicit missing-dataset error
+    global TELEGRAM_BOT  # Use module-level Telegram bot instance
+    TELEGRAM_BOT = setup_telegram_bot(config)  # Initialize Telegram notifications when configured
+    send_telegram_notice(TELEGRAM_BOT, f"Starting Extra Trees feature selection at {start_time.strftime('%Y-%m-%d %H:%M:%S')}")  # Send startup notification
     run_extra_trees_feature_selection(config, str(dataset_path))  # Run feature selection workflow
+    finish_time = datetime.datetime.now()  # Record program finish time
+    print(
+        f"\n{BackgroundColors.GREEN}Start time: {BackgroundColors.CYAN}{start_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Finish time: {BackgroundColors.CYAN}{finish_time.strftime('%d/%m/%Y - %H:%M:%S')}\n{BackgroundColors.GREEN}Execution time: {BackgroundColors.CYAN}{calculate_execution_time(start_time, finish_time)}{Style.RESET_ALL}"
+    )  # Output start, finish, and elapsed time
+    print(
+        f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}Program finished.{Style.RESET_ALL}"
+    )  # Output program-finished message
+    send_telegram_notice(TELEGRAM_BOT, [f"Finished Extra Trees feature selection at {finish_time.strftime('%Y-%m-%d %H:%M:%S')} | Execution time: {calculate_execution_time(start_time, finish_time)}"])  # Send finish notification
+    
 
 
 if __name__ == "__main__":  # Execute only when called as a script
@@ -684,4 +762,6 @@ if __name__ == "__main__":  # Execute only when called as a script
         main()  # Run CLI entry point
     except Exception as exc:  # Report fatal error without hiding traceback
         print(str(exc), file=sys.stderr)  # Print concise failure to stderr
+        if send_exception_via_telegram is not None:  # Forward fatal errors when Telegram support is available
+            send_exception_via_telegram(type(exc), exc, exc.__traceback__)  # Send full traceback through existing Telegram path
         raise  # Preserve traceback and nonzero exit
