@@ -308,6 +308,9 @@ class ResNet18Classifier(ClassifierMixin, BaseEstimator):  # Expose ResNet18 thr
                     validation_loss_sum += float(loss_function(network(batch_features), batch_labels).item()) * int(batch_indices.shape[0])  # Accumulate sample-weighted loss
             validation_loss = validation_loss_sum / float(validation_indices.shape[0])  # Compute mean validation loss
             epochs_completed = epoch_index + 1  # Record completed epoch count
+            progress_callback = getattr(self, "progress_callback", None)  # Read optional stacking progress callback
+            if callable(progress_callback):  # Report real completed epochs when stacking attaches a callback
+                progress_callback(epochs_completed)  # Emit epoch-based progress without changing training semantics
             if validation_loss < best_loss - float(self.min_delta):  # Accept meaningful improvement
                 best_loss = validation_loss  # Record improved loss
                 best_epoch = epochs_completed  # Record improved epoch
