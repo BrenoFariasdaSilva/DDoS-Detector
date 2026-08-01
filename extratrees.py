@@ -722,6 +722,7 @@ def run_extra_trees_feature_selection(config: dict, csv_path: str) -> Path:
     results = build_results_dataframe(ranked, config, csv_path, selector_params, selector_elapsed, testing_elapsed, cv_metrics, test_metrics, cv_method, split_metadata, started_at, finished_at)  # Build output rows
     save_results(results, csv_output)  # Persist ranked results
     print_extra_trees_summary(csv_output, int(results["selected"].sum()), int(split_metadata["eligible_feature_count"]), cv_metrics, test_metrics, (finished_at - started_at).total_seconds())  # Print colored completion summary
+    send_telegram_notice(TELEGRAM_BOT, f"Finished Extra Trees result: Extra-Trees-{int(results['selected'].sum())} - Dataset: {Path(csv_path).stem} - Selected {int(results['selected'].sum())}/{int(split_metadata['eligible_feature_count'])} - Test F1: {test_metrics.get('f1_score')} - CV F1: {cv_metrics.get('f1_score')} in {calculate_execution_time(started_at, finished_at)}")  # Send result-style notification
     return csv_output  # Return output CSV path
 
 
