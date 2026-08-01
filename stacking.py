@@ -467,14 +467,14 @@ def fit_classifier_with_progress(model: Any, X_train: Any, y_train: Any, feature
         with progress:  # Scope callback timing to the original blocking fit.
             return model.fit(X_train, y_train, **options)  # Execute one unchanged Gradient Boosting fit call.
 
-    if model_type is ResNet18Classifier:  # Use ResNet18's internal epoch callback for exact epoch progress.
-        total_epochs = int(model.get_params(deep=False).get("epochs", 1))  # Read the configured ResNet18 epoch total.
-        progress = build_training_progress(feature_set, classifier_name, total_epochs, "Epoch", heartbeat=True, config=config, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio, eta_callback=eta_callback)  # Create contextual genuine ResNet18 epoch reporter with heartbeat ETA.
+    if model_type in (ResNet18Classifier, TabularResNetClassifier):  # Use neural estimators' internal epoch callback for exact epoch progress.
+        total_epochs = int(model.get_params(deep=False).get("epochs", 1))  # Read the configured neural epoch total.
+        progress = build_training_progress(feature_set, classifier_name, total_epochs, "Epoch", heartbeat=True, config=config, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio, eta_callback=eta_callback)  # Create contextual genuine neural epoch reporter with heartbeat ETA.
         existing_progress_callback = getattr(model, "progress_callback", None)  # Preserve any caller-installed callback.
         model.progress_callback = progress.report_unit  # Attach only the temporary reporting callback.
         try:  # Restore callback state after every fit outcome.
             with progress:  # Scope callback timing to the original blocking fit.
-                return model.fit(X_train, y_train, **options)  # Execute one unchanged ResNet18 fit call.
+                return model.fit(X_train, y_train, **options)  # Execute one unchanged neural fit call.
         finally:  # Remove the temporary progress callback before persistence.
             if existing_progress_callback is None:  # Restore absence when no callback existed.
                 delattr(model, "progress_callback")  # Remove transient callback attribute.
