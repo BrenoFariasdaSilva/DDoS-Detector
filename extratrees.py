@@ -31,6 +31,7 @@ from colorama import Style  # Match project terminal color reset style
 from sklearn.ensemble import ExtraTreesClassifier  # Fit Extra Trees feature importances
 from sklearn.metrics import accuracy_score, confusion_matrix, f1_score, precision_score, recall_score  # Compute selector diagnostics
 from sklearn.model_selection import StratifiedKFold, train_test_split  # Split before selector fitting and optional CV diagnostics
+from tqdm import tqdm  # Show progress bars with ETA for iterable stages
 
 try:  # Import optional Telegram utilities
     import telegram_bot as telegram_module  # Configure Telegram message prefixes consistently with stacking.py
@@ -307,25 +308,33 @@ def preprocess_dataframe(dataframe: pd.DataFrame, remove_zero_variance: bool = T
     :return: Cleaned dataset DataFrame.
     """
 
+    original_rows = int(dataframe.shape[0])  # Record source row count before sanitation
+    original_columns = int(dataframe.shape[1])  # Record source column count before sanitation
+    print(f"{BackgroundColors.GREEN}[PREPROCESS] Starting sanitation for {BackgroundColors.CYAN}{original_rows}{BackgroundColors.GREEN} rows and {BackgroundColors.CYAN}{original_columns}{BackgroundColors.GREEN} columns.{Style.RESET_ALL}")  # Log preprocessing start
     dataframe.columns = sanitize_feature_names([str(column).strip() for column in dataframe.columns])  # Apply stacking-compatible column sanitization
     dataframe.replace([np.inf, -np.inf], np.nan, inplace=True)  # Replace infinite values with NaN in-place
     numeric_columns = dataframe.select_dtypes(include=["number"]).columns  # Resolve numeric columns for finite-range sanitation
     if len(numeric_columns) > 0:  # Sanitize numeric predictors when present
         float32_limit = np.finfo(np.float32).max  # Match sklearn tree validation limit
         oversized_rows = pd.Series(False, index=dataframe.index)  # Track rows with values too large for sklearn trees
-        for column in numeric_columns:  # Scan one numeric column at a time to limit memory pressure
+        for column in tqdm(numeric_columns, desc="Extra Trees preprocessing", unit="column"):  # Scan numeric columns with ETA
             oversized_rows |= dataframe[column].abs().gt(float32_limit)  # Mark rows exceeding the float32 tree limit
         if oversized_rows.any():  # Remove rows that sklearn trees cannot fit
+            print(f"{BackgroundColors.YELLOW}[PREPROCESS] Removing {BackgroundColors.CYAN}{int(oversized_rows.sum())}{BackgroundColors.YELLOW} row(s) exceeding sklearn tree float32 limits.{Style.RESET_ALL}")  # Log oversized-row removal
             dataframe.drop(index=dataframe.index[oversized_rows], inplace=True)  # Drop oversized rows in-place
+    rows_after_range = int(dataframe.shape[0])  # Record row count after range sanitation
     dataframe.dropna(inplace=True)  # Drop rows containing NaN values after infinity sanitation
+    rows_after_na = int(dataframe.shape[0])  # Record row count after NaN removal
     if remove_zero_variance and len(numeric_columns) > 0:  # Remove constant numeric columns when configured
         numeric_columns = dataframe.select_dtypes(include=["number"]).columns  # Refresh numeric columns after row cleanup
         variances = dataframe[numeric_columns].var(axis=0, ddof=0)  # Calculate numeric feature variances
         zero_variance_columns = variances[variances == 0].index.tolist()  # Resolve constant numeric columns
         if zero_variance_columns:  # Remove constant columns only when found
+            print(f"{BackgroundColors.YELLOW}[PREPROCESS] Removing {BackgroundColors.CYAN}{len(zero_variance_columns)}{BackgroundColors.YELLOW} zero-variance numeric column(s).{Style.RESET_ALL}")  # Log zero-variance removal
             dataframe.drop(columns=zero_variance_columns, inplace=True)  # Drop zero-variance columns in-place
     if dataframe.empty:  # Reject datasets emptied by sanitation
         raise ValueError("Extra Trees preprocessing removed all rows; dataset contains no valid finite samples")  # Raise explicit empty-data error
+    print(f"{BackgroundColors.GREEN}[PREPROCESS] Finished sanitation: {BackgroundColors.CYAN}{int(dataframe.shape[0])}{BackgroundColors.GREEN} rows, {BackgroundColors.CYAN}{int(dataframe.shape[1])}{BackgroundColors.GREEN} columns retained. Dropped rows: range={BackgroundColors.CYAN}{original_rows - rows_after_range}{BackgroundColors.GREEN}, nan={BackgroundColors.CYAN}{rows_after_range - rows_after_na}{Style.RESET_ALL}")  # Log preprocessing result
     return dataframe  # Return cleaned dataframe
 
 
@@ -389,10 +398,13 @@ def load_dataset(csv_path: str, config: dict) -> pd.DataFrame:
     if not path.exists():  # Validate dataset presence
         raise FileNotFoundError(f"Dataset file not found: {csv_path}")  # Raise explicit dataset error
     low_memory = bool(config.get("execution", {}).get("low_memory", False))  # Resolve pandas low-memory mode
+    print(f"{BackgroundColors.GREEN}[LOAD] Reading dataset from {BackgroundColors.CYAN}{path}{Style.RESET_ALL}")  # Log dataset load start
     dataframe = pd.read_csv(path, low_memory=low_memory)  # Load dataset CSV
+    print(f"{BackgroundColors.GREEN}[LOAD] Loaded raw dataset shape: {BackgroundColors.CYAN}{dataframe.shape[0]} rows x {dataframe.shape[1]} columns{Style.RESET_ALL}")  # Log raw dataset shape
     dataframe = preprocess_dataframe(dataframe, remove_zero_variance=bool(config.get("dataset", {}).get("remove_zero_variance", True)))  # Apply GA-aligned dataframe sanitation
     if dataframe.shape[1] < 2:  # Validate predictor plus target columns
         raise ValueError("Dataset must contain at least one feature column and one target column")  # Raise explicit dataset shape error
+    print(f"{BackgroundColors.GREEN}[LOAD] Dataset ready for Extra Trees: {BackgroundColors.CYAN}{dataframe.shape[0]} rows x {dataframe.shape[1]} columns{Style.RESET_ALL}")  # Log cleaned dataset shape
     return dataframe  # Return loaded dataframe
 
 
@@ -405,12 +417,14 @@ def prepare_training_data(dataframe: pd.DataFrame, config: dict) -> tuple[pd.Dat
     :return: Training predictors, training labels, test predictors, test labels, feature names, and split metadata.
     """
 
+    print(f"{BackgroundColors.GREEN}[SPLIT] Preparing train/test data and eligible feature list.{Style.RESET_ALL}")  # Log split preparation start
     target_column = resolve_target_column(list(dataframe.columns))  # Resolve target column
     excluded = {normalize_feature_name(column) for column in NON_FEATURE_COLUMNS}  # Build leakage-prone metadata exclusion set
     excluded_present = [column for column in dataframe.columns if column != target_column and normalize_feature_name(column) in excluded]  # Record leakage-prone columns present in source data
     feature_columns = [column for column in dataframe.columns if column != target_column and normalize_feature_name(column) not in excluded]  # Select eligible predictor names
     numeric_columns = [column for column in feature_columns if pd.api.types.is_numeric_dtype(dataframe[column])]  # Keep numeric predictors only
     requested_count = int(config.get("extra_trees", {}).get("selection", {}).get("n_features_to_select", 20))  # Resolve requested selection count
+    print(f"{BackgroundColors.GREEN}[SPLIT] Target column: {BackgroundColors.CYAN}{target_column}{BackgroundColors.GREEN} | Numeric eligible features: {BackgroundColors.CYAN}{len(numeric_columns)}{BackgroundColors.GREEN} | Requested selected features: {BackgroundColors.CYAN}{requested_count}{Style.RESET_ALL}")  # Log target and feature counts
     if len(numeric_columns) < requested_count:  # Validate enough eligible features exist
         raise ValueError(f"Extra Trees requested {requested_count} features but only {len(numeric_columns)} eligible numeric features are available")  # Raise explicit feature-count error
     y = dataframe[target_column].to_numpy(copy=False)  # Read labels without renaming or grouping
@@ -425,6 +439,7 @@ def prepare_training_data(dataframe: pd.DataFrame, config: dict) -> tuple[pd.Dat
     X_test = dataframe.loc[dataframe.index[test_indices], numeric_columns]  # Select held-out predictors only for selector diagnostics
     y_test = y[test_indices]  # Select held-out labels only for selector diagnostics
     metadata = {"target_column": target_column, "n_train": int(len(train_indices)), "n_test": int(len(test_indices)), "source_feature_count": int(dataframe.shape[1] - 1), "eligible_feature_count": int(len(numeric_columns)), "excluded_columns": excluded_present, "test_size": float(test_size)}  # Record split and eligibility metadata
+    print(f"{BackgroundColors.GREEN}[SPLIT] Train rows: {BackgroundColors.CYAN}{len(train_indices)}{BackgroundColors.GREEN} | Test rows: {BackgroundColors.CYAN}{len(test_indices)}{BackgroundColors.GREEN} | Test size: {BackgroundColors.CYAN}{test_size}{Style.RESET_ALL}")  # Log split result
     return X_train, y_train, X_test, y_test, numeric_columns, metadata  # Return selector inputs and held-out diagnostics data
 
 
@@ -452,9 +467,11 @@ def fit_extra_trees_rankings(X_train: pd.DataFrame, y_train: np.ndarray, feature
     """
 
     selector = build_extra_trees_selector(config)  # Build configured Extra Trees selector
+    print(f"{BackgroundColors.GREEN}[TRAIN] Fitting final Extra Trees selector on {BackgroundColors.CYAN}{X_train.shape[0]}{BackgroundColors.GREEN} rows x {BackgroundColors.CYAN}{X_train.shape[1]}{BackgroundColors.GREEN} features with {BackgroundColors.CYAN}{selector.n_estimators}{BackgroundColors.GREEN} trees.{Style.RESET_ALL}")  # Log final selector fit start
     start = time.perf_counter()  # Start selector timing
     selector.fit(X_train.to_numpy(copy=False), y_train)  # Fit selector on training rows only
     elapsed = round(time.perf_counter() - start, 6)  # Resolve selector fit duration
+    print(f"{BackgroundColors.GREEN}[TRAIN] Final Extra Trees selector fitted in {BackgroundColors.CYAN}{elapsed:.6f}s{Style.RESET_ALL}")  # Log final selector fit completion
     importances = np.asarray(selector.feature_importances_, dtype=np.float64)  # Read fitted importances
     order = np.lexsort((np.arange(importances.shape[0]), -importances))  # Rank by importance descending then original index
     ranks = np.empty_like(order)  # Allocate rank vector
@@ -520,10 +537,12 @@ def evaluate_selector_metrics(selector: ExtraTreesClassifier, X_test: pd.DataFra
     :return: Test metrics dictionary and testing duration seconds.
     """
 
+    print(f"{BackgroundColors.GREEN}[TEST] Evaluating fitted selector on held-out rows: {BackgroundColors.CYAN}{X_test.shape[0]}{Style.RESET_ALL}")  # Log held-out evaluation start
     start = time.perf_counter()  # Start held-out prediction timing
     y_pred = selector.predict(X_test.to_numpy(copy=False))  # Predict held-out rows without refitting selector
     elapsed = round(time.perf_counter() - start, 6)  # Resolve held-out prediction duration
     metrics = calculate_classification_metrics(y_test, y_pred)  # Calculate held-out selector metrics
+    print(f"{BackgroundColors.GREEN}[TEST] Held-out metrics: F1={BackgroundColors.CYAN}{metrics.get('f1_score')}{BackgroundColors.GREEN}, FPR={BackgroundColors.CYAN}{metrics.get('fpr')}{BackgroundColors.GREEN}, FNR={BackgroundColors.CYAN}{metrics.get('fnr')}{BackgroundColors.GREEN}, time={BackgroundColors.CYAN}{elapsed:.6f}s{Style.RESET_ALL}")  # Log held-out metrics
     return metrics, elapsed  # Return metrics and timing
 
 
@@ -539,22 +558,32 @@ def evaluate_cross_validation_metrics(X_train: pd.DataFrame, y_train: np.ndarray
 
     cv_cfg = config.get("extra_trees", {}).get("cross_validation", {})  # Read CV configuration
     if not bool(cv_cfg.get("enabled", True)):  # Respect disabled CV diagnostics
+        print(f"{BackgroundColors.YELLOW}[CV] Training-partition cross-validation disabled by configuration.{Style.RESET_ALL}")  # Log disabled CV
         return {"accuracy": None, "precision": None, "recall": None, "f1_score": None, "fpr": None, "fnr": None}, "disabled"  # Return missing CV metrics when disabled
     requested_folds = int(cv_cfg.get("n_folds", 3))  # Resolve configured fold count
     _, class_counts = np.unique(y_train, return_counts=True)  # Count labels in training partition only
     effective_folds = min(requested_folds, int(class_counts.min())) if class_counts.size else 0  # Resolve feasible stratified fold count
     if effective_folds < 2:  # Require at least two folds for CV diagnostics
+        print(f"{BackgroundColors.YELLOW}[CV] Skipping CV because training class support is insufficient.{Style.RESET_ALL}")  # Log insufficient CV support
         return {"accuracy": None, "precision": None, "recall": None, "f1_score": None, "fpr": None, "fnr": None}, "insufficient_training_class_support"  # Return missing CV metrics when class support is too small
+    print(f"{BackgroundColors.GREEN}[CV] Starting training-partition StratifiedKFold with {BackgroundColors.CYAN}{effective_folds}{BackgroundColors.GREEN} fold(s). Requested folds: {BackgroundColors.CYAN}{requested_folds}{Style.RESET_ALL}")  # Log CV start
     splitter = StratifiedKFold(n_splits=effective_folds, shuffle=True, random_state=int(config.get("dataset", {}).get("random_state", 42)))  # Build training-only stratified splitter
     fold_metrics = []  # Accumulate fold metric dictionaries
     X_values = X_train.to_numpy(copy=False)  # Reuse CPU-backed training values for fold slicing
-    for train_index, validation_index in splitter.split(X_values, y_train):  # Iterate training-only CV folds
+    fold_iterator = tqdm(splitter.split(X_values, y_train), total=effective_folds, desc="Extra Trees CV", unit="fold")  # Show CV fold progress with ETA
+    for fold_number, (train_index, validation_index) in enumerate(fold_iterator, start=1):  # Iterate training-only CV folds
         fold_selector = build_extra_trees_selector(config)  # Build an isolated selector for this fold
+        fold_start = time.perf_counter()  # Start fold timing
         fold_selector.fit(X_values[train_index], y_train[train_index])  # Fit fold selector on fold-training rows only
         fold_pred = fold_selector.predict(X_values[validation_index])  # Predict fold-validation rows only
-        fold_metrics.append(calculate_classification_metrics(y_train[validation_index], fold_pred))  # Store fold validation metrics
+        fold_metric = calculate_classification_metrics(y_train[validation_index], fold_pred)  # Calculate fold validation metrics
+        fold_metrics.append(fold_metric)  # Store fold validation metrics
+        fold_elapsed = time.perf_counter() - fold_start  # Resolve fold elapsed seconds
+        fold_iterator.set_postfix(f1=f"{fold_metric.get('f1_score'):.6f}", elapsed=f"{fold_elapsed:.1f}s")  # Update progress bar metrics
+        print(f"{BackgroundColors.GREEN}[CV] Fold {BackgroundColors.CYAN}{fold_number}/{effective_folds}{BackgroundColors.GREEN} complete: F1={BackgroundColors.CYAN}{fold_metric.get('f1_score')}{BackgroundColors.GREEN}, time={BackgroundColors.CYAN}{fold_elapsed:.6f}s{Style.RESET_ALL}")  # Log fold completion
     metric_names = ("accuracy", "precision", "recall", "f1_score", "fpr", "fnr")  # Define exported metric names
     cv_metrics = {name: float(np.mean([metrics[name] for metrics in fold_metrics])) for name in metric_names}  # Average fold metrics
+    print(f"{BackgroundColors.GREEN}[CV] Completed CV: F1={BackgroundColors.CYAN}{cv_metrics.get('f1_score')}{BackgroundColors.GREEN}, FPR={BackgroundColors.CYAN}{cv_metrics.get('fpr')}{BackgroundColors.GREEN}, FNR={BackgroundColors.CYAN}{cv_metrics.get('fnr')}{Style.RESET_ALL}")  # Log CV completion
     return cv_metrics, f"StratifiedKFold(n_splits={effective_folds})"  # Return CV metrics and method label
 
 
@@ -652,8 +681,10 @@ def save_results(results: pd.DataFrame, csv_output: Path) -> None:
 
     csv_output.parent.mkdir(parents=True, exist_ok=True)  # Create output directory
     temporary_path = csv_output.with_suffix(csv_output.suffix + ".tmp")  # Build same-directory temporary path
+    print(f"{BackgroundColors.GREEN}[EXPORT] Writing ranked Extra Trees CSV to {BackgroundColors.CYAN}{csv_output}{Style.RESET_ALL}")  # Log export start
     results.to_csv(temporary_path, index=False)  # Write complete ranked CSV atomically staged
     os.replace(temporary_path, csv_output)  # Replace final CSV atomically
+    print(f"{BackgroundColors.GREEN}[EXPORT] CSV saved successfully with {BackgroundColors.CYAN}{len(results)}{BackgroundColors.GREEN} ranked feature row(s).{Style.RESET_ALL}")  # Log export completion
 
 
 def print_extra_trees_summary(csv_output: Path, selected_count: int, eligible_count: int, cv_metrics: dict, test_metrics: dict, elapsed_seconds: float) -> None:  # Print colored Extra Trees execution summary
@@ -742,14 +773,18 @@ def run_extra_trees_feature_selection(config: dict, csv_path: str) -> Path:
     started_at = datetime.datetime.now(datetime.timezone.utc)  # Record start timestamp
     output_dir, csv_output = resolve_output_paths(config, csv_path)  # Resolve output locations
     print(f"{BackgroundColors.GREEN}Starting Extra Trees feature selection for {BackgroundColors.CYAN}{csv_path}{Style.RESET_ALL}")  # Print colored start message
+    print(f"{BackgroundColors.GREEN}[CONFIG] Results directory: {BackgroundColors.CYAN}{output_dir}{BackgroundColors.GREEN} | Results file: {BackgroundColors.CYAN}{csv_output.name}{Style.RESET_ALL}")  # Log resolved export configuration
     dataframe = load_dataset(csv_path, config)  # Load dataset once
     X_train, y_train, X_test, y_test, feature_names, split_metadata = prepare_training_data(dataframe, config)  # Prepare training-only selector inputs and held-out diagnostics data
+    print(f"{BackgroundColors.GREEN}[MEMORY] Releasing raw cleaned DataFrame before CV and fitting.{Style.RESET_ALL}")  # Log dataframe release
     del dataframe  # Release full dataframe before fitting selector
     cv_metrics, cv_method = evaluate_cross_validation_metrics(X_train, y_train, config)  # Evaluate selector CV diagnostics on training partition only
     ranked, selector_elapsed, selector_params, selector = fit_extra_trees_rankings(X_train, y_train, feature_names, config)  # Fit selector and rank features
     test_metrics, testing_elapsed = evaluate_selector_metrics(selector, X_test, y_test)  # Evaluate fitted selector on held-out split
+    print(f"{BackgroundColors.GREEN}[MEMORY] Releasing train/test matrices and fitted selector before CSV assembly.{Style.RESET_ALL}")  # Log matrix release
     del X_train, y_train, X_test, y_test, selector  # Release data and fitted selector before CSV assembly
     finished_at = datetime.datetime.now(datetime.timezone.utc)  # Record finish timestamp
+    print(f"{BackgroundColors.GREEN}[RESULTS] Building ranked feature-result rows.{Style.RESET_ALL}")  # Log results assembly start
     results = build_results_dataframe(ranked, config, csv_path, selector_params, selector_elapsed, testing_elapsed, cv_metrics, test_metrics, cv_method, split_metadata, started_at, finished_at)  # Build output rows
     save_results(results, csv_output)  # Persist ranked results
     print_extra_trees_summary(csv_output, int(results["selected"].sum()), int(split_metadata["eligible_feature_count"]), cv_metrics, test_metrics, (finished_at - started_at).total_seconds())  # Print colored completion summary
