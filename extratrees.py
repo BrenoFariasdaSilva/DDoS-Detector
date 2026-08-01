@@ -70,7 +70,7 @@ def get_default_config() -> dict:
         "dataset": {"test_size": 0.2, "random_state": 42},  # Define split defaults
         "extra_trees": {  # Define selector defaults
             "selection": {"n_features_to_select": 20},  # Define Extra-Trees-20 default representation
-            "cross_validation": {"enabled": True, "n_folds": 3},  # Define training-partition CV diagnostics
+            "cross_validation": {"enabled": True, "n_folds": 10},  # Define training-partition CV diagnostics
             "model": {"n_estimators": 200, "random_state": 42, "n_jobs": 1, "criterion": "gini", "max_features": "sqrt"},  # Define Extra Trees classifier defaults
             "export": {"results_dir": "Feature_Analysis/Extra_Trees", "results_filename": "Extra_Trees_Results.csv", "results_csv_columns": list(DEFAULT_RESULTS_CSV_COLUMNS)},  # Define export path and header defaults
         },
@@ -317,7 +317,7 @@ def preprocess_dataframe(dataframe: pd.DataFrame, remove_zero_variance: bool = T
     if len(numeric_columns) > 0:  # Sanitize numeric predictors when present
         float32_limit = np.finfo(np.float32).max  # Match sklearn tree validation limit
         oversized_rows = pd.Series(False, index=dataframe.index)  # Track rows with values too large for sklearn trees
-        for column in tqdm(numeric_columns, desc="Extra Trees preprocessing", unit="column"):  # Scan numeric columns with ETA
+        for column in tqdm(numeric_columns, desc=f"{BackgroundColors.GREEN}Extra Trees preprocessing{Style.RESET_ALL}", unit="column", colour="green"):  # Scan numeric columns with colored ETA
             oversized_rows |= dataframe[column].abs().gt(float32_limit)  # Mark rows exceeding the float32 tree limit
         if oversized_rows.any():  # Remove rows that sklearn trees cannot fit
             print(f"{BackgroundColors.YELLOW}[PREPROCESS] Removing {BackgroundColors.CYAN}{int(oversized_rows.sum())}{BackgroundColors.YELLOW} row(s) exceeding sklearn tree float32 limits.{Style.RESET_ALL}")  # Log oversized-row removal
@@ -471,7 +471,7 @@ def fit_extra_trees_rankings(X_train: pd.DataFrame, y_train: np.ndarray, feature
     start = time.perf_counter()  # Start selector timing
     selector.fit(X_train.to_numpy(copy=False), y_train)  # Fit selector on training rows only
     elapsed = round(time.perf_counter() - start, 6)  # Resolve selector fit duration
-    print(f"{BackgroundColors.GREEN}[TRAIN] Final Extra Trees selector fitted in {BackgroundColors.CYAN}{elapsed:.6f}s{Style.RESET_ALL}")  # Log final selector fit completion
+    print(f"{BackgroundColors.GREEN}[TRAIN] Final Extra Trees selector fitted in {BackgroundColors.CYAN}{int(round(elapsed))}s{Style.RESET_ALL}")  # Log final selector fit completion
     importances = np.asarray(selector.feature_importances_, dtype=np.float64)  # Read fitted importances
     order = np.lexsort((np.arange(importances.shape[0]), -importances))  # Rank by importance descending then original index
     ranks = np.empty_like(order)  # Allocate rank vector
@@ -542,7 +542,7 @@ def evaluate_selector_metrics(selector: ExtraTreesClassifier, X_test: pd.DataFra
     y_pred = selector.predict(X_test.to_numpy(copy=False))  # Predict held-out rows without refitting selector
     elapsed = round(time.perf_counter() - start, 6)  # Resolve held-out prediction duration
     metrics = calculate_classification_metrics(y_test, y_pred)  # Calculate held-out selector metrics
-    print(f"{BackgroundColors.GREEN}[TEST] Held-out metrics: F1={BackgroundColors.CYAN}{metrics.get('f1_score')}{BackgroundColors.GREEN}, FPR={BackgroundColors.CYAN}{metrics.get('fpr')}{BackgroundColors.GREEN}, FNR={BackgroundColors.CYAN}{metrics.get('fnr')}{BackgroundColors.GREEN}, time={BackgroundColors.CYAN}{elapsed:.6f}s{Style.RESET_ALL}")  # Log held-out metrics
+    print(f"{BackgroundColors.GREEN}[TEST] Held-out metrics: F1={BackgroundColors.CYAN}{metrics.get('f1_score')}{BackgroundColors.GREEN}, FPR={BackgroundColors.CYAN}{metrics.get('fpr')}{BackgroundColors.GREEN}, FNR={BackgroundColors.CYAN}{metrics.get('fnr')}{BackgroundColors.GREEN}, time={BackgroundColors.CYAN}{int(round(elapsed))}s{Style.RESET_ALL}")  # Log held-out metrics
     return metrics, elapsed  # Return metrics and timing
 
 
@@ -570,7 +570,7 @@ def evaluate_cross_validation_metrics(X_train: pd.DataFrame, y_train: np.ndarray
     splitter = StratifiedKFold(n_splits=effective_folds, shuffle=True, random_state=int(config.get("dataset", {}).get("random_state", 42)))  # Build training-only stratified splitter
     fold_metrics = []  # Accumulate fold metric dictionaries
     X_values = X_train.to_numpy(copy=False)  # Reuse CPU-backed training values for fold slicing
-    fold_iterator = tqdm(splitter.split(X_values, y_train), total=effective_folds, desc="Extra Trees CV", unit="fold")  # Show CV fold progress with ETA
+    fold_iterator = tqdm(splitter.split(X_values, y_train), total=effective_folds, desc=f"{BackgroundColors.GREEN}Extra Trees CV{Style.RESET_ALL}", unit="fold", colour="green")  # Show colored CV fold progress with ETA
     for fold_number, (train_index, validation_index) in enumerate(fold_iterator, start=1):  # Iterate training-only CV folds
         fold_selector = build_extra_trees_selector(config)  # Build an isolated selector for this fold
         fold_start = time.perf_counter()  # Start fold timing
@@ -579,8 +579,8 @@ def evaluate_cross_validation_metrics(X_train: pd.DataFrame, y_train: np.ndarray
         fold_metric = calculate_classification_metrics(y_train[validation_index], fold_pred)  # Calculate fold validation metrics
         fold_metrics.append(fold_metric)  # Store fold validation metrics
         fold_elapsed = time.perf_counter() - fold_start  # Resolve fold elapsed seconds
-        fold_iterator.set_postfix(f1=f"{fold_metric.get('f1_score'):.6f}", elapsed=f"{fold_elapsed:.1f}s")  # Update progress bar metrics
-        print(f"{BackgroundColors.GREEN}[CV] Fold {BackgroundColors.CYAN}{fold_number}/{effective_folds}{BackgroundColors.GREEN} complete: F1={BackgroundColors.CYAN}{fold_metric.get('f1_score')}{BackgroundColors.GREEN}, time={BackgroundColors.CYAN}{fold_elapsed:.6f}s{Style.RESET_ALL}")  # Log fold completion
+        fold_iterator.set_postfix(f1=f"{fold_metric.get('f1_score'):.6f}", elapsed=f"{int(round(fold_elapsed))}s")  # Update progress bar metrics
+        print(f"{BackgroundColors.GREEN}[CV] Fold {BackgroundColors.CYAN}{fold_number}/{effective_folds}{BackgroundColors.GREEN} complete: F1={BackgroundColors.CYAN}{fold_metric.get('f1_score')}{BackgroundColors.GREEN}, time={BackgroundColors.CYAN}{int(round(fold_elapsed))}s{Style.RESET_ALL}")  # Log fold completion
     metric_names = ("accuracy", "precision", "recall", "f1_score", "fpr", "fnr")  # Define exported metric names
     cv_metrics = {name: float(np.mean([metrics[name] for metrics in fold_metrics])) for name in metric_names}  # Average fold metrics
     print(f"{BackgroundColors.GREEN}[CV] Completed CV: F1={BackgroundColors.CYAN}{cv_metrics.get('f1_score')}{BackgroundColors.GREEN}, FPR={BackgroundColors.CYAN}{cv_metrics.get('fpr')}{BackgroundColors.GREEN}, FNR={BackgroundColors.CYAN}{cv_metrics.get('fnr')}{Style.RESET_ALL}")  # Log CV completion
@@ -654,10 +654,10 @@ def build_results_dataframe(ranked: pd.DataFrame, config: dict, csv_path: str, s
     ranked["eligible_feature_count"] = int(split_metadata["eligible_feature_count"])  # Store eligible predictor count
     ranked["target_column"] = split_metadata["target_column"]  # Store target column name
     ranked["excluded_columns"] = json.dumps(split_metadata["excluded_columns"], ensure_ascii=False)  # Store excluded predictor metadata
-    ranked["feature_extraction_time_s"] = round(float(selector_elapsed), 6)  # Store selector fit duration
-    ranked["training_time_s"] = round(float(selector_elapsed), 6)  # Store selector training duration
-    ranked["testing_time_s"] = round(float(testing_elapsed), 6)  # Store held-out prediction duration
-    ranked["elapsed_run_time"] = round((finished_at - started_at).total_seconds(), 6)  # Store full script duration
+    ranked["feature_extraction_time_s"] = int(round(float(selector_elapsed)))  # Store selector fit duration as integer seconds
+    ranked["training_time_s"] = int(round(float(selector_elapsed)))  # Store selector training duration as integer seconds
+    ranked["testing_time_s"] = int(round(float(testing_elapsed)))  # Store held-out prediction duration as integer seconds
+    ranked["elapsed_run_time"] = int(round((finished_at - started_at).total_seconds()))  # Store full script duration as integer seconds
     ranked["hardware"] = json.dumps(get_hardware_specifications(), default=str, sort_keys=True)  # Store hardware metadata
     selected_features = ranked.loc[ranked["selected"], "feature_name"].tolist()  # Resolve ranked selected features for GA-compatible summary columns
     ranked["best_features"] = json.dumps(selected_features, ensure_ascii=False)  # Store selected features in GA-compatible payload column
@@ -706,7 +706,7 @@ def print_extra_trees_summary(csv_output: Path, selected_count: int, eligible_co
     print(f"{BackgroundColors.GREEN}Selected features: {BackgroundColors.CYAN}{selected_count}{BackgroundColors.GREEN} of {BackgroundColors.CYAN}{eligible_count}{Style.RESET_ALL}")  # Print selected-feature count
     print(f"{BackgroundColors.GREEN}CV F1: {BackgroundColors.CYAN}{cv_metrics.get('f1_score')}{BackgroundColors.GREEN} | CV FPR: {BackgroundColors.CYAN}{cv_metrics.get('fpr')}{BackgroundColors.GREEN} | CV FNR: {BackgroundColors.CYAN}{cv_metrics.get('fnr')}{Style.RESET_ALL}")  # Print CV diagnostics
     print(f"{BackgroundColors.GREEN}Test F1: {BackgroundColors.CYAN}{test_metrics.get('f1_score')}{BackgroundColors.GREEN} | Test FPR: {BackgroundColors.CYAN}{test_metrics.get('fpr')}{BackgroundColors.GREEN} | Test FNR: {BackgroundColors.CYAN}{test_metrics.get('fnr')}{Style.RESET_ALL}")  # Print held-out diagnostics
-    print(f"{BackgroundColors.GREEN}Execution time: {BackgroundColors.CYAN}{elapsed_seconds:.6f}s{Style.RESET_ALL}")  # Print elapsed time
+    print(f"{BackgroundColors.GREEN}Execution time: {BackgroundColors.CYAN}{int(round(elapsed_seconds))}s{Style.RESET_ALL}")  # Print elapsed time
     print(f"{BackgroundColors.GREEN}{'=' * 80}{Style.RESET_ALL}\n")  # Print summary separator
 
 
