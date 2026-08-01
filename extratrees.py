@@ -298,6 +298,37 @@ def sanitize_feature_names(columns: Any) -> list[str]:
     return sanitized  # Return sanitized names
 
 
+def preprocess_dataframe(dataframe: pd.DataFrame, remove_zero_variance: bool = True) -> pd.DataFrame:
+    """
+    Preprocess a DataFrame for Extra Trees feature selection.
+
+    :param dataframe: Input dataset DataFrame.
+    :param remove_zero_variance: Whether zero-variance numeric columns are removed.
+    :return: Cleaned dataset DataFrame.
+    """
+
+    dataframe.columns = sanitize_feature_names([str(column).strip() for column in dataframe.columns])  # Apply stacking-compatible column sanitization
+    dataframe.replace([np.inf, -np.inf], np.nan, inplace=True)  # Replace infinite values with NaN in-place
+    numeric_columns = dataframe.select_dtypes(include=["number"]).columns  # Resolve numeric columns for finite-range sanitation
+    if len(numeric_columns) > 0:  # Sanitize numeric predictors when present
+        float32_limit = np.finfo(np.float32).max  # Match sklearn tree validation limit
+        oversized_rows = pd.Series(False, index=dataframe.index)  # Track rows with values too large for sklearn trees
+        for column in numeric_columns:  # Scan one numeric column at a time to limit memory pressure
+            oversized_rows |= dataframe[column].abs().gt(float32_limit)  # Mark rows exceeding the float32 tree limit
+        if oversized_rows.any():  # Remove rows that sklearn trees cannot fit
+            dataframe.drop(index=dataframe.index[oversized_rows], inplace=True)  # Drop oversized rows in-place
+    dataframe.dropna(inplace=True)  # Drop rows containing NaN values after infinity sanitation
+    if remove_zero_variance and len(numeric_columns) > 0:  # Remove constant numeric columns when configured
+        numeric_columns = dataframe.select_dtypes(include=["number"]).columns  # Refresh numeric columns after row cleanup
+        variances = dataframe[numeric_columns].var(axis=0, ddof=0)  # Calculate numeric feature variances
+        zero_variance_columns = variances[variances == 0].index.tolist()  # Resolve constant numeric columns
+        if zero_variance_columns:  # Remove constant columns only when found
+            dataframe.drop(columns=zero_variance_columns, inplace=True)  # Drop zero-variance columns in-place
+    if dataframe.empty:  # Reject datasets emptied by sanitation
+        raise ValueError("Extra Trees preprocessing removed all rows; dataset contains no valid finite samples")  # Raise explicit empty-data error
+    return dataframe  # Return cleaned dataframe
+
+
 def normalize_feature_name(name: Any) -> str:
     """
     Normalize feature names for metadata exclusion.
@@ -359,7 +390,7 @@ def load_dataset(csv_path: str, config: dict) -> pd.DataFrame:
         raise FileNotFoundError(f"Dataset file not found: {csv_path}")  # Raise explicit dataset error
     low_memory = bool(config.get("execution", {}).get("low_memory", False))  # Resolve pandas low-memory mode
     dataframe = pd.read_csv(path, low_memory=low_memory)  # Load dataset CSV
-    dataframe.columns = sanitize_feature_names([str(column).strip() for column in dataframe.columns])  # Apply stacking-compatible column sanitization
+    dataframe = preprocess_dataframe(dataframe, remove_zero_variance=bool(config.get("dataset", {}).get("remove_zero_variance", True)))  # Apply GA-aligned dataframe sanitation
     if dataframe.shape[1] < 2:  # Validate predictor plus target columns
         raise ValueError("Dataset must contain at least one feature column and one target column")  # Raise explicit dataset shape error
     return dataframe  # Return loaded dataframe
