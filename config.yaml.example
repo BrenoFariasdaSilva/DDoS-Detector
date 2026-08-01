@@ -304,7 +304,7 @@ extra_trees:
 
   cross_validation:
     enabled: true # Enable training-partition CV diagnostics for the selector model
-    n_folds: 3 # StratifiedKFold count used only inside the training partition
+    n_folds: 10 # StratifiedKFold count used only inside the training partition
 
   model:
     n_estimators: 200 # Number of Extra Trees estimators
