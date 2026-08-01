@@ -27,12 +27,24 @@ import numpy as np  # Handle numeric arrays
 import pandas as pd  # Load datasets and persist CSV results
 import psutil  # Record hardware memory metadata
 import yaml  # Load YAML configuration
+from colorama import Style  # Match project terminal color reset style
 from sklearn.ensemble import ExtraTreesClassifier  # Fit Extra Trees feature importances
-from sklearn.model_selection import train_test_split  # Split before selector fitting
+from sklearn.metrics import accuracy_score, confusion_matrix, f1_score, precision_score, recall_score  # Compute selector diagnostics
+from sklearn.model_selection import StratifiedKFold, train_test_split  # Split before selector fitting and optional CV diagnostics
 
 
 NON_FEATURE_COLUMNS = ("Unnamed: 0", "Flow ID", "Source IP", "Destination IP", "Timestamp")  # Define leakage-prone metadata columns
 TARGET_COLUMN_ALIASES = ("Label", "label", "attack_type", "Attack Type", "Class", "class", "Target", "target")  # Define common target column names
+DEFAULT_RESULTS_CSV_COLUMNS = ("timestamp", "tool", "run_index", "model", "dataset", "dataset_path", "hyperparameters", "cv_method", "train_test_split", "scaling", "cv_accuracy", "cv_precision", "cv_recall", "cv_f1_score", "cv_fpr", "cv_fnr", "test_accuracy", "test_precision", "test_recall", "test_f1_score", "test_fpr", "test_fnr", "feature_extraction_time_s", "training_time_s", "testing_time_s", "elapsed_run_time", "hardware", "best_features", "union_features_across_runs", "rfe_ranking", "feature_name", "original_feature_index", "extra_trees_importance", "importance_rank", "selected", "configured_selected_feature_count", "actual_selected_feature_count", "n_estimators", "random_state", "n_jobs", "n_train", "n_test", "source_feature_count", "eligible_feature_count", "target_column", "excluded_columns")  # Define default configurable export header
+
+
+class BackgroundColors:  # Match project color constants
+    CYAN = "\033[96m"  # Cyan terminal color
+    GREEN = "\033[92m"  # Green terminal color
+    YELLOW = "\033[93m"  # Yellow terminal color
+    RED = "\033[91m"  # Red terminal color
+    BOLD = "\033[1m"  # Bold terminal style
+    CLEAR_TERMINAL = "\033[H\033[J"  # Clear-terminal escape sequence
 
 
 def get_default_config() -> dict:
@@ -47,8 +59,9 @@ def get_default_config() -> dict:
         "dataset": {"test_size": 0.2, "random_state": 42},  # Define split defaults
         "extra_trees": {  # Define selector defaults
             "selection": {"n_features_to_select": 20},  # Define Extra-Trees-20 default representation
+            "cross_validation": {"enabled": True, "n_folds": 3},  # Define training-partition CV diagnostics
             "model": {"n_estimators": 200, "random_state": 42, "n_jobs": 1, "criterion": "gini", "max_features": "sqrt"},  # Define Extra Trees classifier defaults
-            "export": {"results_dir": "Feature_Analysis/Extra_Trees", "results_filename": "Extra_Trees_Results.csv"},  # Define export path defaults
+            "export": {"results_dir": "Feature_Analysis/Extra_Trees", "results_filename": "Extra_Trees_Results.csv", "results_csv_columns": list(DEFAULT_RESULTS_CSV_COLUMNS)},  # Define export path and header defaults
         },
     }  # Complete default config
 
@@ -105,8 +118,11 @@ def parse_cli_args() -> argparse.Namespace:
     parser.add_argument("--n-estimators", dest="n_estimators", type=int, default=None, help="Number of Extra Trees estimators")  # Add estimator-count override
     parser.add_argument("--random-state", dest="random_state", type=int, default=None, help="Random seed")  # Add seed override
     parser.add_argument("--n-jobs", dest="n_jobs", type=int, default=None, help="Extra Trees worker threads")  # Add worker override
+    parser.add_argument("--cv-folds", dest="cv_folds", type=int, default=None, help="Training-partition StratifiedKFold count for selector diagnostics")  # Add CV-fold override
+    parser.add_argument("--disable-cv", dest="disable_cv", action="store_true", default=False, help="Disable training-partition CV diagnostics")  # Add CV-disable override
     parser.add_argument("--results-dir", dest="results_dir", type=str, default=None, help="Results directory relative to dataset directory")  # Add export-directory override
     parser.add_argument("--results-filename", dest="results_filename", type=str, default=None, help="Results CSV filename")  # Add export-filename override
+    parser.add_argument("--results-csv-columns", dest="results_csv_columns", type=str, default=None, help="Comma-separated Extra Trees result CSV columns")  # Add configurable header override
     parser.add_argument("--verbose", action="store_true", default=False, help="Enable verbose logging")  # Add verbose override
     return parser.parse_args()  # Return parsed CLI arguments
 
@@ -133,10 +149,16 @@ def build_cli_overrides(cli_args: argparse.Namespace) -> dict:
         overrides.setdefault("dataset", {})["random_state"] = cli_args.random_state  # Store split seed override
     if cli_args.n_jobs is not None:  # Apply worker override only when supplied
         overrides.setdefault("extra_trees", {}).setdefault("model", {})["n_jobs"] = cli_args.n_jobs  # Store worker override
+    if cli_args.cv_folds is not None:  # Apply CV-fold override only when supplied
+        overrides.setdefault("extra_trees", {}).setdefault("cross_validation", {})["n_folds"] = cli_args.cv_folds  # Store CV-fold override
+    if cli_args.disable_cv:  # Apply CV-disable override only when supplied
+        overrides.setdefault("extra_trees", {}).setdefault("cross_validation", {})["enabled"] = False  # Store CV-disable override
     if cli_args.results_dir is not None:  # Apply results directory override only when supplied
         overrides.setdefault("extra_trees", {}).setdefault("export", {})["results_dir"] = cli_args.results_dir  # Store results directory override
     if cli_args.results_filename is not None:  # Apply results filename override only when supplied
         overrides.setdefault("extra_trees", {}).setdefault("export", {})["results_filename"] = cli_args.results_filename  # Store results filename override
+    if cli_args.results_csv_columns is not None:  # Apply CSV header override only when supplied
+        overrides.setdefault("extra_trees", {}).setdefault("export", {})["results_csv_columns"] = [column.strip() for column in cli_args.results_csv_columns.split(",") if column.strip()]  # Store parsed CSV header override
     return overrides  # Return CLI-only overrides
 
 
@@ -221,11 +243,15 @@ def validate_config(config: dict) -> None:
 
     selection_cfg = config.get("extra_trees", {}).get("selection", {})  # Read selection configuration
     model_cfg = config.get("extra_trees", {}).get("model", {})  # Read model configuration
+    cv_cfg = config.get("extra_trees", {}).get("cross_validation", {})  # Read cross-validation configuration
     export_cfg = config.get("extra_trees", {}).get("export", {})  # Read export configuration
     dataset_cfg = config.get("dataset", {})  # Read dataset configuration
     validate_positive_int(selection_cfg.get("n_features_to_select", 20), "extra_trees.selection.n_features_to_select")  # Validate selected-feature count
     validate_positive_int(model_cfg.get("n_estimators", 200), "extra_trees.model.n_estimators")  # Validate estimator count
     validate_n_jobs(model_cfg.get("n_jobs", 1), "extra_trees.model.n_jobs")  # Validate worker count
+    validate_positive_int(cv_cfg.get("n_folds", 3), "extra_trees.cross_validation.n_folds")  # Validate CV-fold count
+    if not isinstance(cv_cfg.get("enabled", True), bool):  # Validate CV enablement type
+        raise ValueError("extra_trees.cross_validation.enabled must be true or false")  # Raise explicit CV enablement error
     if not isinstance(dataset_cfg.get("random_state", 42), int) or isinstance(dataset_cfg.get("random_state", 42), bool):  # Validate split seed type
         raise ValueError("dataset.random_state must be an integer")  # Raise explicit split-seed error
     if not isinstance(model_cfg.get("random_state", 42), int) or isinstance(model_cfg.get("random_state", 42), bool):  # Validate model seed type
@@ -236,6 +262,13 @@ def validate_config(config: dict) -> None:
     results_filename = export_cfg.get("results_filename", "Extra_Trees_Results.csv")  # Read output filename
     if not isinstance(results_filename, str) or not results_filename.lower().endswith(".csv"):  # Validate CSV filename
         raise ValueError("extra_trees.export.results_filename must end with .csv")  # Raise explicit filename error
+    results_columns = export_cfg.get("results_csv_columns", list(DEFAULT_RESULTS_CSV_COLUMNS))  # Read configured result columns
+    if not isinstance(results_columns, list) or not results_columns or any(not isinstance(column, str) or not column.strip() for column in results_columns):  # Validate result header shape
+        raise ValueError("extra_trees.export.results_csv_columns must be a non-empty list of column names")  # Raise explicit header error
+    required_loader_columns = {"feature_name", "extra_trees_importance", "importance_rank", "selected"}  # Define stacking loader-required columns
+    missing_loader_columns = required_loader_columns - {column.strip() for column in results_columns}  # Identify loader-required columns absent from configured header
+    if missing_loader_columns:  # Reject headers that stacking.py cannot consume
+        raise ValueError(f"extra_trees.export.results_csv_columns must include {sorted(missing_loader_columns)}")  # Raise explicit unusable-header error
 
 
 def sanitize_feature_names(columns: Any) -> list[str]:
@@ -322,13 +355,13 @@ def load_dataset(csv_path: str, config: dict) -> pd.DataFrame:
     return dataframe  # Return loaded dataframe
 
 
-def prepare_training_data(dataframe: pd.DataFrame, config: dict) -> tuple[pd.DataFrame, np.ndarray, list[str], dict]:
+def prepare_training_data(dataframe: pd.DataFrame, config: dict) -> tuple[pd.DataFrame, np.ndarray, pd.DataFrame, np.ndarray, list[str], dict]:
     """
     Prepare training-only data for Extra Trees ranking.
 
     :param dataframe: Loaded dataset DataFrame.
     :param config: Effective configuration dictionary.
-    :return: Training predictors, training labels, feature names, and split metadata.
+    :return: Training predictors, training labels, test predictors, test labels, feature names, and split metadata.
     """
 
     target_column = resolve_target_column(list(dataframe.columns))  # Resolve target column
@@ -348,8 +381,10 @@ def prepare_training_data(dataframe: pd.DataFrame, config: dict) -> tuple[pd.Dat
     train_indices, test_indices = train_test_split(row_indices, test_size=test_size, random_state=split_random_state, stratify=y)  # Split before fitting selector
     X_train = dataframe.loc[dataframe.index[train_indices], numeric_columns]  # Select training predictors only
     y_train = y[train_indices]  # Select training labels only
+    X_test = dataframe.loc[dataframe.index[test_indices], numeric_columns]  # Select held-out predictors only for selector diagnostics
+    y_test = y[test_indices]  # Select held-out labels only for selector diagnostics
     metadata = {"target_column": target_column, "n_train": int(len(train_indices)), "n_test": int(len(test_indices)), "source_feature_count": int(dataframe.shape[1] - 1), "eligible_feature_count": int(len(numeric_columns)), "excluded_columns": excluded_present, "test_size": float(test_size)}  # Record split and eligibility metadata
-    return X_train, y_train, numeric_columns, metadata  # Return training-only selector inputs
+    return X_train, y_train, X_test, y_test, numeric_columns, metadata  # Return selector inputs and held-out diagnostics data
 
 
 def build_extra_trees_selector(config: dict) -> ExtraTreesClassifier:
@@ -364,7 +399,7 @@ def build_extra_trees_selector(config: dict) -> ExtraTreesClassifier:
     return ExtraTreesClassifier(n_estimators=int(model_cfg.get("n_estimators", 200)), random_state=int(model_cfg.get("random_state", 42)), n_jobs=int(model_cfg.get("n_jobs", 1)), criterion=str(model_cfg.get("criterion", "gini")), max_features=model_cfg.get("max_features", "sqrt"))  # Return configured selector
 
 
-def fit_extra_trees_rankings(X_train: pd.DataFrame, y_train: np.ndarray, feature_names: list[str], config: dict) -> tuple[pd.DataFrame, float, dict]:
+def fit_extra_trees_rankings(X_train: pd.DataFrame, y_train: np.ndarray, feature_names: list[str], config: dict) -> tuple[pd.DataFrame, float, dict, ExtraTreesClassifier]:
     """
     Fit Extra Trees and build ranked feature rows.
 
@@ -372,7 +407,7 @@ def fit_extra_trees_rankings(X_train: pd.DataFrame, y_train: np.ndarray, feature
     :param y_train: Training labels.
     :param feature_names: Ordered eligible feature names.
     :param config: Effective configuration dictionary.
-    :return: Ranked DataFrame, elapsed seconds, and model parameters.
+    :return: Ranked DataFrame, elapsed seconds, model parameters, and fitted selector.
     """
 
     selector = build_extra_trees_selector(config)  # Build configured Extra Trees selector
@@ -389,7 +424,97 @@ def fit_extra_trees_rankings(X_train: pd.DataFrame, y_train: np.ndarray, feature
     for original_index, feature_name in enumerate(feature_names):  # Preserve original feature index in output rows
         rows.append({"feature_name": feature_name, "original_feature_index": int(original_index), "extra_trees_importance": float(importances[original_index]), "importance_rank": int(ranks[original_index]), "selected": bool(original_index in selected_indices)})  # Store one feature row
     ranked = pd.DataFrame(rows).sort_values(["importance_rank", "original_feature_index"], ascending=[True, True], kind="mergesort").reset_index(drop=True)  # Persist rows in ranking order
-    return ranked, elapsed, selector.get_params(deep=True)  # Return ranked rows and fitted configuration
+    return ranked, elapsed, selector.get_params(deep=True), selector  # Return ranked rows and fitted selector configuration
+
+
+def calculate_weighted_error_rates(y_true: np.ndarray, y_pred: np.ndarray) -> tuple[float, float]:  # Calculate weighted selector error rates
+    """
+    Calculate weighted false-positive and false-negative rates.
+
+    :param y_true: True labels.
+    :param y_pred: Predicted labels.
+    :return: Weighted false-positive rate and false-negative rate.
+    """
+
+    labels = np.unique(np.concatenate([np.asarray(y_true), np.asarray(y_pred)]))  # Build stable label universe from observed values
+    matrix = confusion_matrix(y_true, y_pred, labels=labels)  # Build confusion matrix across all observed labels
+    supports = matrix.sum(axis=1)  # Calculate per-class support
+    total_support = float(supports.sum()) if supports.sum() > 0 else 1.0  # Resolve nonzero denominator for weighted rates
+    fpr_values = []  # Accumulate per-class false-positive rates
+    fnr_values = []  # Accumulate per-class false-negative rates
+    for index in range(matrix.shape[0]):  # Iterate every label position
+        true_positive = matrix[index, index]  # Resolve true positives for this label
+        false_negative = matrix[index, :].sum() - true_positive  # Resolve false negatives for this label
+        false_positive = matrix[:, index].sum() - true_positive  # Resolve false positives for this label
+        true_negative = matrix.sum() - (true_positive + false_positive + false_negative)  # Resolve true negatives for this label
+        fpr_denominator = false_positive + true_negative if false_positive + true_negative > 0 else 1  # Resolve FPR denominator
+        fnr_denominator = true_positive + false_negative if true_positive + false_negative > 0 else 1  # Resolve FNR denominator
+        fpr_values.append((float(false_positive / fpr_denominator), float(supports[index])))  # Store weighted FPR contribution
+        fnr_values.append((float(false_negative / fnr_denominator), float(supports[index])))  # Store weighted FNR contribution
+    weighted_fpr = float(sum(value * support for value, support in fpr_values) / total_support)  # Calculate weighted FPR
+    weighted_fnr = float(sum(value * support for value, support in fnr_values) / total_support)  # Calculate weighted FNR
+    return weighted_fpr, weighted_fnr  # Return weighted error rates
+
+
+def calculate_classification_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict:  # Calculate selector classification metrics
+    """
+    Calculate weighted classification metrics.
+
+    :param y_true: True labels.
+    :param y_pred: Predicted labels.
+    :return: Dictionary containing accuracy, precision, recall, F1, FPR, and FNR.
+    """
+
+    fpr, fnr = calculate_weighted_error_rates(y_true, y_pred)  # Calculate weighted error rates
+    return {"accuracy": float(accuracy_score(y_true, y_pred)), "precision": float(precision_score(y_true, y_pred, average="weighted", zero_division=0)), "recall": float(recall_score(y_true, y_pred, average="weighted", zero_division=0)), "f1_score": float(f1_score(y_true, y_pred, average="weighted", zero_division=0)), "fpr": fpr, "fnr": fnr}  # Return weighted selector metrics
+
+
+def evaluate_selector_metrics(selector: ExtraTreesClassifier, X_test: pd.DataFrame, y_test: np.ndarray) -> tuple[dict, float]:  # Evaluate held-out selector diagnostics
+    """
+    Evaluate the fitted selector model on held-out data.
+
+    :param selector: Fitted Extra Trees selector.
+    :param X_test: Held-out predictor DataFrame.
+    :param y_test: Held-out labels.
+    :return: Test metrics dictionary and testing duration seconds.
+    """
+
+    start = time.perf_counter()  # Start held-out prediction timing
+    y_pred = selector.predict(X_test.to_numpy(copy=False))  # Predict held-out rows without refitting selector
+    elapsed = round(time.perf_counter() - start, 6)  # Resolve held-out prediction duration
+    metrics = calculate_classification_metrics(y_test, y_pred)  # Calculate held-out selector metrics
+    return metrics, elapsed  # Return metrics and timing
+
+
+def evaluate_cross_validation_metrics(X_train: pd.DataFrame, y_train: np.ndarray, config: dict) -> tuple[dict, str]:  # Evaluate training-only CV diagnostics
+    """
+    Evaluate selector diagnostics with training-partition CV.
+
+    :param X_train: Training predictor DataFrame.
+    :param y_train: Training labels.
+    :param config: Effective configuration dictionary.
+    :return: Mean CV metrics dictionary and CV method label.
+    """
+
+    cv_cfg = config.get("extra_trees", {}).get("cross_validation", {})  # Read CV configuration
+    if not bool(cv_cfg.get("enabled", True)):  # Respect disabled CV diagnostics
+        return {"accuracy": None, "precision": None, "recall": None, "f1_score": None, "fpr": None, "fnr": None}, "disabled"  # Return missing CV metrics when disabled
+    requested_folds = int(cv_cfg.get("n_folds", 3))  # Resolve configured fold count
+    _, class_counts = np.unique(y_train, return_counts=True)  # Count labels in training partition only
+    effective_folds = min(requested_folds, int(class_counts.min())) if class_counts.size else 0  # Resolve feasible stratified fold count
+    if effective_folds < 2:  # Require at least two folds for CV diagnostics
+        return {"accuracy": None, "precision": None, "recall": None, "f1_score": None, "fpr": None, "fnr": None}, "insufficient_training_class_support"  # Return missing CV metrics when class support is too small
+    splitter = StratifiedKFold(n_splits=effective_folds, shuffle=True, random_state=int(config.get("dataset", {}).get("random_state", 42)))  # Build training-only stratified splitter
+    fold_metrics = []  # Accumulate fold metric dictionaries
+    X_values = X_train.to_numpy(copy=False)  # Reuse CPU-backed training values for fold slicing
+    for train_index, validation_index in splitter.split(X_values, y_train):  # Iterate training-only CV folds
+        fold_selector = build_extra_trees_selector(config)  # Build an isolated selector for this fold
+        fold_selector.fit(X_values[train_index], y_train[train_index])  # Fit fold selector on fold-training rows only
+        fold_pred = fold_selector.predict(X_values[validation_index])  # Predict fold-validation rows only
+        fold_metrics.append(calculate_classification_metrics(y_train[validation_index], fold_pred))  # Store fold validation metrics
+    metric_names = ("accuracy", "precision", "recall", "f1_score", "fpr", "fnr")  # Define exported metric names
+    cv_metrics = {name: float(np.mean([metrics[name] for metrics in fold_metrics])) for name in metric_names}  # Average fold metrics
+    return cv_metrics, f"StratifiedKFold(n_splits={effective_folds})"  # Return CV metrics and method label
 
 
 def get_hardware_specifications() -> dict:
@@ -402,7 +527,7 @@ def get_hardware_specifications() -> dict:
     return {"platform": platform.platform(), "processor": platform.processor(), "cpu_count": os.cpu_count(), "memory_gb": round(psutil.virtual_memory().total / (1024 ** 3), 3)}  # Return compact host metadata
 
 
-def build_results_dataframe(ranked: pd.DataFrame, config: dict, csv_path: str, selector_params: dict, selector_elapsed: float, split_metadata: dict, started_at: datetime.datetime, finished_at: datetime.datetime) -> pd.DataFrame:
+def build_results_dataframe(ranked: pd.DataFrame, config: dict, csv_path: str, selector_params: dict, selector_elapsed: float, testing_elapsed: float, cv_metrics: dict, test_metrics: dict, cv_method: str, split_metadata: dict, started_at: datetime.datetime, finished_at: datetime.datetime) -> pd.DataFrame:  # Build configured Extra Trees CSV rows
     """
     Build the persisted Extra Trees results DataFrame.
 
@@ -411,6 +536,10 @@ def build_results_dataframe(ranked: pd.DataFrame, config: dict, csv_path: str, s
     :param csv_path: Dataset CSV path.
     :param selector_params: Fitted selector parameters.
     :param selector_elapsed: Selector fitting duration.
+    :param testing_elapsed: Held-out selector prediction duration.
+    :param cv_metrics: Training-partition CV metrics.
+    :param test_metrics: Held-out test metrics.
+    :param cv_method: CV method label.
     :param split_metadata: Split and dataset metadata.
     :param started_at: Execution start time.
     :param finished_at: Execution finish time.
@@ -429,9 +558,21 @@ def build_results_dataframe(ranked: pd.DataFrame, config: dict, csv_path: str, s
     ranked.insert(4, "dataset", Path(csv_path).stem)  # Store dataset stem
     ranked.insert(5, "dataset_path", os.path.relpath(csv_path))  # Store relative dataset path
     ranked.insert(6, "hyperparameters", json.dumps(selector_params, default=str, sort_keys=True))  # Store selector parameters
-    ranked.insert(7, "cv_method", "train_test_split")  # Store split method
+    ranked.insert(7, "cv_method", cv_method)  # Store CV method label
     ranked.insert(8, "train_test_split", f"{1.0 - float(split_metadata['test_size']):.0%}/{float(split_metadata['test_size']):.0%}")  # Store split ratio
     ranked.insert(9, "scaling", "none")  # Store tree-safety scaling marker
+    ranked["cv_accuracy"] = cv_metrics.get("accuracy")  # Store CV accuracy diagnostic
+    ranked["cv_precision"] = cv_metrics.get("precision")  # Store CV precision diagnostic
+    ranked["cv_recall"] = cv_metrics.get("recall")  # Store CV recall diagnostic
+    ranked["cv_f1_score"] = cv_metrics.get("f1_score")  # Store CV F1 diagnostic
+    ranked["cv_fpr"] = cv_metrics.get("fpr")  # Store CV FPR diagnostic
+    ranked["cv_fnr"] = cv_metrics.get("fnr")  # Store CV FNR diagnostic
+    ranked["test_accuracy"] = test_metrics.get("accuracy")  # Store held-out test accuracy diagnostic
+    ranked["test_precision"] = test_metrics.get("precision")  # Store held-out test precision diagnostic
+    ranked["test_recall"] = test_metrics.get("recall")  # Store held-out test recall diagnostic
+    ranked["test_f1_score"] = test_metrics.get("f1_score")  # Store held-out test F1 diagnostic
+    ranked["test_fpr"] = test_metrics.get("fpr")  # Store held-out test FPR diagnostic
+    ranked["test_fnr"] = test_metrics.get("fnr")  # Store held-out test FNR diagnostic
     ranked["configured_selected_feature_count"] = requested_count  # Store configured selected-feature count
     ranked["actual_selected_feature_count"] = actual_count  # Store actual selected-feature count
     ranked["n_estimators"] = int(selector_params.get("n_estimators", 0))  # Store estimator count
@@ -444,9 +585,19 @@ def build_results_dataframe(ranked: pd.DataFrame, config: dict, csv_path: str, s
     ranked["target_column"] = split_metadata["target_column"]  # Store target column name
     ranked["excluded_columns"] = json.dumps(split_metadata["excluded_columns"], ensure_ascii=False)  # Store excluded predictor metadata
     ranked["feature_extraction_time_s"] = round(float(selector_elapsed), 6)  # Store selector fit duration
+    ranked["training_time_s"] = round(float(selector_elapsed), 6)  # Store selector training duration
+    ranked["testing_time_s"] = round(float(testing_elapsed), 6)  # Store held-out prediction duration
     ranked["elapsed_run_time"] = round((finished_at - started_at).total_seconds(), 6)  # Store full script duration
     ranked["hardware"] = json.dumps(get_hardware_specifications(), default=str, sort_keys=True)  # Store hardware metadata
-    return ranked  # Return complete results DataFrame
+    selected_features = ranked.loc[ranked["selected"], "feature_name"].tolist()  # Resolve ranked selected features for GA-compatible summary columns
+    ranked["best_features"] = json.dumps(selected_features, ensure_ascii=False)  # Store selected features in GA-compatible payload column
+    ranked["union_features_across_runs"] = json.dumps(selected_features, ensure_ascii=False)  # Store single-run selected feature union
+    ranked["rfe_ranking"] = None  # Preserve GA-compatible column with no RFE ranking for Extra Trees
+    configured_columns = config.get("extra_trees", {}).get("export", {}).get("results_csv_columns", list(DEFAULT_RESULTS_CSV_COLUMNS))  # Read configured result header
+    for column in configured_columns:  # Ensure every configured column exists before export
+        if column not in ranked.columns:  # Add configured columns absent from generated metadata
+            ranked[column] = None  # Store project missing-value marker through pandas
+    return ranked[configured_columns]  # Return complete results DataFrame in configured column order
 
 
 def save_results(results: pd.DataFrame, csv_output: Path) -> None:
@@ -464,6 +615,29 @@ def save_results(results: pd.DataFrame, csv_output: Path) -> None:
     os.replace(temporary_path, csv_output)  # Replace final CSV atomically
 
 
+def print_extra_trees_summary(csv_output: Path, selected_count: int, eligible_count: int, cv_metrics: dict, test_metrics: dict, elapsed_seconds: float) -> None:  # Print colored Extra Trees execution summary
+    """
+    Print colored Extra Trees execution summary.
+
+    :param csv_output: Persisted results CSV path.
+    :param selected_count: Number of selected features.
+    :param eligible_count: Number of eligible features.
+    :param cv_metrics: Training-partition CV metrics.
+    :param test_metrics: Held-out test metrics.
+    :param elapsed_seconds: Total execution time in seconds.
+    :return: None.
+    """
+
+    print(f"\n{BackgroundColors.GREEN}{'=' * 80}{Style.RESET_ALL}")  # Print summary separator
+    print(f"{BackgroundColors.GREEN}Extra Trees feature selection completed{Style.RESET_ALL}")  # Print summary title
+    print(f"{BackgroundColors.GREEN}Results CSV: {BackgroundColors.CYAN}{csv_output}{Style.RESET_ALL}")  # Print output path
+    print(f"{BackgroundColors.GREEN}Selected features: {BackgroundColors.CYAN}{selected_count}{BackgroundColors.GREEN} of {BackgroundColors.CYAN}{eligible_count}{Style.RESET_ALL}")  # Print selected-feature count
+    print(f"{BackgroundColors.GREEN}CV F1: {BackgroundColors.CYAN}{cv_metrics.get('f1_score')}{BackgroundColors.GREEN} | CV FPR: {BackgroundColors.CYAN}{cv_metrics.get('fpr')}{BackgroundColors.GREEN} | CV FNR: {BackgroundColors.CYAN}{cv_metrics.get('fnr')}{Style.RESET_ALL}")  # Print CV diagnostics
+    print(f"{BackgroundColors.GREEN}Test F1: {BackgroundColors.CYAN}{test_metrics.get('f1_score')}{BackgroundColors.GREEN} | Test FPR: {BackgroundColors.CYAN}{test_metrics.get('fpr')}{BackgroundColors.GREEN} | Test FNR: {BackgroundColors.CYAN}{test_metrics.get('fnr')}{Style.RESET_ALL}")  # Print held-out diagnostics
+    print(f"{BackgroundColors.GREEN}Execution time: {BackgroundColors.CYAN}{elapsed_seconds:.6f}s{Style.RESET_ALL}")  # Print elapsed time
+    print(f"{BackgroundColors.GREEN}{'=' * 80}{Style.RESET_ALL}\n")  # Print summary separator
+
+
 def run_extra_trees_feature_selection(config: dict, csv_path: str) -> Path:
     """
     Run Extra Trees feature selection and persist results.
@@ -475,16 +649,18 @@ def run_extra_trees_feature_selection(config: dict, csv_path: str) -> Path:
 
     started_at = datetime.datetime.now(datetime.timezone.utc)  # Record start timestamp
     output_dir, csv_output = resolve_output_paths(config, csv_path)  # Resolve output locations
+    print(f"{BackgroundColors.GREEN}Starting Extra Trees feature selection for {BackgroundColors.CYAN}{csv_path}{Style.RESET_ALL}")  # Print colored start message
     dataframe = load_dataset(csv_path, config)  # Load dataset once
-    X_train, y_train, feature_names, split_metadata = prepare_training_data(dataframe, config)  # Prepare training-only selector inputs
+    X_train, y_train, X_test, y_test, feature_names, split_metadata = prepare_training_data(dataframe, config)  # Prepare training-only selector inputs and held-out diagnostics data
     del dataframe  # Release full dataframe before fitting selector
-    ranked, selector_elapsed, selector_params = fit_extra_trees_rankings(X_train, y_train, feature_names, config)  # Fit selector and rank features
-    del X_train, y_train  # Release training data before CSV assembly
+    cv_metrics, cv_method = evaluate_cross_validation_metrics(X_train, y_train, config)  # Evaluate selector CV diagnostics on training partition only
+    ranked, selector_elapsed, selector_params, selector = fit_extra_trees_rankings(X_train, y_train, feature_names, config)  # Fit selector and rank features
+    test_metrics, testing_elapsed = evaluate_selector_metrics(selector, X_test, y_test)  # Evaluate fitted selector on held-out split
+    del X_train, y_train, X_test, y_test, selector  # Release data and fitted selector before CSV assembly
     finished_at = datetime.datetime.now(datetime.timezone.utc)  # Record finish timestamp
-    results = build_results_dataframe(ranked, config, csv_path, selector_params, selector_elapsed, split_metadata, started_at, finished_at)  # Build output rows
+    results = build_results_dataframe(ranked, config, csv_path, selector_params, selector_elapsed, testing_elapsed, cv_metrics, test_metrics, cv_method, split_metadata, started_at, finished_at)  # Build output rows
     save_results(results, csv_output)  # Persist ranked results
-    print(f"Extra Trees feature selection saved to {csv_output}")  # Report output path
-    print(f"Selected features: {int(results['selected'].sum())} of {int(results['eligible_feature_count'].iloc[0])}")  # Report selected feature count
+    print_extra_trees_summary(csv_output, int(results["selected"].sum()), int(split_metadata["eligible_feature_count"]), cv_metrics, test_metrics, (finished_at - started_at).total_seconds())  # Print colored completion summary
     return csv_output  # Return output CSV path
 
 
