@@ -14800,7 +14800,6 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
             for experiment_run in range(1, experiment_runs + 1):  # Execute every requested run independently.
                 run_config = build_experiment_run_config(config, experiment_run)  # Build isolated run-specific seeds and paths.
                 print(f"{BackgroundColors.BOLD}{BackgroundColors.CYAN}[EXPERIMENT RUN {experiment_run}/{experiment_runs}] Combined files dataset: {dataset_name}{Style.RESET_ALL}")  # Report run-specific combined-files progress.
-                send_telegram_message(TELEGRAM_BOT, f"[EXPERIMENT RUN {experiment_run}/{experiment_runs}] Combined files evaluation | Dataset: {dataset_name}")  # Notify run-specific combined-files progress.
                 process_combined_files_evaluation(original_files_list, combined_files_df, attack_types_list, dataset_name, config=run_config)  # Execute one run with run-specific persistence.
             return  # Avoid re-entering the same logical grid after run expansion.
         
@@ -17242,7 +17241,6 @@ def orchestrate_all_combinations(input_path, dataset_name=None, config=None):
         for experiment_run in range(1, experiment_runs + 1):  # Execute every requested run independently.
             run_config = build_experiment_run_config(config, experiment_run)  # Build isolated run-specific seeds and paths.
             print(f"{BackgroundColors.BOLD}{BackgroundColors.CYAN}[EXPERIMENT RUN {experiment_run}/{experiment_runs}] Separate files input: {input_path}{Style.RESET_ALL}")  # Report run-specific separate-files progress.
-            send_telegram_message(TELEGRAM_BOT, f"[EXPERIMENT RUN {experiment_run}/{experiment_runs}] Separate files evaluation | Input: {input_path}")  # Notify run-specific separate-files progress.
             orchestrate_all_combinations(input_path, dataset_name=dataset_name, config=run_config)  # Execute one run with run-specific persistence.
         return  # Avoid re-entering the same logical grid after run expansion.
 
@@ -17960,6 +17958,7 @@ def build_telegram_pipeline_summary(config: Optional[dict], dataset_path: Option
         stacking_enabled = methods_cfg.get("stacking", True)
         test_data_augmentation = execution_cfg.get("test_data_augmentation", True)
         augmentation_ratios = stacking_cfg.get("augmentation_ratios", [0.25, 0.50, 0.75, 1.00])
+        experiment_runs = validate_experiment_runs(stacking_cfg.get("experiment_runs", 1))  # Resolve repeated runs for the consolidated startup notification
         feature_set_workers = validate_feature_set_workers(config.get("evaluation", {}).get("feature_set_workers", None))  # Resolve persistent process configuration for startup notification
 
         dataset_display = dataset_path if dataset_path else "config.yaml (default)"  # Resolve the effective dataset source for the consolidated notification
@@ -17968,6 +17967,7 @@ def build_telegram_pipeline_summary(config: Optional[dict], dataset_path: Option
             f"Dataset: {dataset_display}",  # Report every resolved dataset path
             f"Dataset name: {dataset_name}" if dataset_name else None,  # Report every resolved dataset identity when available
             f"Execution mode: {resolved_mode}",  # Report the authoritative classification mode once
+            f"Experiment runs: {experiment_runs}",  # Report repeated-run count in the first Telegram summary
             f"Methods: Feature Selection: {'ON' if feature_selection_enabled else 'OFF'}, Hyperparameters: {'ON' if hyperparameters_enabled else 'OFF'}, Data Augmentation: {'ON' if augmentation_enabled else 'OFF'}, AutoML: {'ON' if automl_enabled else 'OFF'}, Stacking: {'ON' if stacking_enabled else 'OFF'}",  # Report all pipeline method toggles
             f"Enabled classifiers: {', '.join(enabled_classifiers) if enabled_classifiers else 'None'}",  # Report classifiers instantiated by the model factory
             f"Disabled classifiers: {', '.join(disabled_classifiers) if disabled_classifiers else 'None'}",  # Report classifiers excluded from the model factory
