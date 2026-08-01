@@ -467,6 +467,32 @@ def fit_classifier_with_progress(model: Any, X_train: Any, y_train: Any, feature
         with progress:  # Scope callback timing to the original blocking fit.
             return model.fit(X_train, y_train, **options)  # Execute one unchanged Gradient Boosting fit call.
 
+    if model_type is MLPClassifier and str(model.get_params(deep=False).get("solver", "adam")) in ("adam", "sgd"):  # Use sklearn MLP's per-iteration state without changing the stochastic fit loop.
+        total_iterations = int(model.get_params(deep=False).get("max_iter", 200))  # Read the configured MLP iteration limit.
+        progress = build_training_progress(feature_set, classifier_name, total_iterations, "Iteration", heartbeat=True, config=config, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio, eta_callback=eta_callback)  # Create contextual MLP iteration reporter with heartbeat ETA.
+        original_update = model._update_no_improvement_count  # Preserve sklearn's original bound convergence update.
+
+        def report_mlp_iteration(early_stopping: bool, X_val: Any, y_val: Any, sample_weight_val: Any) -> None:  # Adapt sklearn MLP's internal per-iteration update point
+            """
+            Report one completed MLP iteration while preserving sklearn convergence behavior.
+
+            :param early_stopping: Whether sklearn validation early stopping is active.
+            :param X_val: Validation features prepared by sklearn when early stopping is active.
+            :param y_val: Validation labels prepared by sklearn when early stopping is active.
+            :param sample_weight_val: Validation sample weights prepared by sklearn when present.
+            :return: None.
+            """
+
+            original_update(early_stopping, X_val, y_val, sample_weight_val)  # Run sklearn's original convergence update first.
+            progress.report_unit(int(getattr(model, "n_iter_", 0)))  # Report the completed sklearn iteration without changing stopping logic.
+
+        model._update_no_improvement_count = report_mlp_iteration  # Attach the temporary iteration reporter to this estimator instance only.
+        try:  # Restore sklearn's original update method after every fit outcome.
+            with progress:  # Scope callback timing to the original blocking fit.
+                return model.fit(X_train, y_train, **options)  # Execute one unchanged sklearn MLP fit call.
+        finally:  # Remove the temporary reporter before persistence or reuse.
+            model._update_no_improvement_count = original_update  # Restore the original bound convergence update.
+
     if model_type in (AutoencoderClassifier, FTTransformerClassifier, LSTMClassifier, ResNet18Classifier, TabularResNetClassifier):  # Use neural estimators' internal epoch callback for exact epoch progress.
         total_epochs = int(model.get_params(deep=False).get("epochs", 1))  # Read the configured neural epoch total.
         progress = build_training_progress(feature_set, classifier_name, total_epochs, "Epoch", heartbeat=True, config=config, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio, eta_callback=eta_callback)  # Create contextual genuine neural epoch reporter with heartbeat ETA.
