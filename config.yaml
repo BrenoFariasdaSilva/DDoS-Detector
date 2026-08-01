@@ -302,6 +302,10 @@ extra_trees:
   selection:
     n_features_to_select: 20 # Default Extra-Trees-20 selected-feature count
 
+  cross_validation:
+    enabled: true # Enable training-partition CV diagnostics for the selector model
+    n_folds: 3 # StratifiedKFold count used only inside the training partition
+
   model:
     n_estimators: 200 # Number of Extra Trees estimators
     random_state: 42 # Seed used by ExtraTreesClassifier
@@ -312,6 +316,53 @@ extra_trees:
   export:
     results_dir: "Feature_Analysis/Extra_Trees" # Output directory relative to the dataset directory
     results_filename: "Extra_Trees_Results.csv" # Ranked Extra Trees results CSV filename
+    results_csv_columns: # Columns for the Extra Trees results CSV
+      - timestamp
+      - tool
+      - run_index
+      - model
+      - dataset
+      - dataset_path
+      - hyperparameters
+      - cv_method
+      - train_test_split
+      - scaling
+      - cv_accuracy
+      - cv_precision
+      - cv_recall
+      - cv_f1_score
+      - cv_fpr
+      - cv_fnr
+      - test_accuracy
+      - test_precision
+      - test_recall
+      - test_f1_score
+      - test_fpr
+      - test_fnr
+      - feature_extraction_time_s
+      - training_time_s
+      - testing_time_s
+      - elapsed_run_time
+      - hardware
+      - best_features
+      - union_features_across_runs
+      - rfe_ranking
+      - feature_name
+      - original_feature_index
+      - extra_trees_importance
+      - importance_rank
+      - selected
+      - configured_selected_feature_count
+      - actual_selected_feature_count
+      - n_estimators
+      - random_state
+      - n_jobs
+      - n_train
+      - n_test
+      - source_feature_count
+      - eligible_feature_count
+      - target_column
+      - excluded_columns
 
 
 # ==============================================================================
