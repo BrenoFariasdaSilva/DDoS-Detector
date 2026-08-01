@@ -179,7 +179,10 @@ class TrainingProgress:  # Report genuine public units or heartbeat-only activit
                     return False  # Retain silence until this task's next interval boundary.
                 elapsed_seconds = max(now - self.start_time, 0.0)  # Calculate elapsed time from the monotonic training start.
                 elapsed_label = self.duration_formatter(elapsed_seconds)  # Format elapsed time through the caller's established formatter.
-                print(f"[TRAINING] Feature Set: {self.feature_set} | Classifier: {self.classifier_name}{self.combination_fields} | Status: Active | Elapsed: {elapsed_label} | ETA: unavailable | PID: {os.getpid()}", file=self.output_stream)  # Write one contextual heartbeat without a fabricated percentage.
+                completed = int(self.latest_completed_units) if self.latest_completed_units is not None else 0  # Read the latest genuine public unit count.
+                total = int(self.total_units) if self.total_units is not None else 0  # Read the configured public unit total.
+                eta_label = self.duration_formatter((elapsed_seconds / completed) * (total - completed)) if completed > 0 and total > completed else "unavailable"  # Estimate ETA only from genuine completed units.
+                print(f"[TRAINING] Feature Set: {self.feature_set} | Classifier: {self.classifier_name}{self.combination_fields} | Status: Active | Elapsed: {elapsed_label} | ETA: {eta_label} | PID: {os.getpid()}", file=self.output_stream)  # Write contextual heartbeat with factual ETA when units exist.
                 self.output_stream.flush()  # Flush every heartbeat immediately to detached logs.
                 self.last_report_time = now  # Advance only this classifier task's recurring-report timer.
             return True  # Report successful heartbeat emission.
