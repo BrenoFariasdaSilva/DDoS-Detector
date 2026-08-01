@@ -467,7 +467,7 @@ def fit_classifier_with_progress(model: Any, X_train: Any, y_train: Any, feature
         with progress:  # Scope callback timing to the original blocking fit.
             return model.fit(X_train, y_train, **options)  # Execute one unchanged Gradient Boosting fit call.
 
-    if model_type in (AutoencoderClassifier, FTTransformerClassifier, ResNet18Classifier, TabularResNetClassifier):  # Use neural estimators' internal epoch callback for exact epoch progress.
+    if model_type in (AutoencoderClassifier, FTTransformerClassifier, LSTMClassifier, ResNet18Classifier, TabularResNetClassifier):  # Use neural estimators' internal epoch callback for exact epoch progress.
         total_epochs = int(model.get_params(deep=False).get("epochs", 1))  # Read the configured neural epoch total.
         progress = build_training_progress(feature_set, classifier_name, total_epochs, "Epoch", heartbeat=True, config=config, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio, eta_callback=eta_callback)  # Create contextual genuine neural epoch reporter with heartbeat ETA.
         existing_progress_callback = getattr(model, "progress_callback", None)  # Preserve any caller-installed callback.
