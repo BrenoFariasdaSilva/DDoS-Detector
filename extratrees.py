@@ -32,6 +32,7 @@ from sklearn.ensemble import ExtraTreesClassifier  # Fit Extra Trees feature imp
 from sklearn.metrics import accuracy_score, confusion_matrix, f1_score, precision_score, recall_score  # Compute selector diagnostics
 from sklearn.model_selection import StratifiedKFold, train_test_split  # Split before selector fitting and optional CV diagnostics
 from tqdm import tqdm  # Show progress bars with ETA for iterable stages
+from Logger import Logger, SAO_PAULO_TIMEZONE_NAME  # Reuse project logger for terminal and file output
 
 try:  # Import optional Telegram utilities
     import telegram_bot as telegram_module  # Configure Telegram message prefixes consistently with stacking.py
@@ -47,6 +48,7 @@ NON_FEATURE_COLUMNS = ("Unnamed: 0", "Flow ID", "Source IP", "Destination IP", "
 TARGET_COLUMN_ALIASES = ("Label", "label", "attack_type", "Attack Type", "Class", "class", "Target", "target")  # Define common target column names
 DEFAULT_RESULTS_CSV_COLUMNS = ("timestamp", "tool", "run_index", "model", "dataset", "dataset_path", "hyperparameters", "cv_method", "train_test_split", "scaling", "cv_accuracy", "cv_precision", "cv_recall", "cv_f1_score", "cv_fpr", "cv_fnr", "test_accuracy", "test_precision", "test_recall", "test_f1_score", "test_fpr", "test_fnr", "feature_extraction_time_s", "training_time_s", "testing_time_s", "elapsed_run_time", "hardware", "best_features", "union_features_across_runs", "rfe_ranking", "feature_name", "original_feature_index", "extra_trees_importance", "importance_rank", "selected", "configured_selected_feature_count", "actual_selected_feature_count", "n_estimators", "random_state", "n_jobs", "n_train", "n_test", "source_feature_count", "eligible_feature_count", "target_column", "excluded_columns")  # Define default configurable export header
 TELEGRAM_BOT = None  # Store optional Telegram bot instance for script-level notifications
+logger = None  # Store optional script logger instance
 
 
 class BackgroundColors:  # Match project color constants
@@ -761,6 +763,25 @@ def send_telegram_notice(bot: Any, messages: Any) -> None:
     return None  # Return explicit None
 
 
+def initialize_logger(config: dict) -> Any:
+    """
+    Initialize Extra Trees terminal and file logging.
+
+    :param config: Effective configuration dictionary.
+    :return: Logger instance.
+    """
+
+    logs_dir = config.get("paths", {}).get("logs_dir", "./Logs")  # Resolve shared logs directory
+    clean_log = bool(config.get("logging", {}).get("clean", True))  # Resolve shared log-cleaning policy
+    os.makedirs(logs_dir, exist_ok=True)  # Create logs directory when missing
+    log_path = Path(logs_dir) / f"{Path(__file__).stem}.log"  # Build script log path
+    logger_instance = Logger(str(log_path), clean=clean_log, timestamp_timezone=SAO_PAULO_TIMEZONE_NAME)  # Create timestamped project logger
+    sys.stdout = logger_instance  # Redirect stdout to terminal and log file
+    sys.stderr = logger_instance  # Redirect stderr and tqdm output to terminal and log file
+    print(f"{BackgroundColors.GREEN}[LOGGING] Writing Extra Trees logs to {BackgroundColors.CYAN}{log_path}{Style.RESET_ALL}")  # Log file target
+    return logger_instance  # Return active logger
+
+
 def run_extra_trees_feature_selection(config: dict, csv_path: str) -> Path:
     """
     Run Extra Trees feature selection and persist results.
@@ -800,12 +821,13 @@ def main() -> None:
     """
     
     start_time = datetime.datetime.now()  # Record program start time
+    cli_args = parse_cli_args()  # Parse CLI arguments
+    config = get_config(cli_args)  # Resolve effective configuration
+    global logger  # Use module-level logger instance
+    logger = initialize_logger(config)  # Initialize file logging after configuration resolution
     print(
         f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}Extra Trees for Feature Selection{BackgroundColors.GREEN} Program!{Style.RESET_ALL}\n"
     )  # Output the welcome message
-    
-    cli_args = parse_cli_args()  # Parse CLI arguments
-    config = get_config(cli_args)  # Resolve effective configuration
     dataset_path = config.get("execution", {}).get("dataset_path")  # Resolve dataset path
     if not dataset_path:  # Validate dataset path
         raise ValueError("execution.dataset_path must be provided")  # Raise explicit missing-dataset error
