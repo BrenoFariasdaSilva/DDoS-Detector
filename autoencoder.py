@@ -381,6 +381,9 @@ class AutoencoderClassifier(ClassifierMixin, BaseEstimator):  # Expose Autoencod
                     validation_reconstruction_sum += float(reconstruction_loss_value.item()) * int(batch_indices.shape[0])  # Accumulate sample-weighted reconstruction loss
             validation_loss = validation_loss_sum / float(validation_indices.shape[0])  # Compute mean validation combined loss
             epochs_completed = epoch_index + 1  # Record completed epoch count
+            progress_callback = getattr(self, "progress_callback", None)  # Read optional stacking progress callback
+            if callable(progress_callback):  # Report completed epochs only when stacking attached a callback
+                progress_callback(epochs_completed)  # Emit epoch-based progress without changing training semantics
             if validation_loss < best_loss - float(self.min_delta):  # Accept meaningful improvement
                 best_loss = validation_loss  # Record improved combined loss
                 best_classification_loss = validation_classification_sum / float(validation_indices.shape[0])  # Record matching classification loss
