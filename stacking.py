@@ -165,6 +165,7 @@ CONFIG = {}  # Will be initialized by initialize_config() - holds all runtime se
 
 # Telegram Bot Setup:
 TELEGRAM_BOT = None  # Global Telegram bot instance (initialized in setup_telegram_bot)
+STACKING_FAILURE_TELEGRAM_IDENTITIES: set[str] = set()  # Track failure Telegram identities already emitted in this process
 
 # Logger Setup:
 logger = None  # Will be initialized in initialize_logger()
@@ -2207,6 +2208,7 @@ def setup_telegram_bot(config=None):
 
         try:  # Try to initialize the Telegram bot
             TELEGRAM_BOT = TelegramBot()  # Initialize Telegram bot for progress messages
+            telegram_module.TELEGRAM_BOT = TELEGRAM_BOT  # Share the initialized bot with the imported exception sender
             telegram_module.TELEGRAM_DEVICE_INFO = f"{telegram_module.get_local_ip()} - {platform.system()}"  # Set device info string with IP and OS
             telegram_module.RUNNING_CODE = os.path.basename(__file__)  # Set currently running script name
         except Exception as e:
@@ -12431,6 +12433,95 @@ def build_feature_process_notification_result(result_entry: dict) -> dict:  # Re
     return {field: result_entry.get(field) for field in fields}  # Exclude estimators, matrices, predictions, probabilities, and feature lists
 
 
+def describe_process_exit_signal(exitcode: Optional[int]) -> Optional[str]:  # Resolve a multiprocessing negative exit code to a signal name
+    """
+    Resolve a negative multiprocessing exit code to a signal name.
+
+    :param exitcode: Child process exit code, or None when unavailable.
+    :return: Signal name when determinable, otherwise None.
+    """
+
+    if exitcode is None or int(exitcode) >= 0:  # Reject absent or non-signal exits.
+        return None  # Return no signal name.
+    try:  # Resolve the POSIX signal number through the standard library.
+        return signal.Signals(abs(int(exitcode))).name  # Return canonical signal name such as SIGKILL.
+    except ValueError:  # Preserve reporting when Python does not know the signal number.
+        return f"Signal {abs(int(exitcode))}"  # Return numeric signal fallback.
+
+
+def build_stacking_failure_notification(category: str, exception: Optional[BaseException], context: Optional[dict] = None) -> str:  # Build one contextual Telegram failure report
+    """
+    Build one contextual stacking failure notification.
+
+    :param category: Failure category owned by the reporting layer.
+    :param exception: Original exception object when available.
+    :param context: Optional failure metadata gathered by the reporter.
+    :return: Human-readable Telegram message body.
+    """
+
+    context = context or {}  # Normalize missing context to an empty mapping.
+    failure = context.get("failure") or {}  # Read worker failure metadata when available.
+    task = context.get("task") or {}  # Read task metadata when available.
+    process_payload = context.get("process_payload") or {}  # Read scheduler payload metadata when available.
+    status_snapshot = context.get("status_snapshot")  # Read coordinator status when available.
+    exception_type = failure.get("exception_type") or (type(exception).__name__ if exception is not None else None)  # Resolve most specific exception class.
+    exception_message = failure.get("error") or (str(exception) if exception is not None else None)  # Resolve most specific failure text.
+    exitcode = failure.get("exitcode")  # Read child exit code when available.
+    signal_name = failure.get("signal_name") or describe_process_exit_signal(exitcode)  # Resolve POSIX signal name for negative exits.
+    traceback_text = failure.get("traceback") or context.get("traceback")  # Read serialized traceback supplied by worker or reporter.
+    if traceback_text is None and exception is not None:  # Format traceback only when the object carries one.
+        traceback_text = "".join(traceback.format_exception(type(exception), exception, exception.__traceback__))  # Preserve original traceback text.
+    feature_set_name = context.get("feature_set") or failure.get("feature_set") or task.get("feature_set")  # Resolve feature-set identity from richest source.
+    classifier_name = context.get("classifier") or failure.get("classifier") or task.get("classifier_name")  # Resolve classifier identity when available.
+    hyperparameter_mode = context.get("hyperparameter_mode") or failure.get("hyperparameter_mode") or ("Optimized Hyperparameters" if task.get("hyperparameters_enabled") else ("Default Hyperparameters" if "hyperparameters_enabled" in task else None))  # Resolve HP mode without inventing absent task metadata.
+    run_index = context.get("run_index") or failure.get("run_index") or task.get("experiment_run") or get_current_experiment_run(process_payload.get("config")) if (context.get("run_index") or failure.get("run_index") or task.get("experiment_run") or process_payload.get("config")) else None  # Resolve run index from explicit context or config.
+    global_id = context.get("global_id") or failure.get("global_id") or task.get("global_id")  # Resolve global combination identity.
+    local_id = context.get("local_id") or failure.get("local_id") or task.get("feature_local_position")  # Resolve local combination identity.
+    local_total = task.get("feature_local_total")  # Resolve local denominator when available.
+    dataset_value = context.get("dataset_path") or context.get("dataset") or process_payload.get("file") or process_payload.get("cache_ref_file")  # Resolve dataset identity from payload or caller.
+    execution_mode = context.get("execution_mode") or process_payload.get("execution_mode") or (process_payload.get("config") or {}).get("execution", {}).get("execution_mode")  # Resolve execution mode from payload or config.
+    lines = ["[STACKING FAILURE]", f"Failure category: {category}"]  # Start report using existing plain Telegram text style.
+    optional_fields = [("Exception class", exception_type), ("Exception message", exception_message), ("Child exit code", exitcode), ("Signal", signal_name), ("Child PID", failure.get("pid") or failure.get("child_pid") or context.get("child_pid")), ("Feature set", feature_set_name), ("Classifier", classifier_name), ("Hyperparameter mode", hyperparameter_mode), ("Run index", run_index), ("Global combination ID", global_id), ("Local combination ID", f"{local_id}/{local_total}" if local_id is not None and local_total is not None else local_id), ("Dataset", dataset_value), ("Execution mode", execution_mode), ("Coordinator status", status_snapshot.get("global") if isinstance(status_snapshot, dict) else None), ("Per-feature status", status_snapshot.get("features") if isinstance(status_snapshot, dict) else None), ("Transport exception", context.get("transport_exception"))]  # Collect factual fields only.
+    lines.extend(f"{name}: {value}" for name, value in optional_fields if value is not None)  # Add only metadata actually available.
+    lines.append(f"Host: {platform.node() or 'unknown'}")  # Add current host identity.
+    lines.append(f"Operating system: {platform.platform()}")  # Add current operating-system identity.
+    lines.append(f"Timestamp: {datetime.datetime.now().isoformat(timespec='seconds')}")  # Add local wall-clock failure timestamp.
+    if traceback_text:  # Include traceback when available.
+        lines.extend(["Traceback:", str(traceback_text)])  # Preserve traceback body after structured metadata.
+    return "\n".join(lines)  # Return a single Telegram body.
+
+
+def report_stacking_execution_failure(category: str, exception: Optional[BaseException] = None, context: Optional[dict] = None) -> bool:  # Send one deduplicated stacking failure notification
+    """
+    Report one unexpected stacking execution failure through Telegram.
+
+    :param category: Failure category owned by the reporting layer.
+    :param exception: Original exception object when available.
+    :param context: Optional failure metadata gathered by the reporter.
+    :return: True when this process attempted Telegram delivery for this failure.
+    """
+
+    if isinstance(exception, SystemExit) and getattr(exception, "code", None) in (None, 0):  # Skip successful CLI exits such as --help.
+        return False  # Preserve expected SystemExit success flow.
+    context = context or {}  # Normalize absent context.
+    existing_identity = getattr(exception, "stacking_failure_telegram_identity", None) if exception is not None else None  # Reuse identity attached during an earlier re-raise.
+    raw_identity = repr((category, type(exception).__name__ if exception is not None else None, str(exception) if exception is not None else None, context.get("failure"), context.get("global_id"), context.get("feature_set"), context.get("classifier"), context.get("child_pid")))  # Build stable factual failure identity.
+    failure_identity = existing_identity or hashlib.sha256(raw_identity.encode("utf-8", errors="replace")).hexdigest()  # Hash bulky context into compact de-duplication identity.
+    if failure_identity in STACKING_FAILURE_TELEGRAM_IDENTITIES:  # Suppress the same exception bubbling through outer layers.
+        return False  # Report no new delivery attempt.
+    STACKING_FAILURE_TELEGRAM_IDENTITIES.add(failure_identity)  # Reserve identity before external Telegram I/O.
+    if exception is not None:  # Persist identity on the exception object for re-raise layers in this process.
+        try:  # Some BaseException instances may reject attribute assignment.
+            setattr(exception, "stacking_failure_telegram_identity", failure_identity)  # Mark this exact exception as already reported.
+        except Exception:  # Preserve failure propagation when attribute assignment is unavailable.
+            pass  # Continue with process-local set de-duplication.
+    try:  # Isolate Telegram transport from the original stacking failure.
+        send_telegram_message(TELEGRAM_BOT, build_stacking_failure_notification(category, exception, context))  # Reuse the existing Telegram delivery path.
+    except Exception as telegram_error:  # Preserve the original error when patched or alternate senders raise.
+        print(f"{BackgroundColors.YELLOW}Telegram failure notification failed: {telegram_error}{Style.RESET_ALL}")  # Log Telegram transport failure without replacing the primary error.
+    return True  # Report that this failure consumed its local delivery attempt.
+
+
 def build_feature_process_training_start_message(task: dict, dynamic_total: int, eta_label: str) -> str:
     """
     Build one persistent-process classifier training-start Telegram message.
@@ -15008,7 +15099,7 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
             pass  # Proceed without failing the run since the CSV output is already written
     except Exception as e:
         print(str(e))
-        send_exception_via_telegram(type(e), e, e.__traceback__)
+        report_stacking_execution_failure("Combined files evaluation failure", e, {"dataset": dataset_name, "execution_mode": "combined_files"})  # Notify before re-raising combined-files evaluation failure
         raise
 
 
@@ -16512,9 +16603,13 @@ def run_feature_set_process_worker(process_payload: dict, status_queue: Any, sta
     except BaseException as error:  # Surface exceptions, interrupts, and memory failures to the coordinator
         error_traceback = traceback.format_exc()  # Serialize only the small textual child traceback
         try:  # Keep status reporting best-effort before preserving child failure
-            status_queue.put({"status": "error", "feature_set": process_payload.get("feature_set"), "worker_index": process_payload.get("worker_index"), "pid": os.getpid(), "global_id": active_task.get("global_id") if active_task else None, "error": str(error), "traceback": error_traceback})  # Send complete child failure context without matrices
-        except Exception:  # Preserve the original child exception if status transport fails
-            pass  # Continue deterministic local cleanup
+            status_queue.put({"status": "error", "feature_set": process_payload.get("feature_set"), "worker_index": process_payload.get("worker_index"), "pid": os.getpid(), "global_id": active_task.get("global_id") if active_task else None, "error": str(error), "exception_type": type(error).__name__, "traceback": error_traceback})  # Send complete child failure context without matrices
+        except Exception as queue_error:  # Preserve the original child exception if status transport fails
+            try:  # Keep Telegram setup from replacing the worker failure.
+                setup_telegram_bot(config=process_payload.get("config"))  # Reuse existing Telegram setup only when the parent status channel is unavailable
+                report_stacking_execution_failure("Feature-set worker status transport failure", error, {"failure": {"feature_set": process_payload.get("feature_set"), "worker_index": process_payload.get("worker_index"), "pid": os.getpid(), "global_id": active_task.get("global_id") if active_task else None, "error": str(error), "exception_type": type(error).__name__, "traceback": error_traceback}, "task": active_task, "process_payload": process_payload, "transport_exception": queue_error})  # Send child-owned fallback because the coordinator may receive only an exit code
+            except Exception as telegram_error:  # Preserve the original worker exception during fallback notification failure.
+                print(f"{BackgroundColors.YELLOW}Worker failure notification fallback failed: {telegram_error}{Style.RESET_ALL}")  # Log fallback failure without replacing the worker error
         raise  # Preserve a nonzero child exit code and original traceback
     finally:  # Release every process-owned resource after success, failure, or termination handling
         cleanup_feature_process_original_resources(resource_state["original_resources"])  # Close any remaining original memmaps and owned feature files
@@ -16723,6 +16818,9 @@ def execute_feature_set_processes(pending_by_feature: dict, process_payload: dic
                         failure = {"feature_set": feature_set_name, "global_id": running_task.get("global_id") or shared_global_id or None, "error": f"Child exited without terminal status, exitcode={process.exitcode}", "traceback": ""}  # Preserve deterministic child-death evidence
                         break  # Stop inspecting after the first failure
                 continue  # Resume status monitoring or leave after failure assignment
+            except Exception as transport_error:  # Surface lifecycle queue failures as coordinator-owned run failures
+                failure = {"feature_set": None, "global_id": None, "error": f"Feature-set status queue failed: {transport_error}", "exception_type": type(transport_error).__name__, "traceback": traceback.format_exc()}  # Preserve queue failure evidence for Telegram and logs
+                continue  # Leave the monitor loop through the common failure path
             status_type = status.get("status")  # Resolve the child lifecycle record type
             feature_set_name = status.get("feature_set")  # Resolve the child feature identity
             if status_type == "error":  # Preserve the first complete child exception and traceback
@@ -16779,13 +16877,25 @@ def execute_feature_set_processes(pending_by_feature: dict, process_payload: dic
         if failure is not None:  # Raise the complete child failure after every process has been reaped
             failure_snapshot = reconcile_feature_process_status_after_failure(status_state, failure.get("feature_set"))  # Reconcile interrupted sibling tasks without claiming completion
             print(f"[COORDINATOR FAILURE STATUS] Global={failure_snapshot['global']} | Features={failure_snapshot['features']}")  # Persist accurate terminal failure counters
+            for record in process_records:  # Enrich failure metadata from authoritative process handles
+                if failure.get("feature_set") is not None and record["feature_set"] != failure.get("feature_set"):  # Skip nonfailing feature workers
+                    continue  # Move to the next process record
+                process = record["process"]  # Resolve process handle for exit metadata
+                failure.setdefault("child_pid", process.pid)  # Preserve child PID when the status payload omitted it
+                failure.setdefault("exitcode", process.exitcode)  # Preserve exact multiprocessing exit code
+                failure.setdefault("signal_name", describe_process_exit_signal(process.exitcode))  # Preserve signal name for negative exits
+                break  # Stop after the matching feature or first coordinator-owned process
+            failure_task = tasks_by_global_id.get(failure.get("global_id"))  # Resolve authoritative task metadata when available
             failure_error = RuntimeError(f"Feature-set worker failed for {failure.get('feature_set')} at Global ID {failure.get('global_id')}: {failure.get('error')}\n{failure.get('traceback', '')}")  # Build one surfaced child exception with terminal status evidence
             failure_error.status_snapshot = failure_snapshot  # Preserve reconciled counters for callers and deterministic diagnostics
+            report_stacking_execution_failure(failure.get("category") or "Persistent feature-set worker failure", failure_error, {"failure": failure, "task": failure_task, "process_payload": process_payload, "status_snapshot": failure_snapshot})  # Notify before raising to outer pipeline layers
             raise failure_error  # Surface child exception, task identity, traceback, and accurate status
         final_snapshot = read_feature_process_status(status_state)  # Read synchronized terminal status after every child exit
         final_global = final_snapshot["global"]  # Resolve global completion invariants
         if final_global["completed"] != final_global["total"] or final_global["pending"] != 0 or final_global["running"] != 0 or final_global["failed"] != 0:  # Reject lost, duplicated, failed, or unpersisted combinations
-            raise RuntimeError(f"Persistent feature-set grid terminal status is incomplete: {final_global}")  # Surface exact dynamic process accounting
+            terminal_error = RuntimeError(f"Persistent feature-set grid terminal status is incomplete: {final_global}")  # Build exact dynamic process accounting error
+            report_stacking_execution_failure("Persistent feature-set grid terminal status failure", terminal_error, {"process_payload": process_payload, "status_snapshot": final_snapshot})  # Notify before raising incomplete coordinator status
+            raise terminal_error  # Surface exact dynamic process accounting
         return final_snapshot  # Return verified global and feature-local terminal status
     finally:  # Reap and close every process and queue resource under all outcomes
         for record in process_records:  # Inspect every process that may still be active after an unexpected coordinator error
@@ -16902,11 +17012,27 @@ def run_persistent_feature_set_grid(original_df: pd.DataFrame, file: str, source
         gc.collect()  # Reclaim coordinator dataset memory after safe shared-resource creation
         execute_feature_set_processes(pending_by_feature, process_payload, tasks, cached_results)  # Start one configured worker per active feature set with plan-derived status
         return collect_feature_process_results(tasks, process_payload)  # Reload all completed results in original global order
+    except Exception as e:
+        report_stacking_execution_failure("Persistent feature-set grid failure", e, {"process_payload": process_payload, "dataset": file, "execution_mode": execution_mode_str})  # Notify before re-raising a persistent-grid failure
+        raise
     finally:  # Delete coordinator-owned memmaps only after execute_feature_set_processes has joined every child
+        active_exception = sys.exc_info()[0] is not None  # Detect whether cleanup is running during an existing failure
         if shared_resources is not None:  # Remove only a shared directory created by this coordinator
-            cleanup_feature_process_directory(shared_resources.get("temp_dir"))  # Delete shared backing after no child can retain a mapping
+            try:  # Keep cleanup failure reporting from hiding an active classifier failure
+                cleanup_feature_process_directory(shared_resources.get("temp_dir"))  # Delete shared backing after no child can retain a mapping
+            except Exception as cleanup_error:  # Report cleanup aborts through Telegram when they affect the run
+                report_stacking_execution_failure("Persistent feature-set shared-resource cleanup failure", cleanup_error, {"process_payload": process_payload, "dataset": file, "execution_mode": execution_mode_str})  # Notify cleanup failure with available dataset context
+                if not active_exception:  # Raise cleanup failure only when no primary exception is active
+                    raise  # Preserve cleanup failure as the abort reason
+                print(f"{BackgroundColors.YELLOW}Shared-resource cleanup failed during active failure: {cleanup_error}{Style.RESET_ALL}")  # Log secondary cleanup failure without replacing the original
         if augmentation_shared_directory is not None:  # Remove only lazy ratio backing created by this coordinator
-            cleanup_feature_process_directory(augmentation_shared_directory)  # Delete every ratio pair only after all feature processes have exited
+            try:  # Keep cleanup failure reporting from hiding an active classifier failure
+                cleanup_feature_process_directory(augmentation_shared_directory)  # Delete every ratio pair only after all feature processes have exited
+            except Exception as cleanup_error:  # Report cleanup aborts through Telegram when they affect the run
+                report_stacking_execution_failure("Persistent feature-set augmentation cleanup failure", cleanup_error, {"process_payload": process_payload, "dataset": file, "execution_mode": execution_mode_str})  # Notify cleanup failure with available dataset context
+                if not active_exception:  # Raise cleanup failure only when no primary exception is active
+                    raise  # Preserve cleanup failure as the abort reason
+                print(f"{BackgroundColors.YELLOW}Augmentation cleanup failed during active failure: {cleanup_error}{Style.RESET_ALL}")  # Log secondary cleanup failure without replacing the original
 
 
 def create_grid_progress(total_steps, description):
@@ -17469,7 +17595,7 @@ def execute_both_mode_pipeline(files_to_process, local_dataset_name, config=None
         )  # Print final separator
     except Exception as e:
         print(str(e))
-        send_exception_via_telegram(type(e), e, e.__traceback__)
+        report_stacking_execution_failure("Both-mode pipeline failure", e, {"dataset": local_dataset_name, "execution_mode": "both"})  # Notify before re-raising both-mode pipeline failure
         raise
 
 
@@ -17527,7 +17653,7 @@ def execute_combined_files_mode_pipeline(files_to_process, local_dataset_name, c
         gc.collect()  # Force garbage collection to reclaim memory from combined files evaluation
     except Exception as e:
         print(str(e))
-        send_exception_via_telegram(type(e), e, e.__traceback__)
+        report_stacking_execution_failure("Combined files mode pipeline failure", e, {"dataset": local_dataset_name, "execution_mode": "combined_files"})  # Notify before re-raising combined-files pipeline failure
         raise
 
 
@@ -17609,7 +17735,7 @@ def process_files_in_path(input_path, dataset_name, config=None):
             execute_binary_mode_pipeline(files_to_process, local_dataset_name, config=config)  # Run separate files evaluation pipeline only
     except Exception as e:
         print(str(e))
-        send_exception_via_telegram(type(e), e, e.__traceback__)
+        report_stacking_execution_failure("Path processing failure", e, {"dataset": dataset_name, "dataset_path": input_path, "execution_mode": execution_mode if "execution_mode" in locals() else None})  # Notify before re-raising path processing failure
         raise
 
 
@@ -17635,7 +17761,7 @@ def process_dataset_paths(dataset_name, paths, config=None):
             process_files_in_path(input_path, dataset_name, config=config)  # Process all files in  this path
     except Exception as e:
         print(str(e))
-        send_exception_via_telegram(type(e), e, e.__traceback__)
+        report_stacking_execution_failure("Dataset path processing failure", e, {"dataset": dataset_name})  # Notify before re-raising dataset processing failure
         raise
 
 
@@ -18068,12 +18194,12 @@ def main(config=None):
         write_memory_phase_event("memory_error", config=config, event_outcome=str(e))  # Publish top-level memory error phase
         finalize_memory_watcher(config=config, phase="abnormal_completion", event_outcome=f"memory_error:{e}")  # Publish abnormal watcher terminal phase
         print(str(e))  # Print memory error to terminal logs
-        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send memory error via Telegram
+        report_stacking_execution_failure("Main memory failure", e, {"execution_mode": config.get("execution", {}).get("execution_mode") if config else None})  # Notify before re-raising top-level memory failure
         raise  # Preserve original MemoryError behavior
     except Exception as e:
         finalize_memory_watcher(config=config, phase="abnormal_completion", event_outcome=str(e))  # Publish abnormal watcher terminal phase
         print(str(e))
-        send_exception_via_telegram(type(e), e, e.__traceback__)
+        report_stacking_execution_failure("Main pipeline failure", e, {"execution_mode": config.get("execution", {}).get("execution_mode") if config else None})  # Notify before re-raising top-level pipeline failure
         raise
     finally:  # Always finalize queued explainability work before leaving main
         try:
@@ -18110,9 +18236,11 @@ if __name__ == "__main__":
                 pass  # Continue to re-raise the interrupt
             raise  # Re-raise KeyboardInterrupt to preserve original exit semantics
     except BaseException as e:  # Catch everything (including SystemExit) and report
+        if isinstance(e, SystemExit) and getattr(e, "code", None) in (None, 0):  # Preserve expected successful CLI exits without error notification
+            raise  # Re-raise normal SystemExit success
         try:  # Try to log and notify about the fatal error
             print(f"Fatal error: {e}")  # Print the exception message to terminal for visibility
-            send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback and message via Telegram
+            report_stacking_execution_failure("Module entry-point failure", e, {"execution_mode": config.get("execution", {}).get("execution_mode") if "config" in locals() and config else None})  # Notify before re-raising module-level failure
         except Exception:  # If notification fails, attempt to print traceback to stderr as fallback
             try:  # Attempt fallback traceback printing for diagnostics
                 traceback.print_exc()  # Print full traceback to stderr as a fallback notification
