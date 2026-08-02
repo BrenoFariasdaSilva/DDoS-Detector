@@ -14837,7 +14837,7 @@ def load_and_combine_augmented_combined_files(original_files_list, config=None):
         raise
 
 
-def process_combined_files_augmentation_testing(reference_file, original_files_list, combined_files_df, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, base_models, hp_params_map, attack_types_list, results_original, augmentation_ratios, total_steps, feature_analysis_dir, dataset_name, config=None):
+def process_combined_files_augmentation_testing(reference_file, original_files_list, combined_files_df, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, base_models, hp_params_map, attack_types_list, results_original, augmentation_ratios, total_steps, feature_analysis_dir, dataset_name, config=None, extra_trees_selected_features=None):  # Process combined-files augmentation with every selected-feature artifact available.
     """
     Process combined files evaluation augmented data with ratio-based experiments.
 
@@ -14848,6 +14848,7 @@ def process_combined_files_augmentation_testing(reference_file, original_files_l
     :param ga_selected_features: GA selected features
     :param pca_n_components: Number of PCA components
     :param rfe_selected_features: RFE selected features
+    :param extra_trees_selected_features: Extra Trees selected features
     :param base_models: Dictionary of base models
     :param hp_params_map: Hyperparameters mapping
     :param attack_types_list: List of unique attack type labels
