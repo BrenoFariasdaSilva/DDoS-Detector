@@ -366,7 +366,8 @@ def log_training_phase(feature_set: Optional[str], classifier_name: str, phase: 
             return  # Preserve standalone AutoML phase starts while hiding classifier-combination start chatter.
         feature_label = format_training_feature_set(feature_set)  # Normalize the feature-set label for detached logs.
         combination_fields = format_training_combination_fields(hyperparameters_enabled, augmentation_ratio)  # Format explicit evaluation metadata when supplied.
-        print(f"[TRAINING] Feature Set: {feature_label} | Classifier: {classifier_name}{combination_fields} | Phase: {phase} | Status: {status} | PID: {os.getpid()}")  # Write one contextual newline-delimited phase record.
+        resource_suffix = format_training_resource_suffix(read_latest_training_resource_snapshot(CONFIG), allow_worker_cpu=True)  # Resolve already-collected resource suffix.
+        print(f"[TRAINING] Feature Set: {feature_label} | Classifier: {classifier_name}{combination_fields} | Phase: {phase} | Status: {status} | PID: {os.getpid()}{resource_suffix}")  # Write one contextual newline-delimited phase record.
         sys.stdout.flush()  # Flush the phase record immediately for detached SSH runs.
     except Exception:  # Ignore an unavailable output stream during lifecycle reporting.
         return  # Preserve the caller's training, prediction, metric, or persistence semantics.
@@ -392,7 +393,8 @@ def build_training_progress(feature_set: Optional[str], classifier_name: str, to
     configured_minutes = active_config.get("evaluation", {}).get("training_progress_interval_minutes", DEFAULT_TRAINING_PROGRESS_INTERVAL_MINUTES) if isinstance(active_config, dict) else DEFAULT_TRAINING_PROGRESS_INTERVAL_MINUTES  # Read the single minutes-based progress interval with the built-in fallback.
     interval_minutes = validate_training_progress_interval_minutes(configured_minutes)  # Validate direct and merged runtime configurations at the reporter boundary.
     interval_seconds = interval_minutes * 60.0  # Convert minutes to seconds once before entering the seconds-based timing implementation.
-    return TrainingProgress(feature_set, classifier_name, calculate_execution_time, output_stream=sys.stdout, total_units=total_units, unit_label=unit_label, heartbeat=heartbeat, report_interval_seconds=interval_seconds, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio, eta_callback=eta_callback)  # Pass required progress and combination context explicitly.
+    resource_suffix_callback = lambda: format_training_resource_suffix(read_latest_training_resource_snapshot(active_config), allow_worker_cpu=True)  # Read only already-collected resource data for progress rows.
+    return TrainingProgress(feature_set, classifier_name, calculate_execution_time, output_stream=sys.stdout, total_units=total_units, unit_label=unit_label, heartbeat=heartbeat, report_interval_seconds=interval_seconds, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio, eta_callback=eta_callback, resource_suffix_callback=resource_suffix_callback)  # Pass required progress and combination context explicitly.
 
 
 def fit_classifier_with_progress(model: Any, X_train: Any, y_train: Any, feature_set: Optional[str], classifier_name: str, config: Optional[dict] = None, fit_kwargs: Optional[dict] = None, hyperparameters_enabled: Optional[bool] = None, augmentation_ratio: Optional[float] = None, eta_callback: Optional[Callable[[str], None]] = None) -> Any:  # Fit one estimator with safe progress reporting
@@ -558,6 +560,118 @@ def format_ram_percent(value: Optional[float]) -> str:
     if value is None:  # Render unavailable values explicitly.
         return "unavailable"  # Return the unavailable marker.
     return f"{float(value):.2f}%"  # Return RAM usage formatted with two decimal places.
+
+
+def read_latest_training_resource_snapshot(config: Optional[dict] = None) -> dict:  # Read the newest watcher resource row without sampling.
+    """
+    Read the newest already-collected watcher resource row.
+
+    :param config: Runtime configuration dictionary.
+    :return: Latest resource snapshot mapping, or an empty mapping.
+    """
+
+    try:  # Keep resource suffix retrieval best-effort.
+        cfg = config if isinstance(config, dict) else CONFIG  # Resolve active configuration without requiring callers to pass it.
+        watcher_cfg = cfg.get("memory_watcher", {}) if isinstance(cfg, dict) else {}  # Read watcher configuration.
+        run_dir = watcher_cfg.get("run_directory") or MEMORY_WATCHER_RUN_DIR  # Resolve existing watcher output directory.
+        if not run_dir:  # Treat absent watcher output as missing resource data.
+            return {}  # Return empty snapshot.
+        sample_path = os.path.join(str(run_dir), "memory_samples.jsonl")  # Resolve the existing watcher sample stream.
+        latest_line = ""  # Store the newest complete sample row.
+        with open(sample_path, "r", encoding="utf-8") as samples_file:  # Open the existing watcher sample file.
+            for line in samples_file:  # Iterate to the newest emitted sample.
+                if line.strip():  # Ignore empty lines.
+                    latest_line = line  # Retain latest non-empty row.
+        return json.loads(latest_line) if latest_line else {}  # Decode the newest sample when present.
+    except Exception:  # Preserve original messages when resource data is unavailable.
+        return {}  # Return empty snapshot.
+
+
+def format_training_resource_percent(value: Any) -> str:  # Format one resource percentage.
+    """
+    Format one resource percentage.
+
+    :param value: Raw resource percentage value.
+    :return: One-decimal percentage or unavailable.
+    """
+
+    try:  # Keep individual metric formatting isolated.
+        numeric_value = float(value)  # Normalize numeric metric text or number.
+    except (TypeError, ValueError):  # Treat missing or nonnumeric values as unavailable.
+        return "unavailable"  # Return established unavailable marker.
+    if not math.isfinite(numeric_value):  # Reject NaN and infinite values.
+        return "unavailable"  # Return established unavailable marker.
+    return f"{numeric_value:.1f}%"  # Return one-decimal percentage.
+
+
+def format_training_resource_gib(value: Any) -> str:  # Format one byte value as GiB.
+    """
+    Format one byte value as GiB.
+
+    :param value: Raw byte count.
+    :return: One-decimal GiB value or unavailable.
+    """
+
+    try:  # Keep byte formatting isolated.
+        numeric_value = float(value)  # Normalize byte count.
+    except (TypeError, ValueError):  # Treat missing or nonnumeric values as unavailable.
+        return "unavailable"  # Return established unavailable marker.
+    if not math.isfinite(numeric_value) or numeric_value < 0:  # Reject invalid byte counts.
+        return "unavailable"  # Return established unavailable marker.
+    return f"{numeric_value / (1024 ** 3):.1f} GiB"  # Return one-decimal GiB.
+
+
+def format_training_resource_gib_number(value: Any) -> str:  # Format one byte value as a GiB number.
+    """
+    Format one byte value as a GiB number.
+
+    :param value: Raw byte count.
+    :return: One-decimal GiB number or unavailable.
+    """
+
+    gib_value = format_training_resource_gib(value)  # Reuse byte normalization.
+    return gib_value.replace(" GiB", "") if gib_value != "unavailable" else gib_value  # Return numeric text for combined RAM labels.
+
+
+def resolve_training_resource_value(snapshot: dict, *keys: str) -> Any:  # Resolve the first present resource value.
+    """
+    Resolve the first present resource metric.
+
+    :param snapshot: Resource snapshot mapping.
+    :param keys: Candidate metric keys.
+    :return: First present value, or None.
+    """
+
+    for key in keys:  # Try known field names in priority order.
+        if isinstance(snapshot, dict) and snapshot.get(key) is not None:  # Use only present values.
+            return snapshot.get(key)  # Return matching value.
+    return None  # Return missing value marker.
+
+
+def format_training_resource_suffix(snapshot: Optional[dict] = None, allow_worker_cpu: bool = True) -> str:  # Format compact training resource suffix.
+    """
+    Format the compact training resource suffix from an existing snapshot.
+
+    :param snapshot: Already-collected resource snapshot.
+    :param allow_worker_cpu: Whether worker CPU should be displayed when present.
+    :return: Delimiter-prefixed resource suffix.
+    """
+
+    resource_snapshot = snapshot if isinstance(snapshot, dict) else {}  # Normalize missing snapshots.
+    worker_cpu_value = resolve_training_resource_value(resource_snapshot, "worker_cpu_percent", "process_tree_cpu_percent", "target_cpu_percent") if allow_worker_cpu else None  # Resolve worker CPU only when valid for this message.
+    system_cpu_value = resolve_training_resource_value(resource_snapshot, "system_cpu_percent", "system_cpu_used_percent", "host_cpu_percent")  # Resolve host CPU from existing snapshot fields.
+    worker_ram_value = resolve_training_resource_value(resource_snapshot, "worker_rss_bytes", "process_tree_rss_bytes", "recursive_child_process_nondedup_rss_bytes", "target_rss_bytes")  # Resolve worker/process-tree RAM bytes.
+    system_total_value = resolve_training_resource_value(resource_snapshot, "system_total_memory_bytes", "system_memory_total_bytes", "total_memory_bytes")  # Resolve system total RAM bytes.
+    system_used_value = resolve_training_resource_value(resource_snapshot, "system_used_memory_bytes", "system_memory_used_bytes", "used_memory_bytes")  # Resolve system used RAM bytes.
+    system_available_value = resolve_training_resource_value(resource_snapshot, "system_available_memory_bytes", "system_memory_available_bytes", "available_memory_bytes")  # Resolve system available RAM bytes.
+    if system_used_value is None and system_total_value is not None and system_available_value is not None:  # Derive used RAM only from the same snapshot.
+        system_used_value = max(0, float(system_total_value) - float(system_available_value))  # Compute used bytes from snapshot total and available bytes.
+    system_ram_percent_value = resolve_training_resource_value(resource_snapshot, "system_memory_percent", "system_memory_used_percent", "system_ram_percent")  # Resolve system RAM percentage.
+    system_ram_used = format_training_resource_gib_number(system_used_value)  # Format used system RAM number.
+    system_ram_total = format_training_resource_gib_number(system_total_value)  # Format total system RAM number.
+    system_ram_percent = format_training_resource_percent(system_ram_percent_value)  # Format system RAM percentage.
+    system_ram_label = "unavailable" if "unavailable" in (system_ram_used, system_ram_total, system_ram_percent) else f"{system_ram_used}/{system_ram_total} GiB ({system_ram_percent})"  # Format combined system RAM only when complete.
+    return f" | Worker CPU: {format_training_resource_percent(worker_cpu_value)} | System CPU: {format_training_resource_percent(system_cpu_value)} | Worker RAM: {format_training_resource_gib(worker_ram_value)} | System RAM: {system_ram_label}"  # Return required suffix fields.
 
 
 def build_memory_phase_metadata(config: Optional[dict] = None, **metadata: Any) -> dict:  # Build compact phase-state metadata
@@ -12606,13 +12720,14 @@ def report_stacking_execution_failure(category: str, exception: Optional[BaseExc
     return True  # Report that this failure consumed its local delivery attempt.
 
 
-def build_feature_process_training_start_message(task: dict, dynamic_total: int, eta_label: str) -> str:
+def build_feature_process_training_start_message(task: dict, dynamic_total: int, eta_label: str, resource_snapshot: Optional[dict] = None) -> str:  # Build one classifier training-start Telegram message.
     """
     Build one persistent-process classifier training-start Telegram message.
 
     :param task: Authoritative feature-process task descriptor.
     :param dynamic_total: Actual evaluation-plan length.
     :param eta_label: Factual initial ETA label.
+    :param resource_snapshot: Already-collected resource snapshot.
     :return: Human-readable Telegram message body.
     """
 
@@ -12620,16 +12735,18 @@ def build_feature_process_training_start_message(task: dict, dynamic_total: int,
     local_position = task.get("feature_local_position")  # Read feature-local plan position when present.
     local_total = task.get("feature_local_total")  # Read feature-local plan total when present.
     local_label = f"{local_position}/{local_total}" if local_position is not None and local_total is not None else "unavailable"  # Format local position without inventing missing data.
-    return f"[TRAINING START] Started {task['classifier_name']} classifier training | {combination_header} | Local combination: {local_label} | Global combination: {int(task['global_id'])}/{int(dynamic_total)} | Initial ETA: {eta_label}"  # Return compact start notification.
+    resource_suffix = format_training_resource_suffix(resource_snapshot, allow_worker_cpu=False)  # Format start-time resource suffix without inventing worker CPU.
+    return f"[TRAINING START] Started {task['classifier_name']} classifier training | {combination_header} | Local combination: {local_label} | Global combination: {int(task['global_id'])}/{int(dynamic_total)} | Initial ETA: {eta_label}{resource_suffix}"  # Return compact start notification.
 
 
-def build_feature_process_training_eta_message(task: dict, dynamic_total: int, eta_label: str) -> str:  # Build one classifier training-ETA Telegram message
+def build_feature_process_training_eta_message(task: dict, dynamic_total: int, eta_label: str, resource_snapshot: Optional[dict] = None) -> str:  # Build one classifier training-ETA Telegram message
     """
     Build one persistent-process classifier training-ETA Telegram message.
 
     :param task: Authoritative feature-process task descriptor.
     :param dynamic_total: Actual evaluation-plan length.
     :param eta_label: Factual ETA label from the training progress reporter.
+    :param resource_snapshot: Already-collected resource snapshot.
     :return: Human-readable Telegram message body.
     """
 
@@ -12637,7 +12754,8 @@ def build_feature_process_training_eta_message(task: dict, dynamic_total: int, e
     local_position = task.get("feature_local_position")  # Read feature-local plan position when present.
     local_total = task.get("feature_local_total")  # Read feature-local plan total when present.
     local_label = f"{local_position}/{local_total}" if local_position is not None and local_total is not None else "unavailable"  # Format local position without inventing missing data.
-    return f"[TRAINING ETA] {task['classifier_name']} training ETA is now available | {combination_header} | Local combination: {local_label} | Global combination: {int(task['global_id'])}/{int(dynamic_total)} | ETA: {eta_label}"  # Return compact ETA notification.
+    resource_suffix = format_training_resource_suffix(resource_snapshot, allow_worker_cpu=True)  # Format ETA resource suffix from already-collected data.
+    return f"[TRAINING ETA] {task['classifier_name']} training ETA is now available | {combination_header} | Local combination: {local_label} | Global combination: {int(task['global_id'])}/{int(dynamic_total)} | ETA: {eta_label}{resource_suffix}"  # Return compact ETA notification.
 
 
 def send_feature_process_training_start_notification(status: dict, tasks_by_global_id: dict, dynamic_total: int, notified_training_start_global_ids: set, training_start_unavailable_global_ids: set, notification_acknowledgements: dict) -> bool:  # Send one coordinator-owned classifier training-start notification
@@ -12666,7 +12784,8 @@ def send_feature_process_training_start_notification(status: dict, tasks_by_glob
         eta_label = str(status.get("initial_eta") or "unavailable")  # Use only worker-supplied factual ETA text.
         if eta_label == "unavailable":  # Record that this attempt needs one later factual ETA update.
             training_start_unavailable_global_ids.add(global_id)  # Track only combinations whose start notification lacked ETA.
-        telegram_msg = build_feature_process_training_start_message(task, dynamic_total, eta_label)  # Build message from authoritative task fields.
+        resource_snapshot = read_latest_training_resource_snapshot(CONFIG)  # Read latest already-collected resource snapshot.
+        telegram_msg = build_feature_process_training_start_message(task, dynamic_total, eta_label, resource_snapshot)  # Build message from authoritative task fields.
         try:  # Isolate Telegram transport from scientific training.
             send_telegram_message(TELEGRAM_BOT, telegram_msg)  # Send through the established coordinator-owned Telegram path.
         except Exception:  # Preserve existing Telegram failure isolation under patched senders.
@@ -12703,7 +12822,8 @@ def send_feature_process_training_eta_notification(status: dict, tasks_by_global
     if not eta_label or eta_label == "unavailable" or eta_label == "0s":  # Reject unavailable or completion-only ETA labels.
         return True  # Preserve one meaningful follow-up ETA only.
     notified_training_eta_global_ids.add(global_id)  # Reserve the sole ETA delivery attempt before external I/O.
-    telegram_msg = build_feature_process_training_eta_message(task, dynamic_total, eta_label)  # Build message from authoritative task fields and factual ETA.
+    resource_snapshot = read_latest_training_resource_snapshot(CONFIG)  # Read latest already-collected resource snapshot.
+    telegram_msg = build_feature_process_training_eta_message(task, dynamic_total, eta_label, resource_snapshot)  # Build message from authoritative task fields and factual ETA.
     try:  # Isolate Telegram transport from scientific training.
         send_telegram_message(TELEGRAM_BOT, telegram_msg)  # Send through the established coordinator-owned Telegram path.
     except Exception:  # Preserve existing Telegram failure isolation under patched senders.
