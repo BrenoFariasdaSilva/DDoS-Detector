@@ -12449,6 +12449,59 @@ def describe_process_exit_signal(exitcode: Optional[int]) -> Optional[str]:  # R
         return f"Signal {abs(int(exitcode))}"  # Return numeric signal fallback.
 
 
+def capture_stacking_resource_diagnostics(context: Optional[dict] = None) -> dict:  # Capture failure-time memory, swap, process, and cgroup facts
+    """
+    Capture failure-time resource diagnostics from the coordinator process.
+
+    :param context: Optional failure metadata gathered by the coordinator.
+    :return: Resource diagnostic mapping with only facts available to this process.
+    """
+
+    context = context or {}  # Normalize absent context to an empty mapping.
+    failure = context.get("failure") or {}  # Read child failure metadata when available.
+    diagnostics = {"timestamp": datetime.datetime.now().isoformat(timespec="seconds"), "coordinator_pid": os.getpid(), "child_pid": failure.get("pid") or failure.get("child_pid") or context.get("child_pid")}  # Start with process identities available after child death.
+    try:  # Read current system RAM counters through psutil.
+        virtual_memory = psutil.virtual_memory()  # Capture current virtual-memory state.
+        diagnostics["system_memory"] = {"total": int(getattr(virtual_memory, "total", 0)), "available": int(getattr(virtual_memory, "available", 0)), "used": int(getattr(virtual_memory, "used", 0)), "percent": float(getattr(virtual_memory, "percent", 0.0))}  # Store compact RAM counters.
+    except Exception as exc:  # Preserve resource diagnostics when psutil memory reading fails.
+        diagnostics["system_memory_error"] = str(exc)  # Store psutil RAM failure text.
+    try:  # Read current swap counters through psutil.
+        swap_memory = psutil.swap_memory()  # Capture current swap state.
+        diagnostics["system_swap"] = {"total": int(getattr(swap_memory, "total", 0)), "used": int(getattr(swap_memory, "used", 0)), "free": int(getattr(swap_memory, "free", 0)), "percent": float(getattr(swap_memory, "percent", 0.0))}  # Store compact swap counters.
+    except Exception as exc:  # Preserve resource diagnostics when psutil swap reading fails.
+        diagnostics["system_swap_error"] = str(exc)  # Store psutil swap failure text.
+    try:  # Read coordinator process counters still available after child death.
+        process_memory = psutil.Process(os.getpid()).memory_info()  # Capture coordinator RSS and VMS.
+        diagnostics["coordinator_memory"] = {"rss": int(getattr(process_memory, "rss", 0)), "vms": int(getattr(process_memory, "vms", 0))}  # Store compact coordinator counters.
+    except Exception as exc:  # Preserve resource diagnostics when process reading fails.
+        diagnostics["coordinator_memory_error"] = str(exc)  # Store process counter failure text.
+    cgroup_dirs = []  # Collect Linux cgroup directories visible from this process.
+    try:  # Resolve cgroup v2 directory from /proc when available.
+        with open("/proc/self/cgroup", "r", encoding="utf-8") as cgroup_file:  # Open current process cgroup membership.
+            for line in cgroup_file:  # Parse every membership line.
+                relative_path = line.strip().split(":")[-1].lstrip("/")  # Extract the cgroup-relative path.
+                cgroup_dir = Path("/sys/fs/cgroup") / relative_path if relative_path else Path("/sys/fs/cgroup")  # Resolve the visible cgroup directory.
+                if cgroup_dir not in cgroup_dirs:  # Avoid duplicate cgroup directory reads.
+                    cgroup_dirs.append(cgroup_dir)  # Record one cgroup directory.
+    except Exception as exc:  # Preserve resource diagnostics when /proc cgroup data is unavailable.
+        diagnostics["cgroup_membership_error"] = str(exc)  # Store cgroup membership failure text.
+    if Path("/sys/fs/cgroup").is_dir() and Path("/sys/fs/cgroup") not in cgroup_dirs:  # Include the root cgroup directory when visible.
+        cgroup_dirs.append(Path("/sys/fs/cgroup"))  # Record the root cgroup directory.
+    cgroup_values = {}  # Collect readable cgroup memory and process limit files.
+    for cgroup_dir in cgroup_dirs:  # Read every visible cgroup directory.
+        for filename in ("memory.current", "memory.max", "memory.high", "memory.events", "memory.events.local", "memory.swap.current", "memory.swap.max", "pids.current", "pids.max"):  # Limit reads to small diagnostic files.
+            file_path = cgroup_dir / filename  # Resolve the cgroup diagnostic file path.
+            if not file_path.is_file():  # Skip files absent from this cgroup version.
+                continue  # Move to the next diagnostic file.
+            try:  # Read one small cgroup diagnostic file.
+                cgroup_values[f"{cgroup_dir}:{filename}"] = file_path.read_text(encoding="utf-8", errors="replace").strip()  # Store exact cgroup file content.
+            except Exception as exc:  # Preserve other readable cgroup facts if one file fails.
+                cgroup_values[f"{cgroup_dir}:{filename}:error"] = str(exc)  # Store per-file read failure text.
+    if cgroup_values:  # Include cgroup data only when at least one fact is available.
+        diagnostics["cgroup"] = cgroup_values  # Store visible cgroup counters and events.
+    return diagnostics  # Return available diagnostics without inferring a root cause.
+
+
 def build_stacking_failure_notification(category: str, exception: Optional[BaseException], context: Optional[dict] = None) -> str:  # Build one contextual Telegram failure report
     """
     Build one contextual stacking failure notification.
@@ -12480,8 +12533,9 @@ def build_stacking_failure_notification(category: str, exception: Optional[BaseE
     local_total = task.get("feature_local_total")  # Resolve local denominator when available.
     dataset_value = context.get("dataset_path") or context.get("dataset") or process_payload.get("file") or process_payload.get("cache_ref_file")  # Resolve dataset identity from payload or caller.
     execution_mode = context.get("execution_mode") or process_payload.get("execution_mode") or (process_payload.get("config") or {}).get("execution", {}).get("execution_mode")  # Resolve execution mode from payload or config.
+    resource_diagnostics = context.get("resource_diagnostics")  # Read failure-time resource facts when supplied by the coordinator.
     lines = ["[STACKING FAILURE]", f"Failure category: {category}"]  # Start report using existing plain Telegram text style.
-    optional_fields = [("Exception class", exception_type), ("Exception message", exception_message), ("Child exit code", exitcode), ("Signal", signal_name), ("Child PID", failure.get("pid") or failure.get("child_pid") or context.get("child_pid")), ("Feature set", feature_set_name), ("Classifier", classifier_name), ("Hyperparameter mode", hyperparameter_mode), ("Run index", run_index), ("Global combination ID", global_id), ("Local combination ID", f"{local_id}/{local_total}" if local_id is not None and local_total is not None else local_id), ("Dataset", dataset_value), ("Execution mode", execution_mode), ("Coordinator status", status_snapshot.get("global") if isinstance(status_snapshot, dict) else None), ("Per-feature status", status_snapshot.get("features") if isinstance(status_snapshot, dict) else None), ("Transport exception", context.get("transport_exception"))]  # Collect factual fields only.
+    optional_fields = [("Exception class", exception_type), ("Exception message", exception_message), ("Child exit code", exitcode), ("Signal", signal_name), ("Child PID", failure.get("pid") or failure.get("child_pid") or context.get("child_pid")), ("Feature set", feature_set_name), ("Classifier", classifier_name), ("Hyperparameter mode", hyperparameter_mode), ("Run index", run_index), ("Global combination ID", global_id), ("Local combination ID", f"{local_id}/{local_total}" if local_id is not None and local_total is not None else local_id), ("Dataset", dataset_value), ("Execution mode", execution_mode), ("Coordinator status", status_snapshot.get("global") if isinstance(status_snapshot, dict) else None), ("Per-feature status", status_snapshot.get("features") if isinstance(status_snapshot, dict) else None), ("Resource diagnostics", resource_diagnostics), ("Transport exception", context.get("transport_exception"))]  # Collect factual fields only.
     lines.extend(f"{name}: {value}" for name, value in optional_fields if value is not None)  # Add only metadata actually available.
     lines.append(f"Host: {platform.node() or 'unknown'}")  # Add current host identity.
     lines.append(f"Operating system: {platform.platform()}")  # Add current operating-system identity.
@@ -16888,7 +16942,10 @@ def execute_feature_set_processes(pending_by_feature: dict, process_payload: dic
             failure_task = tasks_by_global_id.get(failure.get("global_id"))  # Resolve authoritative task metadata when available
             failure_error = RuntimeError(f"Feature-set worker failed for {failure.get('feature_set')} at Global ID {failure.get('global_id')}: {failure.get('error')}\n{failure.get('traceback', '')}")  # Build one surfaced child exception with terminal status evidence
             failure_error.status_snapshot = failure_snapshot  # Preserve reconciled counters for callers and deterministic diagnostics
-            report_stacking_execution_failure(failure.get("category") or "Persistent feature-set worker failure", failure_error, {"failure": failure, "task": failure_task, "process_payload": process_payload, "status_snapshot": failure_snapshot})  # Notify before raising to outer pipeline layers
+            failure_context = {"failure": failure, "task": failure_task, "process_payload": process_payload, "status_snapshot": failure_snapshot}  # Build one factual failure context for logging and Telegram.
+            failure_context["resource_diagnostics"] = capture_stacking_resource_diagnostics(failure_context)  # Capture parent-side memory, swap, process, and cgroup facts available after child death.
+            print(f"[RESOURCE FAILURE SNAPSHOT] {failure_context['resource_diagnostics']}")  # Persist failure-time resource facts in the ordinary stacking log.
+            report_stacking_execution_failure(failure.get("category") or "Persistent feature-set worker failure", failure_error, failure_context)  # Notify before raising to outer pipeline layers
             raise failure_error  # Surface child exception, task identity, traceback, and accurate status
         final_snapshot = read_feature_process_status(status_state)  # Read synchronized terminal status after every child exit
         final_global = final_snapshot["global"]  # Resolve global completion invariants
