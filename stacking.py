@@ -147,6 +147,7 @@ from resnet18 import ResNet18Classifier  # Import the standalone sklearn-compati
 from autoencoder import AutoencoderClassifier  # Import the standalone sklearn-compatible supervised Autoencoder classifier
 from lstm import LSTMClassifier  # Import the standalone sklearn-compatible supervised LSTM sequence classifier
 from training_progress import DEFAULT_TRAINING_PROGRESS_INTERVAL_MINUTES, TrainingProgress, XGBoostProgressCallback, format_training_combination_fields, format_training_feature_set, interactive_terminal_attached  # Import reusable training progress infrastructure.
+from utils.skip_combinations import apply_skip_combination_rules, build_alias_lookup, compile_skip_combination_rules, filter_models_for_plan_group, format_skip_rule_match_lines, format_skip_rules_for_info, format_skip_rules_for_telegram, format_skip_summary_line  # Import reusable skip-combination parsing and plan filtering.
 
 
 # Macros:
@@ -990,6 +991,7 @@ def parse_cli_args():
         parser.add_argument("--n-jobs", dest="n_jobs", type=int, default=None, help="Override evaluation.n_jobs for estimators that support parallel fitting (-1 uses all processors; 1 is memory-safe)",)
         parser.add_argument("--feature-extraction-n-jobs", dest="feature_extraction_n_jobs", type=int, default=None, help="Override evaluation.feature_extraction_n_jobs for feature extraction/transformation stages such as PCA, not classifier training (-1 uses available CPUs; 1 is memory-safe)")  # Add the independent feature extraction thread override
         parser.add_argument("--feature-set-workers", dest="feature_set_workers", type=str, default=None, help="Persistent process counts by feature set, for example full=1,ga=1,pca=1,rfe=1,extra_trees=1; only 0 or 1 is supported")  # Add the persistent feature-set process override
+        parser.add_argument("--skip-combination", dest="skip_combination", action="append", default=None, help="Skip combinations by shell-quoted rule because '&' and '||' are shell operators; '&' means all terms match, '||' means either clause matches, missing dimensions are wildcards, augmentation uses 0-100 with 0 off, repeat option for multiple rules")  # Add repeatable skip-rule CLI override.
         pending_sort_group = parser.add_mutually_exclusive_group()  # Preserve absent-versus-explicit CLI semantics for pending runtime ordering
         pending_sort_group.add_argument("--sort-pending-by-elapsed-time", dest="sort_pending_by_elapsed_time", action="store_true", help="Sort pending classifier combinations by historical elapsed_time_s within comparable groups")  # Enable runtime-based pending queue ordering
         pending_sort_group.add_argument("--no-sort-pending-by-elapsed-time", dest="sort_pending_by_elapsed_time", action="store_false", help="Disable runtime-based pending classifier ordering")  # Disable runtime-based pending queue ordering
@@ -1030,6 +1032,7 @@ def get_default_stacking_config():
             "augmentation_comparison_filename": "Data_Augmentation_Comparison_Results.csv",  # Augmentation comparison CSV filename
             "data_augmentation_suffix": "_data_augmented",  # File suffix for augmented data files
             "augmentation_ratios": [0.25, 0.50, 0.75, 1.00],  # Ratios of augmented data to sample
+            "skip_combinations": [],  # User-defined combination skip rules, empty by default.
             "hyperparameters_filename": "Hyperparameter_Optimization_Results.csv",  # Hyperparameter results CSV filename
             "cache_prefix": "Cache_",  # Prefix for cached model files
             "model_export_base": "Feature_Analysis/Stacking/Models/",  # Base directory for model exports
@@ -1876,6 +1879,25 @@ FEATURE_SET_WORKER_KEYS = ("full", "ga", "pca", "rfe", "extra_trees")  # Define 
 FEATURE_PROCESS_START_METHOD = "spawn"  # Select clean-interpreter feature workers without inheriting initialized native thread pools
 FEATURE_PROCESS_STATUS_FIELDS = ("total", "cached", "pending", "running", "computed", "failed", "completed")  # Define synchronized global and feature-local status fields
 FEATURE_PROCESS_STATUS_INDEX = {name: index for index, name in enumerate(FEATURE_PROCESS_STATUS_FIELDS)}  # Resolve compact shared-array positions by status name
+SKIP_RULE_FEATURE_ALIASES = {"Full Features": ("full", "full_features", "full-features", "Full Features"), "Explicit Features": ("explicit", "explicit_features", "explicit-features", "Explicit Features"), "Extra Trees Features": ("extra_trees", "extratrees", "extra-trees", "Extra Trees", "Extra Trees Features"), "GA Features": ("ga", "genetic_algorithm", "genetic-algorithm", "Genetic Algorithm", "GA Features"), "PCA Components": ("pca", "pca_components", "pca-components", "PCA Components"), "RFE Features": ("rfe", "rfe_features", "rfe-features", "RFE Features")}  # Map feature-set aliases to runtime names.
+SKIP_RULE_CLASSIFIER_ALIASES = {"Random Forest": ("random_forest", "randomforest", "random-forest", "Random Forest"), "SVM": ("svm", "support_vector_machine", "support-vector-machine", "Support Vector Machine"), "XGBoost": ("xgboost", "xgb", "XGBoost"), "Logistic Regression": ("logistic_regression", "logistic-regression", "Logistic Regression"), "KNN": ("knn", "k_nearest_neighbors", "k-nearest-neighbors", "K Nearest Neighbors"), "Nearest Centroid": ("nearest_centroid", "nearest-centroid", "Nearest Centroid"), "Gradient Boosting": ("gradient_boosting", "gradient-boosting", "Gradient Boosting"), "LightGBM": ("lightgbm", "lgbm", "LightGBM"), "MLP (Neural Net)": ("mlp", "mlp_neural_net", "mlp-neural-net", "neural_net", "Neural Net", "MLP Neural Net"), "FT-Transformer": ("ft_transformer", "ft-transformer", "FT Transformer"), "Tabular ResNet": ("tabular_resnet", "tabular-resnet", "Tabular ResNet"), "ResNet18": ("resnet18", "resnet_18", "resnet-18", "ResNet18"), "AutoEncoder": ("autoencoder", "auto_encoder", "auto-encoder", "AutoEncoder"), "LSTM": ("lstm", "LSTM"), "StackingClassifier": ("stacking", "stacking_classifier", "stacking-classifier", "StackingClassifier")}  # Map classifier aliases to runtime names.
+SKIP_RULE_HYPERPARAMETER_ALIASES = {"Default Hyperparameters": ("default", "default_hyperparameters", "default-hyperparameters", "Default Hyperparameters"), "Optimized Hyperparameters": ("optimized", "optimized_hyperparameters", "optimized-hyperparameters", "Optimized Hyperparameters")}  # Map hyperparameter aliases to runtime labels.
+
+
+def resolve_skip_combination_rules_source(file_config: dict, cli_args: Any) -> str:  # Resolve skip-rule configuration source.
+    """
+    Resolve skip-combination precedence source.
+
+    :param file_config: Raw configuration loaded from YAML.
+    :param cli_args: Parsed CLI arguments or None.
+    :return: Source label for logging.
+    """
+
+    if cli_args is not None and getattr(cli_args, "skip_combination", None) is not None:  # Detect explicit repeatable CLI rules.
+        return "CLI"  # Report CLI replacement source.
+    if isinstance(file_config, dict) and "skip_combinations" in file_config.get("stacking", {}):  # Detect YAML-provided rule list.
+        return "YAML"  # Report YAML source.
+    return "Default"  # Report internal default source.
 
 
 def validate_feature_set_workers(value: Any, source: str = "evaluation.feature_set_workers") -> dict:  # Normalize and validate persistent feature-set process counts
@@ -1947,6 +1969,10 @@ def merge_configs(defaults, file_config, cli_args):
             validate_feature_extraction_n_jobs(config.get("evaluation", {}).get("feature_extraction_n_jobs", 1))  # Validate the effective file or default feature extraction setting.
             config.setdefault("evaluation", {})["feature_set_workers"] = validate_feature_set_workers(config.get("evaluation", {}).get("feature_set_workers", None))  # Normalize the effective persistent process mapping
             config["evaluation"]["training_progress_interval_minutes"] = validate_training_progress_interval_minutes(config["evaluation"].get("training_progress_interval_minutes", DEFAULT_TRAINING_PROGRESS_INTERVAL_MINUTES))  # Validate the YAML-over-default progress interval.
+            skip_source = resolve_skip_combination_rules_source(file_config, cli_args)  # Resolve skip-rule source without CLI overrides.
+            skip_alias_lookup = build_alias_lookup(SKIP_RULE_FEATURE_ALIASES, SKIP_RULE_CLASSIFIER_ALIASES, SKIP_RULE_HYPERPARAMETER_ALIASES)  # Build skip-rule aliases from runtime names.
+            config.setdefault("stacking", {})["skip_combinations_source"] = skip_source  # Store user-readable skip-rule source.
+            config["stacking"]["compiled_skip_combinations"] = compile_skip_combination_rules(config.get("stacking", {}).get("skip_combinations", []), skip_source, skip_alias_lookup)  # Parse skip rules once before datasets load.
             return config  # Return merged config
         
         if hasattr(cli_args, "verbose") and cli_args.verbose:  # Verbose flag
@@ -2015,6 +2041,9 @@ def merge_configs(defaults, file_config, cli_args):
         if hasattr(cli_args, "feature_set_workers") and cli_args.feature_set_workers is not None:  # Persistent feature-set process CLI override
             config.setdefault("evaluation", {})["feature_set_workers"] = validate_feature_set_workers(cli_args.feature_set_workers, "--feature-set-workers")  # Apply the validated CLI process mapping
 
+        if hasattr(cli_args, "skip_combination") and cli_args.skip_combination is not None:  # Skip-combination CLI replacement override.
+            config.setdefault("stacking", {})["skip_combinations"] = list(cli_args.skip_combination)  # Replace YAML skip rules when CLI supplies any rule.
+
         if hasattr(cli_args, "sort_pending_by_elapsed_time") and cli_args.sort_pending_by_elapsed_time is not None:  # Pending runtime sort CLI override
             config.setdefault("stacking", {})["sort_pending_by_elapsed_time"] = cli_args.sort_pending_by_elapsed_time  # Apply explicit CLI ordering preference over YAML
 
@@ -2068,6 +2097,10 @@ def merge_configs(defaults, file_config, cli_args):
         config.setdefault("stacking", {})["experiment_runs"] = validate_experiment_runs(config.get("stacking", {}).get("experiment_runs", 1))  # Normalize the final repeated-run count after CLI precedence.
         config.setdefault("evaluation", {})["feature_set_workers"] = validate_feature_set_workers(config.get("evaluation", {}).get("feature_set_workers", None))  # Normalize the final persistent process mapping after CLI precedence
         config["evaluation"]["training_progress_interval_minutes"] = validate_training_progress_interval_minutes(config["evaluation"].get("training_progress_interval_minutes", DEFAULT_TRAINING_PROGRESS_INTERVAL_MINUTES))  # Normalize the final validated progress interval after CLI precedence.
+        skip_source = resolve_skip_combination_rules_source(file_config, cli_args)  # Resolve final skip-rule source after CLI precedence.
+        skip_alias_lookup = build_alias_lookup(SKIP_RULE_FEATURE_ALIASES, SKIP_RULE_CLASSIFIER_ALIASES, SKIP_RULE_HYPERPARAMETER_ALIASES)  # Build skip-rule aliases from runtime names.
+        config.setdefault("stacking", {})["skip_combinations_source"] = skip_source  # Store final user-readable skip-rule source.
+        config["stacking"]["compiled_skip_combinations"] = compile_skip_combination_rules(config.get("stacking", {}).get("skip_combinations", []), skip_source, skip_alias_lookup)  # Parse skip rules once before datasets load.
         return config  # Return final merged configuration
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
@@ -13335,7 +13368,7 @@ def run_stacking_evaluation_for_feature_set(name, stacking_model, X_train_df, y_
         raise
 
 
-def print_dataset_evaluation_header(data_source_label, evaluation_plan, execution_mode_str, attack_types_combined, cached_results=None, pending_by_feature=None):
+def print_dataset_evaluation_header(data_source_label, evaluation_plan, execution_mode_str, attack_types_combined, cached_results=None, pending_by_feature=None, skip_summary=None):  # Print one cache-aware eligible-plan header.
     """
     Prints the formatted header block for a dataset evaluation run.
 
@@ -13345,6 +13378,7 @@ def print_dataset_evaluation_header(data_source_label, evaluation_plan, executio
     :param attack_types_combined: Attack types shared by combined-files combinations
     :param cached_results: Optional cached result mapping keyed by global combination ID
     :param pending_by_feature: Optional pending task mapping keyed by feature set
+    :param skip_summary: Optional skip-rule summary for this eligible plan.
     :return: None
     """
 
@@ -13360,6 +13394,8 @@ def print_dataset_evaluation_header(data_source_label, evaluation_plan, executio
         )  # Print bottom separator line for evaluation section
 
         total_combinations = len(evaluation_plan)  # Use the exact ordered plan length displayed by the progress bar
+        canonical_total = int(skip_summary.get("canonical_total", total_combinations)) if skip_summary else total_combinations  # Resolve canonical pre-filter total.
+        global_ids_by_combination = skip_summary.get("global_ids", {}) if skip_summary else {}  # Resolve stable eligible IDs when skip filtering ran.
         cached_results = cached_results or {}  # Normalize absent cache classification to an empty recovered block.
         pending_by_feature = pending_by_feature or {}  # Normalize absent pending classification to a fallback pending block.
         pending_global_ids = {task["global_id"] for tasks in pending_by_feature.values() for task in tasks}  # Preserve actual execution identities from cache partitioning.
@@ -13370,21 +13406,22 @@ def print_dataset_evaluation_header(data_source_label, evaluation_plan, executio
         if not pending_global_ids and not recovered_global_ids:  # Preserve legacy callers without precomputed cache classification.
             pending_global_ids = set(range(1, total_combinations + 1))  # Treat the whole plan as pending when no cache classification was supplied.
 
-        print(f"Evaluation plan: {total_combinations} combinations | Run: {experiment_run} | Recovered: {len(recovered_global_ids)} | Pending: {len(pending_global_ids)}\n")  # Print cache-aware full-grid counts.
+        print(f"Evaluation plan: {total_combinations} eligible combinations | Canonical: {canonical_total} | Run: {experiment_run} | Recovered eligible: {len(recovered_global_ids)} | Pending eligible: {len(pending_global_ids)}\n")  # Print cache-aware full-grid counts.
         print(f"Execution Mode: {execution_mode_str}")  # Print the execution-mode identity shared by the plan
         if attack_types_combined:  # Print the combined attack scope when it participates in cache identity
             print(f"Attack Types: {', '.join(str(attack_type) for attack_type in attack_types_combined)}")  # Print the ordered attack-type scope once for the full plan
         print()  # Separate shared identity fields from ordered combinations
 
         for combination_index, (feature_set, hyperparameters_enabled, augmentation_ratio, classifier) in enumerate(evaluation_plan, start=1):  # Print combinations in their exact execution order
-            if combination_index not in recovered_global_ids:  # Print only combinations recovered by cache classification in this block.
+            stable_global_id = int(global_ids_by_combination.get((feature_set, hyperparameters_enabled, augmentation_ratio, classifier), combination_index))  # Resolve stable global ID for cache reporting.
+            if stable_global_id not in recovered_global_ids:  # Print only combinations recovered by cache classification in this block.
                 continue  # Move to the next planned combination.
             hyperparameter_label = "Optimized Hyperparameters" if hyperparameters_enabled else "Default Hyperparameters"  # Resolve the active hyperparameter label
             augmentation_label = f"{augmentation_ratio * 100:g}%" if augmentation_ratio is not None else "None"  # Resolve the augmented-test ratio.
             testing_data_label = "Augmented Data" if augmentation_ratio is not None else "Original Data"  # Resolve the isolated testing source.
-            if combination_index == min(recovered_global_ids):  # Print the block heading immediately before the first recovered combination.
+            if stable_global_id == min(recovered_global_ids):  # Print the block heading immediately before the first recovered combination.
                 print(f"Recovered combinations from cache: {len(recovered_global_ids)}/{total_combinations}\n")  # Print recovered count before cached plan rows.
-            print(f"[{combination_index}/{total_combinations}] Feature Set: {feature_set} | Classifier: {classifier} | Hyperparameters: {hyperparameter_label} | Augmented Test Ratio: {augmentation_label} | Training Data: Original Data | Testing Data: {testing_data_label}")  # Print one complete ordered combination identity.
+            print(f"[Global ID {stable_global_id}/{canonical_total}] Feature Set: {feature_set} | Classifier: {classifier} | Hyperparameters: {hyperparameter_label} | Augmented Test Ratio: {augmentation_label} | Training Data: Original Data | Testing Data: {testing_data_label}")  # Print one complete ordered combination identity.
         if not recovered_global_ids:  # Keep the recovered block visible for empty or absent caches.
             print(f"Recovered combinations from cache: 0/{total_combinations}")  # Report no cache recoveries explicitly.
         print()  # Separate recovered and pending plan blocks.
@@ -13394,19 +13431,21 @@ def print_dataset_evaluation_header(data_source_label, evaluation_plan, executio
         hyperparameter_modes = list(dict.fromkeys("Optimized Hyperparameters" if combination[1] else "Default Hyperparameters" for combination in evaluation_plan))  # Preserve first-occurrence runnable hyperparameter order
         augmentation_modes = list(dict.fromkeys(f"{combination[2] * 100:g}%" if combination[2] is not None else "None" for combination in evaluation_plan))  # Preserve first-occurrence augmented-test order.
         classifiers = list(dict.fromkeys(combination[3] for combination in evaluation_plan))  # Preserve first-occurrence enabled-classifier order
+        skip_lines = format_skip_rules_for_telegram(skip_summary, len(recovered_global_ids), len(pending_global_ids)) if skip_summary is not None else ["Skip rules: Disabled", f"Canonical combinations: {canonical_total}", "Skipped by rules: 0", f"Eligible combinations: {total_combinations}", f"Recovered eligible combinations: {len(recovered_global_ids)}", f"Pending eligible combinations: {len(pending_global_ids)}"]  # Build explicit Telegram skip fields.
 
         telegram_summary = "\n".join([
             f"Evaluation plan: {data_source_label} Data",
             f"Experiment run: {experiment_run}",
-            f"Total combinations: {total_combinations}",
-            f"Recovered from cache: {len(recovered_global_ids)}",
-            f"Pending execution: {len(pending_global_ids)}",
-            f"Feature sets: {', '.join(feature_sets)}",
+            f"Eligible total combinations: {total_combinations}",
+            f"Recovered eligible from cache: {len(recovered_global_ids)}",
+            f"Pending eligible execution: {len(pending_global_ids)}",
+            *skip_lines,
+            f"Eligible feature sets: {', '.join(feature_sets)}",
             f"Hyperparameters: {', '.join(hyperparameter_modes)}",
             "Training data: Original Data",
             "Testing data: Original Data and ratio-selected Augmented Data",
             f"Augmented test ratios: {', '.join(augmentation_modes)}",
-            f"Classifiers: {', '.join(classifiers)}",
+            f"Eligible classifiers: {', '.join(classifiers)}",
             "Detailed ordered plan written to the application log.",
         ])  # Build one condensed Telegram summary from the ordered runtime plan
         send_telegram_message(TELEGRAM_BOT, telegram_summary)  # Send one guarded, length-protected summary for this evaluation section
@@ -13629,6 +13668,7 @@ def evaluate_on_dataset(
     artifact_recovery_target=None,
     feature_mode_name=None,
     extra_trees_selected_features=None,  # Preserve optional Extra Trees feature selection artifact without breaking legacy positional calls.
+    planned_classifier_names=None,  # Restrict sequential skip-filtered groups to exact eligible classifiers.
 ):
     """
     Train on original data or evaluate persisted original-trained models on augmented data.
@@ -13654,6 +13694,7 @@ def evaluate_on_dataset(
     :param source_files: Ordered original source files used to construct the training dataset.
     :param artifact_recovery_target: Optional feature-set and classifier identity for original-only artifact recovery.
     :param feature_mode_name: Optional single feature mode selected by canonical sequential scheduling.
+    :param planned_classifier_names: Optional ordered classifier identities selected by skip-filtered planning.
     :return: Dictionary mapping (feature_set, model_name) to results
     """
 
@@ -13666,7 +13707,10 @@ def evaluate_on_dataset(
         if hyperparameters_enabled is None:  # If caller did not provide an explicit HP mode flag
             hyperparameters_enabled = bool(hyperparams_map)  # Preserve legacy inference for older callers
 
+        planned_classifier_names = list(planned_classifier_names) if planned_classifier_names is not None else None  # Normalize optional group classifier filter.
         stacking_enabled = config.get("stacking", {}).get("methods", {}).get("stacking", True)  # Resolve stacking toggle from config
+        if planned_classifier_names is not None:  # Apply skip-filtered classifier selection when supplied.
+            stacking_enabled = stacking_enabled and "StackingClassifier" in planned_classifier_names  # Run stacking only when current eligible group includes it.
         if artifact_recovery_target is not None:
             stacking_enabled = artifact_recovery_target[1] == "StackingClassifier"  # Restrict recovery to the missing classifier identity.
 
@@ -13683,7 +13727,8 @@ def evaluate_on_dataset(
             if feature_mode_name not in feature_mode_names:  # Reject scheduling identities absent from actual assembled feature modes.
                 raise ValueError(f"Unknown evaluation feature mode: {feature_mode_name}")  # Surface canonical plan and execution mismatch.
             feature_mode_names = [feature_mode_name]  # Evaluate only current canonical feature-set group.
-        planned_models = base_models if artifact_recovery_target is None else ({artifact_recovery_target[1]: base_models[artifact_recovery_target[1]]} if artifact_recovery_target[1] != "StackingClassifier" else {})  # Keep recovery progress limited to the missing artifact.
+        planned_models = base_models if planned_classifier_names is None else {name: base_models[name] for name in planned_classifier_names if name in base_models}  # Restrict planned individual classifiers when skip filtering supplied names.
+        planned_models = planned_models if artifact_recovery_target is None else ({artifact_recovery_target[1]: base_models[artifact_recovery_target[1]]} if artifact_recovery_target[1] != "StackingClassifier" else {})  # Keep recovery progress limited to the missing artifact.
         if grid_progress is None:  # Build the exact standalone plan for the current data and HP slice
             evaluation_plan = build_evaluation_plan([(bool(hyperparameters_enabled), planned_models, hyperparams_map or {})], [augmentation_ratio], feature_mode_names, stacking_enabled)  # Build the standalone ordered runtime combinations
         else:  # Reuse the complete ordered plan that created the shared full-grid progress bar
@@ -13736,7 +13781,7 @@ def evaluate_on_dataset(
                 grid_progress["plan_printed"] = True  # Prevent per-ratio plan messages for the shared grid.
 
         stacking_model = build_evaluation_stacking_model(base_models, config=config) if stacking_enabled else None  # Build only an unfitted stacking prototype.
-        individual_models = {key: value for key, value in base_models.items() if artifact_recovery_target is None or (artifact_recovery_target[1] != "StackingClassifier" and key == artifact_recovery_target[1])}  # Restrict recovery without retaining fitted estimators.
+        individual_models = {key: value for key, value in planned_models.items() if artifact_recovery_target is None or (artifact_recovery_target[1] != "StackingClassifier" and key == artifact_recovery_target[1])}  # Restrict recovery and skip-filtered execution without retaining fitted estimators.
         if grid_progress is None:
             total_steps = len(evaluation_plan)
             progress_bar = tqdm(total=total_steps, desc=f"{data_source_label} Data", file=sys.stdout, disable=not interactive_terminal_attached(sys.stdout))  # Render local evaluation progress interactively only on an attached terminal.
@@ -14986,9 +15031,25 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
         augmentation_file_paths = [path for path in augmented_files_list if path is not None]  # Filter missing augmented-file placeholders before deferred loading
         augmentation_ratios = config.get("stacking", {}).get("augmentation_ratios", [0.25, 0.50, 0.75, 1.00]) if augmentation_file_paths else []  # Generate ratio modes only when augmentation files exist
         feature_mode_names = list_grid_feature_modes(ga_selected_features, pca_n_components, rfe_selected_features, extra_trees_selected_features, feature_names, config=config)  # Resolve actual feature modes in evaluation order
-        evaluation_plan = build_evaluation_plan(hp_runs, [None] + list(augmentation_ratios), feature_mode_names, methods_cfg.get("stacking", True))  # Build the exact default-first, original-first full-grid order
+        canonical_evaluation_plan = build_evaluation_plan(hp_runs, [None] + list(augmentation_ratios), feature_mode_names, methods_cfg.get("stacking", True))  # Build the exact default-first, original-first full-grid order before runtime filtering.
+        skip_rules = tuple(config.get("stacking", {}).get("compiled_skip_combinations", ()))  # Read compiled skip rules for this generated plan.
+        skip_source = config.get("stacking", {}).get("skip_combinations_source", "Default")  # Read resolved skip-rule source.
+        evaluation_plan, skip_summary = apply_skip_combination_rules(canonical_evaluation_plan, skip_rules, skip_source, get_current_experiment_run(config))  # Apply configured runtime skip rules before cache partitioning.
+        feature_mode_names = list(dict.fromkeys(item[0] for item in evaluation_plan))  # Keep only feature sets with eligible work.
+        for skipped_record in skip_summary.get("skipped_combinations", []):  # Log each unique skipped combination once.
+            print(skipped_record["line"])  # Emit skipped-combination details after rule evaluation.
+        for match_line in format_skip_rule_match_lines(skip_summary):  # Log per-rule aggregate match counts.
+            print(match_line)  # Emit deterministic per-rule count line.
+        for rule_index, count in enumerate(skip_summary.get("rule_match_counts", []), start=1):  # Warn on valid rules with no generated-plan matches.
+            if count == 0:  # Report no-match rules without aborting.
+                print(f"{BackgroundColors.YELLOW}[WARNING] Skip rule matched no generated combinations: {skip_rules[rule_index - 1].canonical}{Style.RESET_ALL}")  # Emit no-match warning.
+        print(format_skip_summary_line(skip_summary))  # Log pre-cache aggregate skip summary.
+        if not evaluation_plan:  # Exit successfully when every generated combination was intentionally skipped.
+            skip_rule_count = len(config.get("stacking", {}).get("compiled_skip_combinations", ()))  # Count resolved skip rules for Telegram.
+            send_telegram_message(TELEGRAM_BOT, [f"[COMBINED_FILES] All combinations skipped | Rules={skip_rule_count} | Skipped={skip_summary['skipped']} | Eligible=0"])  # Send concise all-skipped summary.
+            return  # Avoid cache recovery, matrices, workers, and result writes.
         if persistent_feature_set_processes_enabled(feature_mode_names, config=config):  # Route the complete cache-first grid through persistent OS processes when explicitly enabled
-            persistent_results, persistent_comparisons = run_persistent_feature_set_grid(combined_files_df_holder.pop(), combined_dataset_reference, original_files_list, attack_types_list, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, hp_runs, augmentation_file_paths, list(augmentation_ratios), evaluation_plan, "combined_files", "Original Combined Files", config, extra_trees_selected_features=extra_trees_selected_features)  # Execute one generic Full, GA, PCA, RFE, and Extra Trees worker path without matrix pickling
+            persistent_results, persistent_comparisons = run_persistent_feature_set_grid(combined_files_df_holder.pop(), combined_dataset_reference, original_files_list, attack_types_list, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, hp_runs, augmentation_file_paths, list(augmentation_ratios), evaluation_plan, "combined_files", "Original Combined Files", config, extra_trees_selected_features=extra_trees_selected_features, plan_global_ids=skip_summary["global_ids"], canonical_total=skip_summary["canonical_total"], skip_summary=skip_summary)  # Execute one generic Full, GA, PCA, RFE, and Extra Trees worker path without matrix pickling
             feature_analysis_dir = save_combined_files_results_to_csv(combined_dataset_reference, persistent_results, config=config)  # Save every globally ordered result only after complete child success
             if persistent_comparisons:  # Preserve the existing combined augmentation comparison artifact
                 save_combined_files_augmentation_comparison(None, None, feature_analysis_dir, config=config, comparison_results=persistent_comparisons)  # Save unchanged comparison metrics for both HP modes
@@ -15012,11 +15073,12 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
         fully_cached_ratios = {ratio for ratio in augmentation_ratios if all(build_resume_cache_key("combined_files", f"Augmented@{int(ratio * 100)}%_CombinedFiles", "original_training_augmented_testing", ratio, attack_types_list, feature_set, classifier, hyperparameters_enabled) in orchestration_cache for feature_set, hyperparameters_enabled, planned_ratio, classifier in evaluation_plan if planned_ratio == ratio)}  # Identify ratio groups requiring no augmented contents.
         feature_metadata_by_name = build_feature_process_metadata(feature_names, ga_selected_features, pca_n_components, rfe_selected_features, extra_trees_selected_features)  # Build small feature descriptors for cache-aware plan reporting
         if all(name in feature_metadata_by_name for name in feature_mode_names):  # Use cache-aware grouping only for feature modes with compact descriptors.
-            tasks = build_feature_process_plan(evaluation_plan, feature_metadata_by_name, original_sample_count, combined_dataset_reference, "combined_files", get_current_experiment_run(config))  # Reuse authoritative global IDs and expected original-data shapes for plan reporting
+            tasks = build_feature_process_plan(evaluation_plan, feature_metadata_by_name, original_sample_count, combined_dataset_reference, "combined_files", get_current_experiment_run(config), skip_summary["global_ids"], skip_summary["canonical_total"])  # Reuse authoritative global IDs and expected original-data shapes for plan reporting
             cached_results, pending_by_feature = partition_evaluation_plan_by_cache(tasks, orchestration_cache, feature_mode_names, attack_types_list)  # Reuse existing cache matching before plan reporting
-            print_dataset_evaluation_header("Original Combined Files", evaluation_plan, "combined_files", attack_types_list, cached_results=cached_results, pending_by_feature=pending_by_feature)  # Print cache-aware recovered and pending plan blocks
+            print(format_skip_summary_line(skip_summary, len(cached_results), sum(len(queue_tasks) for queue_tasks in pending_by_feature.values())))  # Log cache-aware skip and plan totals.
+            print_dataset_evaluation_header("Original Combined Files", evaluation_plan, "combined_files", attack_types_list, cached_results=cached_results, pending_by_feature=pending_by_feature, skip_summary=skip_summary)  # Print cache-aware recovered and pending plan blocks
         else:
-            print_dataset_evaluation_header("Original Combined Files", evaluation_plan, "combined_files", attack_types_list)  # Preserve plan reporting for feature modes without compact descriptors.
+            print_dataset_evaluation_header("Original Combined Files", evaluation_plan, "combined_files", attack_types_list, skip_summary=skip_summary)  # Preserve skip-aware plan reporting without compact descriptors.
         grid_progress["plan_printed"] = True  # Prevent nested evaluation calls from reprinting the full grid plan
 
         try:  # Ensure the shared progress bar is closed after the complete grid
@@ -15026,6 +15088,7 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
             df_sampled = None  # Retain only current ratio sample until its final canonical group completes.
             for feature_mode_name, hyperparameters_enabled, augmentation_ratio in dict.fromkeys((item[0], item[1], item[2]) for item in evaluation_plan):  # Execute feature, hyperparameter, and ratio groups in canonical plan order.
                 _, base_models, hp_params_map = next(run for run in hp_runs if run[0] == hyperparameters_enabled)  # Resolve models for current canonical slice.
+                group_models, _, planned_classifier_names = filter_models_for_plan_group(base_models, evaluation_plan, feature_mode_name, hyperparameters_enabled, augmentation_ratio)  # Restrict current group to eligible classifiers.
                 hp_label = "Optimized Hyperparameters" if hyperparameters_enabled else "Default Hyperparameters"  # Build active HP label
                 send_telegram_message(TELEGRAM_BOT, [f"[COMBINED_FILES] Starting {hp_label} grid | Dataset: {dataset_name}"])  # Announce active HP mode
                 if augmentation_ratio is not None:  # Defer augmented processing until both original hyperparameter slices finish.
@@ -15062,7 +15125,7 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
                         del df_sampled  # Release current ratio sample.
                         gc.collect()  # Reclaim skipped ratio data.
                         continue  # Advance to next canonical slice.
-                    results_ratio = evaluate_on_dataset(combined_dataset_reference, ratio_original_df, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, base_models, data_source_label=f"Augmented@{int(augmentation_ratio * 100)}%_CombinedFiles", hyperparams_map=hp_params_map, experiment_id=generate_experiment_id(combined_dataset_reference, "combined_files_original_training_augmented_testing", augmentation_ratio), experiment_mode="original_training_augmented_testing", augmentation_ratio=augmentation_ratio, execution_mode_str="combined_files", attack_types_combined=attack_types_list, df_augmented_for_testing=df_sampled, config=config, hyperparameters_enabled=hyperparameters_enabled, grid_progress=grid_progress, source_files=original_files_list, feature_mode_name=feature_mode_name, extra_trees_selected_features=extra_trees_selected_features)  # Evaluate current canonical feature group while reusing ratio sample.
+                    results_ratio = evaluate_on_dataset(combined_dataset_reference, ratio_original_df, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, group_models, data_source_label=f"Augmented@{int(augmentation_ratio * 100)}%_CombinedFiles", hyperparams_map=hp_params_map, experiment_id=generate_experiment_id(combined_dataset_reference, "combined_files_original_training_augmented_testing", augmentation_ratio), experiment_mode="original_training_augmented_testing", augmentation_ratio=augmentation_ratio, execution_mode_str="combined_files", attack_types_combined=attack_types_list, df_augmented_for_testing=df_sampled, config=config, hyperparameters_enabled=hyperparameters_enabled, grid_progress=grid_progress, source_files=original_files_list, feature_mode_name=feature_mode_name, extra_trees_selected_features=extra_trees_selected_features, planned_classifier_names=planned_classifier_names)  # Evaluate current canonical feature group while reusing ratio sample.
                     ratio_results_list = list(results_ratio.values())  # Convert current ratio results for annotation and export.
                     annotate_results_with_combination_flags(ratio_results_list, methods_cfg.get("feature_selection", True), hyperparameters_enabled, True)  # Mark active grid dimensions.
                     all_grid_results.extend(ratio_results_list)  # Preserve canonical augmented result order.
@@ -15081,13 +15144,14 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
                 gc.collect()  # Reclaim released direct dataframe references before fitting starts.
                 results_original = evaluate_on_dataset(
                     combined_dataset_reference, original_df_for_run_holder.pop(), feature_names, ga_selected_features, pca_n_components,  # Use directory identity for original combined evaluation.
-                    rfe_selected_features, base_models, data_source_label="Original Combined Files", hyperparams_map=hp_params_map,
+                    rfe_selected_features, group_models, data_source_label="Original Combined Files", hyperparams_map=hp_params_map,
                     experiment_id=generate_experiment_id(combined_dataset_reference, "combined_files_original_only"), experiment_mode="original_only", augmentation_ratio=None,  # Build original experiment identity from combined directory.
                     execution_mode_str="combined_files", attack_types_combined=attack_types_list, config=config,
                     hyperparameters_enabled=hyperparameters_enabled, grid_progress=grid_progress,
                     source_files=original_files_list,  # Preserve the ordered original CSV provenance used to build this combined dataset.
                     feature_mode_name=feature_mode_name,  # Evaluate only current canonical original feature group.
                     extra_trees_selected_features=extra_trees_selected_features,  # Preserve Extra Trees feature order for this combined slice.
+                    planned_classifier_names=planned_classifier_names,  # Evaluate only eligible classifiers in this group.
                 )  # Evaluate the no-augmentation feature/classifier slice
                 del original_df_for_run_holder  # Release the empty HP slice transfer holder after evaluation returns.
                 gc.collect()  # Reclaim any released original-only dataframe references before augmentation handling.
@@ -15432,7 +15496,7 @@ def build_feature_process_metadata(feature_names: List[Any], ga_selected_feature
     }  # Complete the supported descriptor mapping
 
 
-def build_feature_process_plan(evaluation_plan: List[Tuple[str, bool, Optional[float], str]], feature_metadata: dict, original_sample_count: int, file: str, execution_mode_str: str, experiment_run: int = 1) -> List[dict]:  # Enrich the authoritative plan with stable global and feature-local identities
+def build_feature_process_plan(evaluation_plan: List[Tuple[str, bool, Optional[float], str]], feature_metadata: dict, original_sample_count: int, file: str, execution_mode_str: str, experiment_run: int = 1, plan_global_ids: Optional[dict] = None, canonical_total: Optional[int] = None) -> List[dict]:  # Enrich the authoritative plan with stable global and feature-local identities
     """
     Build small persistent-process task descriptors from the authoritative plan.
 
@@ -15442,6 +15506,8 @@ def build_feature_process_plan(evaluation_plan: List[Tuple[str, bool, Optional[f
     :param file: Dataset file or directory identity used for experiment IDs.
     :param execution_mode_str: Separate-files or combined-files execution mode.
     :param experiment_run: One-based repeated experiment run index.
+    :param plan_global_ids: Optional mapping from eligible plan tuple to original canonical global ID.
+    :param canonical_total: Optional original canonical plan total before skip filtering.
     :return: Ordered small task descriptors preserving every original combination identity.
     """
 
@@ -15451,8 +15517,11 @@ def build_feature_process_plan(evaluation_plan: List[Tuple[str, bool, Optional[f
     run_index = validate_experiment_runs(experiment_run, "stacking.experiment_run")  # Resolve run metadata for every task descriptor.
     expected_original_test_count = int(math.ceil(original_sample_count * 0.2))  # Mirror the fixed train-test split test cardinality
     expected_train_count = int(original_sample_count - expected_original_test_count)  # Mirror the fixed train-test split training cardinality
+    stable_global_ids = plan_global_ids or {combination: index for index, combination in enumerate(evaluation_plan, start=1)}  # Resolve stable global IDs for eligible combinations.
+    stable_canonical_total = int(canonical_total if canonical_total is not None else len(evaluation_plan))  # Resolve original canonical denominator for identity display.
     tasks = []  # Accumulate enriched descriptors in authoritative global order
     for global_index, (feature_set_name, hyperparameters_enabled, augmentation_ratio, classifier_name) in enumerate(evaluation_plan, start=1):  # Preserve every original global combination ID
+        stable_global_index = int(stable_global_ids.get((feature_set_name, hyperparameters_enabled, augmentation_ratio, classifier_name), global_index))  # Preserve original ID when skip filtering supplied it.
         feature_positions[feature_set_name] += 1  # Advance this feature set's local ordering
         experiment_mode = "original_only" if augmentation_ratio is None else "original_training_augmented_testing"  # Resolve unchanged training and testing semantics
         if augmentation_ratio is None:  # Build the established original-data label and sample count
@@ -15467,7 +15536,7 @@ def build_feature_process_plan(evaluation_plan: List[Tuple[str, bool, Optional[f
             identity_mode = "combined_files_original_only" if execution_mode_str == "combined_files" and augmentation_ratio is None else ("combined_files_original_training_augmented_testing" if execution_mode_str == "combined_files" else experiment_mode)  # Preserve the established experiment-ID mode text
             experiment_ids[experiment_key] = generate_experiment_id(file, identity_mode, augmentation_ratio)  # Generate the existing traceability identity
         descriptor = feature_metadata[feature_set_name]  # Resolve small feature metadata for this combination
-        tasks.append({"feature_set": feature_set_name, "worker_key": resolve_feature_set_worker_key(feature_set_name), "global_id": global_index, "total_combinations": len(evaluation_plan), "feature_local_position": feature_positions[feature_set_name], "feature_local_total": feature_totals[feature_set_name], "hyperparameters_enabled": bool(hyperparameters_enabled), "augmentation_ratio": augmentation_ratio, "classifier_name": classifier_name, "experiment_mode": experiment_mode, "data_source_label": data_source_label, "experiment_id": experiment_ids[experiment_key], "experiment_run": run_index, "execution_mode": execution_mode_str, "expected_n_features": descriptor["feature_count"], "expected_feature_names": list(descriptor["feature_names"]), "expected_n_samples_train": expected_train_count, "expected_n_samples_test": expected_test_count, "requires_model_artifact": False})  # Store one matrix-free task descriptor
+        tasks.append({"feature_set": feature_set_name, "worker_key": resolve_feature_set_worker_key(feature_set_name), "global_id": stable_global_index, "canonical_total": stable_canonical_total, "total_combinations": len(evaluation_plan), "feature_local_position": feature_positions[feature_set_name], "feature_local_total": feature_totals[feature_set_name], "hyperparameters_enabled": bool(hyperparameters_enabled), "augmentation_ratio": augmentation_ratio, "classifier_name": classifier_name, "experiment_mode": experiment_mode, "data_source_label": data_source_label, "experiment_id": experiment_ids[experiment_key], "experiment_run": run_index, "execution_mode": execution_mode_str, "expected_n_features": descriptor["feature_count"], "expected_feature_names": list(descriptor["feature_names"]), "expected_n_samples_train": expected_train_count, "expected_n_samples_test": expected_test_count, "requires_model_artifact": False})  # Store one matrix-free task descriptor
     return tasks  # Return the complete authoritative task sequence
 
 
@@ -16209,7 +16278,8 @@ def format_feature_process_progress(task: dict, status_state: dict, pid: Optiona
     feature_status = status_snapshot["features"][task["feature_set"]]  # Resolve current feature-local execution status
     feature_label = task["worker_key"].upper()  # Use concise Full, GA, PCA, or RFE identity
     queue_position = f"{task['pending_queue_position']}/{task['pending_queue_total']}" if task.get("pending_queue_position") is not None else "cached"  # Distinguish pending queue order from pre-start cache recovery
-    return f"[{feature_label} {feature_status['completed']}/{feature_status['total']} | Feature Cached {feature_status['cached']} | Feature Pending {feature_status['pending']} | Feature Running {feature_status['running']} | Feature Computed {feature_status['computed']} | Feature Failed {feature_status['failed']} | Local ID {task['feature_local_position']}/{task['feature_local_total']} | Queue {queue_position} | Global ID {task['global_id']}/{global_status['total']} | Completed {global_status['completed']}/{global_status['total']} | Cached {global_status['cached']} | Pending {global_status['pending']} | Running {global_status['running']} | Computed {global_status['computed']} | Failed {global_status['failed']} | PID {process_id}]"  # Return complete dynamic status without fixed denominators
+    canonical_total = int(task.get("canonical_total", global_status["total"]))  # Resolve original canonical denominator for stable identity display.
+    return f"[{feature_label} {feature_status['completed']}/{feature_status['total']} | Feature Cached {feature_status['cached']} | Feature Pending {feature_status['pending']} | Feature Running {feature_status['running']} | Feature Computed {feature_status['computed']} | Feature Failed {feature_status['failed']} | Local ID {task['feature_local_position']}/{task['feature_local_total']} | Queue {queue_position} | Global ID {task['global_id']}/{canonical_total} | Completed {global_status['completed']}/{global_status['total']} | Cached {global_status['cached']} | Pending {global_status['pending']} | Running {global_status['running']} | Computed {global_status['computed']} | Failed {global_status['failed']} | PID {process_id}]"  # Return complete dynamic status without fixed denominators
 
 
 def initialize_feature_process_logger(config: dict) -> None:  # Initialize one spawned worker logger in append-only process-safe mode
@@ -16968,7 +17038,7 @@ def collect_feature_process_results(tasks: List[dict], process_payload: dict) ->
     return ordered_results, comparison_results  # Return exact global results and existing comparison output
 
 
-def run_persistent_feature_set_grid(original_df: pd.DataFrame, file: str, source_files: List[str], attack_types_combined: Any, feature_names: List[Any], ga_selected_features: Any, pca_n_components: Any, rfe_selected_features: Any, hp_runs: List[Tuple[bool, dict, dict]], augmentation_file_paths: List[str], augmentation_ratios: List[float], evaluation_plan: List[Tuple[str, bool, Optional[float], str]], execution_mode_str: str, data_source_label: str, config: dict, extra_trees_selected_features: Any = None) -> Tuple[List[dict], List[dict]]:  # Coordinate one cache-first persistent feature-set grid
+def run_persistent_feature_set_grid(original_df: pd.DataFrame, file: str, source_files: List[str], attack_types_combined: Any, feature_names: List[Any], ga_selected_features: Any, pca_n_components: Any, rfe_selected_features: Any, hp_runs: List[Tuple[bool, dict, dict]], augmentation_file_paths: List[str], augmentation_ratios: List[float], evaluation_plan: List[Tuple[str, bool, Optional[float], str]], execution_mode_str: str, data_source_label: str, config: dict, extra_trees_selected_features: Any = None, plan_global_ids: Optional[dict] = None, canonical_total: Optional[int] = None, skip_summary: Optional[dict] = None) -> Tuple[List[dict], List[dict]]:  # Coordinate one cache-first persistent feature-set grid
     """
     Coordinate one complete cache-first persistent feature-set grid.
 
@@ -16988,6 +17058,9 @@ def run_persistent_feature_set_grid(original_df: pd.DataFrame, file: str, source
     :param execution_mode_str: Separate-files or combined-files mode.
     :param data_source_label: Baseline data-source label used by the plan header.
     :param config: Runtime configuration dictionary.
+    :param plan_global_ids: Optional mapping from eligible plan tuple to original canonical global ID.
+    :param canonical_total: Optional original canonical plan total before skip filtering.
+    :param skip_summary: Optional skip-rule summary for this eligible plan.
     :return: Tuple of globally ordered results and comparison rows.
     """
 
@@ -17002,7 +17075,7 @@ def run_persistent_feature_set_grid(original_df: pd.DataFrame, file: str, source
     original_sample_count = int(len(original_df))  # Record exact cleaned original population before releasing the DataFrame
     target_column = str(original_df.columns[-1])  # Preserve the established positional target identity
     label_classes = normalize_metadata_for_json(np.unique(original_df.iloc[:, -1].to_numpy(copy=False)).tolist())  # Preserve exact LabelEncoder class order as small metadata
-    tasks = build_feature_process_plan(evaluation_plan, feature_metadata_by_name, original_sample_count, file, execution_mode_str, get_current_experiment_run(config))  # Build dynamic task identities without opening augmentation rows
+    tasks = build_feature_process_plan(evaluation_plan, feature_metadata_by_name, original_sample_count, file, execution_mode_str, get_current_experiment_run(config), plan_global_ids, canonical_total)  # Build dynamic task identities without opening augmentation rows
     cache_dict = load_cache_results(file, config=config)  # Recover primary or backup cache before worker startup
     optimized_params = {}  # Accumulate coordinator-validated optimized parameter metadata
     coordinator_model_maps = {}  # Retain small coordinator prototypes only for preflight artifact validation
@@ -17012,7 +17085,9 @@ def run_persistent_feature_set_grid(original_df: pd.DataFrame, file: str, source
             optimized_params.update(params_map)  # Preserve exact applied optimized parameters by classifier
     process_payload = {"file": file, "source_files": [str(path) for path in source_files], "attack_types_combined": attack_types_combined, "input_feature_names": [str(name) for name in feature_names], "target_column": target_column, "label_classes": label_classes, "execution_mode": execution_mode_str, "cache_ref_file": file, "config": config, "optimized_params": optimized_params, "augmentation_file_paths": [str(path) for path in augmentation_file_paths], "original_sample_count": original_sample_count, "expected_train_count": int(original_sample_count - math.ceil(original_sample_count * 0.2)), "feature_mode_names": feature_mode_names, "feature_metadata_by_name": feature_metadata_by_name}  # Build one matrix-free shared worker payload
     cached_results, pending_by_feature = partition_feature_process_tasks(tasks, cache_dict, process_payload, coordinator_model_maps)  # Mark every combination cached or pending before any child starts
-    print_dataset_evaluation_header(data_source_label, evaluation_plan, execution_mode_str, attack_types_combined, cached_results=cached_results, pending_by_feature=pending_by_feature)  # Print cache-classified recovered and pending plan blocks before worker startup
+    runtime_skip_summary = skip_summary or {"canonical_total": int(canonical_total if canonical_total is not None else len(evaluation_plan)), "skipped": max(0, int(canonical_total if canonical_total is not None else len(evaluation_plan)) - len(tasks)), "eligible": len(tasks), "global_ids": plan_global_ids or {}, "rule_match_counts": [], "skipped_combinations": [], "source": "Default", "rules": ()}  # Preserve explicit skip metadata for persistent reporting.
+    print(format_skip_summary_line(runtime_skip_summary, len(cached_results), sum(len(queue_tasks) for queue_tasks in pending_by_feature.values())))  # Log cache-aware skip and plan totals.
+    print_dataset_evaluation_header(data_source_label, evaluation_plan, execution_mode_str, attack_types_combined, cached_results=cached_results, pending_by_feature=pending_by_feature, skip_summary=runtime_skip_summary)  # Print cache-classified recovered and pending plan blocks before worker startup
     pending_original_exists = any(task["augmentation_ratio"] is None for queue_tasks in pending_by_feature.values() for task in queue_tasks)  # Determine whether any child requires original fitting data
     pending_augmented_exists = any(task["augmentation_ratio"] is not None for queue_tasks in pending_by_feature.values() for task in queue_tasks)  # Determine whether any child requires lazy shared augmentation data
     pca_cache_context = {"execution_mode": execution_mode_str, "data_source": "Original", "experiment_mode": "original_only", "augmentation_ratio": None, "target_column": target_column, "original_sample_count": original_sample_count, "augmented_sample_count": 0, "test_size": 0.2, "random_state": config.get("evaluation", {}).get("random_state", 42), "experiment_run": get_current_experiment_run(config), "stratified": True, "augmentation_merged_into_training_after_split": False, "attack_types": normalize_metadata_for_json(attack_types_combined)}  # Preserve the run-specific PCA split and source identity
@@ -17419,7 +17494,25 @@ def orchestrate_all_combinations(input_path, dataset_name=None, config=None):
 
             augmentation_ratios = config.get("stacking", {}).get("augmentation_ratios", [0.25, 0.50, 0.75, 1.00]) if augmentation_requested and artifacts.get("augmented_file") else []  # Plan ratio modes from discovered paths without loading augmented contents.
             feature_mode_names = list_grid_feature_modes(ga_sel, pca_n, rfe_sel, extra_trees_sel, feature_names, config=config)  # Resolve actual feature modes in evaluation order
-            evaluation_plan = build_evaluation_plan(hp_runs, [None] + list(augmentation_ratios), feature_mode_names, stacking_enabled)  # Build the exact default-first, original-first full-grid order
+            canonical_evaluation_plan = build_evaluation_plan(hp_runs, [None] + list(augmentation_ratios), feature_mode_names, stacking_enabled)  # Build the exact default-first, original-first full-grid order before runtime filtering.
+            skip_rules = tuple(config.get("stacking", {}).get("compiled_skip_combinations", ()))  # Read compiled skip rules for this generated plan.
+            skip_source = config.get("stacking", {}).get("skip_combinations_source", "Default")  # Read resolved skip-rule source.
+            evaluation_plan, skip_summary = apply_skip_combination_rules(canonical_evaluation_plan, skip_rules, skip_source, get_current_experiment_run(config))  # Apply configured runtime skip rules before cache partitioning.
+            feature_mode_names = list(dict.fromkeys(item[0] for item in evaluation_plan))  # Keep only feature sets with eligible work.
+            for skipped_record in skip_summary.get("skipped_combinations", []):  # Log each unique skipped combination once.
+                print(skipped_record["line"])  # Emit skipped-combination details after rule evaluation.
+            for match_line in format_skip_rule_match_lines(skip_summary):  # Log per-rule aggregate match counts.
+                print(match_line)  # Emit deterministic per-rule count line.
+            for rule_index, count in enumerate(skip_summary.get("rule_match_counts", []), start=1):  # Warn on valid rules with no generated-plan matches.
+                if count == 0:  # Report no-match rules without aborting.
+                    print(f"{BackgroundColors.YELLOW}[WARNING] Skip rule matched no generated combinations: {skip_rules[rule_index - 1].canonical}{Style.RESET_ALL}")  # Emit no-match warning.
+            print(format_skip_summary_line(skip_summary))  # Log pre-cache aggregate skip summary.
+            if not evaluation_plan:  # Exit this file successfully when every generated combination was intentionally skipped.
+                skip_rule_count = len(config.get("stacking", {}).get("compiled_skip_combinations", ()))  # Count resolved skip rules for Telegram.
+                send_telegram_message(TELEGRAM_BOT, [f"[SEPARATE_FILES] All combinations skipped | Rules={skip_rule_count} | Skipped={skip_summary['skipped']} | Eligible=0"])  # Send concise all-skipped summary.
+                del df_original  # Release already-loaded dataset before continuing to next file.
+                gc.collect()  # Reclaim dataset memory after intentional all-skipped exit.
+                continue  # Move to next file without cache recovery, matrices, workers, or result writes.
             total_steps = len(evaluation_plan)  # Use the ordered runtime plan as the exact full-grid denominator
             grid_progress = create_grid_progress(total_steps, f"{os.path.basename(file)} Grid")  # Share one counter across every HP and augmentation mode
             grid_progress["evaluation_plan"] = evaluation_plan  # Reuse the authoritative plan in every evaluation section sharing this progress bar
@@ -17429,11 +17522,12 @@ def orchestrate_all_combinations(input_path, dataset_name=None, config=None):
             fully_cached_ratios = {ratio for ratio in augmentation_ratios if all(build_resume_cache_key("separate_files", f"Augmented@{int(ratio * 100)}%", "original_training_augmented_testing", ratio, None, feature_set, classifier, hyperparameters_enabled) in orchestration_cache for feature_set, hyperparameters_enabled, planned_ratio, classifier in evaluation_plan if planned_ratio == ratio)}  # Identify ratio groups requiring no augmented contents.
             feature_metadata_by_name = build_feature_process_metadata(feature_names, ga_sel, pca_n, rfe_sel, extra_trees_sel)  # Build small feature descriptors for cache-aware plan reporting
             if all(name in feature_metadata_by_name for name in feature_mode_names):  # Use cache-aware grouping only for feature modes with compact descriptors.
-                tasks = build_feature_process_plan(evaluation_plan, feature_metadata_by_name, len(df_original), file, "separate_files", get_current_experiment_run(config))  # Reuse authoritative global IDs and expected original-data shapes for plan reporting
+                tasks = build_feature_process_plan(evaluation_plan, feature_metadata_by_name, len(df_original), file, "separate_files", get_current_experiment_run(config), skip_summary["global_ids"], skip_summary["canonical_total"])  # Reuse authoritative global IDs and expected original-data shapes for plan reporting
                 cached_results, pending_by_feature = partition_evaluation_plan_by_cache(tasks, orchestration_cache, feature_mode_names, None)  # Reuse existing cache matching before plan reporting
-                print_dataset_evaluation_header("Original", evaluation_plan, "separate_files", None, cached_results=cached_results, pending_by_feature=pending_by_feature)  # Print cache-aware recovered and pending plan blocks
+                print(format_skip_summary_line(skip_summary, len(cached_results), sum(len(queue_tasks) for queue_tasks in pending_by_feature.values())))  # Log cache-aware skip and plan totals.
+                print_dataset_evaluation_header("Original", evaluation_plan, "separate_files", None, cached_results=cached_results, pending_by_feature=pending_by_feature, skip_summary=skip_summary)  # Print cache-aware recovered and pending plan blocks
             else:
-                print_dataset_evaluation_header("Original", evaluation_plan, "separate_files", None)  # Preserve plan reporting for feature modes without compact descriptors.
+                print_dataset_evaluation_header("Original", evaluation_plan, "separate_files", None, skip_summary=skip_summary)  # Preserve skip-aware plan reporting without compact descriptors.
             grid_progress["plan_printed"] = True  # Prevent nested evaluation calls from reprinting the full grid plan
 
             print(f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}Orchestrating full grid: file=[{idx}/{total_files}] {file}, combinations={total_steps}{Style.RESET_ALL}")  # Log exact generated grid size
@@ -17444,10 +17538,11 @@ def orchestrate_all_combinations(input_path, dataset_name=None, config=None):
             df_sampled = None  # Retain only current ratio sample until its final canonical group completes.
             for feature_mode_name, hyperparameters_enabled, augmentation_ratio in dict.fromkeys((item[0], item[1], item[2]) for item in evaluation_plan):  # Execute canonical feature, hyperparameter, and ratio groups.
                 _, base_models, hp_params_map = next(run for run in hp_runs if run[0] == hyperparameters_enabled)  # Resolve models belonging to current canonical slice.
+                group_models, _, planned_classifier_names = filter_models_for_plan_group(base_models, evaluation_plan, feature_mode_name, hyperparameters_enabled, augmentation_ratio)  # Restrict current group to eligible classifiers.
                 hp_label = "Optimized Hyperparameters" if hyperparameters_enabled else "Default Hyperparameters"  # Build explicit active HP label
                 send_telegram_message(TELEGRAM_BOT, [f"[SEPARATE_FILES] Starting {hp_label} grid | file: {os.path.basename(file)}"])  # Announce active HP grid
                 if augmentation_ratio is None:  # Execute original-data slice without touching augmented contents.
-                    results_original = evaluate_on_dataset(file, df_original, feature_names, ga_sel, pca_n, rfe_sel, base_models, data_source_label="Original", hyperparams_map=hp_params_map, experiment_id=generate_experiment_id(file, "original_only"), experiment_mode="original_only", augmentation_ratio=None, execution_mode_str="separate_files", attack_types_combined=None, config=config, hyperparameters_enabled=hyperparameters_enabled, grid_progress=grid_progress, feature_mode_name=feature_mode_name, extra_trees_selected_features=extra_trees_sel)  # Evaluate current canonical original feature group.
+                    results_original = evaluate_on_dataset(file, df_original, feature_names, ga_sel, pca_n, rfe_sel, group_models, data_source_label="Original", hyperparams_map=hp_params_map, experiment_id=generate_experiment_id(file, "original_only"), experiment_mode="original_only", augmentation_ratio=None, execution_mode_str="separate_files", attack_types_combined=None, config=config, hyperparameters_enabled=hyperparameters_enabled, grid_progress=grid_progress, feature_mode_name=feature_mode_name, extra_trees_selected_features=extra_trees_sel, planned_classifier_names=planned_classifier_names)  # Evaluate current canonical original feature group.
                     original_list = list(results_original.values())  # Convert baseline results for annotation and export.
                     annotate_results_with_combination_flags(original_list, fs_toggle, hyperparameters_enabled, False)  # Mark baseline grid dimensions.
                     all_grid_results.extend(original_list)  # Preserve canonical baseline row order.
@@ -17483,7 +17578,7 @@ def orchestrate_all_combinations(input_path, dataset_name=None, config=None):
                     active_ratio = augmentation_ratio  # Record reusable current ratio identity.
                 if df_sampled is None or df_sampled.empty:  # Skip ratios producing no augmented test rows.
                     continue  # Advance to next canonical slice.
-                results_ratio = evaluate_on_dataset(file, df_original, feature_names, ga_sel, pca_n, rfe_sel, base_models, data_source_label=f"Augmented@{int(augmentation_ratio * 100)}%", hyperparams_map=hp_params_map, experiment_id=generate_experiment_id(file, "original_training_augmented_testing", augmentation_ratio), experiment_mode="original_training_augmented_testing", augmentation_ratio=augmentation_ratio, execution_mode_str="separate_files", attack_types_combined=None, df_augmented_for_testing=df_sampled, config=config, hyperparameters_enabled=hyperparameters_enabled, grid_progress=grid_progress, feature_mode_name=feature_mode_name, extra_trees_selected_features=extra_trees_sel)  # Evaluate current canonical feature group while reusing ratio sample.
+                results_ratio = evaluate_on_dataset(file, df_original, feature_names, ga_sel, pca_n, rfe_sel, group_models, data_source_label=f"Augmented@{int(augmentation_ratio * 100)}%", hyperparams_map=hp_params_map, experiment_id=generate_experiment_id(file, "original_training_augmented_testing", augmentation_ratio), experiment_mode="original_training_augmented_testing", augmentation_ratio=augmentation_ratio, execution_mode_str="separate_files", attack_types_combined=None, df_augmented_for_testing=df_sampled, config=config, hyperparameters_enabled=hyperparameters_enabled, grid_progress=grid_progress, feature_mode_name=feature_mode_name, extra_trees_selected_features=extra_trees_sel, planned_classifier_names=planned_classifier_names)  # Evaluate current canonical feature group while reusing ratio sample.
                 ratio_list = list(results_ratio.values())  # Convert current ratio results for annotation and export.
                 annotate_results_with_combination_flags(ratio_list, fs_toggle, hyperparameters_enabled, True)  # Mark active grid dimensions.
                 all_grid_results.extend(ratio_list)  # Preserve canonical augmented row order.
@@ -18016,6 +18111,10 @@ def log_resolved_configuration(config: dict) -> None:
         print(f"{BackgroundColors.GREEN}[INFO] Estimator n_jobs: {BackgroundColors.CYAN}{config.get('evaluation', {}).get('n_jobs', 1)}{BackgroundColors.GREEN} | Feature extraction n_jobs: {BackgroundColors.CYAN}{config.get('evaluation', {}).get('feature_extraction_n_jobs', 1)}{Style.RESET_ALL}")  # Log independent estimator and feature-extraction parallelism
         training_progress_minutes = validate_training_progress_interval_minutes(config.get("evaluation", {}).get("training_progress_interval_minutes", DEFAULT_TRAINING_PROGRESS_INTERVAL_MINUTES))  # Resolve the validated minutes-based progress interval.
         print(f"{BackgroundColors.GREEN}[INFO] Training progress interval: {BackgroundColors.CYAN}{training_progress_minutes:g} minutes{Style.RESET_ALL}")  # Log the resolved recurring progress interval once.
+        skip_rules = tuple(config.get("stacking", {}).get("compiled_skip_combinations", ()))  # Read compiled skip rules for display.
+        skip_source = config.get("stacking", {}).get("skip_combinations_source", "Default")  # Read resolved skip-rule source.
+        for skip_line in format_skip_rules_for_info(skip_rules, skip_source):  # Emit resolved skip-rule startup INFO lines.
+            print(f"{BackgroundColors.GREEN}[INFO] {BackgroundColors.CYAN}{skip_line}{Style.RESET_ALL}")  # Log normalized skip-rule configuration.
 
         feature_sets_cfg = config.get("stacking", {}).get("feature_sets_config", {})  # Get resolved feature sets configuration
         full_features_flag = feature_sets_cfg.get("use_full", True)  # Resolve Full Features flag from feature sets config
@@ -18102,6 +18201,8 @@ def build_telegram_pipeline_summary(config: Optional[dict], dataset_path: Option
         augmentation_ratios = stacking_cfg.get("augmentation_ratios", [0.25, 0.50, 0.75, 1.00])
         experiment_runs = validate_experiment_runs(stacking_cfg.get("experiment_runs", 1))  # Resolve repeated runs for the consolidated startup notification
         feature_set_workers = validate_feature_set_workers(config.get("evaluation", {}).get("feature_set_workers", None))  # Resolve persistent process configuration for startup notification
+        skip_rules = tuple(stacking_cfg.get("compiled_skip_combinations", ()))  # Read compiled skip rules for startup notification.
+        skip_source = stacking_cfg.get("skip_combinations_source", "Default")  # Read resolved skip-rule source for startup notification.
 
         dataset_display = dataset_path if dataset_path else "config.yaml (default)"  # Resolve the effective dataset source for the consolidated notification
         resolved_mode = classification_mode or execution_cfg.get("execution_mode", "both")  # Resolve one authoritative execution mode label
@@ -18115,6 +18216,7 @@ def build_telegram_pipeline_summary(config: Optional[dict], dataset_path: Option
             f"Disabled classifiers: {', '.join(disabled_classifiers) if disabled_classifiers else 'None'}",  # Report classifiers excluded from the model factory
             f"Feature selection methods: {', '.join(feature_methods) if feature_methods else 'None'}",  # Report the configured feature-set strategies
             f"Feature-set workers: full={feature_set_workers['full']}, ga={feature_set_workers['ga']}, pca={feature_set_workers['pca']}, rfe={feature_set_workers['rfe']}, extra_trees={feature_set_workers['extra_trees']} | start method: {FEATURE_PROCESS_START_METHOD}",  # Report process isolation configuration
+            f"Skip combinations: {len(skip_rules)} rule(s) from {skip_source}" + (f" | {', '.join(rule.canonical for rule in skip_rules)}" if skip_rules else ""),  # Report skip-rule source and normalized rules.
             f"Test data augmentation: {'ON' if test_data_augmentation else 'OFF'}",  # Report the independent augmented-test toggle
         ]
 
