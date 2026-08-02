@@ -16557,7 +16557,6 @@ def run_feature_set_process_worker(process_payload: dict, status_queue: Any, sta
     augmented_capacity_gate: Any = process_payload.get("augmented_capacity_gate")  # Resolve the coordinator-owned augmented artifact admission gate
     acquired_capacity_gate: Any = None  # Track the exact phase gate owned for exception-safe release
     capacity_acquired = False  # Track admission ownership for exception-safe release
-    reserved_capacity_bytes = 0  # Track weighted capacity reserved by this worker
     try:  # Surface every child failure through both status queue and nonzero exit code
         configure_feature_process_parent_death(process_payload["coordinator_pid"])  # Prevent spawned work from surviving a killed detached coordinator
         initialize_feature_process_logger(process_payload["config"])  # Initialize append-only process-safe child logging after spawn
@@ -16576,16 +16575,13 @@ def run_feature_set_process_worker(process_payload: dict, status_queue: Any, sta
             phase_tasks = [task for task in task_queue if task.get("augmentation_ratio") == phase_ratio]  # Select only pending tasks belonging to current global phase.
             phase_capacity_gate = augmented_capacity_gate if phase_ratio is not None and augmented_capacity_gate is not None else capacity_gate  # Serialize augmented model loading while retaining matrix-derived original capacity
             if phase_tasks and phase_capacity_gate is not None:  # Gate matrix-heavy work separately for each phase to avoid barrier deadlock.
-                if isinstance(phase_capacity_gate, dict):  # Use weighted byte admission for original matrix phases
-                    reserved_capacity_bytes = acquire_feature_process_capacity(phase_capacity_gate, process_payload["feature_set"], process_payload["worker_index"], phase_ratio)  # Reserve this feature set's estimated bytes
-                else:  # Preserve the existing semaphore path for augmented persisted-model phases
-                    print(f"[RESOURCE CAPACITY] Feature Set={process_payload['feature_set']} | Worker Index={process_payload['worker_index']} | PID={os.getpid()} | State=Waiting | Ratio={phase_ratio}")  # Log phase-specific capacity wait.
-                    sys.stdout.flush()  # Flush wait evidence before blocking.
-                    phase_capacity_gate.acquire()  # Wait for coordinator-established phase admission.
-                    print(f"[RESOURCE CAPACITY] Feature Set={process_payload['feature_set']} | Worker Index={process_payload['worker_index']} | PID={os.getpid()} | State=Admitted | Ratio={phase_ratio}")  # Log admitted phase.
-                    sys.stdout.flush()  # Flush admission evidence before allocation.
+                print(f"[RESOURCE CAPACITY] Feature Set={process_payload['feature_set']} | Worker Index={process_payload['worker_index']} | PID={os.getpid()} | State=Waiting | Ratio={phase_ratio}")  # Log phase-specific capacity wait.
+                sys.stdout.flush()  # Flush wait evidence before blocking.
+                phase_capacity_gate.acquire()  # Wait for coordinator-established phase admission.
                 acquired_capacity_gate = phase_capacity_gate  # Preserve the exact acquired gate for failure cleanup
                 capacity_acquired = True  # Record current phase admission ownership.
+                print(f"[RESOURCE CAPACITY] Feature Set={process_payload['feature_set']} | Worker Index={process_payload['worker_index']} | PID={os.getpid()} | State=Admitted | Ratio={phase_ratio}")  # Log admitted phase.
+                sys.stdout.flush()  # Flush admission evidence before allocation.
             for task in phase_tasks:  # Process current feature set's cache-miss tasks for this phase sequentially.
                 active_task = task  # Record current task before lifecycle transition.
                 process_feature_process_task(task, process_payload, model_maps, resource_state, status_queue, status_state)  # Process one reserved combination through existing evaluation logic.
@@ -16604,11 +16600,7 @@ def run_feature_set_process_worker(process_payload: dict, status_queue: Any, sta
                 except (AttributeError, OSError):  # Preserve evaluation when allocator symbols are unavailable
                     pass  # Continue with garbage-collected phase resources
             if capacity_acquired:  # Release current phase admission before waiting for other workers.
-                if isinstance(acquired_capacity_gate, dict):  # Release weighted byte admission for original matrix phases
-                    release_feature_process_capacity(acquired_capacity_gate, reserved_capacity_bytes)  # Return this worker's reserved bytes
-                    reserved_capacity_bytes = 0  # Clear this worker's weighted reservation
-                else:  # Preserve the existing semaphore release for augmented persisted-model phases
-                    acquired_capacity_gate.release()  # Admit another configured worker into current phase.
+                acquired_capacity_gate.release()  # Admit another configured worker into current phase.
                 acquired_capacity_gate = None  # Clear released phase gate ownership
                 capacity_acquired = False  # Clear phase admission ownership.
             barrier_rank = phase_barrier.wait() if phase_barrier is not None else 0  # Wait until every feature worker releases current phase resources.
@@ -16636,11 +16628,7 @@ def run_feature_set_process_worker(process_payload: dict, status_queue: Any, sta
         cleanup_feature_process_original_resources(resource_state["original_resources"])  # Close any remaining original memmaps and owned feature files
         cleanup_feature_process_ratio_data(resource_state["ratio_data"])  # Release any remaining current-ratio augmented resources
         if capacity_acquired:  # Release only a capacity slot owned by this worker
-            if isinstance(acquired_capacity_gate, dict):  # Release weighted byte admission during exception cleanup
-                release_feature_process_capacity(acquired_capacity_gate, reserved_capacity_bytes)  # Return this worker's reserved bytes
-                reserved_capacity_bytes = 0  # Clear this worker's weighted reservation
-            else:  # Preserve the existing semaphore release during exception cleanup
-                acquired_capacity_gate.release()  # Admit the next configured feature worker after complete matrix cleanup
+            acquired_capacity_gate.release()  # Admit the next configured feature worker after complete matrix cleanup
             acquired_capacity_gate = None  # Clear released phase gate ownership
             capacity_acquired = False  # Clear local ownership before logger shutdown
         try:  # Flush and close only this child process's logger handle
@@ -16750,68 +16738,12 @@ def resolve_feature_process_worker_capacity(pending_by_feature: dict, process_pa
         augmented_matrix_bytes = maximum_ratio_rows * (input_feature_count + feature_count) * source_dtype.itemsize  # Reserve full scaling plus feature-specific transformation or selection
         estimated_bytes_by_feature[feature_name] = max(original_matrix_bytes, augmented_matrix_bytes)  # Retain this worker's largest pending matrix phase
 
-    largest_worker_bytes = max(estimated_bytes_by_feature.values(), default=0)  # Resolve the largest feature-local admission estimate
+    largest_worker_bytes = max(estimated_bytes_by_feature.values(), default=0)  # Resolve a conservative uniform admission weight
     pending_worker_count = len(pending_features)  # Count configured workers with uncached tasks
     pending_augmented_worker_count = sum(any(task.get("augmentation_ratio") is not None for task in pending_by_feature[feature_name]) for feature_name in pending_features)  # Count workers that must deserialize persisted models outside matrix-byte estimates
-    planned_remaining_bytes = safe_available_bytes  # Track the estimated byte budget during deterministic admission planning
-    admitted_worker_count = 0  # Count workers whose own estimate fits the memory budget
-    for estimated_bytes in sorted(estimated_bytes_by_feature.values(), reverse=True):  # Pack larger workers first for conservative weighted admission
-        reserved_worker_bytes = min(int(estimated_bytes), safe_available_bytes)  # Cap one oversized worker at the whole safe budget
-        if reserved_worker_bytes <= planned_remaining_bytes:  # Admit this worker when its own estimate fits the remaining budget
-            planned_remaining_bytes -= reserved_worker_bytes  # Reserve only this worker's estimated bytes
-            admitted_worker_count += 1  # Count the planned admission
-    if pending_worker_count and admitted_worker_count == 0:  # Preserve progress when every estimate exceeds the safe budget
-        admitted_worker_count = 1  # Admit one oversized worker at a time
+    admitted_worker_count = pending_worker_count if largest_worker_bytes == 0 else max(1, min(pending_worker_count, safe_available_bytes // largest_worker_bytes))  # Admit all metadata-only work or a capacity-bounded positive worker count
     augmented_admitted_worker_count = min(1, pending_augmented_worker_count)  # Serialize unbounded persisted-model deserialization and prediction memory while preserving original-data concurrency
     return {"pending_worker_count": pending_worker_count, "pending_augmented_worker_count": pending_augmented_worker_count, "admitted_worker_count": int(admitted_worker_count), "augmented_admitted_worker_count": augmented_admitted_worker_count, "total_bytes": total_bytes, "available_bytes": available_bytes, "reserve_bytes": reserve_bytes, "safe_available_bytes": safe_available_bytes, "largest_worker_bytes": largest_worker_bytes, "estimated_bytes_by_feature": estimated_bytes_by_feature}  # Return complete deterministic scheduling evidence
-
-
-def acquire_feature_process_capacity(capacity_state: dict, feature_set_name: str, worker_index: int, phase_ratio: Any) -> int:  # Acquire weighted memory admission for one feature worker
-    """
-    Acquire weighted memory admission for one feature process.
-
-    :param capacity_state: Shared capacity state with remaining byte budget and condition.
-    :param feature_set_name: Runtime feature-set name requesting admission.
-    :param worker_index: One-based worker index used in logs.
-    :param phase_ratio: Augmentation ratio for the current phase.
-    :return: Reserved byte count released after the phase.
-    """
-
-    estimate_by_feature = capacity_state["estimated_bytes_by_feature"]  # Read immutable feature-local byte estimates
-    safe_available_bytes = int(capacity_state["safe_available_bytes"])  # Read the coordinator-planned safe budget
-    reserve_bytes = int(capacity_state["reserve_bytes"])  # Read the memory reserve used by live admission
-    requested_bytes = min(int(estimate_by_feature.get(feature_set_name, 0)), safe_available_bytes)  # Bound one worker reservation to the safe budget
-    requested_bytes = max(0, requested_bytes)  # Normalize missing estimates to metadata-only admission
-    condition = capacity_state["condition"]  # Resolve the shared process condition
-    remaining_bytes = capacity_state["remaining_bytes"]  # Resolve the shared remaining-byte counter
-    with condition:  # Serialize weighted capacity accounting across spawned workers
-        while True:  # Wait until both planned and live memory budgets can admit this worker
-            live_available_bytes = max(0, int(getattr(psutil.virtual_memory(), "available", 0)) - reserve_bytes)  # Recompute live safe memory before every admission
-            if requested_bytes <= remaining_bytes.value and requested_bytes <= live_available_bytes:  # Admit only when planned and live memory budgets both fit
-                remaining_bytes.value -= requested_bytes  # Reserve this worker's estimated bytes
-                print(f"[RESOURCE CAPACITY] Feature Set={feature_set_name} | Worker Index={worker_index} | PID={os.getpid()} | State=Admitted | Ratio={phase_ratio} | Reserved Bytes={requested_bytes} | Remaining Bytes={remaining_bytes.value} | Live Safe Bytes={live_available_bytes}")  # Log weighted admission evidence
-                sys.stdout.flush()  # Flush admission evidence before allocation
-                return requested_bytes  # Return the exact reserved bytes for release
-            print(f"[RESOURCE CAPACITY] Feature Set={feature_set_name} | Worker Index={worker_index} | PID={os.getpid()} | State=Waiting | Ratio={phase_ratio} | Required Bytes={requested_bytes} | Remaining Bytes={remaining_bytes.value} | Live Safe Bytes={live_available_bytes}")  # Log current live memory gate state
-            sys.stdout.flush()  # Flush wait evidence before blocking
-            condition.wait(timeout=2.0)  # Reattempt promptly when another worker releases capacity
-
-
-def release_feature_process_capacity(capacity_state: dict, reserved_bytes: int) -> None:  # Release weighted memory admission for one feature worker
-    """
-    Release weighted memory admission for one feature process.
-
-    :param capacity_state: Shared capacity state with remaining byte budget and condition.
-    :param reserved_bytes: Byte count returned by admission.
-    :return: None.
-    """
-
-    condition = capacity_state["condition"]  # Resolve the shared process condition
-    remaining_bytes = capacity_state["remaining_bytes"]  # Resolve the shared remaining-byte counter
-    safe_available_bytes = int(capacity_state["safe_available_bytes"])  # Read the fixed upper bound for shared reservations
-    with condition:  # Serialize release and wakeup with admission accounting
-        remaining_bytes.value = min(safe_available_bytes, remaining_bytes.value + max(0, int(reserved_bytes)))  # Return only the reservation owned by this worker
-        condition.notify_all()  # Wake waiting workers immediately after capacity returns
 
 
 def execute_feature_set_processes(pending_by_feature: dict, process_payload: dict, tasks: List[dict], cached_results: dict, process_context: Any = None, process_target: Any = None) -> dict:  # Start, monitor, join, and close one persistent process per active feature set
@@ -16850,9 +16782,9 @@ def execute_feature_set_processes(pending_by_feature: dict, process_payload: dic
     capacity_decision = resolve_feature_process_worker_capacity(pending_by_feature, process_payload)  # Resolve matrix admission after cache classification and shared-resource creation
     admitted_worker_count = capacity_decision["admitted_worker_count"]  # Read the deterministic simultaneous heavy-worker limit
     pending_worker_count = capacity_decision["pending_worker_count"]  # Read the number of configured workers with pending work
-    capacity_gate = {"remaining_bytes": context.Value("q", int(capacity_decision["safe_available_bytes"])), "condition": context.Condition(), "estimated_bytes_by_feature": dict(capacity_decision["estimated_bytes_by_feature"]), "safe_available_bytes": int(capacity_decision["safe_available_bytes"]), "reserve_bytes": int(capacity_decision["reserve_bytes"])} if capacity_decision["estimated_bytes_by_feature"] and pending_worker_count > 1 else None  # Create weighted spawn-safe admission state for original matrix phases
+    capacity_gate = context.BoundedSemaphore(admitted_worker_count) if 0 < admitted_worker_count < pending_worker_count else None  # Create one spawn-safe gate only when resource capacity reduces active concurrency
     augmented_capacity_gate = context.BoundedSemaphore(capacity_decision["augmented_admitted_worker_count"]) if 0 < capacity_decision["augmented_admitted_worker_count"] < capacity_decision["pending_augmented_worker_count"] else None  # Serialize augmented artifact loading only when multiple feature workers require it
-    capacity_action = "Weighted" if capacity_gate is not None else "Unchanged"  # Distinguish weighted memory admission from ungated execution
+    capacity_action = "Gated" if capacity_gate is not None else "Unchanged"  # Distinguish an enforced scheduling decision from full admission
     print(f"[RESOURCE CAPACITY] Decision={capacity_action} | Pending Workers={pending_worker_count} | Simultaneous Workers={admitted_worker_count} | Augmented Workers={capacity_decision['pending_augmented_worker_count']} | Simultaneous Augmented Workers={capacity_decision['augmented_admitted_worker_count']} | Available Bytes={capacity_decision['available_bytes']} | Reserved Bytes={capacity_decision['reserve_bytes']} | Safe Available Bytes={capacity_decision['safe_available_bytes']} | Largest Estimated Worker Bytes={capacity_decision['largest_worker_bytes']} | Estimated Bytes={capacity_decision['estimated_bytes_by_feature']}")  # Log exact capacity evidence instead of silently reducing concurrency
     phase_order = list(dict.fromkeys(task["augmentation_ratio"] for task in tasks))  # Derive original and ratio waves from authoritative canonical plan.
     phase_barrier = context.Barrier(len(process_payload["feature_mode_names"])) if process_payload["feature_mode_names"] else None  # Synchronize configured feature workers at every phase boundary.
