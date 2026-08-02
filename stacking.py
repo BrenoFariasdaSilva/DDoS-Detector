@@ -15697,14 +15697,6 @@ def sort_pending_feature_process_tasks_by_elapsed_time(pending_by_feature: dict,
         print(order_message)  # Emit one terminal classifier-order summary line.
     if classifier_order_messages:  # Send the same concise classifier-order summary through Telegram once.
         send_telegram_message(TELEGRAM_BOT, "\n".join(classifier_order_messages))  # Reuse existing guarded Telegram delivery path.
-    for feature_set_name, queue_tasks in pending_by_feature.items():  # Log resulting order per feature queue without Telegram fanout.
-        for pending_position, task in enumerate(queue_tasks, start=1):  # Report the actual execution order after sorting.
-            estimate = estimated_by_task_id.get(id(task))  # Read the selected estimate for display.
-            estimate_label = calculate_execution_time(0, estimate) if estimate is not None else "unavailable"  # Format estimates through the existing duration formatter.
-            hp_label = "Optimized Hyperparameters" if task["hyperparameters_enabled"] else "Default Hyperparameters"  # Resolve HP mode label.
-            ratio_label = f"{task['augmentation_ratio'] * 100:g}%" if task["augmentation_ratio"] is not None else "None"  # Resolve augmentation ratio label.
-            print(f"[PENDING SORT ORDER] Feature Set={feature_set_name} | Queue={pending_position}/{len(queue_tasks)} | Global ID={task['global_id']}/{task['total_combinations']} | Classifier={task['classifier_name']} | Hyperparameters={hp_label} | Augmented Test Ratio={ratio_label} | Estimated={estimate_label}")  # Log one sorted pending row.
-
 
 def build_feature_process_artifact_context(task: dict, process_payload: dict, model_prototype: Any) -> dict:  # Build the unchanged original-model artifact identity from small metadata
     """
