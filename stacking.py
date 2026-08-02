@@ -361,6 +361,8 @@ def log_training_phase(feature_set: Optional[str], classifier_name: str, phase: 
     """
 
     try:  # Keep lifecycle reporting failures from affecting classifier execution.
+        if hyperparameters_enabled is not None and str(status) == "Started":  # Suppress normal combination-start phase rows in favor of recurring active ETA rows.
+            return  # Preserve standalone AutoML phase starts while hiding classifier-combination start chatter.
         feature_label = format_training_feature_set(feature_set)  # Normalize the feature-set label for detached logs.
         combination_fields = format_training_combination_fields(hyperparameters_enabled, augmentation_ratio)  # Format explicit evaluation metadata when supplied.
         print(f"[TRAINING] Feature Set: {feature_label} | Classifier: {classifier_name}{combination_fields} | Phase: {phase} | Status: {status} | PID: {os.getpid()}")  # Write one contextual newline-delimited phase record.
@@ -5590,11 +5592,6 @@ def get_models(config=None):
         if config is None:  # If no config provided
             config = CONFIG  # Use global CONFIG
 
-        verbose_output(
-            f"{BackgroundColors.GREEN}Initializing models for training...{Style.RESET_ALL}",
-            config=config
-        )  # Output the verbose message
-        
         n_jobs = config.get("evaluation", {}).get("n_jobs", 1)  # Get n_jobs from config
         random_state = config.get("evaluation", {}).get("random_state", 42)  # Get random_state from config
         
@@ -13393,24 +13390,6 @@ def print_dataset_evaluation_header(data_source_label, evaluation_plan, executio
         print()  # Separate recovered and pending plan blocks.
 
         print(f"Pending combinations to execute: {len(pending_global_ids)}/{total_combinations}\n")  # Print pending count before executable plan rows.
-        sorted_pending_tasks = [task for tasks in pending_by_feature.values() for task in tasks if task.get("pending_runtime_sort_enabled")]  # Read runtime-sorted task descriptors when enabled.
-        if sorted_pending_tasks:  # Print actual runtime-sorted feature-queue order when enabled.
-            for task in sorted_pending_tasks:  # Print pending combinations in the same order handed to feature workers.
-                hyperparameter_label = "Optimized Hyperparameters" if task["hyperparameters_enabled"] else "Default Hyperparameters"  # Resolve the active hyperparameter label.
-                augmentation_label = f"{task['augmentation_ratio'] * 100:g}%" if task["augmentation_ratio"] is not None else "None"  # Resolve the augmented-test ratio.
-                testing_data_label = "Augmented Data" if task["augmentation_ratio"] is not None else "Original Data"  # Resolve the isolated testing source.
-                estimate = task.get("pending_elapsed_time_estimate_s", None)  # Read display-only historical runtime estimate.
-                estimate_label = calculate_execution_time(0, estimate) if estimate is not None else "unavailable"  # Format the estimate with the existing duration formatter.
-                print(f"[Queue {task['pending_queue_position']}/{task['pending_queue_total']} | Global ID {task['global_id']}/{total_combinations}] Feature Set: {task['feature_set']} | Classifier: {task['classifier_name']} | Hyperparameters: {hyperparameter_label} | Augmented Test Ratio: {augmentation_label} | Training Data: Original Data | Testing Data: {testing_data_label} | Estimated Historical Runtime: {estimate_label}")  # Print one runtime-sorted pending combination identity.
-        else:  # Preserve legacy pending-plan order when runtime sorting is disabled.
-            for combination_index, (feature_set, hyperparameters_enabled, augmentation_ratio, classifier) in enumerate(evaluation_plan, start=1):  # Print pending combinations in their exact execution order
-                if combination_index not in pending_global_ids:  # Print only combinations that cache partitioning left pending.
-                    continue  # Move to the next planned combination.
-                hyperparameter_label = "Optimized Hyperparameters" if hyperparameters_enabled else "Default Hyperparameters"  # Resolve the active hyperparameter label
-                augmentation_label = f"{augmentation_ratio * 100:g}%" if augmentation_ratio is not None else "None"  # Resolve the augmented-test ratio.
-                testing_data_label = "Augmented Data" if augmentation_ratio is not None else "Original Data"  # Resolve the isolated testing source.
-                print(f"[{combination_index}/{total_combinations}] Feature Set: {feature_set} | Classifier: {classifier} | Hyperparameters: {hyperparameter_label} | Augmented Test Ratio: {augmentation_label} | Training Data: Original Data | Testing Data: {testing_data_label}")  # Print one complete ordered combination identity.
-
         feature_sets = list(dict.fromkeys(combination[0] for combination in evaluation_plan))  # Preserve first-occurrence feature-set order for the Telegram summary
         hyperparameter_modes = list(dict.fromkeys("Optimized Hyperparameters" if combination[1] else "Default Hyperparameters" for combination in evaluation_plan))  # Preserve first-occurrence runnable hyperparameter order
         augmentation_modes = list(dict.fromkeys(f"{combination[2] * 100:g}%" if combination[2] is not None else "None" for combination in evaluation_plan))  # Preserve first-occurrence augmented-test order.
@@ -15638,7 +15617,6 @@ def sort_pending_feature_process_tasks_by_elapsed_time(pending_by_feature: dict,
     classifier_average_estimated_count = 0  # Count pending tasks using classifier-level average fallback.
     missing_count = 0  # Count pending tasks without comparable history.
     grouping_label = "feature_set, execution_mode, data_source, experiment_mode, augmentation_ratio, hyperparameter_mode"  # Describe the preserved sort boundaries.
-    classifier_order_messages = []  # Accumulate concise classifier-order summaries for terminal and Telegram.
 
     for feature_set_name, queue_tasks in pending_by_feature.items():  # Sort each feature-owned queue independently.
         grouped_tasks = {}  # Preserve comparable groups within this feature queue.
@@ -15669,14 +15647,6 @@ def sort_pending_feature_process_tasks_by_elapsed_time(pending_by_feature: dict,
         for group_key in group_order:  # Emit groups in original order.
             group_tasks = grouped_tasks[group_key]  # Resolve tasks for this comparable group.
             sorted_group_tasks = sorted(group_tasks, key=lambda task: (1, 0.0) if estimated_by_task_id[id(task)] is None else (0, float(estimated_by_task_id[id(task)])))  # Stable-sort estimated tasks first by duration.
-            feature_label, _, data_label, _, group_ratio, group_hp_enabled = group_key  # Resolve comparable-group labels for order logging.
-            hp_label = "Optimized Hyperparameters" if group_hp_enabled else "Default Hyperparameters"  # Resolve HP mode label for order logging.
-            ratio_label = f"{group_ratio * 100:g}%" if group_ratio is not None else "None"  # Resolve augmentation ratio label for order logging.
-            group_label = f"Feature Set: {feature_label} | Data Source: {data_label} | Hyperparameters: {hp_label} | Augmented Test Ratio: {ratio_label}"  # Build concise comparable-group context.
-            default_order = " -> ".join(task["classifier_name"] for task in group_tasks)  # Preserve original pending classifier order.
-            sorted_order = " -> ".join(task["classifier_name"] for task in sorted_group_tasks)  # Preserve actual sorted classifier order.
-            classifier_order_messages.append(f"Default Classifiers Order [{group_label}]: {default_order}")  # Record original classifier order.
-            classifier_order_messages.append(f"New Classifiers Order (Fastest to Slowest based on Cache Results) [{group_label}]: {sorted_order}")  # Record cache-sorted classifier order.
             reordered_tasks.extend(sorted_group_tasks)  # Append sorted tasks for this comparable group.
         pending_by_feature[feature_set_name] = reordered_tasks  # Replace only this feature-owned pending queue.
 
@@ -15693,10 +15663,6 @@ def sort_pending_feature_process_tasks_by_elapsed_time(pending_by_feature: dict,
                 print(f"[PENDING SORT] {classifier_name}={calculate_execution_time(0, average_seconds)} ({average_seconds:.0f}s, Samples={len(classifier_elapsed_values[classifier_name])})")  # Emit one formatted classifier average.
     else:  # Report absence of valid classifier-average data once.
         print("[PENDING SORT] No valid classifier runtime averages available from cache.")  # Emit factual no-average summary.
-    for order_message in classifier_order_messages:  # Print concise classifier-order summaries before detailed queue rows.
-        print(order_message)  # Emit one terminal classifier-order summary line.
-    if classifier_order_messages:  # Send the same concise classifier-order summary through Telegram once.
-        send_telegram_message(TELEGRAM_BOT, "\n".join(classifier_order_messages))  # Reuse existing guarded Telegram delivery path.
 
 def build_feature_process_artifact_context(task: dict, process_payload: dict, model_prototype: Any) -> dict:  # Build the unchanged original-model artifact identity from small metadata
     """
@@ -16295,6 +16261,9 @@ def log_feature_process_combination(task: dict, status_state: dict, message: str
     :return: None.
     """
 
+    noisy_messages = {"Final cache verification started", "Original memmap data loading started", "Original memmap data loading completed", "Fit started", "Augmentation ratio data loading started"}  # Define preparation-only records hidden from normal output.
+    if message in noisy_messages or str(message).startswith("Augmentation ratio data loading completed"):  # Suppress preparation chatter without changing task state.
+        return  # Keep normal output focused on active ETA, completion, cache, and failure records.
     ratio_label = "None" if task["augmentation_ratio"] is None else f"{float(task['augmentation_ratio']):.2f}"  # Format the active augmentation ratio
     hp_label = "Optimized Hyperparameters" if task["hyperparameters_enabled"] else "Default Hyperparameters"  # Resolve the active hyperparameter mode
     testing_label = "Original" if task["augmentation_ratio"] is None else "Augmented"  # Resolve the active testing mode
@@ -16532,7 +16501,6 @@ def process_feature_process_task(task: dict, process_payload: dict, model_maps: 
             if resource_state["original_resources"] is None:  # Materialize this feature set once for consecutive original combinations
                 log_feature_process_combination(task, status_state, "Original memmap data loading started")  # Announce exact required original resource loading
                 resource_state["original_resources"] = prepare_feature_process_original_resources(process_payload)  # Open shared sources and build only this feature set's matrices
-                print(f"[WORKER MATRIX] Feature Set={process_payload['feature_set']} | Worker Index={process_payload['worker_index']} | PID={os.getpid()} | Matrix Shape={resource_state['original_resources']['X_train'].shape} | Matrix Dtype={resource_state['original_resources']['X_train'].dtype}")  # Log actual feature matrix shape and dtype after preparation
                 log_feature_process_combination(task, status_state, "Original memmap data loading completed")  # Confirm exact required original resources are ready
             result_entry = evaluate_feature_process_original_task(task, process_payload, resource_state["original_resources"], model_prototype, resource_state["cache_dict"], status_state, status_queue)  # Fit, predict, calculate metrics, and persist through existing logic
         else:  # Load only the exact augmentation ratio required by this pending task
@@ -16599,8 +16567,6 @@ def run_feature_set_process_worker(process_payload: dict, status_queue: Any, sta
         matrix_shape = (source_descriptor["shape"][0], process_payload["feature_metadata"]["feature_count"]) if source_descriptor else (process_payload["expected_train_count"], process_payload["feature_metadata"]["feature_count"])  # Resolve startup matrix shape from small metadata
         matrix_dtype = source_descriptor["dtype"] if source_descriptor else "artifact-backed"  # Resolve startup dtype without loading combination data
         feature_start_status = read_feature_process_status(status_state)["features"][process_payload["feature_set"]]  # Read exact cache-first feature status before this worker processes its queue
-        print(f"[WORKER START] Feature Set={process_payload['feature_set']} | Worker Index={process_payload['worker_index']} | PID={os.getpid()} | PPID={os.getppid()} | Queue Size={len(task_queue)} | Cached Count={feature_start_status['cached']} | Pending Count={len(task_queue)} | Matrix Resource={matrix_resource} | Matrix Shape={matrix_shape} | Matrix Dtype={matrix_dtype}")  # Log required worker identity, queue, cache, and matrix metadata
-        sys.stdout.flush()  # Flush startup evidence for detached process-tree verification
         status_queue.put({"status": "started", "feature_set": process_payload["feature_set"], "worker_index": process_payload["worker_index"], "pid": os.getpid(), "ppid": os.getppid(), "queue_size": len(task_queue), "cached_count": feature_start_status["cached"], "pending_count": len(task_queue), "matrix_resource": matrix_resource, "matrix_shape": matrix_shape, "matrix_dtype": matrix_dtype})  # Report only small startup metadata to the coordinator
         resource_state["cache_dict"] = load_cache_results(process_payload["cache_ref_file"], config=process_payload["config"], notify_discovery=False)  # Initialize the worker-local cache snapshot
         phase_order = list(process_payload.get("phase_order") or dict.fromkeys(task.get("augmentation_ratio") for task in task_queue))  # Use coordinator global phases or local task phases for focused callers.
@@ -16878,8 +16844,8 @@ def execute_feature_set_processes(pending_by_feature: dict, process_payload: dic
             elif status_type == "done":  # Record one successful worker terminal state
                 terminal_features.add(feature_set_name)  # Mark the feature queue complete
                 running_task_by_feature.pop(feature_set_name, None)  # Clear terminal worker current-task identity
-            elif status_type == "started":  # Log process startup metadata received from the child
-                print(f"[COORDINATOR] Worker started | Feature Set={feature_set_name} | Worker Index={status.get('worker_index')} | PID={status.get('pid')} | PPID={status.get('ppid')} | Queue Size={status.get('queue_size')} | Cached Count={status.get('cached_count')} | Pending Count={status.get('pending_count')} | Matrix Resource={status.get('matrix_resource')} | Matrix Shape={status.get('matrix_shape')} | Matrix Dtype={status.get('matrix_dtype')}")  # Surface child startup to the coordinator log
+            elif status_type == "started":  # Accept process startup metadata without emitting normal combination output.
+                continue  # Preserve startup status consumption while keeping normal logs active-only.
             elif status_type == "running":  # Track exact current combination for abrupt-death status reconciliation
                 running_task_by_feature[feature_set_name] = status  # Store only small task identity metadata
             elif status_type == "training_start":  # Send one coordinator-owned start notification before worker fitting begins

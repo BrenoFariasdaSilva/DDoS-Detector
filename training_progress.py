@@ -209,21 +209,21 @@ class TrainingProgress:  # Report genuine public units or heartbeat-only activit
                 is_final = completed == total  # Detect the configured final public unit.
                 if is_final and self.final_unit_reported:  # Suppress duplicate 100% callbacks.
                     return  # Preserve one immediate final progress record only.
+                if is_final:  # Leave final progress to existing completion records instead of another active row.
+                    self.final_unit_reported = True  # Prevent duplicate final callbacks from printing later.
+                    return  # Keep normal in-progress output limited to active ETA rows.
                 if not is_final and self.last_report_time is not None and now - self.last_report_time < self.interval_seconds:  # Rate-limit recurring non-final callback records.
                     return  # Retain the latest state without emitting before the interval.
                 elapsed_seconds = max(now - self.start_time, 0.0)  # Calculate elapsed time after the latest completed unit.
                 remaining_seconds = (elapsed_seconds / completed) * (total - completed)  # Estimate remaining time only from completed real units.
-                progress_percent = (completed / total) * 100.0  # Calculate genuine percentage from the public unit denominator.
                 elapsed_label = self.duration_formatter(elapsed_seconds)  # Format elapsed time through the caller's established formatter.
                 eta_label = self.duration_formatter(remaining_seconds)  # Format the unit-based ETA through the caller's established formatter.
-                print(f"[TRAINING] Feature Set: {self.feature_set} | Classifier: {self.classifier_name}{self.combination_fields} | {self.unit_label}: {completed}/{total} | Progress: {progress_percent:.2f}% | Elapsed: {elapsed_label} | ETA: {eta_label} | PID: {os.getpid()}", file=self.output_stream)  # Write latest contextual due or immediate final unit-completion record.
+                print(f"[TRAINING] Feature Set: {self.feature_set} | Classifier: {self.classifier_name}{self.combination_fields} | Status: Active | Elapsed: {elapsed_label} | ETA: {eta_label} | PID: {os.getpid()}", file=self.output_stream)  # Write one active ETA row for normal in-progress output.
                 self.output_stream.flush()  # Flush every emitted genuine progress record immediately to detached logs.
                 if self.eta_callback is not None and not self.eta_callback_reported and not is_final and eta_label != "0s":  # Notify only on the first meaningful emitted ETA.
                     self.eta_callback_reported = True  # Reserve the one ETA callback before external notification code.
                     self.eta_callback(eta_label)  # Send the exact formatted ETA label to the caller.
                 self.last_report_time = now  # Advance only this classifier task's recurring-report timer.
-                if is_final:  # Mark the configured final public unit after successful output.
-                    self.final_unit_reported = True  # Prevent duplicate final progress records without delaying fit completion logs.
         except Exception:  # Ignore reporting failures so callbacks cannot alter fitted results.
             return  # Preserve estimator training after a reporting failure.
 
