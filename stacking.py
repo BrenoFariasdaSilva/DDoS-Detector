@@ -147,6 +147,7 @@ from resnet18 import ResNet18Classifier  # Import the standalone sklearn-compati
 from autoencoder import AutoencoderClassifier  # Import the standalone sklearn-compatible supervised Autoencoder classifier
 from lstm import LSTMClassifier  # Import the standalone sklearn-compatible supervised LSTM sequence classifier
 from training_progress import DEFAULT_TRAINING_PROGRESS_INTERVAL_MINUTES, TrainingProgress, XGBoostProgressCallback, format_training_combination_fields, format_training_feature_set, interactive_terminal_attached  # Import reusable training progress infrastructure.
+from utils.oom_restart import AUTO_RESTART_ATTEMPT_ENV, build_exact_oom_skip_rule, capture_oom_baseline, oom_kill_delta, recover_launch_command, schedule_detached_restart, transform_command_with_skip_rule  # Import focused OOM restart planning utilities.
 from utils.skip_combinations import apply_skip_combination_rules, build_alias_lookup, compile_skip_combination_rules, filter_models_for_plan_group, format_skip_rule_match_lines, format_skip_rules_for_info, format_skip_rules_for_telegram, format_skip_summary_line, normalize_plan_augmentation_ratio  # Import reusable skip-combination parsing and plan filtering.
 
 
@@ -167,6 +168,7 @@ CONFIG = {}  # Will be initialized by initialize_config() - holds all runtime se
 # Telegram Bot Setup:
 TELEGRAM_BOT = None  # Global Telegram bot instance (initialized in setup_telegram_bot)
 STACKING_FAILURE_TELEGRAM_IDENTITIES: set[str] = set()  # Track failure Telegram identities already emitted in this process
+OOM_RESTART_SCHEDULED = False  # Track whether this coordinator has already scheduled an OOM restart.
 
 # Logger Setup:
 logger = None  # Will be initialized in initialize_logger()
@@ -1106,6 +1108,10 @@ def parse_cli_args():
         parser.add_argument("--feature-extraction-n-jobs", dest="feature_extraction_n_jobs", type=int, default=None, help="Override evaluation.feature_extraction_n_jobs for feature extraction/transformation stages such as PCA, not classifier training (-1 uses available CPUs; 1 is memory-safe)")  # Add the independent feature extraction thread override
         parser.add_argument("--feature-set-workers", dest="feature_set_workers", type=str, default=None, help="Persistent process counts by feature set, for example full=1,ga=1,pca=1,rfe=1,extra_trees=1; only 0 or 1 is supported")  # Add the persistent feature-set process override
         parser.add_argument("--skip-combination", dest="skip_combination", action="append", default=None, help="Skip combinations by shell-quoted rule because '&' and '||' are shell operators; '&' means all terms match, '||' means either clause matches, missing dimensions are wildcards, augmentation uses 0-100 with 0 off, repeat option for multiple rules")  # Add repeatable skip-rule CLI override.
+        oom_restart_group = parser.add_mutually_exclusive_group()  # Prevent contradictory OOM restart overrides.
+        oom_restart_group.add_argument("--auto-restart-on-oom", dest="auto_restart_on_oom", action="store_true", help="Enable automatic exact-skip restart after confirmed persistent-worker OOM")  # Enable OOM restart recovery.
+        oom_restart_group.add_argument("--no-auto-restart-on-oom", dest="auto_restart_on_oom", action="store_false", help="Disable automatic exact-skip restart after confirmed persistent-worker OOM")  # Disable OOM restart recovery.
+        parser.set_defaults(auto_restart_on_oom=None)  # Preserve YAML/default when neither OOM restart flag is supplied.
         pending_sort_group = parser.add_mutually_exclusive_group()  # Preserve absent-versus-explicit CLI semantics for pending runtime ordering
         pending_sort_group.add_argument("--sort-pending-by-elapsed-time", dest="sort_pending_by_elapsed_time", action="store_true", help="Sort pending classifier combinations by historical elapsed_time_s within comparable groups")  # Enable runtime-based pending queue ordering
         pending_sort_group.add_argument("--no-sort-pending-by-elapsed-time", dest="sort_pending_by_elapsed_time", action="store_false", help="Disable runtime-based pending classifier ordering")  # Disable runtime-based pending queue ordering
@@ -1147,6 +1153,7 @@ def get_default_stacking_config():
             "data_augmentation_suffix": "_data_augmented",  # File suffix for augmented data files
             "augmentation_ratios": [0.25, 0.50, 0.75, 1.00],  # Ratios of augmented data to sample
             "skip_combinations": [],  # User-defined combination skip rules, empty by default.
+            "auto_restart_on_oom": True,  # Automatically relaunch with an exact skip rule after confirmed persistent-worker OOM.
             "hyperparameters_filename": "Hyperparameter_Optimization_Results.csv",  # Hyperparameter results CSV filename
             "cache_prefix": "Cache_",  # Prefix for cached model files
             "model_export_base": "Feature_Analysis/Stacking/Models/",  # Base directory for model exports
@@ -2157,6 +2164,9 @@ def merge_configs(defaults, file_config, cli_args):
 
         if hasattr(cli_args, "skip_combination") and cli_args.skip_combination is not None:  # Skip-combination CLI replacement override.
             config.setdefault("stacking", {})["skip_combinations"] = list(cli_args.skip_combination)  # Replace YAML skip rules when CLI supplies any rule.
+
+        if hasattr(cli_args, "auto_restart_on_oom") and cli_args.auto_restart_on_oom is not None:  # OOM restart CLI override.
+            config.setdefault("stacking", {})["auto_restart_on_oom"] = bool(cli_args.auto_restart_on_oom)  # Apply CLI OOM restart setting.
 
         if hasattr(cli_args, "sort_pending_by_elapsed_time") and cli_args.sort_pending_by_elapsed_time is not None:  # Pending runtime sort CLI override
             config.setdefault("stacking", {})["sort_pending_by_elapsed_time"] = cli_args.sort_pending_by_elapsed_time  # Apply explicit CLI ordering preference over YAML
@@ -12678,11 +12688,13 @@ def build_stacking_failure_notification(category: str, exception: Optional[BaseE
     dataset_value = context.get("dataset_path") or context.get("dataset") or process_payload.get("file") or process_payload.get("cache_ref_file")  # Resolve dataset identity from payload or caller.
     execution_mode = context.get("execution_mode") or process_payload.get("execution_mode") or (process_payload.get("config") or {}).get("execution", {}).get("execution_mode")  # Resolve execution mode from payload or config.
     resource_diagnostics = context.get("resource_diagnostics")  # Read failure-time resource facts when supplied by the coordinator.
+    oom_restart = context.get("oom_restart") or {}  # Read OOM restart decision metadata when supplied by the coordinator.
     lines = ["[STACKING FAILURE]", f"Failure category: {category}"]  # Start report using existing plain Telegram text style.
     combination_detail_lines = format_failure_combination_details(task)  # Format complete failing-combination metadata when available.
     lines.extend(combination_detail_lines)  # Add complete failing-combination metadata when available.
     fallback_combination_fields = [] if combination_detail_lines else [("Feature set", feature_set_name), ("Classifier", classifier_name), ("Hyperparameter mode", hyperparameter_mode), ("Run index", run_index), ("Global combination ID", global_id), ("Local combination ID", f"{local_id}/{local_total}" if local_id is not None and local_total is not None else local_id)]  # Use legacy partial fields only when no task exists.
-    optional_fields = [("Exception class", exception_type), ("Exception message", exception_message), ("Child exit code", exitcode), ("Signal", signal_name), ("Child PID", failure.get("pid") or failure.get("child_pid") or context.get("child_pid")), *fallback_combination_fields, ("Dataset", dataset_value), ("Execution mode", execution_mode), ("Coordinator status", status_snapshot.get("global") if isinstance(status_snapshot, dict) else None), ("Per-feature status", status_snapshot.get("features") if isinstance(status_snapshot, dict) else None), ("Resource diagnostics", resource_diagnostics), ("Transport exception", context.get("transport_exception"))]  # Collect factual fields only.
+    oom_restart_fields = [("Confirmed OOM", oom_restart.get("confirmed_oom")), ("Generated exact skip rule", oom_restart.get("generated_skip_rule")), ("Automatic restart enabled", oom_restart.get("auto_restart_enabled")), ("Restart scheduled", oom_restart.get("restart_scheduled")), ("Restart reason", oom_restart.get("restart_reason")), ("Previous skip-rule count", oom_restart.get("previous_skip_count")), ("Updated skip-rule count", oom_restart.get("updated_skip_count")), ("Command source", oom_restart.get("command_source")), ("Restart attempt", oom_restart.get("restart_attempt"))] if isinstance(oom_restart, dict) else []  # Collect restart fields without exposing shell commands.
+    optional_fields = [("Exception class", exception_type), ("Exception message", exception_message), ("Child exit code", exitcode), ("Signal", signal_name), ("Child PID", failure.get("pid") or failure.get("child_pid") or context.get("child_pid")), *fallback_combination_fields, *oom_restart_fields, ("Dataset", dataset_value), ("Execution mode", execution_mode), ("Coordinator status", status_snapshot.get("global") if isinstance(status_snapshot, dict) else None), ("Per-feature status", status_snapshot.get("features") if isinstance(status_snapshot, dict) else None), ("Resource diagnostics", resource_diagnostics), ("Transport exception", context.get("transport_exception"))]  # Collect factual fields only.
     lines.extend(f"{name}: {value}" for name, value in optional_fields if value is not None)  # Add only metadata actually available.
     lines.append(f"Host: {platform.node() or 'unknown'}")  # Add current host identity.
     lines.append(f"Operating system: {platform.platform()}")  # Add current operating-system identity.
@@ -12716,6 +12728,89 @@ def format_failure_combination_details(task: Optional[dict]) -> List[str]:  # Fo
 
     details = build_failure_combination_details(task)  # Build normalized detail mapping.
     return [f"{name}: {value}" for name, value in details.items() if value is not None]  # Return populated lines only.
+
+
+def canonicalize_skip_rule_text(rule_text: str) -> str:  # Canonicalize one skip rule through the existing parser.
+    """
+    Canonicalize one skip rule through the existing parser.
+
+    :param rule_text: Raw skip rule text.
+    :return: Canonical skip rule text.
+    """
+
+    alias_lookup = build_alias_lookup(SKIP_RULE_FEATURE_ALIASES, SKIP_RULE_CLASSIFIER_ALIASES, SKIP_RULE_HYPERPARAMETER_ALIASES)  # Build parser aliases from runtime registries.
+    return compile_skip_combination_rules([rule_text], "OOM restart", alias_lookup)[0].canonical  # Return parser canonical form.
+
+
+def schedule_oom_restart_if_needed(failure: dict, task: Optional[dict], process_payload: dict, failure_context: dict) -> dict:  # Schedule one exact OOM restart when safe.
+    """
+    Schedule one exact OOM restart when safe.
+
+    :param failure: Worker failure metadata.
+    :param task: Authoritative failed task metadata.
+    :param process_payload: Persistent worker coordinator payload.
+    :param failure_context: Failure context sent to Telegram.
+    :return: OOM restart decision metadata.
+    """
+
+    global OOM_RESTART_SCHEDULED  # Enforce one restart per coordinator.
+    config = process_payload.get("config", {}) if isinstance(process_payload, dict) else {}  # Read runtime config from coordinator payload.
+    enabled = bool(config.get("stacking", {}).get("auto_restart_on_oom", True)) if isinstance(config, dict) else True  # Resolve config toggle.
+    decision = {"confirmed_oom": "No", "generated_skip_rule": "unavailable", "auto_restart_enabled": "Yes" if enabled else "No", "restart_scheduled": "No", "restart_reason": "not evaluated", "previous_skip_count": len(tuple(config.get("stacking", {}).get("compiled_skip_combinations", ()))) if isinstance(config, dict) else 0, "updated_skip_count": None, "command_source": "unavailable", "restart_attempt": "unavailable"}  # Start complete decision payload.
+    exitcode = failure.get("exitcode")  # Read exact process exit code.
+    signal_name = failure.get("signal_name")  # Read resolved signal name.
+    if not enabled:  # Respect disabled auto-restart setting.
+        decision["restart_reason"] = "automatic OOM restart disabled"  # Store no-restart reason.
+    elif OOM_RESTART_SCHEDULED:  # Prevent duplicate scheduling from repeated failure paths.
+        decision["restart_reason"] = "restart already scheduled by this coordinator"  # Store no-restart reason.
+    elif failure.get("intentional_shutdown"):  # Reject worker exits caused by intentional coordinator shutdown.
+        decision["restart_reason"] = "worker shutdown was intentional"  # Store no-restart reason.
+    elif not (exitcode == -9 or signal_name == "SIGKILL"):  # Require conclusive kill signal before OOM evidence.
+        decision["restart_reason"] = "worker exit was not SIGKILL"  # Store no-restart reason.
+    else:  # Continue only for killed persistent worker.
+        oom_delta = oom_kill_delta(process_payload.get("oom_kill_baseline"))  # Compare fresh cgroup OOM counters against baseline.
+        decision["confirmed_oom"] = "Yes" if oom_delta.get("confirmed") else "No"  # Record OOM confirmation.
+        decision["oom_delta"] = oom_delta  # Preserve counter evidence for local logs.
+        if not oom_delta.get("confirmed"):  # Reject stale or absent OOM evidence.
+            decision["restart_reason"] = "no fresh cgroup oom_kill delta"  # Store no-restart reason.
+        else:  # Continue only after fresh OOM evidence.
+            rule_result = build_exact_oom_skip_rule(task, SKIP_RULE_FEATURE_ALIASES, SKIP_RULE_CLASSIFIER_ALIASES, SKIP_RULE_HYPERPARAMETER_ALIASES)  # Build exact four-dimensional skip rule.
+            if not rule_result.get("ok"):  # Abort when required fields are missing.
+                decision["restart_reason"] = f"missing required rule field(s): {', '.join(rule_result.get('missing', []))}"  # Store missing metadata reason.
+            else:  # Continue with exact generated rule.
+                generated_rule = str(rule_result["rule"])  # Read exact generated rule.
+                generated_canonical = canonicalize_skip_rule_text(generated_rule)  # Canonicalize generated rule through existing parser.
+                decision["generated_skip_rule"] = generated_rule  # Store exact generated rule.
+                existing_rules = tuple(config.get("stacking", {}).get("compiled_skip_combinations", ())) if isinstance(config, dict) else ()  # Read effective compiled rules.
+                existing_canonical = {rule.canonical for rule in existing_rules}  # Build canonical duplicate set.
+                command_result = process_payload.get("launch_command") if isinstance(process_payload.get("launch_command"), dict) else {"ok": False, "reason": "launch command not captured"}  # Read pre-worker command recovery.
+                decision["command_source"] = command_result.get("source")  # Store command source.
+                if not command_result.get("ok"):  # Abort when no exact command is available.
+                    decision["restart_reason"] = command_result.get("reason") or "launch command unavailable"  # Store command failure reason.
+                else:  # Transform recovered command.
+                    transform = transform_command_with_skip_rule(str(command_result["command"]), generated_rule, list(config.get("stacking", {}).get("skip_combinations", [])) if isinstance(config, dict) else [], generated_canonical, existing_canonical, canonicalize_skip_rule_text)  # Append exact rule while preserving existing rules.
+                    decision["previous_skip_count"] = transform.get("previous_skip_count")  # Store previous count.
+                    decision["updated_skip_count"] = transform.get("updated_skip_count")  # Store updated count.
+                    decision["only_skip_args_changed"] = transform.get("only_skip_args_changed")  # Store transformation proof.
+                    if not transform.get("ok"):  # Abort unsafe or duplicate transformation.
+                        decision["restart_reason"] = transform.get("reason")  # Store transform reason.
+                    else:  # Schedule detached restart.
+                        repository_root = str(Path(__file__).resolve().parent)  # Resolve repository root from this script.
+                        attempt = int(os.environ.get(AUTO_RESTART_ATTEMPT_ENV, "0") or "0") + 1  # Increment restart attempt count.
+                        print(f"[OOM RESTART COMMAND ORIGINAL] {command_result['command']}")  # Log original exact command locally once.
+                        print(f"[OOM RESTART COMMAND UPDATED] {transform['updated_command']}")  # Log transformed exact command locally once.
+                        scheduled = schedule_detached_restart(str(transform["updated_command"]), repository_root, attempt)  # Launch detached waiter.
+                        OOM_RESTART_SCHEDULED = True  # Prevent duplicate scheduling by this coordinator.
+                        decision["restart_scheduled"] = "Yes"  # Report successful scheduling.
+                        decision["restart_reason"] = "scheduled"  # Store successful reason.
+                        decision["restart_attempt"] = scheduled.get("attempt")  # Store attempt number.
+                        decision["launcher_pid"] = scheduled.get("pid")  # Store detached launcher PID.
+    decision["updated_skip_count"] = decision["updated_skip_count"] if decision["updated_skip_count"] is not None else decision["previous_skip_count"]  # Fill updated count for no-restart paths.
+    failure_context["oom_restart"] = decision  # Attach decision to Telegram failure context.
+    log_labels = {"confirmed_oom": "Confirmed OOM", "generated_skip_rule": "Generated exact skip rule", "auto_restart_enabled": "Automatic restart enabled", "restart_scheduled": "Restart scheduled", "restart_reason": "Restart reason", "previous_skip_count": "Previous skip-rule count", "updated_skip_count": "Updated skip-rule count", "command_source": "Command source", "restart_attempt": "Restart attempt"}  # Preserve user-facing restart field names.
+    for label, display_name in log_labels.items():  # Emit required local restart fields.
+        print(f"[OOM RESTART] {display_name}: {decision.get(label)}")  # Log one restart decision field.
+    return decision  # Return decision metadata.
 
 
 def report_stacking_execution_failure(category: str, exception: Optional[BaseException] = None, context: Optional[dict] = None) -> bool:  # Send one deduplicated stacking failure notification
@@ -17140,6 +17235,7 @@ def execute_feature_set_processes(pending_by_feature: dict, process_payload: dic
             failure_context = {"failure": failure, "task": failure_task, "process_payload": process_payload, "status_snapshot": failure_snapshot}  # Build one factual failure context for logging and Telegram.
             failure_context["resource_diagnostics"] = capture_stacking_resource_diagnostics(failure_context)  # Capture parent-side memory, swap, process, and cgroup facts available after child death.
             print(f"[RESOURCE FAILURE SNAPSHOT] {failure_context['resource_diagnostics']}")  # Persist failure-time resource facts in the ordinary stacking log.
+            schedule_oom_restart_if_needed(failure, failure_task, process_payload, failure_context)  # Attach exact OOM restart decision before Telegram reporting.
             report_stacking_execution_failure(failure.get("category") or "Persistent feature-set worker failure", failure_error, failure_context)  # Notify before raising to outer pipeline layers
             raise failure_error  # Surface child exception, task identity, traceback, and accurate status
         final_snapshot = read_feature_process_status(status_state)  # Read synchronized terminal status after every child exit
@@ -17250,6 +17346,8 @@ def run_persistent_feature_set_grid(original_df: pd.DataFrame, file: str, source
         if hyperparameters_enabled:  # Capture only the optimized parameter mapping for worker-local reconstruction
             optimized_params.update(params_map)  # Preserve exact applied optimized parameters by classifier
     process_payload = {"file": file, "source_files": [str(path) for path in source_files], "attack_types_combined": attack_types_combined, "input_feature_names": [str(name) for name in feature_names], "target_column": target_column, "label_classes": label_classes, "execution_mode": execution_mode_str, "cache_ref_file": file, "config": config, "optimized_params": optimized_params, "augmentation_file_paths": [str(path) for path in augmentation_file_paths], "original_sample_count": original_sample_count, "expected_train_count": int(original_sample_count - math.ceil(original_sample_count * 0.2)), "feature_mode_names": feature_mode_names, "feature_metadata_by_name": feature_metadata_by_name}  # Build one matrix-free shared worker payload
+    process_payload["launch_command"] = recover_launch_command(str(Path(__file__).resolve().parent))  # Capture exact launch command before workers start.
+    process_payload["oom_kill_baseline"] = capture_oom_baseline()  # Capture fresh cgroup OOM baseline before workers start.
     cached_results, pending_by_feature = partition_feature_process_tasks(tasks, cache_dict, process_payload, coordinator_model_maps)  # Mark every combination cached or pending before any child starts
     runtime_skip_summary = skip_summary or {"canonical_total": int(canonical_total if canonical_total is not None else len(evaluation_plan)), "skipped": max(0, int(canonical_total if canonical_total is not None else len(evaluation_plan)) - len(tasks)), "eligible": len(tasks), "global_ids": plan_global_ids or {}, "rule_match_counts": [], "skipped_combinations": [], "source": "Default", "rules": ()}  # Preserve explicit skip metadata for persistent reporting.
     print(format_skip_summary_line(runtime_skip_summary, len(cached_results), sum(len(queue_tasks) for queue_tasks in pending_by_feature.values())))  # Log cache-aware skip and plan totals.
@@ -18277,6 +18375,7 @@ def log_resolved_configuration(config: dict) -> None:
         print(f"{BackgroundColors.GREEN}[INFO] Estimator n_jobs: {BackgroundColors.CYAN}{config.get('evaluation', {}).get('n_jobs', 1)}{BackgroundColors.GREEN} | Feature extraction n_jobs: {BackgroundColors.CYAN}{config.get('evaluation', {}).get('feature_extraction_n_jobs', 1)}{Style.RESET_ALL}")  # Log independent estimator and feature-extraction parallelism
         training_progress_minutes = validate_training_progress_interval_minutes(config.get("evaluation", {}).get("training_progress_interval_minutes", DEFAULT_TRAINING_PROGRESS_INTERVAL_MINUTES))  # Resolve the validated minutes-based progress interval.
         print(f"{BackgroundColors.GREEN}[INFO] Training progress interval: {BackgroundColors.CYAN}{training_progress_minutes:g} minutes{Style.RESET_ALL}")  # Log the resolved recurring progress interval once.
+        print(f"{BackgroundColors.GREEN}[INFO] Auto-restart on OOM: {BackgroundColors.CYAN}{bool(config.get('stacking', {}).get('auto_restart_on_oom', True))}{Style.RESET_ALL}")  # Log OOM restart toggle state.
         skip_rules = tuple(config.get("stacking", {}).get("compiled_skip_combinations", ()))  # Read compiled skip rules for display.
         skip_source = config.get("stacking", {}).get("skip_combinations_source", "Default")  # Read resolved skip-rule source.
         for skip_line in format_skip_rules_for_info(skip_rules, skip_source):  # Emit resolved skip-rule startup INFO lines.
@@ -18369,6 +18468,7 @@ def build_telegram_pipeline_summary(config: Optional[dict], dataset_path: Option
         feature_set_workers = validate_feature_set_workers(config.get("evaluation", {}).get("feature_set_workers", None))  # Resolve persistent process configuration for startup notification
         skip_rules = tuple(stacking_cfg.get("compiled_skip_combinations", ()))  # Read compiled skip rules for startup notification.
         skip_source = stacking_cfg.get("skip_combinations_source", "Default")  # Read resolved skip-rule source for startup notification.
+        auto_restart_on_oom = bool(stacking_cfg.get("auto_restart_on_oom", True))  # Read OOM restart toggle for startup notification.
 
         dataset_display = dataset_path if dataset_path else "config.yaml (default)"  # Resolve the effective dataset source for the consolidated notification
         resolved_mode = classification_mode or execution_cfg.get("execution_mode", "both")  # Resolve one authoritative execution mode label
@@ -18382,6 +18482,7 @@ def build_telegram_pipeline_summary(config: Optional[dict], dataset_path: Option
             f"Disabled classifiers: {', '.join(disabled_classifiers) if disabled_classifiers else 'None'}",  # Report classifiers excluded from the model factory
             f"Feature selection methods: {', '.join(feature_methods) if feature_methods else 'None'}",  # Report the configured feature-set strategies
             f"Feature-set workers: full={feature_set_workers['full']}, ga={feature_set_workers['ga']}, pca={feature_set_workers['pca']}, rfe={feature_set_workers['rfe']}, extra_trees={feature_set_workers['extra_trees']} | start method: {FEATURE_PROCESS_START_METHOD}",  # Report process isolation configuration
+            f"Auto-restart on OOM: {'ON' if auto_restart_on_oom else 'OFF'}",  # Report OOM restart setting.
             f"Skip combinations: {len(skip_rules)} rule(s) from {skip_source}" + (f" | {', '.join(rule.canonical for rule in skip_rules)}" if skip_rules else ""),  # Report skip-rule source and normalized rules.
             f"Test data augmentation: {'ON' if test_data_augmentation else 'OFF'}",  # Report the independent augmented-test toggle
         ]
