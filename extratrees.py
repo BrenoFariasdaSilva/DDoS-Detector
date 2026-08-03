@@ -631,14 +631,17 @@ def evaluate_cross_validation_metrics(X_train: pd.DataFrame, y_train: np.ndarray
     cv_cfg = config.get("extra_trees", {}).get("cross_validation", {})  # Read CV configuration
     if not bool(cv_cfg.get("enabled", True)):  # Respect disabled CV diagnostics
         print(f"{BackgroundColors.YELLOW}[CV] Training-partition cross-validation disabled by configuration.{Style.RESET_ALL}")  # Log disabled CV
+        send_telegram_notice(TELEGRAM_BOT, "[EXTRA TREES CV] Cross-validation disabled by configuration")  # Send disabled-CV notice
         return {"accuracy": None, "precision": None, "recall": None, "f1_score": None, "fpr": None, "fnr": None}, "disabled"  # Return missing CV metrics when disabled
     requested_folds = int(cv_cfg.get("n_folds", 3))  # Resolve configured fold count
     _, class_counts = np.unique(y_train, return_counts=True)  # Count labels in training partition only
     effective_folds = min(requested_folds, int(class_counts.min())) if class_counts.size else 0  # Resolve feasible stratified fold count
     if effective_folds < 2:  # Require at least two folds for CV diagnostics
         print(f"{BackgroundColors.YELLOW}[CV] Skipping CV because training class support is insufficient.{Style.RESET_ALL}")  # Log insufficient CV support
+        send_telegram_notice(TELEGRAM_BOT, "[EXTRA TREES CV] Cross-validation skipped: insufficient training class support")  # Send skipped-CV notice
         return {"accuracy": None, "precision": None, "recall": None, "f1_score": None, "fpr": None, "fnr": None}, "insufficient_training_class_support"  # Return missing CV metrics when class support is too small
     print(f"{BackgroundColors.GREEN}[CV] Starting training-partition StratifiedKFold with {BackgroundColors.CYAN}{effective_folds}{BackgroundColors.GREEN} fold(s). Requested folds: {BackgroundColors.CYAN}{requested_folds}{Style.RESET_ALL}")  # Log CV start
+    send_telegram_notice(TELEGRAM_BOT, f"[EXTRA TREES CV START] Starting training-partition StratifiedKFold | Effective folds: {effective_folds} | Requested folds: {requested_folds} | Training rows: {X_train.shape[0]} | Features: {X_train.shape[1]}")  # Send CV start notice
     splitter = StratifiedKFold(n_splits=effective_folds, shuffle=True, random_state=int(config.get("dataset", {}).get("random_state", 42)))  # Build training-only stratified splitter
     fold_metrics = []  # Accumulate fold metric dictionaries
     X_values = X_train.to_numpy(copy=False)  # Reuse CPU-backed training values for fold slicing
@@ -653,9 +656,11 @@ def evaluate_cross_validation_metrics(X_train: pd.DataFrame, y_train: np.ndarray
         fold_elapsed = time.perf_counter() - fold_start  # Resolve fold elapsed seconds
         fold_iterator.set_postfix(f1=f"{fold_metric.get('f1_score'):.6f}", elapsed=f"{int(round(fold_elapsed))}s")  # Update progress bar metrics
         print(f"{BackgroundColors.GREEN}[CV] Fold {BackgroundColors.CYAN}{fold_number}/{effective_folds}{BackgroundColors.GREEN} complete: F1={BackgroundColors.CYAN}{fold_metric.get('f1_score')}{BackgroundColors.GREEN}, time={BackgroundColors.CYAN}{int(round(fold_elapsed))}s{Style.RESET_ALL}")  # Log fold completion
+        send_telegram_notice(TELEGRAM_BOT, format_cv_metrics_notice(f"[EXTRA TREES CV] Fold {fold_number}/{effective_folds}", fold_metric, fold_elapsed))  # Send per-fold CV result notice
     metric_names = ("accuracy", "precision", "recall", "f1_score", "fpr", "fnr")  # Define exported metric names
     cv_metrics = {name: float(np.mean([metrics[name] for metrics in fold_metrics])) for name in metric_names}  # Average fold metrics
     print(f"{BackgroundColors.GREEN}[CV] Completed CV: F1={BackgroundColors.CYAN}{cv_metrics.get('f1_score')}{BackgroundColors.GREEN}, FPR={BackgroundColors.CYAN}{cv_metrics.get('fpr')}{BackgroundColors.GREEN}, FNR={BackgroundColors.CYAN}{cv_metrics.get('fnr')}{Style.RESET_ALL}")  # Log CV completion
+    send_telegram_notice(TELEGRAM_BOT, format_cv_metrics_notice(f"[EXTRA TREES CV] Completed {effective_folds} fold(s)", cv_metrics))  # Send aggregate CV result notice
     return cv_metrics, f"StratifiedKFold(n_splits={effective_folds})"  # Return CV metrics and method label
 
 
@@ -798,6 +803,54 @@ def calculate_execution_time(start_time: datetime.datetime, finish_time: datetim
     return f"{hours:02d}h {minutes:02d}m {seconds:02d}s"  # Return formatted runtime
 
 
+def format_metric_value(value: Any) -> str:
+    """
+    Format a metric value for Telegram notices.
+
+    :param value: Raw metric value.
+    :return: Readable metric text.
+    """
+
+    if value is None:  # Preserve unavailable metrics explicitly
+        return "unavailable"  # Return unavailable marker
+    try:  # Format numeric metrics compactly
+        return f"{float(value):.6f}"  # Return fixed precision metric
+    except Exception:  # Preserve unexpected metric values without hiding the notice
+        return str(value)  # Return fallback text
+
+
+def format_extra_trees_config_notice(config: dict, dataset_path: str) -> str:
+    """
+    Format the Extra Trees configuration Telegram notice.
+
+    :param config: Effective configuration dictionary.
+    :param dataset_path: Dataset path.
+    :return: Telegram configuration notice text.
+    """
+
+    execution_cfg = config.get("execution", {})  # Read execution configuration
+    selection_cfg = config.get("extra_trees", {}).get("selection", {})  # Read feature-selection configuration
+    model_cfg = config.get("extra_trees", {}).get("model", {})  # Read model configuration
+    cv_cfg = config.get("extra_trees", {}).get("cross_validation", {})  # Read cross-validation configuration
+    export_cfg = config.get("extra_trees", {}).get("export", {})  # Read export configuration
+    mode = "Combined files in memory" if bool(execution_cfg.get("combined_files", False)) else "Single CSV"  # Resolve execution mode label
+    return f"[EXTRA TREES CONFIG] Dataset: {dataset_path} | Mode: {mode} | Selected features: {selection_cfg.get('n_features_to_select', 20)} | Estimators: {model_cfg.get('n_estimators', 200)} | n_jobs: {model_cfg.get('n_jobs', 1)} | Random state: {model_cfg.get('random_state', 42)} | CV: {'Enabled' if bool(cv_cfg.get('enabled', True)) else 'Disabled'} | CV folds: {cv_cfg.get('n_folds', 10)} | Results: {export_cfg.get('results_dir', 'Feature_Analysis/Extra_Trees')}/{export_cfg.get('results_filename', 'Extra_Trees_Results.csv')}"  # Return compact config summary
+
+
+def format_cv_metrics_notice(prefix: str, metrics: dict, elapsed_seconds: Optional[float] = None) -> str:
+    """
+    Format cross-validation metrics for Telegram notices.
+
+    :param prefix: Notice prefix.
+    :param metrics: Metric mapping.
+    :param elapsed_seconds: Optional elapsed seconds.
+    :return: Telegram CV metrics notice text.
+    """
+
+    elapsed = f" | Time: {int(round(elapsed_seconds))}s" if elapsed_seconds is not None else ""  # Format optional elapsed time
+    return f"{prefix} | Accuracy: {format_metric_value(metrics.get('accuracy'))} | Precision: {format_metric_value(metrics.get('precision'))} | Recall: {format_metric_value(metrics.get('recall'))} | F1: {format_metric_value(metrics.get('f1_score'))} | FPR: {format_metric_value(metrics.get('fpr'))} | FNR: {format_metric_value(metrics.get('fnr'))}{elapsed}"  # Return compact CV notice
+
+
 def setup_telegram_bot(config: dict) -> Any:
     """
     Set up the Telegram bot for Extra Trees notifications.
@@ -904,6 +957,7 @@ def main() -> None:
     global TELEGRAM_BOT  # Use module-level Telegram bot instance
     TELEGRAM_BOT = setup_telegram_bot(config)  # Initialize Telegram notifications when configured
     send_telegram_notice(TELEGRAM_BOT, f"Starting Extra Trees feature selection at {start_time.strftime('%Y-%m-%d %H:%M:%S')}")  # Send startup notification
+    send_telegram_notice(TELEGRAM_BOT, format_extra_trees_config_notice(config, str(dataset_path)))  # Send startup configuration notification
     run_extra_trees_feature_selection(config, str(dataset_path))  # Run feature selection workflow
     finish_time = datetime.datetime.now()  # Record program finish time
     print(
