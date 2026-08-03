@@ -640,12 +640,13 @@ def evaluate_cross_validation_metrics(X_train: pd.DataFrame, y_train: np.ndarray
         print(f"{BackgroundColors.YELLOW}[CV] Skipping CV because training class support is insufficient.{Style.RESET_ALL}")  # Log insufficient CV support
         send_telegram_notice(TELEGRAM_BOT, "[EXTRA TREES CV] Cross-validation skipped: insufficient training class support")  # Send skipped-CV notice
         return {"accuracy": None, "precision": None, "recall": None, "f1_score": None, "fpr": None, "fnr": None}, "insufficient_training_class_support"  # Return missing CV metrics when class support is too small
-    print(f"{BackgroundColors.GREEN}[CV] Starting training-partition StratifiedKFold with {BackgroundColors.CYAN}{effective_folds}{BackgroundColors.GREEN} fold(s). Requested folds: {BackgroundColors.CYAN}{requested_folds}{Style.RESET_ALL}")  # Log CV start
-    send_telegram_notice(TELEGRAM_BOT, f"[EXTRA TREES CV START] Starting training-partition StratifiedKFold | Effective folds: {effective_folds} | Requested folds: {requested_folds} | Training rows: {X_train.shape[0]} | Features: {X_train.shape[1]}")  # Send CV start notice
+    print(f"{BackgroundColors.GREEN}[CV] Starting training-partition StratifiedKFold with {BackgroundColors.CYAN}{effective_folds}{BackgroundColors.GREEN} fold(s). Requested folds: {BackgroundColors.CYAN}{requested_folds}{BackgroundColors.GREEN} | Initial CV ETA: {BackgroundColors.CYAN}unavailable{Style.RESET_ALL}")  # Log CV start
+    send_telegram_notice(TELEGRAM_BOT, f"[EXTRA TREES CV START] Starting training-partition StratifiedKFold | Effective folds: {effective_folds} | Requested folds: {requested_folds} | Training rows: {X_train.shape[0]} | Features: {X_train.shape[1]} | Initial CV ETA: unavailable")  # Send CV start notice
     splitter = StratifiedKFold(n_splits=effective_folds, shuffle=True, random_state=int(config.get("dataset", {}).get("random_state", 42)))  # Build training-only stratified splitter
     fold_metrics = []  # Accumulate fold metric dictionaries
     X_values = X_train.to_numpy(copy=False)  # Reuse CPU-backed training values for fold slicing
     fold_iterator = tqdm(splitter.split(X_values, y_train), total=effective_folds, desc=f"{BackgroundColors.GREEN}Extra Trees CV{Style.RESET_ALL}", unit="fold", colour="green")  # Show colored CV fold progress with ETA
+    cv_started_at = time.perf_counter()  # Start current CV timing for ETA reporting
     for fold_number, (train_index, validation_index) in enumerate(fold_iterator, start=1):  # Iterate training-only CV folds
         fold_selector = build_extra_trees_selector(config)  # Build an isolated selector for this fold
         fold_start = time.perf_counter()  # Start fold timing
@@ -654,9 +655,11 @@ def evaluate_cross_validation_metrics(X_train: pd.DataFrame, y_train: np.ndarray
         fold_metric = calculate_classification_metrics(y_train[validation_index], fold_pred)  # Calculate fold validation metrics
         fold_metrics.append(fold_metric)  # Store fold validation metrics
         fold_elapsed = time.perf_counter() - fold_start  # Resolve fold elapsed seconds
-        fold_iterator.set_postfix(f1=f"{fold_metric.get('f1_score'):.6f}", elapsed=f"{int(round(fold_elapsed))}s")  # Update progress bar metrics
-        print(f"{BackgroundColors.GREEN}[CV] Fold {BackgroundColors.CYAN}{fold_number}/{effective_folds}{BackgroundColors.GREEN} complete: F1={BackgroundColors.CYAN}{fold_metric.get('f1_score')}{BackgroundColors.GREEN}, time={BackgroundColors.CYAN}{int(round(fold_elapsed))}s{Style.RESET_ALL}")  # Log fold completion
-        send_telegram_notice(TELEGRAM_BOT, format_cv_metrics_notice(f"[EXTRA TREES CV] Fold {fold_number}/{effective_folds}", fold_metric, fold_elapsed))  # Send per-fold CV result notice
+        remaining_folds = max(effective_folds - fold_number, 0)  # Resolve remaining fold count
+        cv_eta_label = "complete" if remaining_folds == 0 else format_duration_seconds((time.perf_counter() - cv_started_at) / fold_number * remaining_folds)  # Estimate current CV ETA from completed folds
+        fold_iterator.set_postfix(f1=f"{fold_metric.get('f1_score'):.6f}", elapsed=f"{int(round(fold_elapsed))}s", eta=cv_eta_label)  # Update progress bar metrics
+        print(f"{BackgroundColors.GREEN}[CV] Fold {BackgroundColors.CYAN}{fold_number}/{effective_folds}{BackgroundColors.GREEN} complete: F1={BackgroundColors.CYAN}{fold_metric.get('f1_score')}{BackgroundColors.GREEN}, time={BackgroundColors.CYAN}{int(round(fold_elapsed))}s{BackgroundColors.GREEN}, CV ETA={BackgroundColors.CYAN}{cv_eta_label}{Style.RESET_ALL}")  # Log fold completion with current CV ETA
+        send_telegram_notice(TELEGRAM_BOT, format_cv_metrics_notice(f"[EXTRA TREES CV] Fold {fold_number}/{effective_folds}", fold_metric, fold_elapsed, cv_eta_label))  # Send per-fold CV result notice with current CV ETA
     metric_names = ("accuracy", "precision", "recall", "f1_score", "fpr", "fnr")  # Define exported metric names
     cv_metrics = {name: float(np.mean([metrics[name] for metrics in fold_metrics])) for name in metric_names}  # Average fold metrics
     print(f"{BackgroundColors.GREEN}[CV] Completed CV: F1={BackgroundColors.CYAN}{cv_metrics.get('f1_score')}{BackgroundColors.GREEN}, FPR={BackgroundColors.CYAN}{cv_metrics.get('fpr')}{BackgroundColors.GREEN}, FNR={BackgroundColors.CYAN}{cv_metrics.get('fnr')}{Style.RESET_ALL}")  # Log CV completion
@@ -803,6 +806,24 @@ def calculate_execution_time(start_time: datetime.datetime, finish_time: datetim
     return f"{hours:02d}h {minutes:02d}m {seconds:02d}s"  # Return formatted runtime
 
 
+def format_duration_seconds(total_seconds: float) -> str:
+    """
+    Format a duration in seconds.
+
+    :param total_seconds: Duration in seconds.
+    :return: Human-readable duration text.
+    """
+
+    seconds = max(int(round(total_seconds)), 0)  # Normalize duration to non-negative whole seconds
+    hours, remainder = divmod(seconds, 3600)  # Split elapsed hours
+    minutes, seconds = divmod(remainder, 60)  # Split elapsed minutes and seconds
+    if hours:  # Include hours only when needed
+        return f"{hours}h {minutes}m {seconds}s"  # Return hour-minute-second duration
+    if minutes:  # Include minutes only when needed
+        return f"{minutes}m {seconds}s"  # Return minute-second duration
+    return f"{seconds}s"  # Return second-only duration
+
+
 def format_metric_value(value: Any) -> str:
     """
     Format a metric value for Telegram notices.
@@ -837,18 +858,20 @@ def format_extra_trees_config_notice(config: dict, dataset_path: str) -> str:
     return f"[EXTRA TREES CONFIG] Dataset: {dataset_path} | Mode: {mode} | Selected features: {selection_cfg.get('n_features_to_select', 20)} | Estimators: {model_cfg.get('n_estimators', 200)} | n_jobs: {model_cfg.get('n_jobs', 1)} | Random state: {model_cfg.get('random_state', 42)} | CV: {'Enabled' if bool(cv_cfg.get('enabled', True)) else 'Disabled'} | CV folds: {cv_cfg.get('n_folds', 10)} | Results: {export_cfg.get('results_dir', 'Feature_Analysis/Extra_Trees')}/{export_cfg.get('results_filename', 'Extra_Trees_Results.csv')}"  # Return compact config summary
 
 
-def format_cv_metrics_notice(prefix: str, metrics: dict, elapsed_seconds: Optional[float] = None) -> str:
+def format_cv_metrics_notice(prefix: str, metrics: dict, elapsed_seconds: Optional[float] = None, eta_label: Optional[str] = None) -> str:
     """
     Format cross-validation metrics for Telegram notices.
 
     :param prefix: Notice prefix.
     :param metrics: Metric mapping.
     :param elapsed_seconds: Optional elapsed seconds.
+    :param eta_label: Optional current CV ETA label.
     :return: Telegram CV metrics notice text.
     """
 
     elapsed = f" | Time: {int(round(elapsed_seconds))}s" if elapsed_seconds is not None else ""  # Format optional elapsed time
-    return f"{prefix} | Accuracy: {format_metric_value(metrics.get('accuracy'))} | Precision: {format_metric_value(metrics.get('precision'))} | Recall: {format_metric_value(metrics.get('recall'))} | F1: {format_metric_value(metrics.get('f1_score'))} | FPR: {format_metric_value(metrics.get('fpr'))} | FNR: {format_metric_value(metrics.get('fnr'))}{elapsed}"  # Return compact CV notice
+    eta = f" | CV ETA: {eta_label}" if eta_label else ""  # Format optional current-CV ETA
+    return f"{prefix} | Accuracy: {format_metric_value(metrics.get('accuracy'))} | Precision: {format_metric_value(metrics.get('precision'))} | Recall: {format_metric_value(metrics.get('recall'))} | F1: {format_metric_value(metrics.get('f1_score'))} | FPR: {format_metric_value(metrics.get('fpr'))} | FNR: {format_metric_value(metrics.get('fnr'))}{elapsed}{eta}"  # Return compact CV notice
 
 
 def setup_telegram_bot(config: dict) -> Any:
