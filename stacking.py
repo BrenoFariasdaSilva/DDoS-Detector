@@ -147,6 +147,7 @@ from resnet18 import ResNet18Classifier  # Import the standalone sklearn-compati
 from autoencoder import AutoencoderClassifier  # Import the standalone sklearn-compatible supervised Autoencoder classifier
 from lstm import LSTMClassifier  # Import the standalone sklearn-compatible supervised LSTM sequence classifier
 from training_progress import DEFAULT_TRAINING_PROGRESS_INTERVAL_MINUTES, TrainingProgress, XGBoostProgressCallback, format_training_combination_fields, format_training_feature_set, interactive_terminal_attached  # Import reusable training progress infrastructure.
+from utils.lstm_sequences import LSTMSequenceMetadataError, build_lstm_sequence_windows  # Build verified partition-local LSTM windows.
 from utils.oom_restart import AUTO_RESTART_ATTEMPT_ENV, build_exact_oom_skip_rule, capture_oom_baseline, oom_kill_delta, recover_launch_command, schedule_detached_restart, transform_command_with_skip_rule  # Import focused OOM restart planning utilities.
 from utils.skip_combinations import apply_skip_combination_rules, build_alias_lookup, compile_skip_combination_rules, filter_models_for_plan_group, format_skip_rule_match_lines, format_skip_rules_for_info, format_skip_rules_for_telegram, format_skip_summary_line, normalize_plan_augmentation_ratio  # Import reusable skip-combination parsing and plan filtering.
 
@@ -186,9 +187,62 @@ MEMORY_WATCHER_FINALIZED = False  # Prevents duplicate terminal watcher events
 FEATURE_SOURCE_TEMP_DIRS: set = set()  # Tracks temporary feature-source directories created by this process
 CACHE_THREAD_LOCKS: dict = {}  # Stores process-local cache locks by normalized destination path
 CACHE_THREAD_LOCKS_GUARD = threading.Lock()  # Serializes process-local cache lock creation
+LSTM_SOURCE_FILE_COLUMN = "__stacking_lstm_source_file"  # Reserved nonnumeric source identity for verified LSTM windows.
+LSTM_ROW_ORDER_COLUMN = "__stacking_lstm_row_order"  # Reserved nonnumeric row chronology for verified LSTM windows.
 
 
 # Functions Definitions:
+
+
+def is_lstm_metadata_column(column_name: Any) -> bool:
+    """Return whether a column is reserved for LSTM sequence metadata."""
+
+    return str(column_name) in {LSTM_SOURCE_FILE_COLUMN, LSTM_ROW_ORDER_COLUMN}
+
+
+def feature_columns_without_lstm_metadata(columns: Any) -> List[Any]:
+    """Remove reserved LSTM metadata columns from feature identities."""
+
+    return [column for column in list(columns) if not is_lstm_metadata_column(column)]
+
+
+def extract_lstm_row_metadata(df: pd.DataFrame, source_file: str = "single_file") -> pd.DataFrame:
+    """Return source_file and row_order metadata aligned to the supplied cleaned frame."""
+
+    if LSTM_SOURCE_FILE_COLUMN in df.columns and LSTM_ROW_ORDER_COLUMN in df.columns:
+        return pd.DataFrame({"source_file": df[LSTM_SOURCE_FILE_COLUMN].astype(str).to_numpy(copy=False), "row_order": df[LSTM_ROW_ORDER_COLUMN].to_numpy(copy=False)}, index=df.index)
+    return pd.DataFrame({"source_file": str(source_file), "row_order": df.index.to_numpy(copy=True)}, index=df.index)
+
+
+def is_lstm_classifier_name(model_name: Any) -> bool:
+    """Return whether the active classifier identity is the supervised LSTM."""
+
+    return str(model_name) == "LSTM"
+
+
+def prepare_lstm_sequence_evaluation_inputs(model: Any, X_train: Any, y_train: Any, X_test: Any, y_test: Any, train_metadata: Optional[pd.DataFrame], test_metadata: Optional[pd.DataFrame]) -> tuple[Any, Any, Any, Any, dict]:
+    """Build verified LSTM train and test windows and enable the estimator trust flag."""
+
+    if train_metadata is None or test_metadata is None:
+        raise LSTMSequenceMetadataError("LSTM combination lacks train/test row metadata required for source-local chronological windows")
+    params = model.get_params(deep=False) if hasattr(model, "get_params") else {}
+    sequence_length = int(params.get("sequence_length", 8))
+    sequence_stride = int(params.get("sequence_stride", 1))
+    minimum_group_length = int(params.get("minimum_group_length", sequence_length))
+    label_strategy = str(params.get("label_strategy", "final_timestep"))
+    mixed_label_policy = str(params.get("mixed_label_window_policy", "keep"))
+    X_train_seq, y_train_seq, train_sequence_metadata = build_lstm_sequence_windows(X_train, y_train, train_metadata, sequence_length, sequence_stride, minimum_group_length, label_strategy, mixed_label_policy)
+    X_test_seq, y_test_seq, test_sequence_metadata = build_lstm_sequence_windows(X_test, y_test, test_metadata, sequence_length, sequence_stride, minimum_group_length, label_strategy, mixed_label_policy)
+    model.set_params(trusted_sequence_input=True, chronological_field="row_order", group_fields=("source_file",), sequence_source_row_count=train_sequence_metadata["sequence_source_row_count"], discarded_prefix_rows=train_sequence_metadata["discarded_prefix_rows"], mixed_label_windows=train_sequence_metadata["mixed_label_windows"], skipped_groups=train_sequence_metadata["skipped_groups"])
+    return X_train_seq, y_train_seq, X_test_seq, y_test_seq, {"train": train_sequence_metadata, "test": test_sequence_metadata}
+
+
+def classifier_feature_count(features: Any, fallback: Optional[Any] = None) -> Optional[int]:
+    """Return the model feature axis width for 2D tabular or 3D sequence inputs."""
+
+    if hasattr(features, "shape") and len(features.shape) > 1:
+        return int(features.shape[-1])
+    return fallback
 
 
 def get_memory_watcher_config(config: Optional[dict] = None) -> dict:  # Resolve memory watcher configuration
@@ -3120,6 +3174,8 @@ def concat_files_into_combined_files_df(processed_files_with_labels, common_feat
 
     for idx, (f, df_clean, this_target, feat_cols, attack_label) in enumerate(processed_files_with_labels):  # Iterate over processed files with index
         df_subset = df_clean[common_features_list].copy()  # Select only common features as a copy for safe modification
+        df_subset[LSTM_SOURCE_FILE_COLUMN] = str(f)  # Preserve source-file grouping for later verified LSTM windows.
+        df_subset[LSTM_ROW_ORDER_COLUMN] = pd.Series(df_clean.index.to_numpy(copy=True), index=df_clean.index).astype(str).values  # Preserve pre-concat row chronology for LSTM only.
         df_subset["attack_type"] = df_clean[this_target].values  # Preserve original label column values to maintain benign and attack class integrity
         combined_parts.append(df_subset)  # Append to combined parts list
 
@@ -5640,7 +5696,7 @@ def preprocess_dataframe(df, remove_zero_variance=True, config=None):
         raise
 
 
-def scale_and_split(X, y, test_size=0.2, random_state=42, config=None):
+def scale_and_split(X, y, test_size=0.2, random_state=42, config=None, row_metadata: Optional[pd.DataFrame] = None):
     """
     Scales the numeric features using StandardScaler and splits the data
     into training and testing sets.
@@ -5652,7 +5708,7 @@ def scale_and_split(X, y, test_size=0.2, random_state=42, config=None):
     :param test_size: Fraction of the data to reserve for the test set.
     :param random_state: Seed for the random split for reproducibility.
     :param config: Configuration dictionary (uses global CONFIG if None)
-    :return: Tuple (X_train_scaled, X_test_scaled, y_train, y_test, scaler, label_encoder)
+    :return: Tuple (X_train_scaled, X_test_scaled, y_train, y_test, scaler, label_encoder) plus metadata partitions when row_metadata is supplied
     """
     
     try:
@@ -5704,7 +5760,9 @@ def scale_and_split(X, y, test_size=0.2, random_state=42, config=None):
         y_test = np.asarray(le.transform(target_values[test_idx]), dtype=np.int64)  # Transform original testing labels without modifying the encoder.
         write_memory_phase_event("after_train_test_split", config=config, train_sample_count=len(y_train), test_sample_count=len(y_test), feature_count=X_train.shape[1], event_outcome="completed")  # Publish train/test split completion
 
-        del sample_indices, train_idx, test_idx, X_values  # Release split helper arrays and base feature view before augmentation/scaling
+        train_metadata = row_metadata.iloc[train_idx].reset_index(drop=True) if row_metadata is not None else None  # Preserve train row provenance only when requested.
+        test_metadata = row_metadata.iloc[test_idx].reset_index(drop=True) if row_metadata is not None else None  # Preserve test row provenance only when requested.
+        del sample_indices, X_values  # Release split helper arrays and base feature view before augmentation/scaling
         gc.collect()  # Force garbage collection to reclaim memory from released split helpers
 
         write_memory_phase_event("before_scaling", config=config, train_sample_count=len(y_train), test_sample_count=len(y_test), feature_count=X_train.shape[1], event_outcome="starting")  # Publish scaling start
@@ -5723,7 +5781,7 @@ def scale_and_split(X, y, test_size=0.2, random_state=42, config=None):
             config=config
         )  # Output the successful split message
 
-        return (
+        split_result = (
             X_train_scaled,
             X_test_scaled,
             y_train,
@@ -5731,6 +5789,10 @@ def scale_and_split(X, y, test_size=0.2, random_state=42, config=None):
             scaler,
             le,
         )  # Return scaled features, targets, and fitted preprocessing.
+        if row_metadata is not None:
+            return split_result + (train_metadata, test_metadata)  # Return aligned provenance for verified LSTM windows.
+        del train_idx, test_idx  # Release index arrays only after optional metadata slicing.
+        return split_result  # Return the original six-value contract.
     except Exception as e:
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
@@ -7479,7 +7541,7 @@ def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, 
             log_training_phase(feature_set, model_name, "Training", "Completed", hyperparameters_enabled, augmentation_ratio)  # Mark contextual fit completion without implying combination completion.
             params_digest = get_classifier_params_digest(model)  # Build fitted classifier parameter digest
             fit_metadata = dict(phase_metadata)  # Copy caller watcher metadata
-            fit_metadata.update({"dataset_identity": os.path.basename(str(dataset_file)) if dataset_file is not None else fit_metadata.get("dataset_identity"), "classifier_name": model_name, "classifier_params_digest": params_digest, "classifier_params_reference": f"sha256:{params_digest.get('digest')}", "train_sample_count": len(y_train), "test_sample_count": len(y_test), "feature_count": X_train.shape[1] if hasattr(X_train, "shape") and len(X_train.shape) > 1 else fit_metadata.get("feature_count"), "n_jobs": get_classifier_n_jobs(model), "event_outcome": "fit_completed"})  # Build fit completion watcher metadata
+            fit_metadata.update({"dataset_identity": os.path.basename(str(dataset_file)) if dataset_file is not None else fit_metadata.get("dataset_identity"), "classifier_name": model_name, "classifier_params_digest": params_digest, "classifier_params_reference": f"sha256:{params_digest.get('digest')}", "train_sample_count": len(y_train), "test_sample_count": len(y_test), "feature_count": classifier_feature_count(X_train, fit_metadata.get("feature_count")), "n_jobs": get_classifier_n_jobs(model), "event_outcome": "fit_completed"})  # Build fit completion watcher metadata
             write_memory_phase_event("after_classifier_fit", config=config, **fit_metadata)  # Publish classifier fit completion
         else:
             store_training_ram_stats(training_ram_stats, stop_training_ram_monitor(None))  # Preserve RAM-stat shape without starting a training monitor.
@@ -7522,7 +7584,7 @@ def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, 
         return (acc, prec, rec, f1, fpr, fnr, int(round(elapsed_time)))  # Return the metrics tuple
     except MemoryError as e:  # Handle classifier memory errors with a diagnostic phase
         error_metadata = dict(phase_metadata or {})  # Copy watcher metadata for memory error
-        error_metadata.update({"dataset_identity": os.path.basename(str(dataset_file)) if dataset_file is not None else error_metadata.get("dataset_identity"), "classifier_name": model_name, "train_sample_count": len(y_train) if y_train is not None else error_metadata.get("train_sample_count"), "test_sample_count": len(y_test) if y_test is not None else error_metadata.get("test_sample_count"), "feature_count": X_train.shape[1] if hasattr(X_train, "shape") and len(X_train.shape) > 1 else error_metadata.get("feature_count"), "n_jobs": get_classifier_n_jobs(model), "event_outcome": str(e)})  # Build memory error watcher metadata
+        error_metadata.update({"dataset_identity": os.path.basename(str(dataset_file)) if dataset_file is not None else error_metadata.get("dataset_identity"), "classifier_name": model_name, "train_sample_count": len(y_train) if y_train is not None else error_metadata.get("train_sample_count"), "test_sample_count": len(y_test) if y_test is not None else error_metadata.get("test_sample_count"), "feature_count": classifier_feature_count(X_train, error_metadata.get("feature_count")), "n_jobs": get_classifier_n_jobs(model), "event_outcome": str(e)})  # Build memory error watcher metadata
         write_memory_phase_event("memory_error", config=config, **error_metadata)  # Publish classifier memory error
         try:
             model = None  # Release the partially fitted estimator before heavy error reporting
@@ -7530,11 +7592,10 @@ def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, 
         except Exception:
             pass  # Do not mask the original MemoryError
         print(str(e))  # Print memory error to terminal logs
-        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send memory error via Telegram
         raise  # Preserve original MemoryError behavior
     except Exception as e:
         error_metadata = dict(phase_metadata or {})  # Copy watcher metadata for model error
-        error_metadata.update({"dataset_identity": os.path.basename(str(dataset_file)) if dataset_file is not None else error_metadata.get("dataset_identity"), "classifier_name": model_name, "train_sample_count": len(y_train) if y_train is not None else error_metadata.get("train_sample_count"), "test_sample_count": len(y_test) if y_test is not None else error_metadata.get("test_sample_count"), "feature_count": X_train.shape[1] if hasattr(X_train, "shape") and len(X_train.shape) > 1 else error_metadata.get("feature_count"), "n_jobs": get_classifier_n_jobs(model), "event_outcome": str(e)})  # Build model error watcher metadata
+        error_metadata.update({"dataset_identity": os.path.basename(str(dataset_file)) if dataset_file is not None else error_metadata.get("dataset_identity"), "classifier_name": model_name, "train_sample_count": len(y_train) if y_train is not None else error_metadata.get("train_sample_count"), "test_sample_count": len(y_test) if y_test is not None else error_metadata.get("test_sample_count"), "feature_count": classifier_feature_count(X_train, error_metadata.get("feature_count")), "n_jobs": get_classifier_n_jobs(model), "event_outcome": str(e)})  # Build model error watcher metadata
         write_memory_phase_event("model_error", config=config, **error_metadata)  # Publish classifier model error
         try:
             model = None  # Release the partially fitted estimator before heavy error reporting
@@ -7542,7 +7603,6 @@ def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, 
         except Exception:
             pass  # Do not mask the original exception
         print(str(e))
-        send_exception_via_telegram(type(e), e, e.__traceback__)
         raise
 
 
@@ -12029,20 +12089,22 @@ def sanitize_and_verify_feature_selections(ga_selected_features, rfe_selected_fe
         raise
 
 
-def prepare_evaluation_data_splits(df, config=None):
+def prepare_evaluation_data_splits(df, config=None, include_lstm_metadata: bool = False, lstm_source_file: str = "single_file"):
     """
     Prepare original-only training and testing data splits.
 
     :param df: DataFrame with the original dataset
     :param config: Configuration dictionary (uses global CONFIG if None)
-    :return: Tuple of (X_train_scaled, X_test_scaled, y_train, y_test, scaler, label_encoder) or None if single-class target
+    :return: Tuple of (X_train_scaled, X_test_scaled, y_train, y_test, scaler, label_encoder) plus metadata partitions when requested, or None if single-class target
     """
 
     try:
         if config is None:  # If no config provided
             config = CONFIG  # Use global CONFIG
 
+        row_metadata = extract_lstm_row_metadata(df, lstm_source_file) if include_lstm_metadata else None  # Capture row provenance before feature-only views are built.
         feature_df = df.iloc[:, :-1]  # Build feature view excluding the target column positionally to avoid drop-copy amplification
+        feature_df = feature_df[[column for column in feature_df.columns if not is_lstm_metadata_column(column)]]  # Remove reserved metadata from all classifier features.
         X_full = feature_df.select_dtypes(include=np.number)  # Select only numeric feature columns from the feature view
         y = df.iloc[:, -1]  # Extract target column as the last column
 
@@ -12055,14 +12117,12 @@ def prepare_evaluation_data_splits(df, config=None):
             )  # Output the error message
             return None  # Return None to signal classification is not possible
 
-        X_train_scaled, X_test_scaled, y_train, y_test, scaler, label_encoder = scale_and_split(
-            X_full, y, config=config
-        )  # Split and fit preprocessing on original training data only.
+        split_result = scale_and_split(X_full, y, config=config, row_metadata=row_metadata)  # Split and fit preprocessing on original training data only.
 
         del X_full, y  # Release original split inputs after scale_and_split returns
         gc.collect()  # Force garbage collection to reclaim memory from released original split inputs
 
-        return X_train_scaled, X_test_scaled, y_train, y_test, scaler, label_encoder  # Return the prepared original-only data splits and preprocessing.
+        return split_result  # Return the prepared original-only data splits and preprocessing.
     except Exception as e:
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
@@ -13276,7 +13336,7 @@ def schedule_cached_classifier_explainability(model_prototype, model_name, X_tes
     )  # Reuse the ordinary scheduler; unavailable training RAM selects the safe synchronous path.
 
 
-def run_individual_classifiers_for_feature_set(name, individual_models, X_train_df, y_train, X_test_df, y_test, X_test_subset, X_train_n_cols, file, execution_mode_str, attack_types_combined, data_source_label, experiment_id, experiment_mode, augmentation_ratio, hyperparams_map, scaler, label_encoder, transformer, input_feature_names, target_column, source_files, subset_feature_names, total_steps, current_combination, progress_bar, config=None, cache_dict=None, cache_ref_file=None, hyperparameters_enabled=False):
+def run_individual_classifiers_for_feature_set(name, individual_models, X_train_df, y_train, X_test_df, y_test, X_test_subset, X_train_n_cols, file, execution_mode_str, attack_types_combined, data_source_label, experiment_id, experiment_mode, augmentation_ratio, hyperparams_map, scaler, label_encoder, transformer, input_feature_names, target_column, source_files, subset_feature_names, total_steps, current_combination, progress_bar, config=None, cache_dict=None, cache_ref_file=None, hyperparameters_enabled=False, train_row_metadata: Optional[pd.DataFrame] = None, test_row_metadata: Optional[pd.DataFrame] = None):
     """
     Evaluates all individual classifiers for a feature set sequentially, collects results, and runs explainability.
 
@@ -13325,13 +13385,22 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
         X_test_values = X_test_df.to_numpy(copy=False) if hasattr(X_test_df, "to_numpy") else np.asarray(X_test_df)  # Reuse one no-copy test array view for all classifiers in this feature set
 
         for model_name, model in individual_models.items():  # Iterate over each individual model sequentially to prevent loky deadlock
-            recovered, current_combination = recover_cached_individual_classifier_result(cache_dict, execution_mode_str, data_source_label, experiment_mode, augmentation_ratio, attack_types_combined, name, model_name, results_dict, current_combination, total_steps, progress_bar, hyperparameters_enabled=hyperparameters_enabled, expected_n_features=X_train_n_cols, expected_feature_names=subset_feature_names, expected_n_samples_train=len(y_train), expected_n_samples_test=len(y_test))  # Recover only rows produced with the same active data shape and ordered features.
+            cache_train_count = None if is_lstm_classifier_name(model_name) else len(y_train)  # LSTM cache rows use sequence counts unavailable until windowing.
+            cache_test_count = None if is_lstm_classifier_name(model_name) else len(y_test)  # Preserve exact row-count cache checks for non-LSTM models.
+            recovered, current_combination = recover_cached_individual_classifier_result(cache_dict, execution_mode_str, data_source_label, experiment_mode, augmentation_ratio, attack_types_combined, name, model_name, results_dict, current_combination, total_steps, progress_bar, hyperparameters_enabled=hyperparameters_enabled, expected_n_features=X_train_n_cols, expected_feature_names=subset_feature_names, expected_n_samples_train=cache_train_count, expected_n_samples_test=cache_test_count)  # Recover only rows produced with the same active data shape and ordered features.
             if recovered:  # Skip recomputation when cache recovery succeeds
                 log_training_phase(name, model_name, "Cache persistence", "Recovered", hyperparameters_enabled, augmentation_ratio)  # Record contextual durable cache recovery without implying retraining.
                 schedule_cached_classifier_explainability(model, model_name, X_test_subset, y_test, subset_feature_names, file, name, execution_mode_str, attack_types_combined, experiment_mode, hyperparameters_enabled, config, source_files, target_column, input_feature_names, label_encoder, transformer)  # Explain the exact persisted classifier when its compatible artifact exists.
                 continue  # Move to next model because this one has already been recovered
             log_training_phase(name, model_name, "Model preparation", "Started", hyperparameters_enabled, augmentation_ratio)  # Mark contextual estimator cloning and artifact identity preparation.
             active_model = clone(model)  # Clone the estimator prototype so fitted state is not retained across atomic classifiers
+            model_X_train = X_train_values  # Default non-LSTM training matrix remains row-wise 2D.
+            model_y_train = y_train  # Default non-LSTM training labels remain row-aligned.
+            model_X_test = X_test_values  # Default non-LSTM testing matrix remains row-wise 2D.
+            model_y_test = y_test  # Default non-LSTM testing labels remain row-aligned.
+            sequence_metadata = None  # Store LSTM generation evidence only for sequence models.
+            if is_lstm_classifier_name(model_name):  # Convert only LSTM inputs after split, scaling, and feature selection.
+                model_X_train, model_y_train, model_X_test, model_y_test, sequence_metadata = prepare_lstm_sequence_evaluation_inputs(active_model, X_train_values, y_train, X_test_values, y_test, train_row_metadata, test_row_metadata)  # Build verified partition-local sequence tensors.
             artifact_feature_set = f"{name} - {'Optimized Hyperparameters' if hyperparameters_enabled else 'Default Hyperparameters'}"  # Resolve HP-isolated artifact feature-set label
             dataset_name = build_filename_safe_dataset_identity(resolve_canonical_dataset_identity(str(file), True)) if execution_mode_str == "combined_files" else os.path.basename(os.path.dirname(file))  # Resolve model export dataset folder by execution mode.
             artifact_context = build_stacking_model_artifact_context(file, source_files, execution_mode_str, attack_types_combined, target_column, model_name, active_model, artifact_feature_set, input_feature_names, subset_feature_names, list(label_encoder.classes_), transformer, hyperparameters_enabled, get_current_experiment_run(config), config.get("evaluation", {}).get("random_state", 42))  # Build run-specific original-training artifact identity.
@@ -13341,7 +13410,7 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
             phase_params_digest = get_classifier_params_digest(active_model)  # Build compact classifier parameter digest
             phase_cache_key = build_resume_cache_key(execution_mode_str, data_source_label, experiment_mode, augmentation_ratio, attack_types_combined, name, model_name, hyperparameters_enabled)  # Build cache identity source for diagnostics
             phase_cache_digest = hashlib.sha256(json.dumps(phase_cache_key, sort_keys=True, default=str).encode("utf-8")).hexdigest()  # Build stable cache identity digest
-            phase_metadata = {"dataset_identity": os.path.basename(str(file)), "dataset_source": file, "experiment_run": get_current_experiment_run(config), "execution_mode": execution_mode_str, "attack_scope": attack_types_combined, "data_source": data_source_label, "experiment_mode": experiment_mode, "augmentation_ratio": augmentation_ratio, "feature_set_name": name, "hyperparameter_mode": "Optimized Hyperparameters" if hyperparameters_enabled else "Default Hyperparameters", "classifier_name": model_name, "classifier_params_digest": phase_params_digest, "classifier_params_reference": f"sha256:{phase_params_digest.get('digest')}", "train_sample_count": len(y_train), "test_sample_count": len(y_test), "feature_count": X_train_n_cols, "n_jobs": get_classifier_n_jobs(active_model), "cache_identity": phase_cache_digest, "cache_reference": cache_ref_file, "combination_index": current_combination, "total_combinations": total_steps}  # Build compact phase metadata for this classifier
+            phase_metadata = {"dataset_identity": os.path.basename(str(file)), "dataset_source": file, "experiment_run": get_current_experiment_run(config), "execution_mode": execution_mode_str, "attack_scope": attack_types_combined, "data_source": data_source_label, "experiment_mode": experiment_mode, "augmentation_ratio": augmentation_ratio, "feature_set_name": name, "hyperparameter_mode": "Optimized Hyperparameters" if hyperparameters_enabled else "Default Hyperparameters", "classifier_name": model_name, "classifier_params_digest": phase_params_digest, "classifier_params_reference": f"sha256:{phase_params_digest.get('digest')}", "train_sample_count": len(model_y_train), "test_sample_count": len(model_y_test), "feature_count": X_train_n_cols, "n_jobs": get_classifier_n_jobs(active_model), "cache_identity": phase_cache_digest, "cache_reference": cache_ref_file, "combination_index": current_combination, "total_combinations": total_steps, "sequence_metadata": sequence_metadata}  # Build compact phase metadata for this classifier
             if memory_watcher_enabled(config):  # Add concrete matrix layout diagnostics only when the watcher is active
                 phase_metadata.update(build_array_memory_metadata("X_train", X_train_values))  # Record train matrix shape/dtype/layout
                 phase_metadata.update(build_array_memory_metadata("X_test", X_test_values))  # Record test matrix shape/dtype/layout
@@ -13352,10 +13421,10 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
             metrics = evaluate_individual_classifier(
                 active_model,  # Use the fitted clone for this atomic classifier.
                 model_name,
-                X_train_values,
-                y_train,
-                X_test_values,
-                y_test,
+                model_X_train,
+                model_y_train,
+                model_X_test,
+                model_y_test,
                 file,
                 scaler,
                 subset_feature_names,
@@ -13374,7 +13443,7 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
             result_entry = build_classifier_result_entry(
                 model_class, file, execution_mode_str, attack_types_combined, name, "Individual",
                 model_name, data_source_label, experiment_id, experiment_mode, augmentation_ratio,
-                X_train_n_cols, len(y_train), len(y_test), metrics, subset_feature_names,
+                X_train_n_cols, len(model_y_train), len(model_y_test), metrics, subset_feature_names,
                 hyperparams_map=hyperparams_map,
                 hyperparameters_enabled=hyperparameters_enabled,
                 effective_hyperparameters=effective_hyperparameters,
@@ -13399,7 +13468,7 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
             explainability_outcome = "skipped"  # Track explainability scheduling outcome
             if config.get("explainability", {}).get("enabled", False) and experiment_mode == "original_only":  # Only queue explainability on original data
                 try:  # Attempt to dispatch explainability for this model.
-                    explainability_dispatch = schedule_explainability_job(active_model, model_name, X_test_subset, y_test, subset_feature_names, file, name, execution_mode_str, config, experiment_mode, hyperparameters_enabled, training_ram_stats=training_ram_stats)  # Dispatch explainability according to RAM-gated process policy.
+                    explainability_dispatch = schedule_explainability_job(active_model, model_name, model_X_test if is_lstm_classifier_name(model_name) else X_test_subset, model_y_test, subset_feature_names, file, name, execution_mode_str, config, experiment_mode, hyperparameters_enabled, training_ram_stats=training_ram_stats)  # Dispatch explainability according to RAM-gated process policy.
                     explainability_outcome = f"scheduled:{explainability_dispatch.get('mode', 'none')}" if isinstance(explainability_dispatch, dict) else "scheduled:none"  # Track selected explainability execution mode.
                 except Exception as e:  # If explainability queueing fails
                     explainability_outcome = f"failed:{e}"  # Track explainability scheduling failure
@@ -13436,7 +13505,6 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
         except Exception:
             pass  # Do not mask the primary failure
         print(str(e))
-        send_exception_via_telegram(type(e), e, e.__traceback__)
         raise
 
 
@@ -13695,7 +13763,6 @@ def print_dataset_evaluation_header(data_source_label, evaluation_plan, executio
         send_telegram_message(TELEGRAM_BOT, telegram_summary)  # Send one guarded, length-protected summary for this evaluation section
     except Exception as e:
         print(str(e))
-        send_exception_via_telegram(type(e), e, e.__traceback__)
         raise
 
 
@@ -13823,6 +13890,8 @@ def evaluate_single_feature_set(
     cache_dict=None,
     cache_ref_file=None,
     hyperparameters_enabled=False,
+    train_row_metadata: Optional[pd.DataFrame] = None,
+    test_row_metadata: Optional[pd.DataFrame] = None,
 ):
     """
     Evaluate all individual classifiers and the stacking model on one non-empty feature subset.
@@ -13872,7 +13941,7 @@ def evaluate_single_feature_set(
         X_test_subset, X_train_subset.shape[1], file, execution_mode_str, attack_types_combined,
         data_source_label, experiment_id, experiment_mode, augmentation_ratio,
         hyperparams_map, scaler, label_encoder, transformer, input_feature_names, target_column, source_files, subset_feature_names, total_steps, current_combination, progress_bar, config=config,
-        cache_dict=cache_dict, cache_ref_file=cache_ref_file, hyperparameters_enabled=hyperparameters_enabled,
+        cache_dict=cache_dict, cache_ref_file=cache_ref_file, hyperparameters_enabled=hyperparameters_enabled, train_row_metadata=train_row_metadata, test_row_metadata=test_row_metadata,
     )  # Evaluate all individual classifiers and collect their result entries with resume support
 
     stacking_result_entry = None
@@ -13978,7 +14047,7 @@ def evaluate_on_dataset(
         else:  # Reuse the complete ordered plan that created the shared full-grid progress bar
             evaluation_plan = grid_progress["evaluation_plan"]  # Reuse the authoritative full-grid plan source
 
-        pca_input_feature_names = [str(column) for column in df.iloc[:, :-1].select_dtypes(include=np.number).columns]  # Capture the exact ordered numeric columns consumed by scaling and PCA.
+        pca_input_feature_names = feature_columns_without_lstm_metadata([str(column) for column in df.iloc[:, :-1].select_dtypes(include=np.number).columns])  # Capture the exact ordered numeric columns consumed by scaling and PCA.
         target_column_name = str(df.columns[-1])  # Capture the positional target column used by the split flow.
         original_sample_count = int(len(df))  # Record the original sample population before splitting.
         if source_files is not None:  # Use caller-supplied provenance for combined or explicitly sourced evaluation data.
@@ -14064,6 +14133,8 @@ def evaluate_on_dataset(
                 subset_feature_names = selected_features_by_mode[name]
                 expected_transformer = PCA(n_components=len(subset_feature_names)) if name == "PCA Components" else None
                 for model_name, model_prototype in evaluation_models:
+                    if is_lstm_classifier_name(model_name):
+                        raise LSTMSequenceMetadataError("Augmented LSTM testing is unsupported in the current persisted-model row-batch path: missing sequence-level augmented artifact flow with source_file and row_order metadata")
                     recovered, current_combination = recover_cached_individual_classifier_result(cache_dict, execution_mode_str, data_source_label, experiment_mode, augmentation_ratio, attack_types_combined, name, model_name, all_results, current_combination, total_steps, progress_bar, hyperparameters_enabled=hyperparameters_enabled, expected_n_features=len(subset_feature_names), expected_feature_names=subset_feature_names, expected_n_samples_train=original_train_count, expected_n_samples_test=len(y_augmented_raw))
                     if recovered:
                         continue
@@ -14111,12 +14182,12 @@ def evaluate_on_dataset(
             gc.collect()
             return all_results
 
-        data_splits = prepare_evaluation_data_splits(df, config=config)  # Prepare original-only training and testing data splits.
+        data_splits = prepare_evaluation_data_splits(df, config=config, include_lstm_metadata=True, lstm_source_file=file)  # Prepare original-only training and testing data splits with LSTM provenance.
 
         if data_splits is None:  # If data preparation failed (single-class target)
             return {}  # Return empty dictionary
 
-        X_train_scaled, X_test_scaled, y_train, y_test, scaler, label_encoder = data_splits  # Unpack original-only splits and fitted preprocessing.
+        X_train_scaled, X_test_scaled, y_train, y_test, scaler, label_encoder, train_row_metadata, test_row_metadata = data_splits  # Unpack original-only splits, preprocessing, and row provenance.
         feature_source_arrays = {"X_train_scaled": X_train_scaled, "X_test_scaled": X_test_scaled, "spilled_to_memmap": False}  # Transfer full source matrices into a mutable lifecycle holder.
         del data_splits, X_train_scaled, X_test_scaled  # Remove duplicate local references so the holder can truly release or spill the full matrices.
         del df  # Release the original dataframe after split and scaling before classifier fitting.
@@ -14149,7 +14220,7 @@ def evaluate_on_dataset(
                 file, execution_mode_str, attack_types_combined,
                 data_source_label, experiment_id, experiment_mode, augmentation_ratio,
                 hyperparams_map, scaler, label_encoder, transformer, pca_input_feature_names, target_column_name, pca_source_files, total_steps, current_combination, progress_bar, stacking_enabled=stacking_enabled, config=config,
-                cache_dict=cache_dict, cache_ref_file=effective_cache_ref, hyperparameters_enabled=hyperparameters_enabled,
+                cache_dict=cache_dict, cache_ref_file=effective_cache_ref, hyperparameters_enabled=hyperparameters_enabled, train_row_metadata=train_row_metadata, test_row_metadata=test_row_metadata,
             )  # Evaluate all individual classifiers and stacking model on this non-empty feature subset with resume support
             write_memory_phase_event("after_feature_set_evaluation", config=config, **feature_phase_metadata, event_outcome="completed")  # Publish feature-set evaluation completion
 
@@ -14167,7 +14238,7 @@ def evaluate_on_dataset(
             feature_sets_iter.close()  # Trigger generator-side subset cleanup if not already exhausted
         cleanup_feature_source_arrays(feature_source_arrays, config=config)  # Release full source arrays or temporary memmaps before returning result metadata
         feature_source_arrays = None  # Prevent duplicate cleanup in the outer finally
-        del y_train, y_test, scaler, label_encoder  # Release labels and fitted preprocessing before returning result metadata
+        del y_train, y_test, scaler, label_encoder, train_row_metadata, test_row_metadata  # Release labels, fitted preprocessing, and row provenance before returning result metadata
         gc.collect()  # Reclaim split/scaled arrays after all feature modes complete
         return all_results  # Return dictionary of results
     except Exception as e:
@@ -14307,7 +14378,7 @@ def load_and_preprocess_dataset(file, combined_df, config=None):
             )  # Output error message
             return (None, None)  # Return None tuple
 
-        feature_names = df_cleaned.iloc[:, :-1].select_dtypes(include=np.number).columns.tolist()  # Preserve every ordered numeric feature regardless of target dtype.
+        feature_names = feature_columns_without_lstm_metadata(df_cleaned.iloc[:, :-1].select_dtypes(include=np.number).columns.tolist())  # Preserve ordered numeric features excluding reserved sequence metadata.
 
         return (df_cleaned, feature_names)  # Return cleaned dataframe and feature names
     except Exception as e:
@@ -15713,7 +15784,7 @@ def persistent_feature_set_processes_enabled(feature_mode_names: List[str], conf
     return True  # Enable one persistent process per active feature set
 
 
-def build_feature_process_metadata(feature_names: List[Any], ga_selected_features: Any, pca_n_components: Any, rfe_selected_features: Any, extra_trees_selected_features: Any) -> dict:  # Build ordered feature identities and indices without materializing matrices
+def build_feature_process_metadata(feature_names: List[Any], ga_selected_features: Any, pca_n_components: Any, rfe_selected_features: Any, extra_trees_selected_features: Any = None) -> dict:  # Build ordered feature identities and indices without materializing matrices
     """
     Build feature-set metadata without materializing feature matrices.
 
@@ -15802,8 +15873,9 @@ def feature_process_cache_result(task: dict, cache_dict: Optional[dict], attack_
         return None  # Keep the task pending
     cached_feature_names = cached_result.get("features_list")  # Read ordered persisted feature identity
     expected_test_count = task.get("expected_n_samples_test")  # Read exact original count or deferred augmented cardinality
-    test_count_compatible = expected_test_count is None or int(cached_result.get("n_samples_test", -1)) == int(expected_test_count)  # Avoid opening augmentation rows solely to validate cached ratio cardinality
-    compatible = int(cached_result.get("n_features", -1)) == int(task["expected_n_features"]) and [str(name) for name in (cached_feature_names if isinstance(cached_feature_names, list) else [])] == [str(name) for name in task["expected_feature_names"]] and int(cached_result.get("n_samples_train", -1)) == int(task["expected_n_samples_train"]) and test_count_compatible  # Require exact active shape and ordered feature identity
+    sample_counts_compatible = True if is_lstm_classifier_name(task.get("classifier_name")) else int(cached_result.get("n_samples_train", -1)) == int(task["expected_n_samples_train"])  # LSTM sequence counts are produced after verified windowing.
+    test_count_compatible = is_lstm_classifier_name(task.get("classifier_name")) or expected_test_count is None or int(cached_result.get("n_samples_test", -1)) == int(expected_test_count)  # Avoid opening augmentation rows solely to validate cached ratio cardinality
+    compatible = int(cached_result.get("n_features", -1)) == int(task["expected_n_features"]) and [str(name) for name in (cached_feature_names if isinstance(cached_feature_names, list) else [])] == [str(name) for name in task["expected_feature_names"]] and sample_counts_compatible and test_count_compatible  # Require exact active shape and ordered feature identity
     return cached_result if compatible else None  # Return only a fully compatible cached result
 
 
@@ -16172,13 +16244,17 @@ def create_feature_process_shared_resources(original_df: pd.DataFrame, file: str
     :return: Small shared-resource descriptor mapping.
     """
 
-    data_splits = prepare_evaluation_data_splits(original_df, config=config)  # Reuse the unchanged scaling, split, labels, and seeds
+    data_splits = prepare_evaluation_data_splits(original_df, config=config, include_lstm_metadata=True, lstm_source_file=file)  # Reuse the unchanged scaling, split, labels, seeds, and LSTM row provenance
     if data_splits is None:  # Reject an unusable single-class dataset before child startup
         raise ValueError("Persistent feature-set evaluation requires at least two target classes")  # Surface the unchanged classification requirement
-    X_train_scaled, X_test_scaled, y_train, y_test, scaler, label_encoder = data_splits  # Unpack the unchanged original-only preprocessing outputs
+    X_train_scaled, X_test_scaled, y_train, y_test, scaler, label_encoder, train_row_metadata, test_row_metadata = data_splits  # Unpack the unchanged original-only preprocessing outputs
     temp_dir = create_feature_process_temp_directory(file, config=config)  # Create one coordinator-owned shared backing directory
     try:  # Remove partial shared resources if any persistence step fails
-        descriptors = {"X_train_scaled": persist_feature_process_array(X_train_scaled, temp_dir, "X_train_scaled"), "X_test_scaled": persist_feature_process_array(X_test_scaled, temp_dir, "X_test_scaled"), "y_train": persist_feature_process_array(y_train, temp_dir, "y_train"), "y_test": persist_feature_process_array(y_test, temp_dir, "y_test")}  # Persist exact matrices and labels as read-only reopenable files
+        source_names = pd.Index(pd.concat([train_row_metadata["source_file"], test_row_metadata["source_file"]], ignore_index=True).astype(str).unique())  # Encode every split source before memmap storage.
+        source_lookup = {name: index for index, name in enumerate(source_names.tolist())}  # Build stable source IDs for both partitions.
+        train_source_codes = np.asarray([source_lookup[value] for value in train_row_metadata["source_file"].astype(str)], dtype=np.int64)  # Encode train source IDs without storing objects.
+        test_source_codes = np.asarray([source_lookup[value] for value in test_row_metadata["source_file"].astype(str)], dtype=np.int64)  # Encode test source IDs without storing objects.
+        descriptors = {"X_train_scaled": persist_feature_process_array(X_train_scaled, temp_dir, "X_train_scaled"), "X_test_scaled": persist_feature_process_array(X_test_scaled, temp_dir, "X_test_scaled"), "y_train": persist_feature_process_array(y_train, temp_dir, "y_train"), "y_test": persist_feature_process_array(y_test, temp_dir, "y_test"), "train_source_file": persist_feature_process_array(np.asarray(train_source_codes, dtype=np.int64), temp_dir, "train_source_file"), "test_source_file": persist_feature_process_array(test_source_codes, temp_dir, "test_source_file"), "train_row_order": persist_feature_process_array(pd.to_numeric(train_row_metadata["row_order"], errors="raise").to_numpy(dtype=np.int64), temp_dir, "train_row_order"), "test_row_order": persist_feature_process_array(pd.to_numeric(test_row_metadata["row_order"], errors="raise").to_numpy(dtype=np.int64), temp_dir, "test_row_order")}  # Persist exact matrices, labels, and LSTM provenance as read-only reopenable files
         preprocessing_path = os.path.join(temp_dir, "preprocessing.joblib")  # Resolve the small fitted preprocessing bundle path
         write_stacking_pca_artifact_atomically({"scaler": scaler, "label_encoder": label_encoder}, preprocessing_path, "joblib")  # Persist fitted preprocessing without any full matrices
         descriptors["preprocessing_path"] = preprocessing_path  # Add only the small bundle path to the cross-process payload
@@ -16187,7 +16263,7 @@ def create_feature_process_shared_resources(original_df: pd.DataFrame, file: str
         cleanup_feature_process_directory(temp_dir)  # Delete incomplete shared backing files
         raise  # Preserve the original shared-resource failure
     finally:  # Release coordinator in-memory split outputs after safe disk persistence
-        del X_train_scaled, X_test_scaled, y_train, y_test, scaler, label_encoder, data_splits  # Drop every large or fitted coordinator reference
+        del X_train_scaled, X_test_scaled, y_train, y_test, scaler, label_encoder, train_row_metadata, test_row_metadata, data_splits  # Drop every large or fitted coordinator reference
         gc.collect()  # Reclaim original split memory before child startup
     return descriptors  # Return only small paths, shapes, dtypes, and fitted preprocessing path
 
@@ -16234,6 +16310,8 @@ def prepare_feature_process_original_resources(process_payload: dict) -> dict:  
     X_test_source = open_feature_process_array(shared_resources["X_test_scaled"])  # Reopen the shared testing matrix read-only
     y_train = open_feature_process_array(shared_resources["y_train"])  # Reopen shared training labels read-only
     y_test = open_feature_process_array(shared_resources["y_test"])  # Reopen shared testing labels read-only
+    train_row_metadata = pd.DataFrame({"source_file": np.asarray(open_feature_process_array(shared_resources["train_source_file"]), dtype=np.int64), "row_order": np.asarray(open_feature_process_array(shared_resources["train_row_order"]), dtype=np.int64)})  # Rebuild train provenance for LSTM windows.
+    test_row_metadata = pd.DataFrame({"source_file": np.asarray(open_feature_process_array(shared_resources["test_source_file"]), dtype=np.int64), "row_order": np.asarray(open_feature_process_array(shared_resources["test_row_order"]), dtype=np.int64)})  # Rebuild test provenance for LSTM windows.
     preprocessing_bundle = load(shared_resources["preprocessing_path"])  # Load only the small fitted scaler and label encoder bundle
     scaler = preprocessing_bundle["scaler"]  # Resolve the unchanged fitted StandardScaler
     label_encoder = preprocessing_bundle["label_encoder"]  # Resolve the unchanged fitted LabelEncoder
@@ -16264,7 +16342,7 @@ def prepare_feature_process_original_resources(process_payload: dict) -> dict:  
             close_feature_source_memmap(array, array_name)  # Release this worker's read-only mapping only
         raise  # Preserve the original materialization failure
     source_cleanup_required = process_payload["feature_set"] != "Full Features"  # Avoid storing duplicate references when full matrices are the shared source mappings
-    return {"X_train": X_train_feature, "X_test": X_test_feature, "y_train": y_train, "y_test": y_test, "X_train_source": X_train_source if source_cleanup_required else None, "X_test_source": X_test_source if source_cleanup_required else None, "scaler": scaler, "label_encoder": label_encoder, "transformer": transformer, "temp_dir": temp_dir}  # Return bounded worker evaluation resources and exact cleanup ownership
+    return {"X_train": X_train_feature, "X_test": X_test_feature, "y_train": y_train, "y_test": y_test, "train_row_metadata": train_row_metadata, "test_row_metadata": test_row_metadata, "X_train_source": X_train_source if source_cleanup_required else None, "X_test_source": X_test_source if source_cleanup_required else None, "scaler": scaler, "label_encoder": label_encoder, "transformer": transformer, "temp_dir": temp_dir}  # Return bounded worker evaluation resources and exact cleanup ownership
 
 
 def cleanup_feature_process_original_resources(resources: Optional[dict]) -> None:  # Release one worker's original-data mappings and owned backing files
@@ -16601,16 +16679,23 @@ def evaluate_feature_process_original_task(task: dict, process_payload: dict, re
     """
 
     active_model = clone(model_prototype)  # Clone the process-local prototype so fitted state never crosses combinations
+    model_X_train = resources["X_train"]  # Preserve row-wise 2D matrices for non-LSTM classifiers.
+    model_y_train = resources["y_train"]  # Preserve row-aligned labels for non-LSTM classifiers.
+    model_X_test = resources["X_test"]  # Preserve row-wise 2D test matrices for non-LSTM classifiers.
+    model_y_test = resources["y_test"]  # Preserve row-aligned test labels for non-LSTM classifiers.
+    sequence_metadata = None  # Store LSTM sequence-generation evidence only when used.
+    if is_lstm_classifier_name(task["classifier_name"]):  # Convert only LSTM tasks after split, scaling, and feature materialization.
+        model_X_train, model_y_train, model_X_test, model_y_test, sequence_metadata = prepare_lstm_sequence_evaluation_inputs(active_model, resources["X_train"], resources["y_train"], resources["X_test"], resources["y_test"], resources.get("train_row_metadata"), resources.get("test_row_metadata"))  # Build verified partition-local sequence tensors.
     artifact_feature_set = f"{task['feature_set']} - {'Optimized Hyperparameters' if task['hyperparameters_enabled'] else 'Default Hyperparameters'}"  # Preserve the existing model slot identity
     artifact_context = build_feature_process_artifact_context(task, process_payload, active_model)  # Build unchanged original-model provenance
     dataset_name = build_filename_safe_dataset_identity(resolve_canonical_dataset_identity(str(process_payload["file"]), True)) if process_payload["execution_mode"] == "combined_files" else os.path.basename(os.path.dirname(process_payload["file"]))  # Resolve the established model artifact directory
-    phase_metadata = {"dataset_identity": os.path.basename(str(process_payload["file"])), "dataset_source": process_payload["file"], "experiment_run": task["experiment_run"], "execution_mode": process_payload["execution_mode"], "attack_scope": process_payload["attack_types_combined"], "data_source": task["data_source_label"], "experiment_mode": task["experiment_mode"], "augmentation_ratio": task["augmentation_ratio"], "feature_set_name": task["feature_set"], "hyperparameter_mode": "Optimized Hyperparameters" if task["hyperparameters_enabled"] else "Default Hyperparameters", "classifier_name": task["classifier_name"], "train_sample_count": len(resources["y_train"]), "test_sample_count": len(resources["y_test"]), "feature_count": task["expected_n_features"], "n_jobs": get_classifier_n_jobs(active_model), "combination_index": task["global_id"], "total_combinations": task["total_combinations"]}  # Build compact existing watcher metadata without matrices
+    phase_metadata = {"dataset_identity": os.path.basename(str(process_payload["file"])), "dataset_source": process_payload["file"], "experiment_run": task["experiment_run"], "execution_mode": process_payload["execution_mode"], "attack_scope": process_payload["attack_types_combined"], "data_source": task["data_source_label"], "experiment_mode": task["experiment_mode"], "augmentation_ratio": task["augmentation_ratio"], "feature_set_name": task["feature_set"], "hyperparameter_mode": "Optimized Hyperparameters" if task["hyperparameters_enabled"] else "Default Hyperparameters", "classifier_name": task["classifier_name"], "train_sample_count": len(model_y_train), "test_sample_count": len(model_y_test), "feature_count": task["expected_n_features"], "n_jobs": get_classifier_n_jobs(active_model), "combination_index": task["global_id"], "total_combinations": task["total_combinations"], "sequence_metadata": sequence_metadata}  # Build compact existing watcher metadata without matrices
     training_ram_stats = {}  # Hold only this classifier's bounded RAM statistics
     training_eta_callback = lambda eta_label: publish_feature_process_training_eta_event(task, process_payload, status_queue, eta_label)  # Publish the first emitted factual progress ETA through the coordinator.
     log_feature_process_combination(task, status_state, "Fit started")  # Announce the blocking fit before existing heartbeat or unit progress begins
-    metrics = evaluate_individual_classifier(active_model, task["classifier_name"], resources["X_train"], resources["y_train"], resources["X_test"], resources["y_test"], process_payload["file"], resources["scaler"], task["expected_feature_names"], artifact_feature_set, config=process_payload["config"], phase_metadata=phase_metadata, training_ram_stats=training_ram_stats, fit_model=True, notification_context=build_telegram_combination_header(task["feature_set"], task["classifier_name"], None, task["hyperparameters_enabled"], experiment_run=task["experiment_run"]), hyperparameters_enabled=task["hyperparameters_enabled"], augmentation_ratio=task["augmentation_ratio"], training_eta_callback=training_eta_callback)  # Reuse unchanged evaluation with serialized authoritative combination metadata.
+    metrics = evaluate_individual_classifier(active_model, task["classifier_name"], model_X_train, model_y_train, model_X_test, model_y_test, process_payload["file"], resources["scaler"], task["expected_feature_names"], artifact_feature_set, config=process_payload["config"], phase_metadata=phase_metadata, training_ram_stats=training_ram_stats, fit_model=True, notification_context=build_telegram_combination_header(task["feature_set"], task["classifier_name"], None, task["hyperparameters_enabled"], experiment_run=task["experiment_run"]), hyperparameters_enabled=task["hyperparameters_enabled"], augmentation_ratio=task["augmentation_ratio"], training_eta_callback=training_eta_callback)  # Reuse unchanged evaluation with serialized authoritative combination metadata.
     log_feature_process_combination(task, status_state, "Prediction and metrics completed")  # Announce completion of existing prediction and metric phases
-    result_entry = build_classifier_result_entry(active_model.__class__.__name__, process_payload["file"], process_payload["execution_mode"], process_payload["attack_types_combined"], task["feature_set"], "Individual", task["classifier_name"], task["data_source_label"], task["experiment_id"], task["experiment_mode"], None, task["expected_n_features"], len(resources["y_train"]), len(resources["y_test"]), metrics, task["expected_feature_names"], hyperparams_map=process_payload["optimized_params"] if task["hyperparameters_enabled"] else {}, hyperparameters_enabled=task["hyperparameters_enabled"], effective_hyperparameters=serialize_effective_estimator_parameters(active_model), experiment_run=task["experiment_run"])  # Build the run-scoped cache and export result payload
+    result_entry = build_classifier_result_entry(active_model.__class__.__name__, process_payload["file"], process_payload["execution_mode"], process_payload["attack_types_combined"], task["feature_set"], "Individual", task["classifier_name"], task["data_source_label"], task["experiment_id"], task["experiment_mode"], None, task["expected_n_features"], len(model_y_train), len(model_y_test), metrics, task["expected_feature_names"], hyperparams_map=process_payload["optimized_params"] if task["hyperparameters_enabled"] else {}, hyperparameters_enabled=task["hyperparameters_enabled"], effective_hyperparameters=serialize_effective_estimator_parameters(active_model), experiment_run=task["experiment_run"])  # Build the run-scoped cache and export result payload
     log_feature_process_combination(task, status_state, "Persistence started")  # Announce the atomic result transaction
     persist_cache_result_entry(process_payload["cache_ref_file"], result_entry, cache_dict, config=process_payload["config"])  # Persist and verify this completed result immediately through the process-safe cache transaction
     export_model_and_scaler(active_model, resources["scaler"], dataset_name, task["classifier_name"], feature_set=artifact_feature_set, dataset_csv_path=process_payload["file"], config=process_payload["config"], artifact_context=artifact_context, label_encoder=resources["label_encoder"], transformer=resources["transformer"])  # Persist the fitted model and preprocessing through the existing process-safe model transaction
@@ -16633,6 +16718,8 @@ def evaluate_feature_process_augmented_task(task: dict, process_payload: dict, r
     :return: Durably persisted classifier result entry.
     """
 
+    if is_lstm_classifier_name(task["classifier_name"]):
+        raise LSTMSequenceMetadataError("Augmented LSTM testing is unsupported in the current persistent row-batch path: missing sequence-level augmented artifact flow with source_file and row_order metadata")
     artifact_feature_set = f"{task['feature_set']} - {'Optimized Hyperparameters' if task['hyperparameters_enabled'] else 'Default Hyperparameters'}"  # Preserve the existing original-model slot identity
     artifact_context = build_feature_process_artifact_context(task, process_payload, model_prototype)  # Build unchanged original-model provenance
     dataset_name = build_filename_safe_dataset_identity(resolve_canonical_dataset_identity(str(process_payload["file"]), True)) if process_payload["execution_mode"] == "combined_files" else os.path.basename(os.path.dirname(process_payload["file"]))  # Resolve the established model artifact directory
@@ -17113,7 +17200,7 @@ def execute_feature_set_processes(pending_by_feature: dict, process_payload: dic
     augmented_capacity_gate = context.BoundedSemaphore(capacity_decision["augmented_admitted_worker_count"]) if 0 < capacity_decision["augmented_admitted_worker_count"] < capacity_decision["pending_augmented_worker_count"] else None  # Serialize augmented artifact loading only when multiple feature workers require it
     capacity_action = "Gated" if capacity_gate is not None else "Unchanged"  # Distinguish an enforced scheduling decision from full admission
     print(f"[RESOURCE CAPACITY] Decision={capacity_action} | Pending Workers={pending_worker_count} | Simultaneous Workers={admitted_worker_count} | Augmented Workers={capacity_decision['pending_augmented_worker_count']} | Simultaneous Augmented Workers={capacity_decision['augmented_admitted_worker_count']} | Available Bytes={capacity_decision['available_bytes']} | Reserved Bytes={capacity_decision['reserve_bytes']} | Safe Available Bytes={capacity_decision['safe_available_bytes']} | Largest Estimated Worker Bytes={capacity_decision['largest_worker_bytes']} | Estimated Bytes={capacity_decision['estimated_bytes_by_feature']}")  # Log exact capacity evidence instead of silently reducing concurrency
-    phase_order = list(dict.fromkeys(task["augmentation_ratio"] for task in tasks))  # Derive original and ratio waves from authoritative canonical plan.
+    phase_order = list(dict.fromkeys(task.get("augmentation_ratio") for task in tasks))  # Derive original and ratio waves from authoritative canonical plan.
     phase_barrier = context.Barrier(len(process_payload["feature_mode_names"])) if process_payload["feature_mode_names"] else None  # Synchronize configured feature workers at every phase boundary.
     status_queue = context.Queue()  # Create one small lifecycle channel for every persistent worker
     process_records = []  # Track every child for deterministic termination, joining, and closing
@@ -17230,7 +17317,7 @@ def execute_feature_set_processes(pending_by_feature: dict, process_payload: dic
                 failure_task = {"feature_set": failure.get("feature_set"), "classifier_name": failure.get("classifier_name"), "hyperparameters_enabled": failure.get("hyperparameters_enabled"), "augmentation_ratio": failure.get("augmentation_ratio"), "experiment_run": failure.get("experiment_run"), "global_id": failure.get("global_id"), "feature_local_position": failure.get("feature_local_position"), "feature_local_total": failure.get("feature_local_total"), "canonical_total": failure.get("canonical_total"), "total_combinations": failure.get("total_combinations")}  # Preserve fields propagated by the child status event.
             for detail_line in format_failure_combination_details(failure_task):  # Emit complete failing-combination fields to application logs.
                 print(f"[COORDINATOR FAILURE COMBINATION] {detail_line}")  # Log one normalized failure detail.
-            failure_error = RuntimeError(f"Feature-set worker failed for {failure.get('feature_set')} at Global ID {failure.get('global_id')}: {failure.get('error')}\n{failure.get('traceback', '')}")  # Build one surfaced child exception with terminal status evidence
+            failure_error = RuntimeError(f"Feature-set worker failed for {failure.get('feature_set')} at Global ID {failure.get('global_id')}: {failure.get('exception_type', 'Exception')}: {failure.get('error')}")  # Build one concise surfaced child exception; traceback remains in structured failure context.
             failure_error.status_snapshot = failure_snapshot  # Preserve reconciled counters for callers and deterministic diagnostics
             failure_context = {"failure": failure, "task": failure_task, "process_payload": process_payload, "status_snapshot": failure_snapshot}  # Build one factual failure context for logging and Telegram.
             failure_context["resource_diagnostics"] = capture_stacking_resource_diagnostics(failure_context)  # Capture parent-side memory, swap, process, and cgroup facts available after child death.
@@ -17555,7 +17642,7 @@ def execute_original_combined_files_evaluation(files_to_process, ga_sel, pca_n, 
         print(f"{BackgroundColors.YELLOW}No combined files evaluation dataset available. Skipping combined files evaluation orchestration.{Style.RESET_ALL}")  # Warn
         return "break", None  # Signal to break out of combination loop
 
-    feature_names = [c for c in combined_df.columns if c != 'attack_type']  # Extract feature names excluding target
+    feature_names = feature_columns_without_lstm_metadata([c for c in combined_df.columns if c != 'attack_type'])  # Extract feature names excluding target and reserved LSTM metadata
     combined_dataset_identity = resolve_combined_files_dataset_identity(files_to_process)  # Resolve canonical combined directory identity.
     combined_dataset_reference = combined_dataset_identity.rstrip("/")  # Use directory path text without trailing separator for path APIs.
 
