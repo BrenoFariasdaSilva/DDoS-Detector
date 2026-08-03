@@ -147,7 +147,7 @@ from resnet18 import ResNet18Classifier  # Import the standalone sklearn-compati
 from autoencoder import AutoencoderClassifier  # Import the standalone sklearn-compatible supervised Autoencoder classifier
 from lstm import LSTMClassifier  # Import the standalone sklearn-compatible supervised LSTM sequence classifier
 from training_progress import DEFAULT_TRAINING_PROGRESS_INTERVAL_MINUTES, TrainingProgress, XGBoostProgressCallback, format_training_combination_fields, format_training_feature_set, interactive_terminal_attached  # Import reusable training progress infrastructure.
-from utils.skip_combinations import apply_skip_combination_rules, build_alias_lookup, compile_skip_combination_rules, filter_models_for_plan_group, format_skip_rule_match_lines, format_skip_rules_for_info, format_skip_rules_for_telegram, format_skip_summary_line  # Import reusable skip-combination parsing and plan filtering.
+from utils.skip_combinations import apply_skip_combination_rules, build_alias_lookup, compile_skip_combination_rules, filter_models_for_plan_group, format_skip_rule_match_lines, format_skip_rules_for_info, format_skip_rules_for_telegram, format_skip_summary_line, normalize_plan_augmentation_ratio  # Import reusable skip-combination parsing and plan filtering.
 
 
 # Macros:
@@ -12679,7 +12679,10 @@ def build_stacking_failure_notification(category: str, exception: Optional[BaseE
     execution_mode = context.get("execution_mode") or process_payload.get("execution_mode") or (process_payload.get("config") or {}).get("execution", {}).get("execution_mode")  # Resolve execution mode from payload or config.
     resource_diagnostics = context.get("resource_diagnostics")  # Read failure-time resource facts when supplied by the coordinator.
     lines = ["[STACKING FAILURE]", f"Failure category: {category}"]  # Start report using existing plain Telegram text style.
-    optional_fields = [("Exception class", exception_type), ("Exception message", exception_message), ("Child exit code", exitcode), ("Signal", signal_name), ("Child PID", failure.get("pid") or failure.get("child_pid") or context.get("child_pid")), ("Feature set", feature_set_name), ("Classifier", classifier_name), ("Hyperparameter mode", hyperparameter_mode), ("Run index", run_index), ("Global combination ID", global_id), ("Local combination ID", f"{local_id}/{local_total}" if local_id is not None and local_total is not None else local_id), ("Dataset", dataset_value), ("Execution mode", execution_mode), ("Coordinator status", status_snapshot.get("global") if isinstance(status_snapshot, dict) else None), ("Per-feature status", status_snapshot.get("features") if isinstance(status_snapshot, dict) else None), ("Resource diagnostics", resource_diagnostics), ("Transport exception", context.get("transport_exception"))]  # Collect factual fields only.
+    combination_detail_lines = format_failure_combination_details(task)  # Format complete failing-combination metadata when available.
+    lines.extend(combination_detail_lines)  # Add complete failing-combination metadata when available.
+    fallback_combination_fields = [] if combination_detail_lines else [("Feature set", feature_set_name), ("Classifier", classifier_name), ("Hyperparameter mode", hyperparameter_mode), ("Run index", run_index), ("Global combination ID", global_id), ("Local combination ID", f"{local_id}/{local_total}" if local_id is not None and local_total is not None else local_id)]  # Use legacy partial fields only when no task exists.
+    optional_fields = [("Exception class", exception_type), ("Exception message", exception_message), ("Child exit code", exitcode), ("Signal", signal_name), ("Child PID", failure.get("pid") or failure.get("child_pid") or context.get("child_pid")), *fallback_combination_fields, ("Dataset", dataset_value), ("Execution mode", execution_mode), ("Coordinator status", status_snapshot.get("global") if isinstance(status_snapshot, dict) else None), ("Per-feature status", status_snapshot.get("features") if isinstance(status_snapshot, dict) else None), ("Resource diagnostics", resource_diagnostics), ("Transport exception", context.get("transport_exception"))]  # Collect factual fields only.
     lines.extend(f"{name}: {value}" for name, value in optional_fields if value is not None)  # Add only metadata actually available.
     lines.append(f"Host: {platform.node() or 'unknown'}")  # Add current host identity.
     lines.append(f"Operating system: {platform.platform()}")  # Add current operating-system identity.
@@ -12687,6 +12690,32 @@ def build_stacking_failure_notification(category: str, exception: Optional[BaseE
     if traceback_text:  # Include traceback when available.
         lines.extend(["Traceback:", str(traceback_text)])  # Preserve traceback body after structured metadata.
     return "\n".join(lines)  # Return a single Telegram body.
+
+
+def build_failure_combination_details(task: Optional[dict]) -> dict:  # Build full failing-combination details from authoritative task metadata.
+    """
+    Build full failing-combination details from authoritative task metadata.
+
+    :param task: Authoritative feature-process task descriptor.
+    :return: Human-readable combination detail mapping.
+    """
+
+    if not isinstance(task, dict):  # Reject absent task metadata.
+        return {}  # Return no combination details.
+    augmentation_ratio = normalize_plan_augmentation_ratio(task.get("augmentation_ratio"))  # Normalize ratio exactly like skip-combination rules.
+    return {"Feature set": task.get("feature_set"), "Classifier": task.get("classifier_name"), "Hyperparameter mode": "Optimized Hyperparameters" if task.get("hyperparameters_enabled") else "Default Hyperparameters", "Data augmentation": "Off" if augmentation_ratio == 0 else "On", "Data augmentation ratio": augmentation_ratio, "Run index": task.get("experiment_run"), "Global combination ID": f"{task.get('global_id')}/{task.get('canonical_total') or task.get('total_combinations')}" if task.get("global_id") is not None else None, "Local combination ID": f"{task.get('feature_local_position')}/{task.get('feature_local_total')}" if task.get("feature_local_position") is not None and task.get("feature_local_total") is not None else task.get("feature_local_position")}  # Return complete display fields.
+
+
+def format_failure_combination_details(task: Optional[dict]) -> List[str]:  # Format full failing-combination details.
+    """
+    Format full failing-combination details.
+
+    :param task: Authoritative feature-process task descriptor.
+    :return: Detail lines for logs and Telegram.
+    """
+
+    details = build_failure_combination_details(task)  # Build normalized detail mapping.
+    return [f"{name}: {value}" for name, value in details.items() if value is not None]  # Return populated lines only.
 
 
 def report_stacking_execution_failure(category: str, exception: Optional[BaseException] = None, context: Optional[dict] = None) -> bool:  # Send one deduplicated stacking failure notification
@@ -16599,6 +16628,19 @@ def publish_feature_process_result_event(task: dict, process_payload: dict, resu
     status_queue.put({"status": "progress", "feature_set": process_payload["feature_set"], "global_id": task["global_id"], "event": event, "notification_result": notification_result, "pid": os.getpid()})  # Publish completion only after persistence and terminal status transition
 
 
+def build_feature_process_task_status_fields(task: Optional[dict]) -> dict:  # Copy authoritative task fields for lifecycle events.
+    """
+    Copy authoritative task fields for lifecycle events.
+
+    :param task: Small feature-process task descriptor.
+    :return: Small scalar combination metadata mapping.
+    """
+
+    if not isinstance(task, dict):  # Reject missing task metadata.
+        return {}  # Return no copied fields.
+    return {"classifier_name": task.get("classifier_name"), "hyperparameters_enabled": task.get("hyperparameters_enabled"), "augmentation_ratio": task.get("augmentation_ratio"), "experiment_run": task.get("experiment_run"), "feature_local_position": task.get("feature_local_position"), "feature_local_total": task.get("feature_local_total"), "canonical_total": task.get("canonical_total"), "total_combinations": task.get("total_combinations")}  # Return only scalar active-combination fields.
+
+
 def publish_feature_process_training_start_event(task: dict, process_payload: dict, status_queue: Any) -> None:
     """
     Publish one classifier training-start event before expensive fitting begins.
@@ -16609,7 +16651,7 @@ def publish_feature_process_training_start_event(task: dict, process_payload: di
     :return: None.
     """
 
-    status_queue.put({"status": "training_start", "feature_set": process_payload["feature_set"], "global_id": task["global_id"], "event": "training_start", "initial_eta": "unavailable", "pid": os.getpid()})  # Publish factual start metadata after final cache miss and before data loading or fit.
+    status_queue.put({"status": "training_start", "feature_set": process_payload["feature_set"], "global_id": task["global_id"], "event": "training_start", "initial_eta": "unavailable", "pid": os.getpid(), **build_feature_process_task_status_fields(task)})  # Publish factual start metadata after final cache miss and before data loading or fit.
 
 
 def publish_feature_process_training_eta_event(task: dict, process_payload: dict, status_queue: Any, eta_label: str) -> None:  # Publish one classifier training-ETA event
@@ -16623,7 +16665,7 @@ def publish_feature_process_training_eta_event(task: dict, process_payload: dict
     :return: None.
     """
 
-    status_queue.put({"status": "training_eta", "feature_set": process_payload["feature_set"], "global_id": task["global_id"], "event": "training_eta", "eta": eta_label, "pid": os.getpid()})  # Publish factual ETA metadata after local progress logging emits it.
+    status_queue.put({"status": "training_eta", "feature_set": process_payload["feature_set"], "global_id": task["global_id"], "event": "training_eta", "eta": eta_label, "pid": os.getpid(), **build_feature_process_task_status_fields(task)})  # Publish factual ETA metadata after local progress logging emits it.
 
 
 def await_feature_process_notification_acknowledgement(task: dict, process_payload: dict) -> None:
@@ -16658,7 +16700,7 @@ def process_feature_process_task(task: dict, process_payload: dict, model_maps: 
     combination_lock = None  # Track exact combination reservation for exception-safe release
     task_finished = False  # Prevent duplicate terminal status transitions
     transition_feature_process_status(status_state, task, "started")  # Move this dequeued task atomically from pending to running
-    status_queue.put({"status": "running", "feature_set": process_payload["feature_set"], "global_id": task["global_id"], "feature_local_position": task["feature_local_position"], "pending_queue_position": task.get("pending_queue_position"), "pid": os.getpid()})  # Report small current-task identity for abrupt-death accounting
+    status_queue.put({"status": "running", "feature_set": process_payload["feature_set"], "global_id": task["global_id"], "pending_queue_position": task.get("pending_queue_position"), "pid": os.getpid(), **build_feature_process_task_status_fields(task)})  # Report small current-task identity for abrupt-death accounting
     try:  # Keep exact reservation through final cache validation, computation, and durable persistence
         combination_lock = acquire_feature_process_combination_lock(task, process_payload)  # Block only duplicate computation of this exact cache identity
         model_prototype = model_maps[task["hyperparameters_enabled"]][task["classifier_name"]]  # Resolve the process-local estimator prototype
@@ -16806,7 +16848,7 @@ def run_feature_set_process_worker(process_payload: dict, status_queue: Any, sta
     except BaseException as error:  # Surface exceptions, interrupts, and memory failures to the coordinator
         error_traceback = traceback.format_exc()  # Serialize only the small textual child traceback
         try:  # Keep status reporting best-effort before preserving child failure
-            status_queue.put({"status": "error", "feature_set": process_payload.get("feature_set"), "worker_index": process_payload.get("worker_index"), "pid": os.getpid(), "global_id": active_task.get("global_id") if active_task else None, "error": str(error), "exception_type": type(error).__name__, "traceback": error_traceback})  # Send complete child failure context without matrices
+            status_queue.put({"status": "error", "feature_set": process_payload.get("feature_set"), "worker_index": process_payload.get("worker_index"), "pid": os.getpid(), "global_id": active_task.get("global_id") if active_task else None, "error": str(error), "exception_type": type(error).__name__, "traceback": error_traceback, **build_feature_process_task_status_fields(active_task)})  # Send complete child failure context without matrices
         except Exception as queue_error:  # Preserve the original child exception if status transport fails
             try:  # Keep Telegram setup from replacing the worker failure.
                 setup_telegram_bot(config=process_payload.get("config"))  # Reuse existing Telegram setup only when the parent status channel is unavailable
@@ -17089,6 +17131,10 @@ def execute_feature_set_processes(pending_by_feature: dict, process_payload: dic
                 failure.setdefault("signal_name", describe_process_exit_signal(process.exitcode))  # Preserve signal name for negative exits
                 break  # Stop after the matching feature or first coordinator-owned process
             failure_task = tasks_by_global_id.get(failure.get("global_id"))  # Resolve authoritative task metadata when available
+            if failure_task is None and failure.get("global_id") is not None:  # Fall back to scalar lifecycle metadata when task lookup is unavailable.
+                failure_task = {"feature_set": failure.get("feature_set"), "classifier_name": failure.get("classifier_name"), "hyperparameters_enabled": failure.get("hyperparameters_enabled"), "augmentation_ratio": failure.get("augmentation_ratio"), "experiment_run": failure.get("experiment_run"), "global_id": failure.get("global_id"), "feature_local_position": failure.get("feature_local_position"), "feature_local_total": failure.get("feature_local_total"), "canonical_total": failure.get("canonical_total"), "total_combinations": failure.get("total_combinations")}  # Preserve fields propagated by the child status event.
+            for detail_line in format_failure_combination_details(failure_task):  # Emit complete failing-combination fields to application logs.
+                print(f"[COORDINATOR FAILURE COMBINATION] {detail_line}")  # Log one normalized failure detail.
             failure_error = RuntimeError(f"Feature-set worker failed for {failure.get('feature_set')} at Global ID {failure.get('global_id')}: {failure.get('error')}\n{failure.get('traceback', '')}")  # Build one surfaced child exception with terminal status evidence
             failure_error.status_snapshot = failure_snapshot  # Preserve reconciled counters for callers and deterministic diagnostics
             failure_context = {"failure": failure, "task": failure_task, "process_payload": process_payload, "status_snapshot": failure_snapshot}  # Build one factual failure context for logging and Telegram.
