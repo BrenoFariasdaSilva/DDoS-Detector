@@ -68,7 +68,7 @@ def get_default_config() -> dict:
     """
 
     return {  # Return internal defaults before YAML and CLI overrides
-        "execution": {"verbose": False, "dataset_path": "./Datasets/CICDDoS2019/01-12/DrDoS_DNS.csv", "low_memory": False},  # Define execution defaults
+        "execution": {"verbose": False, "dataset_path": "./Datasets/CICDDoS2019/01-12/DrDoS_DNS.csv", "low_memory": False, "combined_files": False},  # Define execution defaults
         "dataset": {"test_size": 0.2, "random_state": 42},  # Define split defaults
         "extra_trees": {  # Define selector defaults
             "selection": {"n_features_to_select": 20},  # Define Extra-Trees-20 default representation
@@ -127,6 +127,7 @@ def parse_cli_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Extra Trees feature selection for DDoS-Detector")  # Build CLI parser
     parser.add_argument("--config", type=str, default=None, help="Path to config.yaml")  # Add config override
     parser.add_argument("--dataset-path", "--dataset_path", dest="dataset_path", type=str, default=None, help="Path to dataset CSV")  # Add dataset override
+    parser.add_argument("--combined-files", dest="combined_files", action="store_true", default=False, help="Treat dataset path as a directory of CSV files and combine them in memory")  # Add in-memory combined-files mode
     parser.add_argument("--n-features-to-select", dest="n_features_to_select", type=int, default=None, help="Number of Extra Trees features to select")  # Add selected-count override
     parser.add_argument("--n-estimators", dest="n_estimators", type=int, default=None, help="Number of Extra Trees estimators")  # Add estimator-count override
     parser.add_argument("--random-state", dest="random_state", type=int, default=None, help="Random seed")  # Add seed override
@@ -153,6 +154,8 @@ def build_cli_overrides(cli_args: argparse.Namespace) -> dict:
         overrides.setdefault("execution", {})["verbose"] = True  # Store verbose override
     if cli_args.dataset_path is not None:  # Apply dataset path only when supplied
         overrides.setdefault("execution", {})["dataset_path"] = cli_args.dataset_path  # Store dataset path override
+    if cli_args.combined_files:  # Apply combined-files mode only when explicitly requested
+        overrides.setdefault("execution", {})["combined_files"] = True  # Store in-memory directory-combine override
     if cli_args.n_features_to_select is not None:  # Apply selected-count override only when supplied
         overrides.setdefault("extra_trees", {}).setdefault("selection", {})["n_features_to_select"] = cli_args.n_features_to_select  # Store selected-count override
     if cli_args.n_estimators is not None:  # Apply estimator-count override only when supplied
@@ -259,10 +262,13 @@ def validate_config(config: dict) -> None:
     cv_cfg = config.get("extra_trees", {}).get("cross_validation", {})  # Read cross-validation configuration
     export_cfg = config.get("extra_trees", {}).get("export", {})  # Read export configuration
     dataset_cfg = config.get("dataset", {})  # Read dataset configuration
+    execution_cfg = config.get("execution", {})  # Read execution configuration
     validate_positive_int(selection_cfg.get("n_features_to_select", 20), "extra_trees.selection.n_features_to_select")  # Validate selected-feature count
     validate_positive_int(model_cfg.get("n_estimators", 200), "extra_trees.model.n_estimators")  # Validate estimator count
     validate_n_jobs(model_cfg.get("n_jobs", 1), "extra_trees.model.n_jobs")  # Validate worker count
     validate_positive_int(cv_cfg.get("n_folds", 3), "extra_trees.cross_validation.n_folds")  # Validate CV-fold count
+    if not isinstance(execution_cfg.get("combined_files", False), bool):  # Validate combined-files mode type
+        raise ValueError("execution.combined_files must be true or false")  # Raise explicit combined-files mode error
     if not isinstance(cv_cfg.get("enabled", True), bool):  # Validate CV enablement type
         raise ValueError("extra_trees.cross_validation.enabled must be true or false")  # Raise explicit CV enablement error
     if not isinstance(dataset_cfg.get("random_state", 42), int) or isinstance(dataset_cfg.get("random_state", 42), bool):  # Validate split seed type
@@ -380,11 +386,68 @@ def resolve_output_paths(config: dict, csv_path: str) -> tuple[Path, Path]:
     export_cfg = config.get("extra_trees", {}).get("export", {})  # Read export configuration
     results_dir_raw = export_cfg.get("results_dir", "Feature_Analysis/Extra_Trees")  # Read configured output directory
     results_filename = export_cfg.get("results_filename", "Extra_Trees_Results.csv")  # Read configured output filename
-    dataset_dir = Path(csv_path).expanduser().resolve().parent  # Resolve dataset directory
+    dataset_path = Path(csv_path).expanduser().resolve()  # Resolve dataset path
+    dataset_dir = dataset_path if dataset_path.is_dir() else dataset_path.parent  # Resolve dataset directory for file or combined-directory input
     output_dir = Path(results_dir_raw).expanduser()  # Normalize configured output directory
     if not output_dir.is_absolute():  # Resolve relative exports beside dataset
         output_dir = dataset_dir / output_dir  # Build dataset-relative export directory
     return output_dir.resolve(), (output_dir / results_filename).resolve()  # Return resolved paths
+
+
+def list_combined_dataset_files(dataset_dir: Path) -> list[Path]:
+    """
+    List CSV files for in-memory combined-files Extra Trees mode.
+
+    :param dataset_dir: Dataset directory.
+    :return: Ordered CSV file paths.
+    """
+
+    files = sorted(path for path in dataset_dir.glob("*.csv") if path.is_file())  # Resolve deterministic top-level CSV inputs
+    if not files:  # Reject empty directories
+        raise FileNotFoundError(f"No CSV files found in dataset directory: {dataset_dir}")  # Raise explicit combined-files error
+    return files  # Return ordered CSV files
+
+
+def resolve_common_columns(csv_files: list[Path], low_memory: bool) -> list[str]:
+    """
+    Resolve common CSV columns in first-file order.
+
+    :param csv_files: Ordered CSV files.
+    :param low_memory: Pandas low-memory mode.
+    :return: Common column names.
+    """
+
+    headers = [(path, list(pd.read_csv(path, nrows=0, low_memory=low_memory).columns)) for path in csv_files]  # Read headers without loading rows
+    common_columns = list(headers[0][1])  # Preserve first-file column order
+    for _, columns in headers[1:]:  # Intersect remaining headers
+        column_set = set(columns)  # Build lookup for this file
+        common_columns = [column for column in common_columns if column in column_set]  # Keep only shared columns
+    if not common_columns:  # Reject incompatible CSV files
+        raise ValueError(f"No common columns across {len(csv_files)} CSV files in combined-files mode")  # Raise explicit schema error
+    return common_columns  # Return shared columns
+
+
+def load_combined_dataset(dataset_dir: Path, config: dict) -> pd.DataFrame:
+    """
+    Load a directory of CSV files into one in-memory DataFrame.
+
+    :param dataset_dir: Dataset directory.
+    :param config: Effective configuration dictionary.
+    :return: Combined DataFrame.
+    """
+
+    low_memory = bool(config.get("execution", {}).get("low_memory", False))  # Resolve pandas low-memory mode
+    csv_files = list_combined_dataset_files(dataset_dir)  # Resolve source CSV files
+    common_columns = resolve_common_columns(csv_files, low_memory)  # Align files to common schema
+    print(f"{BackgroundColors.GREEN}[LOAD] Combining {BackgroundColors.CYAN}{len(csv_files)}{BackgroundColors.GREEN} CSV file(s) from {BackgroundColors.CYAN}{dataset_dir}{BackgroundColors.GREEN} in memory.{Style.RESET_ALL}")  # Log combined-files load start
+    print(f"{BackgroundColors.GREEN}[LOAD] Common columns retained: {BackgroundColors.CYAN}{len(common_columns)}{Style.RESET_ALL}")  # Log common schema width
+    frames = []  # Accumulate in-memory source frames
+    for csv_file in tqdm(csv_files, desc=f"{BackgroundColors.GREEN}Extra Trees combined CSV load{Style.RESET_ALL}", unit="file", colour="green"):  # Load each source file with progress
+        frame = pd.read_csv(csv_file, usecols=common_columns, low_memory=low_memory)  # Load only aligned common columns
+        frames.append(frame)  # Store frame for in-memory concatenation
+    dataframe = pd.concat(frames, ignore_index=True, copy=False)  # Combine every source frame without writing an intermediate CSV
+    print(f"{BackgroundColors.GREEN}[LOAD] Loaded combined raw dataset shape: {BackgroundColors.CYAN}{dataframe.shape[0]} rows x {dataframe.shape[1]} columns{Style.RESET_ALL}")  # Log combined shape
+    return dataframe  # Return combined frame
 
 
 def load_dataset(csv_path: str, config: dict) -> pd.DataFrame:
@@ -400,9 +463,16 @@ def load_dataset(csv_path: str, config: dict) -> pd.DataFrame:
     if not path.exists():  # Validate dataset presence
         raise FileNotFoundError(f"Dataset file not found: {csv_path}")  # Raise explicit dataset error
     low_memory = bool(config.get("execution", {}).get("low_memory", False))  # Resolve pandas low-memory mode
-    print(f"{BackgroundColors.GREEN}[LOAD] Reading dataset from {BackgroundColors.CYAN}{path}{Style.RESET_ALL}")  # Log dataset load start
-    dataframe = pd.read_csv(path, low_memory=low_memory)  # Load dataset CSV
-    print(f"{BackgroundColors.GREEN}[LOAD] Loaded raw dataset shape: {BackgroundColors.CYAN}{dataframe.shape[0]} rows x {dataframe.shape[1]} columns{Style.RESET_ALL}")  # Log raw dataset shape
+    if bool(config.get("execution", {}).get("combined_files", False)):  # Use directory-based in-memory combined mode when requested
+        if not path.is_dir():  # Require a directory for combined-files mode
+            raise ValueError(f"Combined-files mode requires --dataset-path to be a directory: {csv_path}")  # Raise explicit mode/path mismatch
+        dataframe = load_combined_dataset(path, config)  # Load and concatenate source CSV files in memory
+    else:  # Use legacy single-CSV mode
+        if path.is_dir():  # Reject accidental directory input in single-file mode
+            raise ValueError(f"Dataset path is a directory; pass --combined-files to combine CSV files in memory: {csv_path}")  # Raise explicit mode hint
+        print(f"{BackgroundColors.GREEN}[LOAD] Reading dataset from {BackgroundColors.CYAN}{path}{Style.RESET_ALL}")  # Log dataset load start
+        dataframe = pd.read_csv(path, low_memory=low_memory)  # Load dataset CSV
+        print(f"{BackgroundColors.GREEN}[LOAD] Loaded raw dataset shape: {BackgroundColors.CYAN}{dataframe.shape[0]} rows x {dataframe.shape[1]} columns{Style.RESET_ALL}")  # Log raw dataset shape
     dataframe = preprocess_dataframe(dataframe, remove_zero_variance=bool(config.get("dataset", {}).get("remove_zero_variance", True)))  # Apply GA-aligned dataframe sanitation
     if dataframe.shape[1] < 2:  # Validate predictor plus target columns
         raise ValueError("Dataset must contain at least one feature column and one target column")  # Raise explicit dataset shape error

@@ -294,6 +294,7 @@ extra_trees:
     verbose: false # Enable verbose Extra Trees feature-selection logging
     dataset_path: "./Datasets/CICDDoS2019/01-12/DrDoS_DNS.csv" # Dataset CSV used when running extratrees.py directly
     low_memory: false # Pandas low_memory mode for Extra Trees CSV loading
+    combined_files: false # Treat dataset_path as a directory of CSV files and combine them in memory for extratrees.py
 
   dataset:
     test_size: 0.2 # Held-out fraction excluded from Extra Trees ranking fit
