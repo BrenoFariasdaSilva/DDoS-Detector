@@ -141,7 +141,7 @@ class TrainingProgressTests(unittest.TestCase):  # Group deterministic training 
         cls.X_train, cls.y_train = make_classification(n_samples=80, n_features=6, n_informative=4, n_redundant=0, random_state=42)  # Build a compact deterministic binary dataset.
         cls.fast_config = {"evaluation": {"training_progress_interval_minutes": 0.01 / 60.0}}  # Use a ten-millisecond progress interval only inside focused tests.
 
-    def fit_with_output(self, model, classifier_name, fit_kwargs=None):  # Fit one estimator and capture progress output
+    def fit_with_output(self, model, classifier_name, fit_kwargs=None, estimated_total_seconds=None, eta_callback=None):  # Fit one estimator and capture progress output
         """
         Fit one estimator through the production progress integration.
 
@@ -149,12 +149,14 @@ class TrainingProgressTests(unittest.TestCase):  # Group deterministic training 
         :param model: Estimator instance to fit.
         :param classifier_name: Classifier identity for progress output.
         :param fit_kwargs: Optional public fit keyword arguments.
+        :param estimated_total_seconds: Optional historical total duration for heartbeat-only ETA.
+        :param eta_callback: Optional callback receiving the first emitted ETA.
         :return: Captured progress output string.
         """
 
         output = io.StringIO()  # Allocate one isolated progress output stream.
         with contextlib.redirect_stdout(output):  # Capture only output from this estimator fit.
-            stacking.fit_classifier_with_progress(model, self.X_train, self.y_train, "PCA Components", classifier_name, config=self.fast_config, fit_kwargs=fit_kwargs)  # Execute the production fit path on small deterministic data.
+            stacking.fit_classifier_with_progress(model, self.X_train, self.y_train, "PCA Components", classifier_name, config=self.fast_config, fit_kwargs=fit_kwargs, estimated_total_seconds=estimated_total_seconds, eta_callback=eta_callback)  # Execute the production fit path on small deterministic data.
         return output.getvalue()  # Return captured progress text for assertions.
 
     def assert_results_identical(self, baseline, observed):  # Compare scientific outputs from two fitted estimators
@@ -452,6 +454,13 @@ class TrainingProgressTests(unittest.TestCase):  # Group deterministic training 
         self.assertIn(f"PID: {os.getpid()}", success_output)  # Require the active process identity.
         self.assertNotIn("Progress:", success_output)  # Forbid elapsed-time-derived percentages.
         self.assertFalse(any(thread.name.startswith("training-heartbeat-") for thread in threading.enumerate()))  # Require no heartbeat thread after successful fit.
+
+        eta_labels = []  # Capture heartbeat ETA notifications.
+        estimated_output = self.fit_with_output(SleepingEstimator(), "SVM", estimated_total_seconds=3600.0, eta_callback=eta_labels.append)  # Run one heartbeat-only fit with comparable historical duration.
+        self.assertIn("Status: Active", estimated_output)  # Require the normal heartbeat row.
+        self.assertNotIn("ETA: unavailable", estimated_output)  # Require historical runtime ETA when available.
+        self.assertNotIn("Progress:", estimated_output)  # Forbid elapsed-time-derived percentages.
+        self.assertEqual(len(eta_labels), 1)  # Require one ETA callback for coordinator notification.
 
         failure = RuntimeError("Original fit failure")  # Create the exact exception instance expected from fit.
         output = io.StringIO()  # Allocate isolated failure progress output.

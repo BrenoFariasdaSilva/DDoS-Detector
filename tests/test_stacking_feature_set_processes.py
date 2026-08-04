@@ -176,6 +176,16 @@ class FeatureSetProcessTests(unittest.TestCase):  # Group persistent feature-set
         self.assertEqual(capacity["pending_augmented_worker_count"], 2)  # Detect both artifact-backed augmented workers
         self.assertEqual(capacity["augmented_admitted_worker_count"], 1)  # Serialize memory-unbounded model deserialization and prediction
 
+    def test_task_elapsed_estimate_uses_cache_without_runtime_sort(self):  # Verify SVM heartbeat ETA can use cache while preserving queue order
+        """Estimate task duration from cache rows even when pending sorting is disabled."""
+
+        file_path = "Datasets/Fix/sample.csv"  # Match separate-files runtime identity semantics.
+        metadata = stacking.build_feature_process_metadata(["a", "b"], [], 0, ["a"])  # Build one RFE descriptor with stable feature order.
+        task = stacking.build_feature_process_plan([("RFE Features", False, None, "SVM")], metadata, 10, file_path, "separate_files")[0]  # Build one original-data SVM task.
+        payload = {"file": file_path, "execution_mode": "separate_files", "attack_types_combined": None}  # Supply only identity fields needed by the estimator.
+        cache = {"old": {"elapsed_time_s": 7200.0, "execution_mode": "separate_files", "dataset": os.path.relpath(file_path), "attack_types_combined": None, "hyperparameter_mode": "Default Hyperparameters", "hyperparameters_enabled": False, "data_source": "Original", "experiment_mode": "original_only", "augmentation_ratio": None, "feature_set": "RFE Features", "model_name": "SVM", "n_features": 1, "n_samples_train": 8, "n_samples_test": 2, "features_list": ["a"]}}  # Provide one compatible completed result row.
+        self.assertEqual(stacking.estimate_feature_process_task_elapsed_seconds(task, cache, payload), 7200.0)  # Require cache-backed ETA input without enabling sorting.
+
     def test_evaluation_plan_totals_follow_enabled_dimensions(self):  # Verify every plan dimension changes totals without fixed production counts
         """
         Verify plan totals follow enabled classifiers, modes, tests, ratios, and features.

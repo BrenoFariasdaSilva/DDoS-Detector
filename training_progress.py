@@ -70,7 +70,7 @@ def interactive_terminal_attached(output_stream: Optional[Any] = None) -> bool: 
 class TrainingProgress:  # Report genuine public units or heartbeat-only activity
     """Report genuine training units or low-frequency active heartbeats."""
 
-    def __init__(self, feature_set: Optional[str], classifier_name: str, duration_formatter: Callable[[float], str], output_stream: Optional[Any] = None, total_units: Optional[int] = None, unit_label: Optional[str] = None, heartbeat: bool = False, report_interval_seconds: float = DEFAULT_TRAINING_PROGRESS_INTERVAL_SECONDS, hyperparameters_enabled: Optional[bool] = None, augmentation_ratio: Optional[float] = None, eta_callback: Optional[Callable[[str], None]] = None, resource_suffix_callback: Optional[Callable[[], str]] = None):  # Initialize one training progress scope
+    def __init__(self, feature_set: Optional[str], classifier_name: str, duration_formatter: Callable[[float], str], output_stream: Optional[Any] = None, total_units: Optional[int] = None, unit_label: Optional[str] = None, heartbeat: bool = False, report_interval_seconds: float = DEFAULT_TRAINING_PROGRESS_INTERVAL_SECONDS, hyperparameters_enabled: Optional[bool] = None, augmentation_ratio: Optional[float] = None, eta_callback: Optional[Callable[[str], None]] = None, resource_suffix_callback: Optional[Callable[[], str]] = None, estimated_total_seconds: Optional[float] = None):  # Initialize one training progress scope
         """
         Initialize one classifier training progress scope.
 
@@ -87,6 +87,7 @@ class TrainingProgress:  # Report genuine public units or heartbeat-only activit
         :param augmentation_ratio: Authoritative augmentation ratio, or None for original data.
         :param eta_callback: Optional callback receiving the first emitted nonfinal ETA label.
         :param resource_suffix_callback: Optional callback returning already-collected resource text.
+        :param estimated_total_seconds: Optional historical total duration for heartbeat-only ETA.
         :return: None.
         """
 
@@ -113,6 +114,11 @@ class TrainingProgress:  # Report genuine public units or heartbeat-only activit
         self.eta_callback = eta_callback  # Store optional ETA notification callback.
         self.eta_callback_reported = False  # Track one ETA callback emission per training scope.
         self.resource_suffix_callback = resource_suffix_callback  # Store optional resource suffix callback.
+        try:
+            resolved_estimate = float(estimated_total_seconds) if estimated_total_seconds is not None else None  # Normalize historical runtime estimates.
+        except (TypeError, ValueError):
+            resolved_estimate = None  # Ignore malformed estimates.
+        self.estimated_total_seconds = resolved_estimate if resolved_estimate is not None and math.isfinite(resolved_estimate) and resolved_estimate > 0 else None  # Store only positive finite estimates.
 
     def resource_suffix(self) -> str:  # Resolve optional resource suffix text.
         """
@@ -203,9 +209,17 @@ class TrainingProgress:  # Report genuine public units or heartbeat-only activit
                 elapsed_label = self.duration_formatter(elapsed_seconds)  # Format elapsed time through the caller's established formatter.
                 completed = int(self.latest_completed_units) if self.latest_completed_units is not None else 0  # Read the latest genuine public unit count.
                 total = int(self.total_units) if self.total_units is not None else 0  # Read the configured public unit total.
-                eta_label = self.duration_formatter((elapsed_seconds / completed) * (total - completed)) if completed > 0 and total > completed else "unavailable"  # Estimate ETA only from genuine completed units.
+                if completed > 0 and total > completed:  # Prefer genuine public estimator units when available.
+                    eta_label = self.duration_formatter((elapsed_seconds / completed) * (total - completed))  # Estimate ETA from completed units.
+                elif self.estimated_total_seconds is not None and elapsed_seconds < self.estimated_total_seconds:  # Fall back to comparable cached runtime for heartbeat-only estimators.
+                    eta_label = self.duration_formatter(self.estimated_total_seconds - elapsed_seconds)  # Report remaining time from historical total duration.
+                else:
+                    eta_label = "unavailable"  # Keep unavailable when no factual estimate exists.
                 print(f"[TRAINING] Feature Set: {self.feature_set} | Classifier: {self.classifier_name}{self.combination_fields} | Status: Active | Elapsed: {elapsed_label} | ETA: {eta_label} | PID: {os.getpid()}{self.resource_suffix()}", file=self.output_stream)  # Write contextual heartbeat with factual ETA when units exist.
                 self.output_stream.flush()  # Flush every heartbeat immediately to detached logs.
+                if self.eta_callback is not None and not self.eta_callback_reported and eta_label != "unavailable" and eta_label != "0s":  # Notify once when heartbeat-only ETA becomes available.
+                    self.eta_callback_reported = True  # Reserve the one ETA callback before external notification code.
+                    self.eta_callback(eta_label)  # Send the exact formatted ETA label to the caller.
                 self.last_report_time = now  # Advance only this classifier task's recurring-report timer.
             return True  # Report successful heartbeat emission.
         except Exception:  # Stop only progress output if the stream becomes unavailable.

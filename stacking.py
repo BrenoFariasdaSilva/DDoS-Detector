@@ -436,7 +436,7 @@ def log_training_phase(feature_set: Optional[str], classifier_name: str, phase: 
         return  # Preserve the caller's training, prediction, metric, or persistence semantics.
 
 
-def build_training_progress(feature_set: Optional[str], classifier_name: str, total_units: Optional[int] = None, unit_label: Optional[str] = None, heartbeat: bool = False, config: Optional[dict] = None, hyperparameters_enabled: Optional[bool] = None, augmentation_ratio: Optional[float] = None, eta_callback: Optional[Callable[[str], None]] = None) -> TrainingProgress:  # Build one progress scope from experiment context
+def build_training_progress(feature_set: Optional[str], classifier_name: str, total_units: Optional[int] = None, unit_label: Optional[str] = None, heartbeat: bool = False, config: Optional[dict] = None, hyperparameters_enabled: Optional[bool] = None, augmentation_ratio: Optional[float] = None, eta_callback: Optional[Callable[[str], None]] = None, estimated_total_seconds: Optional[float] = None) -> TrainingProgress:  # Build one progress scope from experiment context
     """
     Build one reusable training progress scope from experiment configuration.
 
@@ -449,6 +449,7 @@ def build_training_progress(feature_set: Optional[str], classifier_name: str, to
     :param hyperparameters_enabled: Whether optimized hyperparameters are active, or None outside an evaluation combination.
     :param augmentation_ratio: Authoritative augmentation ratio, or None for original data.
     :param eta_callback: Optional callback receiving the first emitted nonfinal ETA label.
+    :param estimated_total_seconds: Optional historical total duration for heartbeat-only ETA.
     :return: Configured TrainingProgress instance.
     """
 
@@ -457,10 +458,10 @@ def build_training_progress(feature_set: Optional[str], classifier_name: str, to
     interval_minutes = validate_training_progress_interval_minutes(configured_minutes)  # Validate direct and merged runtime configurations at the reporter boundary.
     interval_seconds = interval_minutes * 60.0  # Convert minutes to seconds once before entering the seconds-based timing implementation.
     resource_suffix_callback = lambda: format_training_resource_suffix(read_latest_training_resource_snapshot(active_config), allow_worker_cpu=True)  # Read only already-collected resource data for progress rows.
-    return TrainingProgress(feature_set, classifier_name, calculate_execution_time, output_stream=sys.stdout, total_units=total_units, unit_label=unit_label, heartbeat=heartbeat, report_interval_seconds=interval_seconds, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio, eta_callback=eta_callback, resource_suffix_callback=resource_suffix_callback)  # Pass required progress and combination context explicitly.
+    return TrainingProgress(feature_set, classifier_name, calculate_execution_time, output_stream=sys.stdout, total_units=total_units, unit_label=unit_label, heartbeat=heartbeat, report_interval_seconds=interval_seconds, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio, eta_callback=eta_callback, resource_suffix_callback=resource_suffix_callback, estimated_total_seconds=estimated_total_seconds)  # Pass required progress and combination context explicitly.
 
 
-def fit_classifier_with_progress(model: Any, X_train: Any, y_train: Any, feature_set: Optional[str], classifier_name: str, config: Optional[dict] = None, fit_kwargs: Optional[dict] = None, hyperparameters_enabled: Optional[bool] = None, augmentation_ratio: Optional[float] = None, eta_callback: Optional[Callable[[str], None]] = None) -> Any:  # Fit one estimator with safe progress reporting
+def fit_classifier_with_progress(model: Any, X_train: Any, y_train: Any, feature_set: Optional[str], classifier_name: str, config: Optional[dict] = None, fit_kwargs: Optional[dict] = None, hyperparameters_enabled: Optional[bool] = None, augmentation_ratio: Optional[float] = None, eta_callback: Optional[Callable[[str], None]] = None, estimated_total_seconds: Optional[float] = None) -> Any:  # Fit one estimator with safe progress reporting
     """
     Fit one estimator with public training-unit callbacks or heartbeat reporting.
 
@@ -474,6 +475,7 @@ def fit_classifier_with_progress(model: Any, X_train: Any, y_train: Any, feature
     :param hyperparameters_enabled: Whether optimized hyperparameters are active, or None outside an evaluation combination.
     :param augmentation_ratio: Authoritative augmentation ratio, or None for original data.
     :param eta_callback: Optional callback receiving the first emitted nonfinal ETA label.
+    :param estimated_total_seconds: Optional historical total duration for heartbeat-only ETA.
     :return: The fitted estimator returned by its original fit method.
     """
 
@@ -576,7 +578,7 @@ def fit_classifier_with_progress(model: Any, X_train: Any, y_train: Any, feature
             else:  # Restore caller-provided callback when present.
                 model.progress_callback = existing_progress_callback  # Restore original callback object.
 
-    progress = build_training_progress(feature_set, classifier_name, heartbeat=True, config=config, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio, eta_callback=eta_callback)  # Use contextual heartbeat reporting for estimators without safe public training units.
+    progress = build_training_progress(feature_set, classifier_name, heartbeat=True, config=config, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio, eta_callback=eta_callback, estimated_total_seconds=estimated_total_seconds)  # Use contextual heartbeat reporting for estimators without safe public training units.
     with progress:  # Ensure the heartbeat stops after success, failure, or interruption.
         return model.fit(X_train, y_train, **options)  # Preserve the estimator's original single blocking fit call.
 
@@ -7470,7 +7472,7 @@ def load_existing_model_if_available(model_name, dataset_file, dataset_name, fea
             artifact_lock.close()  # Closing the descriptor releases flock automatically
 
 
-def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, y_test, dataset_file=None, scaler=None, feature_names=None, feature_set=None, config=None, phase_metadata=None, training_ram_stats=None, fit_model=True, notification_context=None, hyperparameters_enabled: Optional[bool] = None, augmentation_ratio: Optional[float] = None, precomputed_predictions: Optional[np.ndarray] = None, precomputed_prediction_seconds: float = 0.0, training_eta_callback: Optional[Callable[[str], None]] = None):  # Evaluate one classifier with watcher metadata, RAM statistics, and optional bounded predictions
+def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, y_test, dataset_file=None, scaler=None, feature_names=None, feature_set=None, config=None, phase_metadata=None, training_ram_stats=None, fit_model=True, notification_context=None, hyperparameters_enabled: Optional[bool] = None, augmentation_ratio: Optional[float] = None, precomputed_predictions: Optional[np.ndarray] = None, precomputed_prediction_seconds: float = 0.0, training_eta_callback: Optional[Callable[[str], None]] = None, estimated_training_seconds: Optional[float] = None):  # Evaluate one classifier with watcher metadata, RAM statistics, and optional bounded predictions
     """
     Trains an individual classifier and evaluates its performance on the test set.
 
@@ -7494,6 +7496,7 @@ def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, 
     :param precomputed_predictions: Optional predictions produced through bounded augmented-data batches.
     :param precomputed_prediction_seconds: Time already spent producing bounded predictions.
     :param training_eta_callback: Optional callback receiving the first emitted nonfinal training ETA.
+    :param estimated_training_seconds: Optional historical total training duration for heartbeat-only ETA.
     :return: Metrics tuple (acc, prec, rec, f1, fpr, fnr, elapsed_time)
     """
     
@@ -7538,7 +7541,7 @@ def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, 
             sys.stdout.flush()  # Flush stdout before model training to ensure logs are visible under nohup
             training_ram_monitor = start_training_ram_monitor(TRAINING_RAM_SAMPLE_INTERVAL_SECONDS)  # Start RAM monitoring immediately before classifier fit.
             try:  # Ensure RAM monitoring stops even when classifier fit fails.
-                fit_classifier_with_progress(model, X_train, y_train, feature_set, model_name, config=config, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio, eta_callback=training_eta_callback)  # Fit once with contextual public callbacks or heartbeat reporting.
+                fit_classifier_with_progress(model, X_train, y_train, feature_set, model_name, config=config, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio, eta_callback=training_eta_callback, estimated_total_seconds=estimated_training_seconds)  # Fit once with contextual public callbacks or heartbeat reporting.
             finally:  # Stop RAM monitoring immediately after classifier fit exits.
                 classifier_ram_stats = stop_training_ram_monitor(training_ram_monitor)  # Summarize RAM usage across this classifier fit.
                 store_training_ram_stats(training_ram_stats, classifier_ram_stats)  # Associate RAM statistics with this classifier only.
@@ -15969,6 +15972,36 @@ def build_feature_process_result_runtime_identity(result_entry: dict, process_pa
         return None  # Return no runtime identity for invalid metadata.
 
 
+def estimate_feature_process_task_elapsed_seconds(task: dict, cache_dict: dict, process_payload: dict) -> Optional[float]:
+    """
+    Estimate one task runtime from already-loaded comparable cache rows.
+
+    :param task: Matrix-free task descriptor.
+    :param cache_dict: Validated production resume cache.
+    :param process_payload: Small shared process payload.
+    :return: Positive finite estimated elapsed seconds, or None.
+    """
+
+    exact_identity = build_feature_process_task_runtime_identity(task, process_payload, True)  # Build exact comparable runtime identity.
+    fallback_identity = build_feature_process_task_runtime_identity(task, process_payload, False)  # Build same classifier and experiment-group identity.
+    exact_values = []  # Collect exact-shape history first.
+    fallback_values = []  # Collect same-group history second.
+    classifier_values = []  # Collect classifier-only history as the last fallback.
+    for result_entry in (cache_dict or {}).values():  # Reuse already-loaded cache rows only.
+        elapsed_seconds = resolve_runtime_elapsed_seconds(result_entry.get("elapsed_time_s", None))  # Parse a valid positive elapsed value.
+        if elapsed_seconds is None:  # Skip unavailable cache timing.
+            continue
+        result_exact_identity = build_feature_process_result_runtime_identity(result_entry, process_payload, True)  # Build exact result identity.
+        result_fallback_identity = build_feature_process_result_runtime_identity(result_entry, process_payload, False)  # Build same-group result identity.
+        if result_exact_identity == exact_identity:  # Prefer exact matching shapes and feature order.
+            exact_values.append(elapsed_seconds)
+        if result_fallback_identity == fallback_identity:  # Retain broader same-group history.
+            fallback_values.append(elapsed_seconds)
+        if str(result_entry.get("model_name", "")).strip() == str(task.get("classifier_name", "")).strip():  # Last-resort classifier average.
+            classifier_values.append(elapsed_seconds)
+    return summarize_runtime_elapsed_seconds(exact_values) or summarize_runtime_elapsed_seconds(fallback_values) or summarize_runtime_elapsed_seconds(classifier_values)  # Return the most specific available estimate.
+
+
 def sort_pending_feature_process_tasks_by_elapsed_time(pending_by_feature: dict, cache_dict: dict, process_payload: dict) -> None:
     """
     Sort pending process queues by historical elapsed time within comparable groups.
@@ -16700,7 +16733,8 @@ def evaluate_feature_process_original_task(task: dict, process_payload: dict, re
     training_ram_stats = {}  # Hold only this classifier's bounded RAM statistics
     training_eta_callback = lambda eta_label: publish_feature_process_training_eta_event(task, process_payload, status_queue, eta_label)  # Publish the first emitted factual progress ETA through the coordinator.
     log_feature_process_combination(task, status_state, "Fit started")  # Announce the blocking fit before existing heartbeat or unit progress begins
-    metrics = evaluate_individual_classifier(active_model, task["classifier_name"], model_X_train, model_y_train, model_X_test, model_y_test, process_payload["file"], resources["scaler"], task["expected_feature_names"], artifact_feature_set, config=process_payload["config"], phase_metadata=phase_metadata, training_ram_stats=training_ram_stats, fit_model=True, notification_context=build_telegram_combination_header(task["feature_set"], task["classifier_name"], None, task["hyperparameters_enabled"], experiment_run=task["experiment_run"]), hyperparameters_enabled=task["hyperparameters_enabled"], augmentation_ratio=task["augmentation_ratio"], training_eta_callback=training_eta_callback)  # Reuse unchanged evaluation with serialized authoritative combination metadata.
+    estimated_training_seconds = task.get("pending_elapsed_time_estimate_s") or estimate_feature_process_task_elapsed_seconds(task, cache_dict, process_payload)  # Use runtime-sort estimate or compute one from cache without reordering.
+    metrics = evaluate_individual_classifier(active_model, task["classifier_name"], model_X_train, model_y_train, model_X_test, model_y_test, process_payload["file"], resources["scaler"], task["expected_feature_names"], artifact_feature_set, config=process_payload["config"], phase_metadata=phase_metadata, training_ram_stats=training_ram_stats, fit_model=True, notification_context=build_telegram_combination_header(task["feature_set"], task["classifier_name"], None, task["hyperparameters_enabled"], experiment_run=task["experiment_run"]), hyperparameters_enabled=task["hyperparameters_enabled"], augmentation_ratio=task["augmentation_ratio"], training_eta_callback=training_eta_callback, estimated_training_seconds=estimated_training_seconds)  # Reuse unchanged evaluation with serialized authoritative combination metadata.
     log_feature_process_combination(task, status_state, "Prediction and metrics completed")  # Announce completion of existing prediction and metric phases
     result_entry = build_classifier_result_entry(active_model.__class__.__name__, process_payload["file"], process_payload["execution_mode"], process_payload["attack_types_combined"], task["feature_set"], "Individual", task["classifier_name"], task["data_source_label"], task["experiment_id"], task["experiment_mode"], None, task["expected_n_features"], len(model_y_train), len(model_y_test), metrics, task["expected_feature_names"], hyperparams_map=process_payload["optimized_params"] if task["hyperparameters_enabled"] else {}, hyperparameters_enabled=task["hyperparameters_enabled"], effective_hyperparameters=serialize_effective_estimator_parameters(active_model), experiment_run=task["experiment_run"])  # Build the run-scoped cache and export result payload
     log_feature_process_combination(task, status_state, "Persistence started")  # Announce the atomic result transaction
