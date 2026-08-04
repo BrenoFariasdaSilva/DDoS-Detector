@@ -42,6 +42,13 @@ Assumptions & Notes:
       in the original file when reconstructing YAML blocks.
     - Sound notification is skipped on Windows by design.
 """
+if __name__ in {"__main__", "__mp_main__"}:
+    try:
+        from setproctitle import setproctitle
+        setproctitle(f"DDoS-{__file__.rsplit('/', 1)[-1].rsplit('.', 1)[0]}")
+    except ImportError:
+        pass
+
 
 
 import atexit  # For playing a sound when the program finishes

@@ -53,6 +53,13 @@ Assumptions & Notes:
     - Separator between functions is standardized to 3 newlines (2 empty lines)
     - Sound notification disabled on Windows platform
 """
+if __name__ in {"__main__", "__mp_main__"}:
+    try:
+        from setproctitle import setproctitle
+        setproctitle(f"DDoS-{__file__.rsplit('/', 1)[-1].rsplit('.', 1)[0]}")
+    except ImportError:
+        pass
+
 
 import atexit  # For playing a sound when the program finishes
 import datetime  # For getting the current date and time

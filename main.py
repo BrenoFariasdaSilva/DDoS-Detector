@@ -62,6 +62,13 @@ Outputs (summary):
     - Extended confusion matrix with detailed class metrics
     - Aggregated performance summaries by dataset and algorithm
 """
+if __name__ in {"__main__", "__mp_main__"}:
+    try:
+        from setproctitle import setproctitle
+        setproctitle(f"DDoS-{__file__.rsplit('/', 1)[-1].rsplit('.', 1)[0]}")
+    except ImportError:
+        pass
+
 
 import arff as liac_arff  # For loading ARFF files
 import atexit  # For registering a function to run at exit

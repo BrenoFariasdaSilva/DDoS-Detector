@@ -37,6 +37,13 @@ Assumptions:
     - The log file will contain cleaned, human-readable text (no ANSI codes).
     - The logger is safe for short-lived scripts and long-running processes.
 """
+if __name__ in {"__main__", "__mp_main__"}:
+    try:
+        from setproctitle import setproctitle
+        setproctitle(f"DDoS-{__file__.rsplit('/', 1)[-1].rsplit('.', 1)[0]}")
+    except ImportError:
+        pass
+
 
 import fcntl  # Provide process-safe serialization for shared detached log writes
 import os  # For interacting with the filesystem

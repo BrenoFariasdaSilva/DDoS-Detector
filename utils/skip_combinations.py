@@ -1,4 +1,11 @@
 """Parse, normalize, match, and report stacking skip-combination rules."""
+if __name__ in {"__main__", "__mp_main__"}:
+    try:
+        from setproctitle import setproctitle
+        setproctitle(f"DDoS-{__file__.rsplit('/', 1)[-1].rsplit('.', 1)[0]}")
+    except ImportError:
+        pass
+
 
 import math  # Use finite-safe augmentation ratio normalization.
 from typing import Any, List, NamedTuple, Optional, Tuple  # Define compact typed rule structures.

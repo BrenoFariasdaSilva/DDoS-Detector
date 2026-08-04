@@ -10,6 +10,13 @@ Description :
     ranks all eligible numeric predictor columns by Extra Trees importance, and
     persists the complete ranked list for downstream stacking.py execution.
 """
+if __name__ in {"__main__", "__mp_main__"}:
+    try:
+        from setproctitle import setproctitle
+        setproctitle(f"DDoS-{__file__.rsplit('/', 1)[-1].rsplit('.', 1)[0]}")
+    except ImportError:
+        pass
+
 
 import argparse  # Parse command-line overrides
 import datetime  # Build timestamp metadata

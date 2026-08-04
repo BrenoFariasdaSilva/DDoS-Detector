@@ -1,3 +1,10 @@
+if __name__ in {"__main__", "__mp_main__"}:
+    try:
+        from setproctitle import setproctitle
+        setproctitle(f"DDoS-{__file__.rsplit('/', 1)[-1].rsplit('.', 1)[0]}")
+    except ImportError:
+        pass
+
 import multiprocessing as mp  # Exercise coordinator-owned notifications across real spawned feature workers
 import os  # Record spawned worker identities in lifecycle events
 import queue  # Capture direct task lifecycle events without another process

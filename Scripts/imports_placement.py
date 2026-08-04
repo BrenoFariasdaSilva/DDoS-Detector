@@ -49,6 +49,13 @@ Assumptions & Notes:
     - Report is overwritten on each run.
     - Sound notifications disabled on Windows.
 """
+if __name__ in {"__main__", "__mp_main__"}:
+    try:
+        from setproctitle import setproctitle
+        setproctitle(f"DDoS-{__file__.rsplit('/', 1)[-1].rsplit('.', 1)[0]}")
+    except ImportError:
+        pass
+
 
 
 import ast  # For parsing Python code

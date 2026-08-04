@@ -52,6 +52,13 @@ Limitations / TODO
     - Add CLI flags for `sample_size`, `min_class_size`, `CROSS_DATASET_VALIDATE`.
     - Consider structured logging instead of printing/redirecting stdout.
 """
+if __name__ in {"__main__", "__mp_main__"}:
+    try:
+        from setproctitle import setproctitle
+        setproctitle(f"DDoS-{__file__.rsplit('/', 1)[-1].rsplit('.', 1)[0]}")
+    except ImportError:
+        pass
+
 
 
 import argparse  # For parsing CLI arguments

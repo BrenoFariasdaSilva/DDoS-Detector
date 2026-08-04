@@ -45,6 +45,13 @@ Assumptions & Notes:
     - <Mention platform or OS-specific notes — e.g., sound disabled on Windows.>
     - <Note on output structure or reusability.>
 """
+if __name__ in {"__main__", "__mp_main__"}:
+    try:
+        from setproctitle import setproctitle
+        setproctitle(f"DDoS-{__file__.rsplit('/', 1)[-1].rsplit('.', 1)[0]}")
+    except ImportError:
+        pass
+
 
 import argparse  # Parse watcher command-line arguments
 import atexit  # For playing a sound when the program finishes

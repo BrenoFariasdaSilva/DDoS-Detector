@@ -45,6 +45,13 @@ TODOs (short):
     - Add optional parallel conversion mode for large workloads
     - Provide more granular CLI control for cleaning rules
 """
+if __name__ in {"__main__", "__mp_main__"}:
+    try:
+        from setproctitle import setproctitle
+        setproctitle(f"DDoS-{__file__.rsplit('/', 1)[-1].rsplit('.', 1)[0]}")
+    except ImportError:
+        pass
+
 
 
 import arff  # Liac-arff, used to save ARFF files

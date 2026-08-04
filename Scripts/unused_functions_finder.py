@@ -39,6 +39,13 @@ Assumptions & Notes:
     - Files in IGNORE_DIRS are skipped
     - The JSON report only includes functions defined and never called
 """
+if __name__ in {"__main__", "__mp_main__"}:
+    try:
+        from setproctitle import setproctitle
+        setproctitle(f"DDoS-{__file__.rsplit('/', 1)[-1].rsplit('.', 1)[0]}")
+    except ImportError:
+        pass
+
 
 
 import ast  # For parsing Python code into an AST
