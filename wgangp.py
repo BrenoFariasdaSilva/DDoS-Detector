@@ -94,6 +94,7 @@ from torch import autograd  # For gradient penalty
 from torch.utils.data import DataLoader, Dataset  # Dataset and DataLoader
 from tqdm import tqdm  # For progress bar visualization
 from typing import Any, Dict, List, Optional, Union, cast  # For Any type hint and cast
+from utils.process_name import set_runtime_process_name  # Apply optional htop-visible process identities.
 
 psutil = (
     __import__("psutil") if __import__("importlib").util.find_spec("psutil") else None
@@ -1201,6 +1202,7 @@ def parse_args():
         p = argparse.ArgumentParser(description="DRCGAN-like WGAN-GP for CICDDoS2019 features")  # Create argument parser
     
         p.add_argument("--config", type=str, default=None, help="Path to configuration YAML file (default: config.yaml)")  # Add config file argument
+        p.add_argument("--process-name", type=str, default=None, help="Process title displayed by htop and similar tools")  # Allow concurrent runs to have distinct operating-system identities.
         
         p.add_argument("--verbose", action="store_true", help="Enable verbose output messages")  # Add verbose argument
         p.add_argument("--no_sound", action="store_true", help="Disable sound notification")  # Add no sound argument
@@ -5621,6 +5623,7 @@ def initialize_cli_and_config() -> Dict:
 
     global CONFIG  # Declare global CONFIG for mutation
     args = parse_args()  # Parse command-line arguments from CLI
+    set_runtime_process_name(args.process_name)  # Apply the requested htop identity before configuration and logging initialization.
     cli_overrides = args_to_config_overrides(args)  # Convert parsed CLI args to configuration overrides dict
     config = load_configuration(config_path=args.config, cli_overrides=cli_overrides)  # Load and merge configuration from file and CLI
     force_source = resolve_force_regenerate_samples_source(args)  # Resolve effective force-regeneration source for logging.

@@ -158,6 +158,7 @@ from utils.stacking.shap import aggregate_mean_shap_importance, build_kernel_exp
 from utils.stacking.planning import FEATURE_SET_WORKER_KEYS, build_evaluation_plan, build_feature_process_metadata, resolve_feature_set_worker_key, retain_stacking_classifier_plan  # Re-export pure evaluation planning utilities.
 from utils.lstm_sequences import LSTMSequenceMetadataError, build_lstm_sequence_windows  # Build verified partition-local LSTM windows.
 from utils.oom_restart import AUTO_RESTART_ATTEMPT_ENV, build_exact_oom_skip_rule, capture_oom_baseline, oom_kill_delta, recover_launch_command, schedule_detached_restart, transform_command_with_skip_rule  # Import focused OOM restart planning utilities.
+from utils.process_name import set_runtime_process_name  # Apply optional htop-visible process identities.
 from utils.skip_combinations import apply_skip_combination_rules, build_alias_lookup, compile_skip_combination_rules, filter_models_for_plan_group, format_skip_rule_match_lines, format_skip_rules_for_info, format_skip_rules_for_telegram, format_skip_summary_line, normalize_plan_augmentation_ratio  # Import reusable skip-combination parsing and plan filtering.
 
 
@@ -1101,26 +1102,6 @@ def validate_output_path(base_dir: str, target_path: str) -> None:
     
     if common != base_dir:
         raise RuntimeError("Unsafe path detected outside stacking output directory")
-
-
-def set_runtime_process_name(process_name: Optional[str]) -> None:
-    """
-    Set the operating-system process title shown by tools such as htop.
-
-    :param process_name: Requested process title or None to preserve the default title.
-    :return: None.
-    """
-
-    if process_name is None:  # Preserve the existing DDoS-stacking title when no override is supplied.
-        return  # Leave the process title unchanged.
-    normalized_name = str(process_name).strip()  # Normalize surrounding shell or configuration whitespace.
-    if not normalized_name or "\0" in normalized_name:  # Reject names that cannot form a valid process title.
-        raise ValueError("--process-name must be a non-empty string without null bytes")  # Surface an actionable CLI error.
-    try:  # Load the existing optional process-title dependency only when requested.
-        from setproctitle import setproctitle  # Import the platform process-title setter.
-    except ImportError as error:  # Fail explicitly because the requested htop identity cannot be applied.
-        raise RuntimeError("--process-name requires the setproctitle package") from error  # Preserve the missing dependency cause.
-    setproctitle(normalized_name)  # Replace the default DDoS-stacking title with the requested identity.
 
 
 def parse_cli_args():
