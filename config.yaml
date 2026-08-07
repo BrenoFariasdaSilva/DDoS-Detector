@@ -373,6 +373,7 @@ extra_trees:
 stacking: # Stacking experiment settings
   results_dir: "Stacking" # Directory to save stacking results (relative to Feature_Analysis)
   stacking_only: false # Run only StackingClassifier on full features with optional stages disabled.
+  automl_only: false # Run only AutoML without the regular classifier grid or optional stages.
   results_filename: "Stacking_Classifiers_Results.csv" # Main results CSV filename for separate_files mode
   cache_results_subdir: "Cache_Results" # Subdir inside results_dir to store the cache results
   combined_files_results_filename: "Stacking_Classifiers_CombinedFiles_Results.csv" # Results CSV filename for combined_files mode

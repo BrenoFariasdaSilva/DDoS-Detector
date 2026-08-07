@@ -1139,7 +1139,9 @@ def parse_cli_args():
         parser.add_argument("--disable-hyperparameters", dest="enable_hyperparameters", action="store_false", help="Disable hyperparameter optimization method toggle")
         parser.add_argument("--enable-stacking", dest="enable_stacking", action="store_true", default=None, help="Enable stacking classifier evaluation")
         parser.add_argument("--disable-stacking", dest="enable_stacking", action="store_false", help="Disable stacking classifier evaluation")
-        parser.add_argument("--stacking-only", action="store_true", default=None, help="Run only StackingClassifier with full features and default hyperparameters")  # Select the isolated stacking-classifier pipeline.
+        isolated_mode_group = parser.add_mutually_exclusive_group()  # Prevent two isolated pipeline modes from being requested together.
+        isolated_mode_group.add_argument("--stacking-only", action="store_true", default=None, help="Run only StackingClassifier with full features and default hyperparameters")  # Select the isolated stacking-classifier pipeline.
+        isolated_mode_group.add_argument("--automl-only", action="store_true", default=None, help="Run only the AutoML pipeline without the regular classifier grid")  # Select the isolated AutoML pipeline.
         explainability_group = parser.add_mutually_exclusive_group()  # Prevent contradictory explainability overrides in one invocation.
         explainability_group.add_argument("--enable-explainability", dest="enable_explainability", action="store_true", help="Enable model explainability (overrides config)")  # Force the explainability pipeline on from the CLI.
         explainability_group.add_argument("--disable-explainability", dest="enable_explainability", action="store_false", help="Disable model explainability (overrides config)")  # Force the explainability pipeline off from the CLI.
@@ -1187,6 +1189,7 @@ def get_default_stacking_config():
         return {
             "results_dir": "Stacking",  # Output subdirectory name for stacking results
             "stacking_only": False,  # Keep the complete classifier pipeline unless isolated stacking is requested.
+            "automl_only": False,  # Keep AutoML after the classifier grid unless isolated AutoML is requested.
             "results_filename": "Stacking_Classifiers_Results.csv",  # Separate files evaluation results CSV filename
             "cache_results_subdir": "Cache_Results",  # Cache results subdirectory inside the stacking results directory
             "combined_files_results_filename": "Stacking_Classifiers_CombinedFiles_Results.csv",  # Combined files evaluation results CSV filename
@@ -2126,6 +2129,26 @@ def apply_stacking_only_mode(config):
     return config  # Return the normalized isolated stacking configuration.
 
 
+def apply_automl_only_mode(config):
+    """
+    Apply the isolated AutoML execution settings.
+
+    :param config: Merged stacking pipeline configuration.
+    :return: Configuration restricted to the AutoML pipeline when requested.
+    """
+
+    stacking_config = config.setdefault("stacking", {})  # Resolve the stacking section once for mode normalization.
+    if not stacking_config.get("automl_only", False):  # Preserve normal pipeline behavior when the mode is inactive.
+        return config  # Return the unchanged merged configuration.
+    if stacking_config.get("stacking_only", False):  # Reject contradictory config.yaml mode selection.
+        raise ValueError("stacking.stacking_only and stacking.automl_only cannot both be true")  # Require one isolated execution path.
+    stacking_config.setdefault("methods", {}).update({"augmentation": False, "automl": True, "feature_selection": False, "hyperparameter_optimization": False, "stacking": False})  # Disable the regular grid and retain only AutoML.
+    config.setdefault("execution", {})["test_data_augmentation"] = False  # Prevent augmented test evaluation in isolated AutoML mode.
+    config.setdefault("explainability", {})["enabled"] = False  # Prevent regular classifier explainability work.
+    config.setdefault("memory_watcher", {})["enabled"] = False  # Prevent an additional watcher process in isolated AutoML mode.
+    return config  # Return the normalized isolated AutoML configuration.
+
+
 def merge_configs(defaults, file_config, cli_args):
     """
     Merge configurations with priority: CLI > file > defaults.
@@ -2146,6 +2169,7 @@ def merge_configs(defaults, file_config, cli_args):
         
         if cli_args is None:  # If no CLI args
             config = apply_stacking_only_mode(config)  # Apply a stacking-only setting supplied by config.yaml.
+            config = apply_automl_only_mode(config)  # Apply an AutoML-only setting supplied by config.yaml.
             config.setdefault("stacking", {})["experiment_runs"] = validate_experiment_runs(config.get("stacking", {}).get("experiment_runs", 1))  # Normalize the YAML-over-default run count.
             validate_feature_extraction_n_jobs(config.get("evaluation", {}).get("feature_extraction_n_jobs", 1))  # Validate the effective file or default feature extraction setting.
             config.setdefault("evaluation", {})["feature_set_workers"] = validate_feature_set_workers(config.get("evaluation", {}).get("feature_set_workers", None))  # Normalize the effective persistent process mapping
@@ -2207,6 +2231,11 @@ def merge_configs(defaults, file_config, cli_args):
 
         if hasattr(cli_args, "stacking_only") and cli_args.stacking_only:  # Isolated stacking classifier CLI mode
             config.setdefault("stacking", {})["stacking_only"] = True  # Apply the stacking-only mode over file and default configuration.
+            config["stacking"]["automl_only"] = False  # Let the explicit CLI mode override an AutoML-only YAML setting.
+
+        if hasattr(cli_args, "automl_only") and cli_args.automl_only:  # Isolated AutoML CLI mode
+            config.setdefault("stacking", {})["automl_only"] = True  # Apply the AutoML-only mode over file and default configuration.
+            config["stacking"]["stacking_only"] = False  # Let the explicit CLI mode override a stacking-only YAML setting.
 
         if hasattr(cli_args, "enable_explainability") and cli_args.enable_explainability is not None:  # Explainability pipeline CLI override
             config.setdefault("explainability", {})["enabled"] = cli_args.enable_explainability  # Apply explainability toggle without changing method-level settings
@@ -2281,6 +2310,7 @@ def merge_configs(defaults, file_config, cli_args):
             config.setdefault("memory_watcher", {})["capture_tracemalloc"] = True  # Enable optional Python allocation reports
 
         config = apply_stacking_only_mode(config)  # Enforce the isolated pipeline after every CLI override is resolved.
+        config = apply_automl_only_mode(config)  # Enforce the isolated AutoML pipeline after every CLI override is resolved.
         validate_feature_extraction_n_jobs(config.get("evaluation", {}).get("feature_extraction_n_jobs", 1))  # Validate the effective feature extraction setting after CLI precedence is applied.
         config.setdefault("stacking", {})["experiment_runs"] = validate_experiment_runs(config.get("stacking", {}).get("experiment_runs", 1))  # Normalize the final repeated-run count after CLI precedence.
         config.setdefault("evaluation", {})["feature_set_workers"] = validate_feature_set_workers(config.get("evaluation", {}).get("feature_set_workers", None))  # Normalize the final persistent process mapping after CLI precedence
@@ -2338,7 +2368,7 @@ def initialize_logger(config=None):
         clean = config.get("logging", {}).get("clean", True)  # Get clean flag
         
         os.makedirs(logs_dir, exist_ok=True)  # Ensure logs directory exists
-        log_stem = "stacking_only" if config.get("stacking", {}).get("stacking_only", False) else Path(__file__).stem  # Isolate stacking-only logs from concurrent full-pipeline output.
+        log_stem = "automl_only" if config.get("stacking", {}).get("automl_only", False) else ("stacking_only" if config.get("stacking", {}).get("stacking_only", False) else Path(__file__).stem)  # Isolate each requested mode from concurrent full-pipeline output.
         log_path = Path(logs_dir) / f"{log_stem}.log"  # Build log file path
         
         logger = Logger(str(log_path), clean=clean, timestamp_timezone=SAO_PAULO_TIMEZONE_NAME)  # Create one São Paulo timestamped Logger instance
@@ -14957,6 +14987,11 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
         print(f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}\n")  # Print closing separator
         send_telegram_message(TELEGRAM_BOT, f"Starting combined files evaluation | Dataset: {dataset_name} | Attack types: {len(attack_types_list)}")  # Send only the combined-files stage transition after the startup configuration
 
+        if config.get("stacking", {}).get("automl_only", False):  # Bypass the regular classifier grid in isolated AutoML mode.
+            feature_names = feature_columns_without_lstm_metadata([column for column in combined_files_df.columns if column != "attack_type"])  # Preserve the combined dataset feature identity for AutoML exports.
+            run_automl_pipeline(combined_dataset_reference, combined_files_df, feature_names, data_source_label="Original Combined Files", config=config)  # Execute the sole requested pipeline against the combined dataset.
+            return  # Prevent feature artifacts, classifier planning, caches, and regular result exports.
+
         ga_selected_features, pca_n_components, rfe_selected_features, extra_trees_selected_features = load_feature_selection_results(
             reference_file, config=config
         )  # Load feature selection results
@@ -15221,6 +15256,12 @@ def process_single_file_evaluation(file, combined_df, combined_file_for_features
         )  # Output the verbose message
 
         print_file_processing_header(file, config=config)  # Print formatted header
+
+        if config.get("stacking", {}).get("automl_only", False):  # Bypass regular single-file evaluation in isolated AutoML mode.
+            df_original_cleaned, feature_names = load_and_preprocess_dataset(file, combined_df, config=config)  # Prepare the sole AutoML dataset input.
+            if df_original_cleaned is not None:  # Run only when preprocessing produced a usable dataset.
+                run_automl_pipeline(file, df_original_cleaned, feature_names, config=config)  # Execute the sole requested pipeline.
+            return  # Prevent feature artifacts, classifier planning, and regular result exports.
 
         file_for_features = combined_file_for_features if file == "combined" else file  # Determine which file to use for feature selection metadata
         ga_selected_features, pca_n_components, rfe_selected_features, extra_trees_selected_features = load_feature_selection_results(
@@ -17437,6 +17478,11 @@ def orchestrate_all_combinations(input_path, dataset_name=None, config=None):
     for idx, file in enumerate(files_to_process, start=1):  # Evaluate each file independently
         grid_progress = None  # Initialize shared progress state for safe cleanup
         try:  # Protect individual-file orchestration
+            if config.get("stacking", {}).get("automl_only", False):  # Bypass the regular separate-file grid in isolated AutoML mode.
+                df_original, feature_names = load_and_preprocess_dataset(file, None, config=config)  # Prepare the sole AutoML dataset input.
+                if df_original is not None:  # Run only when preprocessing produced a usable dataset.
+                    run_automl_pipeline(file, df_original, feature_names, config=config)  # Execute the sole requested pipeline.
+                continue  # Prevent artifact discovery, classifier planning, caches, and regular result exports.
             artifacts = locate_and_verify_artifacts(file, config=config)  # Locate feature, HP, and augmentation artifacts
             ga_sel = artifacts.get("ga") if fs_toggle else None  # Use GA artifact only when feature selection is enabled
             pca_n = artifacts.get("pca") if fs_toggle else None  # Use PCA artifact only when feature selection is enabled
@@ -17795,7 +17841,8 @@ def process_files_in_path(input_path, dataset_name, config=None):
         write_memory_phase_event("before_combined_file_discovery", config=config, dataset_source=input_path, dataset_identity=dataset_name, event_outcome="starting")  # Publish file discovery start
         files_to_process = determine_files_to_process(csv_file, input_path, config=config)  # Determine which files to process
         write_memory_phase_event("after_combined_file_discovery", config=config, dataset_source=input_path, dataset_identity=dataset_name, source_file_count=len(files_to_process), source_files=[os.path.basename(str(path)) for path in files_to_process], event_outcome="completed")  # Publish file discovery completion
-        migrate_experiment_result_files_for_startup(input_path, files_to_process, execution_mode, config=config)  # Normalize active result storage before any experiment planning.
+        if not config.get("stacking", {}).get("automl_only", False):  # Leave regular stacking results untouched in isolated AutoML mode.
+            migrate_experiment_result_files_for_startup(input_path, files_to_process, execution_mode, config=config)  # Normalize active result storage before any experiment planning.
 
         local_dataset_name = dataset_name or get_dataset_name(input_path)  # Use provided dataset name or infer from path
 
