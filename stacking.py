@@ -154,7 +154,8 @@ from resnet18 import ResNet18Classifier  # Import the standalone sklearn-compati
 from autoencoder import AutoencoderClassifier  # Import the standalone sklearn-compatible supervised Autoencoder classifier
 from lstm import LSTMClassifier  # Import the standalone sklearn-compatible supervised LSTM sequence classifier
 from training_progress import DEFAULT_TRAINING_PROGRESS_INTERVAL_MINUTES, TrainingProgress, XGBoostProgressCallback, format_training_combination_fields, format_training_feature_set, interactive_terminal_attached  # Import reusable training progress infrastructure.
-from stacking_shap import aggregate_mean_shap_importance, build_kernel_explainer, build_shap_progress_description, compute_shap_values_with_context, create_shap_progress_wrapper, describe_raw_shap_result, get_shap_prediction_function, normalize_shap_output, resolve_model_class_count, resolve_shap_progress_target, sample_shap_test_data, select_shap_explainer, supports_predict_proba  # Re-export stateless SHAP utilities.
+from utils.stacking.shap import aggregate_mean_shap_importance, build_kernel_explainer, build_shap_progress_description, compute_shap_values_with_context, create_shap_progress_wrapper, describe_raw_shap_result, get_shap_prediction_function, normalize_shap_output, resolve_model_class_count, resolve_shap_progress_target, sample_shap_test_data, select_shap_explainer, supports_predict_proba  # Re-export stateless SHAP utilities.
+from utils.stacking.planning import FEATURE_SET_WORKER_KEYS, build_evaluation_plan, build_feature_process_metadata, resolve_feature_set_worker_key  # Re-export pure evaluation planning utilities.
 from utils.lstm_sequences import LSTMSequenceMetadataError, build_lstm_sequence_windows  # Build verified partition-local LSTM windows.
 from utils.oom_restart import AUTO_RESTART_ATTEMPT_ENV, build_exact_oom_skip_rule, capture_oom_baseline, oom_kill_delta, recover_launch_command, schedule_detached_restart, transform_command_with_skip_rule  # Import focused OOM restart planning utilities.
 from utils.skip_combinations import apply_skip_combination_rules, build_alias_lookup, compile_skip_combination_rules, filter_models_for_plan_group, format_skip_rule_match_lines, format_skip_rules_for_info, format_skip_rules_for_telegram, format_skip_summary_line, normalize_plan_augmentation_ratio  # Import reusable skip-combination parsing and plan filtering.
@@ -2034,7 +2035,6 @@ def migrate_experiment_result_files_for_startup(input_path: str, files_to_proces
         migrate_result_storage_files_for_reference(reference_path, config=reference_config)  # Complete migration before any plan construction.
 
 
-FEATURE_SET_WORKER_KEYS = ("full", "ga", "pca", "rfe", "extra_trees")  # Define the feature-set process identities supported by the persistent scheduler
 FEATURE_PROCESS_START_METHOD = "spawn"  # Select clean-interpreter feature workers without inheriting initialized native thread pools
 FEATURE_PROCESS_STATUS_FIELDS = ("total", "cached", "pending", "running", "computed", "failed", "completed")  # Define synchronized global and feature-local status fields
 FEATURE_PROCESS_STATUS_INDEX = {name: index for index, name in enumerate(FEATURE_PROCESS_STATUS_FIELDS)}  # Resolve compact shared-array positions by status name
@@ -15334,48 +15334,6 @@ def list_grid_feature_modes(ga_selected_features: Optional[List[Any]], pca_n_com
     return feature_modes  # Return the exact ordered feature modes expected from sequential evaluation
 
 
-def build_evaluation_plan(hp_runs: List[Tuple[bool, dict, dict]], augmentation_modes: List[Optional[float]], feature_mode_names: List[str], stacking_enabled: bool) -> List[Tuple[str, bool, Optional[float], str]]:
-    """
-    Build the exact ordered combinations represented by one evaluation progress bar.
-
-    :param hp_runs: Ordered runnable hyperparameter modes and their model mappings.
-    :param augmentation_modes: Ordered augmentation ratios with None representing original-only data.
-    :param feature_mode_names: Ordered feature modes produced by the evaluation iterator.
-    :param stacking_enabled: Whether the stacking classifier runs after individual classifiers.
-    :return: Ordered tuples of feature set, hyperparameter mode, augmentation ratio, and classifier.
-    """
-
-    evaluation_plan = []  # Accumulate combinations in canonical global phase order.
-    original_modes = [ratio for ratio in augmentation_modes if ratio is None]  # Preserve every configured original-testing mode before augmentation.
-    augmented_ratios = [ratio for ratio in augmentation_modes if ratio is not None]  # Preserve configured augmented-ratio order.
-    for feature_mode_name in feature_mode_names:  # Complete original experiments for each feature set in configured order.
-        for hyperparameters_enabled, models_map, _ in hp_runs:  # Preserve default-first hyperparameter order for current feature set.
-            classifier_names = list(models_map.keys()) + (["StackingClassifier"] if stacking_enabled else [])  # Preserve classifier order followed by optional stacking.
-            for augmentation_ratio in original_modes:  # Keep original testing isolated in first global phase.
-                for classifier_name in classifier_names:  # Preserve classifier order inside current original hyperparameter mode.
-                    evaluation_plan.append((feature_mode_name, hyperparameters_enabled, augmentation_ratio, classifier_name))  # Store one original-data combination.
-    for augmentation_ratio in augmented_ratios:  # Complete every combination for current ratio before next ratio.
-        for feature_mode_name in feature_mode_names:  # Preserve configured feature-set order inside current ratio.
-            for hyperparameters_enabled, models_map, _ in hp_runs:  # Preserve default-first hyperparameter order inside current ratio and feature set.
-                classifier_names = list(models_map.keys()) + (["StackingClassifier"] if stacking_enabled else [])  # Preserve classifier order followed by optional stacking.
-                for classifier_name in classifier_names:  # Preserve classifier order inside current augmented hyperparameter mode.
-                    evaluation_plan.append((feature_mode_name, hyperparameters_enabled, augmentation_ratio, classifier_name))  # Store one ratio-grouped augmented combination.
-
-    return evaluation_plan  # Return the authoritative ordered progress plan
-
-
-def resolve_feature_set_worker_key(feature_set_name: str) -> str:  # Resolve one runtime feature-set name to its configured process key
-    """
-    Resolve a runtime feature-set name to its configured process key.
-
-    :param feature_set_name: Runtime feature-set display name.
-    :return: Configured worker key for Full, GA, PCA, RFE, or Extra Trees.
-    """
-
-    key_by_name = {"Full Features": "full", "GA Features": "ga", "PCA Components": "pca", "RFE Features": "rfe", "Extra Trees Features": "extra_trees"}  # Map supported runtime identities to configuration keys
-    if feature_set_name not in key_by_name:  # Reject unsupported persistent feature-set identities
-        raise ValueError(f"Persistent feature-set processes support only Full Features, GA Features, PCA Components, RFE Features, and Extra Trees Features, not {feature_set_name}")  # Report the unsupported runtime identity
-    return key_by_name[feature_set_name]  # Return the configured process key
 
 
 def persistent_feature_set_processes_enabled(feature_mode_names: List[str], config: Optional[dict] = None) -> bool:  # Resolve whether the complete grid uses persistent feature-set processes
@@ -15401,31 +15359,6 @@ def persistent_feature_set_processes_enabled(feature_mode_names: List[str], conf
     return True  # Enable one persistent process per active feature set
 
 
-def build_feature_process_metadata(feature_names: List[Any], ga_selected_features: Any, pca_n_components: Any, rfe_selected_features: Any, extra_trees_selected_features: Any = None) -> dict:  # Build ordered feature identities and indices without materializing matrices
-    """
-    Build feature-set metadata without materializing feature matrices.
-
-    :param feature_names: Ordered numeric input feature names.
-    :param ga_selected_features: Ordered GA-selected feature names.
-    :param pca_n_components: Selected PCA component count.
-    :param rfe_selected_features: Ordered RFE-selected feature names.
-    :param extra_trees_selected_features: Ordered Extra Trees-selected feature names.
-    :return: Mapping of runtime feature-set names to small metadata descriptors.
-    """
-
-    normalized_feature_names = [str(feature) for feature in feature_names]  # Normalize the input schema without changing order
-    feature_index = {feature: index for index, feature in enumerate(normalized_feature_names)}  # Build one deterministic positional lookup
-    ga_names = [str(feature) for feature in (ga_selected_features or []) if str(feature) in feature_index]  # Preserve valid GA feature order
-    rfe_names = [str(feature) for feature in (rfe_selected_features or []) if str(feature) in feature_index]  # Preserve valid RFE feature order
-    extra_trees_names = [str(feature) for feature in (extra_trees_selected_features or []) if str(feature) in feature_index]  # Preserve valid Extra Trees feature order
-    pca_count = min(int(pca_n_components or 0), len(normalized_feature_names))  # Resolve the exact effective PCA component count
-    return {  # Return small descriptors for every supported persistent feature set
-        "Full Features": {"feature_names": normalized_feature_names, "indices": list(range(len(normalized_feature_names))), "feature_count": len(normalized_feature_names)},  # Describe the unchanged full input columns
-        "GA Features": {"feature_names": ga_names, "indices": [feature_index[name] for name in ga_names], "feature_count": len(ga_names)},  # Describe GA input columns
-        "PCA Components": {"feature_names": [f"PC{index + 1}" for index in range(pca_count)], "indices": None, "feature_count": pca_count},  # Describe PCA output components
-        "RFE Features": {"feature_names": rfe_names, "indices": [feature_index[name] for name in rfe_names], "feature_count": len(rfe_names)},  # Describe RFE input columns
-        "Extra Trees Features": {"feature_names": extra_trees_names, "indices": [feature_index[name] for name in extra_trees_names], "feature_count": len(extra_trees_names)},  # Describe Extra Trees input columns
-    }  # Complete the supported descriptor mapping
 
 
 def build_feature_process_plan(evaluation_plan: List[Tuple[str, bool, Optional[float], str]], feature_metadata: dict, original_sample_count: int, file: str, execution_mode_str: str, experiment_run: int = 1, plan_global_ids: Optional[dict] = None, canonical_total: Optional[int] = None) -> List[dict]:  # Enrich the authoritative plan with stable global and feature-local identities
