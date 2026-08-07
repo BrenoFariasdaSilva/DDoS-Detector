@@ -158,6 +158,26 @@ def compile_skip_combination_rules(raw_rules: Any, source: str, alias_lookup: di
     return tuple(compiled_rules)  # Return immutable compiled rules.
 
 
+def compile_only_combination_rules(raw_rules: Any, source: str, alias_lookup: dict) -> Tuple[SkipCombinationRule, ...]:
+    """
+    Validate and compile only-combination rules using skip-rule syntax.
+
+    :param raw_rules: Raw YAML, CLI, or default rule list.
+    :param source: User-facing configuration source.
+    :param alias_lookup: Normalized alias lookup produced from runtime registries.
+    :return: Tuple of compiled allowlist rules.
+    """
+
+    if not isinstance(raw_rules, list):  # Require YAML and CLI lists.
+        raise ValueError(f"{source} only_combinations must be a list of strings")  # Reject scalar and mapping configuration.
+    compiled_rules = []  # Accumulate parsed allowlist rules in configured order.
+    for index, rule_text in enumerate(raw_rules, start=1):  # Validate every configured rule independently.
+        if not isinstance(rule_text, str) or not rule_text.strip():  # Reject invalid or empty entries.
+            raise ValueError(f"{source} only_combinations[{index}] must be a non-empty string")  # Report the invalid list item.
+        compiled_rules.append(parse_skip_combination_rule(rule_text, f"{source} only_combinations[{index}]", alias_lookup))  # Reuse the established exact combination-rule grammar.
+    return tuple(compiled_rules)  # Return immutable compiled allowlist rules.
+
+
 def normalize_plan_augmentation_ratio(value: Any) -> int:  # Normalize internal plan ratio.
     """
     Normalize an internal plan augmentation value to a user-facing percent.
@@ -262,6 +282,30 @@ def apply_skip_combination_rules(evaluation_plan: List[Tuple[str, bool, Optional
     return eligible_plan, {"canonical_total": len(evaluation_plan), "skipped": skipped_total, "eligible": len(eligible_plan), "global_ids": global_ids, "rule_match_counts": rule_match_counts, "skipped_combinations": skipped_records, "source": source, "rules": rules}  # Return filtered plan and diagnostics.
 
 
+def apply_only_combination_rules(evaluation_plan: List[Tuple[str, bool, Optional[float], str]], rules: Tuple[SkipCombinationRule, ...], source: str) -> Tuple[List[Tuple[str, bool, Optional[float], str]], dict]:
+    """
+    Retain combinations matched by at least one compiled allowlist rule.
+
+    :param evaluation_plan: Canonical unfiltered evaluation plan.
+    :param rules: Compiled only-combination rules.
+    :param source: Resolved only-rule source label.
+    :return: Selected plan and allowlist summary metadata.
+    """
+
+    if not rules:  # Preserve the complete plan when no allowlist is configured.
+        return list(evaluation_plan), {"generated": len(evaluation_plan), "selected": len(evaluation_plan), "excluded": 0, "rule_match_counts": [], "source": source, "rules": rules}  # Return a no-op summary.
+    selected_plan = []  # Accumulate allowlisted combinations in canonical order.
+    rule_match_counts = [0 for _ in rules]  # Track generated-plan matches per rule.
+    for combination in evaluation_plan:  # Visit every generated combination once.
+        metadata = build_skip_combination_metadata(combination[0], combination[1], combination[2], combination[3])  # Build normalized matcher metadata.
+        matched_rule_indexes = tuple(index for index, rule in enumerate(rules) if skip_rule_matches_combination(rule, metadata))  # Match every allowlist rule without reparsing.
+        for rule_index in matched_rule_indexes:  # Count overlapping rule matches independently.
+            rule_match_counts[rule_index] += 1  # Increment the matching allowlist rule count.
+        if matched_rule_indexes:  # Retain a combination matched by any rule.
+            selected_plan.append(combination)  # Preserve canonical execution order and avoid duplicates.
+    return selected_plan, {"generated": len(evaluation_plan), "selected": len(selected_plan), "excluded": len(evaluation_plan) - len(selected_plan), "rule_match_counts": rule_match_counts, "source": source, "rules": rules}  # Return selected combinations and diagnostics.
+
+
 def format_skip_rules_for_info(rules: Tuple[SkipCombinationRule, ...], source: str) -> List[str]:  # Format startup INFO skip lines.
     """
     Format resolved skip rules for startup INFO logs.
@@ -276,6 +320,33 @@ def format_skip_rules_for_info(rules: Tuple[SkipCombinationRule, ...], source: s
     lines = [f"Skip-combination rules source: {source}", f"Skip-combination rules: {len(rules)}"]  # Start with source and count.
     lines.extend(f"Skip rule {index}: {rule.canonical}" for index, rule in enumerate(rules, start=1))  # Append canonical rules.
     return lines  # Return complete startup INFO lines.
+
+
+def format_only_rules_for_info(rules: Tuple[SkipCombinationRule, ...], source: str) -> List[str]:
+    """
+    Format resolved only-combination rules for startup logs.
+
+    :param rules: Compiled only-combination rules.
+    :param source: Resolved only-rule source label.
+    :return: User-readable startup message bodies.
+    """
+
+    if not rules:  # Report disabled state concisely.
+        return ["Only-combination rules: Disabled"]  # Return the disabled line.
+    lines = [f"Only-combination rules source: {source}", f"Only-combination rules: {len(rules)}"]  # Start with source and count.
+    lines.extend(f"Only rule {index}: {rule.canonical}" for index, rule in enumerate(rules, start=1))  # Append canonical allowlist rules.
+    return lines  # Return complete startup lines.
+
+
+def format_only_summary_line(only_summary: dict) -> str:
+    """
+    Format aggregate only-combination selection totals.
+
+    :param only_summary: Summary returned by apply_only_combination_rules.
+    :return: User-readable aggregate allowlist summary.
+    """
+
+    return f"[ONLY SUMMARY] Generated={only_summary['generated']} | Selected={only_summary['selected']} | Excluded={only_summary['excluded']}"  # Return complete allowlist totals.
 
 
 def format_skip_rule_match_lines(skip_summary: dict) -> List[str]:  # Format per-rule match counts.

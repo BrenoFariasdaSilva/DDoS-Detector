@@ -159,7 +159,7 @@ from utils.stacking.planning import FEATURE_SET_WORKER_KEYS, build_evaluation_pl
 from utils.lstm_sequences import LSTMSequenceMetadataError, build_lstm_sequence_windows  # Build verified partition-local LSTM windows.
 from utils.oom_restart import AUTO_RESTART_ATTEMPT_ENV, build_exact_oom_skip_rule, capture_oom_baseline, oom_kill_delta, recover_launch_command, schedule_detached_restart, transform_command_with_skip_rule  # Import focused OOM restart planning utilities.
 from utils.process_name import set_runtime_process_name  # Apply optional htop-visible process identities.
-from utils.skip_combinations import apply_skip_combination_rules, build_alias_lookup, compile_skip_combination_rules, filter_models_for_plan_group, format_skip_rule_match_lines, format_skip_rules_for_info, format_skip_rules_for_telegram, format_skip_summary_line, normalize_plan_augmentation_ratio  # Import reusable skip-combination parsing and plan filtering.
+from utils.skip_combinations import apply_only_combination_rules, apply_skip_combination_rules, build_alias_lookup, compile_only_combination_rules, compile_skip_combination_rules, filter_models_for_plan_group, format_only_rules_for_info, format_only_summary_line, format_skip_rule_match_lines, format_skip_rules_for_info, format_skip_rules_for_telegram, format_skip_summary_line, normalize_plan_augmentation_ratio  # Import reusable combination-rule parsing and plan filtering.
 
 
 # Macros:
@@ -1152,6 +1152,7 @@ def parse_cli_args():
         parser.add_argument("--feature-extraction-n-jobs", dest="feature_extraction_n_jobs", type=int, default=None, help="Override evaluation.feature_extraction_n_jobs for feature extraction/transformation stages such as PCA, not classifier training (-1 uses available CPUs; 1 is memory-safe)")  # Add the independent feature extraction thread override
         parser.add_argument("--feature-set-workers", dest="feature_set_workers", type=str, default=None, help="Persistent process counts by feature set, for example full=1,ga=1,pca=1,rfe=1,extra_trees=1; only 0 or 1 is supported")  # Add the persistent feature-set process override
         parser.add_argument("--skip-combination", dest="skip_combination", action="append", default=None, help="Skip combinations by shell-quoted rule because '&' and '||' are shell operators; '&' means all terms match, '||' means either clause matches, missing dimensions are wildcards, augmentation uses 0-100 with 0 off, repeat option for multiple rules")  # Add repeatable skip-rule CLI override.
+        parser.add_argument("--only-combination", dest="only_combination", action="append", default=None, help="Run only combinations matched by a shell-quoted rule using the same syntax as --skip-combination; repeat for additional allowed combinations")  # Add repeatable allowlist-rule CLI override.
         oom_restart_group = parser.add_mutually_exclusive_group()  # Prevent contradictory OOM restart overrides.
         oom_restart_group.add_argument("--auto-restart-on-oom", dest="auto_restart_on_oom", action="store_true", help="Enable automatic exact-skip restart after confirmed persistent-worker OOM")  # Enable OOM restart recovery.
         oom_restart_group.add_argument("--no-auto-restart-on-oom", dest="auto_restart_on_oom", action="store_false", help="Disable automatic exact-skip restart after confirmed persistent-worker OOM")  # Disable OOM restart recovery.
@@ -1199,6 +1200,7 @@ def get_default_stacking_config():
             "data_augmentation_suffix": "_data_augmented",  # File suffix for augmented data files
             "augmentation_ratios": [0.25, 0.50, 0.75, 1.00],  # Ratios of augmented data to sample
             "skip_combinations": [],  # User-defined combination skip rules, empty by default.
+            "only_combinations": [],  # User-defined combination allowlist rules, empty by default.
             "auto_restart_on_oom": True,  # Automatically relaunch with an exact skip rule after confirmed persistent-worker OOM.
             "hyperparameters_filename": "Hyperparameter_Optimization_Results.csv",  # Hyperparameter results CSV filename
             "cache_prefix": "Cache_",  # Prefix for cached model files
@@ -2066,6 +2068,22 @@ def resolve_skip_combination_rules_source(file_config: dict, cli_args: Any) -> s
     return "Default"  # Report internal default source.
 
 
+def resolve_only_combination_rules_source(file_config: dict, cli_args: Any) -> str:
+    """
+    Resolve only-combination precedence source.
+
+    :param file_config: Raw configuration loaded from YAML.
+    :param cli_args: Parsed CLI arguments or None.
+    :return: Source label for logging.
+    """
+
+    if cli_args is not None and getattr(cli_args, "only_combination", None) is not None:  # Detect explicit repeatable CLI rules.
+        return "CLI"  # Report CLI replacement source.
+    if isinstance(file_config, dict) and "only_combinations" in file_config.get("stacking", {}):  # Detect YAML-provided allowlist.
+        return "YAML"  # Report YAML source.
+    return "Default"  # Report internal default source.
+
+
 def validate_feature_set_workers(value: Any, source: str = "evaluation.feature_set_workers") -> dict:  # Normalize and validate persistent feature-set process counts
     """
     Normalize persistent feature-set process counts.
@@ -2177,9 +2195,12 @@ def merge_configs(defaults, file_config, cli_args):
             config.setdefault("evaluation", {})["feature_set_workers"] = validate_feature_set_workers(config.get("evaluation", {}).get("feature_set_workers", None))  # Normalize the effective persistent process mapping
             config["evaluation"]["training_progress_interval_minutes"] = validate_training_progress_interval_minutes(config["evaluation"].get("training_progress_interval_minutes", DEFAULT_TRAINING_PROGRESS_INTERVAL_MINUTES))  # Validate the YAML-over-default progress interval.
             skip_source = resolve_skip_combination_rules_source(file_config, cli_args)  # Resolve skip-rule source without CLI overrides.
+            only_source = resolve_only_combination_rules_source(file_config, cli_args)  # Resolve only-rule source without CLI overrides.
             skip_alias_lookup = build_alias_lookup(SKIP_RULE_FEATURE_ALIASES, SKIP_RULE_CLASSIFIER_ALIASES, SKIP_RULE_HYPERPARAMETER_ALIASES)  # Build skip-rule aliases from runtime names.
             config.setdefault("stacking", {})["skip_combinations_source"] = skip_source  # Store user-readable skip-rule source.
             config["stacking"]["compiled_skip_combinations"] = compile_skip_combination_rules(config.get("stacking", {}).get("skip_combinations", []), skip_source, skip_alias_lookup)  # Parse skip rules once before datasets load.
+            config["stacking"]["only_combinations_source"] = only_source  # Store user-readable only-rule source.
+            config["stacking"]["compiled_only_combinations"] = compile_only_combination_rules(config.get("stacking", {}).get("only_combinations", []), only_source, skip_alias_lookup)  # Parse allowlist rules once before datasets load.
             return config  # Return merged config
         
         if hasattr(cli_args, "verbose") and cli_args.verbose:  # Verbose flag
@@ -2259,6 +2280,9 @@ def merge_configs(defaults, file_config, cli_args):
         if hasattr(cli_args, "skip_combination") and cli_args.skip_combination is not None:  # Skip-combination CLI replacement override.
             config.setdefault("stacking", {})["skip_combinations"] = list(cli_args.skip_combination)  # Replace YAML skip rules when CLI supplies any rule.
 
+        if hasattr(cli_args, "only_combination") and cli_args.only_combination is not None:  # Only-combination CLI replacement override.
+            config.setdefault("stacking", {})["only_combinations"] = list(cli_args.only_combination)  # Replace YAML allowlist rules when CLI supplies any rule.
+
         if hasattr(cli_args, "auto_restart_on_oom") and cli_args.auto_restart_on_oom is not None:  # OOM restart CLI override.
             config.setdefault("stacking", {})["auto_restart_on_oom"] = bool(cli_args.auto_restart_on_oom)  # Apply CLI OOM restart setting.
 
@@ -2318,9 +2342,12 @@ def merge_configs(defaults, file_config, cli_args):
         config.setdefault("evaluation", {})["feature_set_workers"] = validate_feature_set_workers(config.get("evaluation", {}).get("feature_set_workers", None))  # Normalize the final persistent process mapping after CLI precedence
         config["evaluation"]["training_progress_interval_minutes"] = validate_training_progress_interval_minutes(config["evaluation"].get("training_progress_interval_minutes", DEFAULT_TRAINING_PROGRESS_INTERVAL_MINUTES))  # Normalize the final validated progress interval after CLI precedence.
         skip_source = resolve_skip_combination_rules_source(file_config, cli_args)  # Resolve final skip-rule source after CLI precedence.
+        only_source = resolve_only_combination_rules_source(file_config, cli_args)  # Resolve final only-rule source after CLI precedence.
         skip_alias_lookup = build_alias_lookup(SKIP_RULE_FEATURE_ALIASES, SKIP_RULE_CLASSIFIER_ALIASES, SKIP_RULE_HYPERPARAMETER_ALIASES)  # Build skip-rule aliases from runtime names.
         config.setdefault("stacking", {})["skip_combinations_source"] = skip_source  # Store final user-readable skip-rule source.
         config["stacking"]["compiled_skip_combinations"] = compile_skip_combination_rules(config.get("stacking", {}).get("skip_combinations", []), skip_source, skip_alias_lookup)  # Parse skip rules once before datasets load.
+        config["stacking"]["only_combinations_source"] = only_source  # Store final user-readable only-rule source.
+        config["stacking"]["compiled_only_combinations"] = compile_only_combination_rules(config.get("stacking", {}).get("only_combinations", []), only_source, skip_alias_lookup)  # Parse allowlist rules once before datasets load.
         return config  # Return final merged configuration
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
@@ -15032,6 +15059,14 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
         feature_mode_names = list_grid_feature_modes(ga_selected_features, pca_n_components, rfe_selected_features, extra_trees_selected_features, feature_names, config=config)  # Resolve actual feature modes in evaluation order
         canonical_evaluation_plan = build_evaluation_plan(hp_runs, [None] + list(augmentation_ratios), feature_mode_names, methods_cfg.get("stacking", True))  # Build the exact default-first, original-first full-grid order before runtime filtering.
         canonical_evaluation_plan = retain_stacking_classifier_plan(canonical_evaluation_plan, config.get("stacking", {}).get("stacking_only", False))  # Remove individual classifiers before scheduling isolated stacking work.
+        only_rules = tuple(config.get("stacking", {}).get("compiled_only_combinations", ()))  # Read compiled allowlist rules for this generated plan.
+        only_source = config.get("stacking", {}).get("only_combinations_source", "Default")  # Read resolved allowlist source.
+        canonical_evaluation_plan, only_summary = apply_only_combination_rules(canonical_evaluation_plan, only_rules, only_source)  # Retain only explicitly selected combinations before applying exclusions.
+        if only_rules:  # Report active allowlist selection without flooding logs with every excluded combination.
+            print(format_only_summary_line(only_summary))  # Emit generated, selected, and excluded totals.
+            for rule_index, count in enumerate(only_summary.get("rule_match_counts", []), start=1):  # Warn about allowlist rules that select no generated work.
+                if count == 0:  # Surface misspelled or unavailable logical combinations.
+                    print(f"{BackgroundColors.YELLOW}[WARNING] Only rule matched no generated combinations: {only_rules[rule_index - 1].canonical}{Style.RESET_ALL}")  # Emit the unmatched allowlist rule.
         skip_rules = tuple(config.get("stacking", {}).get("compiled_skip_combinations", ()))  # Read compiled skip rules for this generated plan.
         skip_source = config.get("stacking", {}).get("skip_combinations_source", "Default")  # Read resolved skip-rule source.
         evaluation_plan, skip_summary = apply_skip_combination_rules(canonical_evaluation_plan, skip_rules, skip_source, get_current_experiment_run(config))  # Apply configured runtime skip rules before cache partitioning.
@@ -15045,6 +15080,9 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
                 print(f"{BackgroundColors.YELLOW}[WARNING] Skip rule matched no generated combinations: {skip_rules[rule_index - 1].canonical}{Style.RESET_ALL}")  # Emit no-match warning.
         print(format_skip_summary_line(skip_summary))  # Log pre-cache aggregate skip summary.
         if not evaluation_plan:  # Exit successfully when every generated combination was intentionally skipped.
+            if only_rules and only_summary["selected"] == 0:  # Distinguish an empty allowlist selection from skip-rule exclusions.
+                send_telegram_message(TELEGRAM_BOT, [f"[COMBINED_FILES] No combinations matched only-combination rules | Rules={len(only_rules)} | Eligible=0"])  # Send concise empty-selection summary.
+                return  # Avoid cache recovery, matrices, workers, and result writes.
             skip_rule_count = len(config.get("stacking", {}).get("compiled_skip_combinations", ()))  # Count resolved skip rules for Telegram.
             send_telegram_message(TELEGRAM_BOT, [f"[COMBINED_FILES] All combinations skipped | Rules={skip_rule_count} | Skipped={skip_summary['skipped']} | Eligible=0"])  # Send concise all-skipped summary.
             return  # Avoid cache recovery, matrices, workers, and result writes.
@@ -17507,6 +17545,14 @@ def orchestrate_all_combinations(input_path, dataset_name=None, config=None):
             feature_mode_names = list_grid_feature_modes(ga_sel, pca_n, rfe_sel, extra_trees_sel, feature_names, config=config)  # Resolve actual feature modes in evaluation order
             canonical_evaluation_plan = build_evaluation_plan(hp_runs, [None] + list(augmentation_ratios), feature_mode_names, stacking_enabled)  # Build the exact default-first, original-first full-grid order before runtime filtering.
             canonical_evaluation_plan = retain_stacking_classifier_plan(canonical_evaluation_plan, config.get("stacking", {}).get("stacking_only", False))  # Remove individual classifiers before scheduling isolated stacking work.
+            only_rules = tuple(config.get("stacking", {}).get("compiled_only_combinations", ()))  # Read compiled allowlist rules for this generated plan.
+            only_source = config.get("stacking", {}).get("only_combinations_source", "Default")  # Read resolved allowlist source.
+            canonical_evaluation_plan, only_summary = apply_only_combination_rules(canonical_evaluation_plan, only_rules, only_source)  # Retain only explicitly selected combinations before applying exclusions.
+            if only_rules:  # Report active allowlist selection without flooding logs with every excluded combination.
+                print(format_only_summary_line(only_summary))  # Emit generated, selected, and excluded totals.
+                for rule_index, count in enumerate(only_summary.get("rule_match_counts", []), start=1):  # Warn about allowlist rules that select no generated work.
+                    if count == 0:  # Surface misspelled or unavailable logical combinations.
+                        print(f"{BackgroundColors.YELLOW}[WARNING] Only rule matched no generated combinations: {only_rules[rule_index - 1].canonical}{Style.RESET_ALL}")  # Emit the unmatched allowlist rule.
             skip_rules = tuple(config.get("stacking", {}).get("compiled_skip_combinations", ()))  # Read compiled skip rules for this generated plan.
             skip_source = config.get("stacking", {}).get("skip_combinations_source", "Default")  # Read resolved skip-rule source.
             evaluation_plan, skip_summary = apply_skip_combination_rules(canonical_evaluation_plan, skip_rules, skip_source, get_current_experiment_run(config))  # Apply configured runtime skip rules before cache partitioning.
@@ -17520,6 +17566,11 @@ def orchestrate_all_combinations(input_path, dataset_name=None, config=None):
                     print(f"{BackgroundColors.YELLOW}[WARNING] Skip rule matched no generated combinations: {skip_rules[rule_index - 1].canonical}{Style.RESET_ALL}")  # Emit no-match warning.
             print(format_skip_summary_line(skip_summary))  # Log pre-cache aggregate skip summary.
             if not evaluation_plan:  # Exit this file successfully when every generated combination was intentionally skipped.
+                if only_rules and only_summary["selected"] == 0:  # Distinguish an empty allowlist selection from skip-rule exclusions.
+                    send_telegram_message(TELEGRAM_BOT, [f"[SEPARATE_FILES] No combinations matched only-combination rules | Rules={len(only_rules)} | Eligible=0"])  # Send concise empty-selection summary.
+                    del df_original  # Release the loaded dataset before continuing.
+                    gc.collect()  # Reclaim dataset memory after empty allowlist selection.
+                    continue  # Move to the next file without cache or model work.
                 skip_rule_count = len(config.get("stacking", {}).get("compiled_skip_combinations", ()))  # Count resolved skip rules for Telegram.
                 send_telegram_message(TELEGRAM_BOT, [f"[SEPARATE_FILES] All combinations skipped | Rules={skip_rule_count} | Skipped={skip_summary['skipped']} | Eligible=0"])  # Send concise all-skipped summary.
                 del df_original  # Release already-loaded dataset before continuing to next file.
@@ -18129,6 +18180,10 @@ def log_resolved_configuration(config: dict) -> None:
         skip_source = config.get("stacking", {}).get("skip_combinations_source", "Default")  # Read resolved skip-rule source.
         for skip_line in format_skip_rules_for_info(skip_rules, skip_source):  # Emit resolved skip-rule startup INFO lines.
             print(f"{BackgroundColors.GREEN}[INFO] {BackgroundColors.CYAN}{skip_line}{Style.RESET_ALL}")  # Log normalized skip-rule configuration.
+        only_rules = tuple(config.get("stacking", {}).get("compiled_only_combinations", ()))  # Read compiled allowlist rules for display.
+        only_source = config.get("stacking", {}).get("only_combinations_source", "Default")  # Read resolved allowlist source.
+        for only_line in format_only_rules_for_info(only_rules, only_source):  # Emit resolved allowlist startup INFO lines.
+            print(f"{BackgroundColors.GREEN}[INFO] {BackgroundColors.CYAN}{only_line}{Style.RESET_ALL}")  # Log normalized only-rule configuration.
 
         feature_sets_cfg = config.get("stacking", {}).get("feature_sets_config", {})  # Get resolved feature sets configuration
         full_features_flag = feature_sets_cfg.get("use_full", True)  # Resolve Full Features flag from feature sets config
@@ -18217,6 +18272,8 @@ def build_telegram_pipeline_summary(config: Optional[dict], dataset_path: Option
         feature_set_workers = validate_feature_set_workers(config.get("evaluation", {}).get("feature_set_workers", None))  # Resolve persistent process configuration for startup notification
         skip_rules = tuple(stacking_cfg.get("compiled_skip_combinations", ()))  # Read compiled skip rules for startup notification.
         skip_source = stacking_cfg.get("skip_combinations_source", "Default")  # Read resolved skip-rule source for startup notification.
+        only_rules = tuple(stacking_cfg.get("compiled_only_combinations", ()))  # Read compiled allowlist rules for startup notification.
+        only_source = stacking_cfg.get("only_combinations_source", "Default")  # Read resolved allowlist source for startup notification.
         auto_restart_on_oom = bool(stacking_cfg.get("auto_restart_on_oom", True))  # Read OOM restart toggle for startup notification.
 
         dataset_display = dataset_path if dataset_path else "config.yaml (default)"  # Resolve the effective dataset source for the consolidated notification
@@ -18233,6 +18290,7 @@ def build_telegram_pipeline_summary(config: Optional[dict], dataset_path: Option
             f"Feature-set workers: full={feature_set_workers['full']}, ga={feature_set_workers['ga']}, pca={feature_set_workers['pca']}, rfe={feature_set_workers['rfe']}, extra_trees={feature_set_workers['extra_trees']} | start method: {FEATURE_PROCESS_START_METHOD}",  # Report process isolation configuration
             f"Auto-restart on OOM: {'ON' if auto_restart_on_oom else 'OFF'}",  # Report OOM restart setting.
             f"Skip combinations: {len(skip_rules)} rule(s) from {skip_source}" + (f" | {', '.join(rule.canonical for rule in skip_rules)}" if skip_rules else ""),  # Report skip-rule source and normalized rules.
+            f"Only combinations: {len(only_rules)} rule(s) from {only_source}" + (f" | {', '.join(rule.canonical for rule in only_rules)}" if only_rules else ""),  # Report allowlist source and normalized rules.
             f"Test data augmentation: {'ON' if test_data_augmentation else 'OFF'}",  # Report the independent augmented-test toggle
         ]
 

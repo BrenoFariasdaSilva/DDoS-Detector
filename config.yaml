@@ -390,6 +390,7 @@ stacking: # Stacking experiment settings
   sort_pending_by_elapsed_time: false # When true, pending classifier queues run faster historical elapsed_time_s combinations first within comparable groups.
   experiment_runs: 1 # Total repeated runs required for every logical experiment.
   skip_combinations: [] # Runtime skip rules for feature/classifier/hyperparameter/augmentation combinations. Empty keeps all generated combinations eligible.
+  only_combinations: [] # Runtime allowlist rules using skip-rule syntax. Empty permits every generated combination.
   auto_restart_on_oom: true # Automatically relaunch with an exact skip rule after confirmed persistent-worker OOM.
 
   methods: # Method toggles for stacking pipeline (overridable via CLI)
