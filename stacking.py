@@ -155,7 +155,7 @@ from autoencoder import AutoencoderClassifier  # Import the standalone sklearn-c
 from lstm import LSTMClassifier  # Import the standalone sklearn-compatible supervised LSTM sequence classifier
 from training_progress import DEFAULT_TRAINING_PROGRESS_INTERVAL_MINUTES, TrainingProgress, XGBoostProgressCallback, format_training_combination_fields, format_training_feature_set, interactive_terminal_attached  # Import reusable training progress infrastructure.
 from utils.stacking.shap import aggregate_mean_shap_importance, build_kernel_explainer, build_shap_progress_description, compute_shap_values_with_context, create_shap_progress_wrapper, describe_raw_shap_result, get_shap_prediction_function, normalize_shap_output, resolve_model_class_count, resolve_shap_progress_target, sample_shap_test_data, select_shap_explainer, supports_predict_proba  # Re-export stateless SHAP utilities.
-from utils.stacking.planning import FEATURE_SET_WORKER_KEYS, build_evaluation_plan, build_feature_process_metadata, resolve_feature_set_worker_key  # Re-export pure evaluation planning utilities.
+from utils.stacking.planning import FEATURE_SET_WORKER_KEYS, build_evaluation_plan, build_feature_process_metadata, resolve_feature_set_worker_key, retain_stacking_classifier_plan  # Re-export pure evaluation planning utilities.
 from utils.lstm_sequences import LSTMSequenceMetadataError, build_lstm_sequence_windows  # Build verified partition-local LSTM windows.
 from utils.oom_restart import AUTO_RESTART_ATTEMPT_ENV, build_exact_oom_skip_rule, capture_oom_baseline, oom_kill_delta, recover_launch_command, schedule_detached_restart, transform_command_with_skip_rule  # Import focused OOM restart planning utilities.
 from utils.skip_combinations import apply_skip_combination_rules, build_alias_lookup, compile_skip_combination_rules, filter_models_for_plan_group, format_skip_rule_match_lines, format_skip_rules_for_info, format_skip_rules_for_telegram, format_skip_summary_line, normalize_plan_augmentation_ratio  # Import reusable skip-combination parsing and plan filtering.
@@ -1139,6 +1139,7 @@ def parse_cli_args():
         parser.add_argument("--disable-hyperparameters", dest="enable_hyperparameters", action="store_false", help="Disable hyperparameter optimization method toggle")
         parser.add_argument("--enable-stacking", dest="enable_stacking", action="store_true", default=None, help="Enable stacking classifier evaluation")
         parser.add_argument("--disable-stacking", dest="enable_stacking", action="store_false", help="Disable stacking classifier evaluation")
+        parser.add_argument("--stacking-only", action="store_true", default=None, help="Run only StackingClassifier with full features and default hyperparameters")  # Select the isolated stacking-classifier pipeline.
         explainability_group = parser.add_mutually_exclusive_group()  # Prevent contradictory explainability overrides in one invocation.
         explainability_group.add_argument("--enable-explainability", dest="enable_explainability", action="store_true", help="Enable model explainability (overrides config)")  # Force the explainability pipeline on from the CLI.
         explainability_group.add_argument("--disable-explainability", dest="enable_explainability", action="store_false", help="Disable model explainability (overrides config)")  # Force the explainability pipeline off from the CLI.
@@ -1185,6 +1186,7 @@ def get_default_stacking_config():
     try:
         return {
             "results_dir": "Stacking",  # Output subdirectory name for stacking results
+            "stacking_only": False,  # Keep the complete classifier pipeline unless isolated stacking is requested.
             "results_filename": "Stacking_Classifiers_Results.csv",  # Separate files evaluation results CSV filename
             "cache_results_subdir": "Cache_Results",  # Cache results subdirectory inside the stacking results directory
             "combined_files_results_filename": "Stacking_Classifiers_CombinedFiles_Results.csv",  # Combined files evaluation results CSV filename
@@ -2105,6 +2107,25 @@ def validate_feature_set_workers(value: Any, source: str = "evaluation.feature_s
     return normalized  # Return the complete normalized mapping
 
 
+def apply_stacking_only_mode(config):
+    """
+    Apply the isolated stacking classifier execution settings.
+
+    :param config: Merged stacking pipeline configuration.
+    :return: Configuration restricted to stacking classifier evaluation when requested.
+    """
+
+    stacking_config = config.setdefault("stacking", {})  # Resolve the stacking section once for mode normalization.
+    if not stacking_config.get("stacking_only", False):  # Preserve normal pipeline behavior when the mode is inactive.
+        return config  # Return the unchanged merged configuration.
+    stacking_config.setdefault("methods", {}).update({"augmentation": False, "automl": False, "feature_selection": False, "hyperparameter_optimization": False, "stacking": True})  # Disable every optional pipeline stage and force stacking evaluation.
+    stacking_config.setdefault("feature_sets_config", {}).update({"use_full": True, "use_pca": False, "use_rfe": False, "use_ga": False, "use_extra_trees": False, "explicit_features": []})  # Restrict evaluation to the unmodified full feature set.
+    config.setdefault("execution", {})["test_data_augmentation"] = False  # Prevent augmented test evaluation in isolated stacking mode.
+    config.setdefault("explainability", {})["enabled"] = False  # Prevent explainability work after the requested classifier evaluation.
+    config.setdefault("memory_watcher", {})["enabled"] = False  # Prevent an additional watcher process in isolated stacking mode.
+    return config  # Return the normalized isolated stacking configuration.
+
+
 def merge_configs(defaults, file_config, cli_args):
     """
     Merge configurations with priority: CLI > file > defaults.
@@ -2124,6 +2145,7 @@ def merge_configs(defaults, file_config, cli_args):
             config["execution"]["execution_mode"] = _LEGACY_MODES.get(classification_mode, classification_mode)  # Normalize legacy mode name to canonical value before assigning
         
         if cli_args is None:  # If no CLI args
+            config = apply_stacking_only_mode(config)  # Apply a stacking-only setting supplied by config.yaml.
             config.setdefault("stacking", {})["experiment_runs"] = validate_experiment_runs(config.get("stacking", {}).get("experiment_runs", 1))  # Normalize the YAML-over-default run count.
             validate_feature_extraction_n_jobs(config.get("evaluation", {}).get("feature_extraction_n_jobs", 1))  # Validate the effective file or default feature extraction setting.
             config.setdefault("evaluation", {})["feature_set_workers"] = validate_feature_set_workers(config.get("evaluation", {}).get("feature_set_workers", None))  # Normalize the effective persistent process mapping
@@ -2182,6 +2204,9 @@ def merge_configs(defaults, file_config, cli_args):
 
         if hasattr(cli_args, "enable_stacking") and cli_args.enable_stacking is not None:  # Stacking classifier evaluation toggle CLI override
             config.setdefault("stacking", {}).setdefault("methods", {})["stacking"] = cli_args.enable_stacking  # Apply stacking toggle override
+
+        if hasattr(cli_args, "stacking_only") and cli_args.stacking_only:  # Isolated stacking classifier CLI mode
+            config.setdefault("stacking", {})["stacking_only"] = True  # Apply the stacking-only mode over file and default configuration.
 
         if hasattr(cli_args, "enable_explainability") and cli_args.enable_explainability is not None:  # Explainability pipeline CLI override
             config.setdefault("explainability", {})["enabled"] = cli_args.enable_explainability  # Apply explainability toggle without changing method-level settings
@@ -2255,6 +2280,7 @@ def merge_configs(defaults, file_config, cli_args):
         if hasattr(cli_args, "enable_memory_tracemalloc") and cli_args.enable_memory_tracemalloc:  # Optional tracemalloc CLI toggle
             config.setdefault("memory_watcher", {})["capture_tracemalloc"] = True  # Enable optional Python allocation reports
 
+        config = apply_stacking_only_mode(config)  # Enforce the isolated pipeline after every CLI override is resolved.
         validate_feature_extraction_n_jobs(config.get("evaluation", {}).get("feature_extraction_n_jobs", 1))  # Validate the effective feature extraction setting after CLI precedence is applied.
         config.setdefault("stacking", {})["experiment_runs"] = validate_experiment_runs(config.get("stacking", {}).get("experiment_runs", 1))  # Normalize the final repeated-run count after CLI precedence.
         config.setdefault("evaluation", {})["feature_set_workers"] = validate_feature_set_workers(config.get("evaluation", {}).get("feature_set_workers", None))  # Normalize the final persistent process mapping after CLI precedence
@@ -2312,7 +2338,8 @@ def initialize_logger(config=None):
         clean = config.get("logging", {}).get("clean", True)  # Get clean flag
         
         os.makedirs(logs_dir, exist_ok=True)  # Ensure logs directory exists
-        log_path = Path(logs_dir) / f"{Path(__file__).stem}.log"  # Build log file path
+        log_stem = "stacking_only" if config.get("stacking", {}).get("stacking_only", False) else Path(__file__).stem  # Isolate stacking-only logs from concurrent full-pipeline output.
+        log_path = Path(logs_dir) / f"{log_stem}.log"  # Build log file path
         
         logger = Logger(str(log_path), clean=clean, timestamp_timezone=SAO_PAULO_TIMEZONE_NAME)  # Create one São Paulo timestamped Logger instance
         sys.stdout = logger  # Redirect stdout to logger
@@ -13638,6 +13665,8 @@ def evaluate_on_dataset(
             hyperparameters_enabled = bool(hyperparams_map)  # Preserve legacy inference for older callers
 
         planned_classifier_names = list(planned_classifier_names) if planned_classifier_names is not None else None  # Normalize optional group classifier filter.
+        if config.get("stacking", {}).get("stacking_only", False):  # Enforce stacking-only semantics for direct and legacy evaluation callers.
+            planned_classifier_names = ["StackingClassifier"]  # Remove every individual classifier from the executable model subset.
         stacking_enabled = config.get("stacking", {}).get("methods", {}).get("stacking", True)  # Resolve stacking toggle from config
         if planned_classifier_names is not None:  # Apply skip-filtered classifier selection when supplied.
             stacking_enabled = stacking_enabled and "StackingClassifier" in planned_classifier_names  # Run stacking only when current eligible group includes it.
@@ -13661,6 +13690,7 @@ def evaluate_on_dataset(
         planned_models = planned_models if artifact_recovery_target is None else ({artifact_recovery_target[1]: base_models[artifact_recovery_target[1]]} if artifact_recovery_target[1] != "StackingClassifier" else {})  # Keep recovery progress limited to the missing artifact.
         if grid_progress is None:  # Build the exact standalone plan for the current data and HP slice
             evaluation_plan = build_evaluation_plan([(bool(hyperparameters_enabled), planned_models, hyperparams_map or {})], [augmentation_ratio], feature_mode_names, stacking_enabled)  # Build the standalone ordered runtime combinations
+            evaluation_plan = retain_stacking_classifier_plan(evaluation_plan, config.get("stacking", {}).get("stacking_only", False))  # Enforce isolated stacking for direct evaluation callers.
         else:  # Reuse the complete ordered plan that created the shared full-grid progress bar
             evaluation_plan = grid_progress["evaluation_plan"]  # Reuse the authoritative full-grid plan source
 
@@ -14964,6 +14994,7 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
         augmentation_ratios = config.get("stacking", {}).get("augmentation_ratios", [0.25, 0.50, 0.75, 1.00]) if augmentation_file_paths else []  # Generate ratio modes only when augmentation files exist
         feature_mode_names = list_grid_feature_modes(ga_selected_features, pca_n_components, rfe_selected_features, extra_trees_selected_features, feature_names, config=config)  # Resolve actual feature modes in evaluation order
         canonical_evaluation_plan = build_evaluation_plan(hp_runs, [None] + list(augmentation_ratios), feature_mode_names, methods_cfg.get("stacking", True))  # Build the exact default-first, original-first full-grid order before runtime filtering.
+        canonical_evaluation_plan = retain_stacking_classifier_plan(canonical_evaluation_plan, config.get("stacking", {}).get("stacking_only", False))  # Remove individual classifiers before scheduling isolated stacking work.
         skip_rules = tuple(config.get("stacking", {}).get("compiled_skip_combinations", ()))  # Read compiled skip rules for this generated plan.
         skip_source = config.get("stacking", {}).get("skip_combinations_source", "Default")  # Read resolved skip-rule source.
         evaluation_plan, skip_summary = apply_skip_combination_rules(canonical_evaluation_plan, skip_rules, skip_source, get_current_experiment_run(config))  # Apply configured runtime skip rules before cache partitioning.
@@ -17427,6 +17458,7 @@ def orchestrate_all_combinations(input_path, dataset_name=None, config=None):
             augmentation_ratios = config.get("stacking", {}).get("augmentation_ratios", [0.25, 0.50, 0.75, 1.00]) if augmentation_requested and artifacts.get("augmented_file") else []  # Plan ratio modes from discovered paths without loading augmented contents.
             feature_mode_names = list_grid_feature_modes(ga_sel, pca_n, rfe_sel, extra_trees_sel, feature_names, config=config)  # Resolve actual feature modes in evaluation order
             canonical_evaluation_plan = build_evaluation_plan(hp_runs, [None] + list(augmentation_ratios), feature_mode_names, stacking_enabled)  # Build the exact default-first, original-first full-grid order before runtime filtering.
+            canonical_evaluation_plan = retain_stacking_classifier_plan(canonical_evaluation_plan, config.get("stacking", {}).get("stacking_only", False))  # Remove individual classifiers before scheduling isolated stacking work.
             skip_rules = tuple(config.get("stacking", {}).get("compiled_skip_combinations", ()))  # Read compiled skip rules for this generated plan.
             skip_source = config.get("stacking", {}).get("skip_combinations_source", "Default")  # Read resolved skip-rule source.
             evaluation_plan, skip_summary = apply_skip_combination_rules(canonical_evaluation_plan, skip_rules, skip_source, get_current_experiment_run(config))  # Apply configured runtime skip rules before cache partitioning.

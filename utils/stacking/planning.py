@@ -36,6 +36,20 @@ def build_evaluation_plan(hp_runs: List[Tuple[bool, dict, dict]], augmentation_m
     return evaluation_plan  # Return the authoritative ordered progress plan
 
 
+def retain_stacking_classifier_plan(evaluation_plan: List[Tuple[str, bool, Optional[float], str]], stacking_only: bool) -> List[Tuple[str, bool, Optional[float], str]]:
+    """
+    Retain only stacking classifier combinations when stacking-only mode is active.
+
+    :param evaluation_plan: Ordered runtime evaluation combinations.
+    :param stacking_only: Whether only StackingClassifier combinations may run.
+    :return: Original plan or its stacking-classifier-only subset.
+    """
+
+    if stacking_only:  # Restrict the runtime plan to the requested ensemble classifier.
+        return [combination for combination in evaluation_plan if combination[3] == "StackingClassifier"]  # Preserve canonical order while removing every individual classifier.
+    return evaluation_plan  # Preserve the normal full evaluation plan unchanged.
+
+
 def resolve_feature_set_worker_key(feature_set_name: str) -> str:  # Resolve one runtime feature-set name to its configured process key
     """
     Resolve a runtime feature-set name to its configured process key.
