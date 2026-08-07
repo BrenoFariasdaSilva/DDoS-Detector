@@ -77,6 +77,7 @@ from scipy.io import arff as scipy_arff  # Used to read ARFF files
 from telegram_bot import TelegramBot, send_exception_via_telegram, send_telegram_message, setup_global_exception_hook  # For Telegram utilities and global exception hook
 from tqdm import tqdm  # For showing a progress bar
 from typing import Any, Optional, cast  # For optional typing hints
+from utils.process_name import set_runtime_process_name  # Apply optional htop-visible process identities.
 
 
 # Macros:
@@ -284,6 +285,7 @@ def parse_cli_arguments():
         parser = argparse.ArgumentParser(
             description="Multi-Format Dataset Converter: convert ARFF/CSV/Parquet/TXT datasets"
         )  # Create the argument parser
+        parser.add_argument("--process-name", type=str, default=None, help="Process title displayed by htop and similar tools")  # Allow concurrent runs to have distinct operating-system identities.
 
         parser.add_argument(
             "-i", "--input", type=str, help="Input path (file or directory). If not provided, uses ./Input"
@@ -311,7 +313,9 @@ def parse_cli_arguments():
         parser.add_argument("--low-memory", dest="low_memory", action="store_true", help="Enable low memory mode")  # Low memory mode flag
         parser.add_argument("--no-low-memory", dest="no_low_memory", action="store_true", help="Disable low memory mode")  # No low memory mode flag
 
-        return parser.parse_args()  # Return parsed CLI arguments
+        cli_args = parser.parse_args()  # Parse the dataset-converter arguments.
+        set_runtime_process_name(cli_args.process_name)  # Apply the requested htop identity before conversion initialization.
+        return cli_args  # Return parsed CLI arguments.
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram

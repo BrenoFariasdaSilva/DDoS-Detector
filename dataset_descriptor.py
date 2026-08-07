@@ -92,6 +92,7 @@ from sklearn.preprocessing import StandardScaler  # For feature scaling
 from telegram_bot import TelegramBot, send_exception_via_telegram, send_telegram_message, setup_global_exception_hook  # For sending progress messages and exceptions to Telegram
 from tqdm import tqdm  # For progress bars
 from typing import Any, cast, Iterator, Optional  # For type hinting and streaming batch generator
+from utils.process_name import set_runtime_process_name  # Apply optional htop-visible process identities.
 
 
 setup_global_exception_hook()  # Install global exception handler to catch unhandled exceptions
@@ -205,6 +206,7 @@ def parse_cli_args(argv=None) -> dict:
     """
 
     parser = argparse.ArgumentParser(add_help=False)  # Create argument parser without default help option
+    parser.add_argument("--process-name", type=str, default=None)  # Allow concurrent runs to have distinct operating-system identities.
     low_memory_group = parser.add_mutually_exclusive_group()
     low_memory_group.add_argument("--low-memory", dest="low_memory", action="store_true", default=None)
     low_memory_group.add_argument("--no-low-memory", dest="low_memory", action="store_false", default=None)
@@ -227,6 +229,8 @@ def parse_cli_args(argv=None) -> dict:
     parser.add_argument("--batch_threshold_gb", dest="batch_threshold_gb", type=float, default=None)  # Threshold in GB above which batched loading is activated
     parser.add_argument("--config", dest="config", default="config.yaml")
     args, _ = parser.parse_known_args(argv)  # Parse known args and discard unknown entries
+    set_runtime_process_name(args.process_name)  # Apply the requested htop identity before configuration and logging initialization.
+    delattr(args, "process_name")  # Keep the runtime-only option out of descriptor configuration overrides.
     return {k: v for k, v in vars(args).items() if v is not None}  # Return only non-None values as overrides
 
 

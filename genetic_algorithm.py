@@ -105,6 +105,7 @@ from sklearn.preprocessing import StandardScaler  # For feature scaling
 from telegram_bot import TelegramBot, send_exception_via_telegram, send_telegram_message, setup_global_exception_hook  # For Telegram notifications
 from tqdm import tqdm  # For progress bars
 from typing import Any, Callable, Union, cast  # For type hints
+from utils.process_name import set_runtime_process_name  # Apply optional htop-visible process identities.
 
 psutil = (
     __import__("psutil") if __import__("importlib").util.find_spec("psutil") else None
@@ -201,10 +202,13 @@ def parse_cli_args():
         parser.add_argument("--monitor-interval", type=int, help="Monitor interval in seconds")  # Monitor interval
 
         parser.add_argument("--config", type=str, help="Path to configuration file (YAML or .env)")  # Config file path
+        parser.add_argument("--process-name", type=str, default=None, help="Process title displayed by htop and similar tools")  # Allow concurrent runs to have distinct operating-system identities.
         parser.add_argument("--results_dir", type=str, help="Override results directory for GA exports (overrides genetic_algorithm.export.results_dir)")
         parser.add_argument("--results_filename", type=str, help="Override results filename for GA exports (overrides genetic_algorithm.export.results_filename)")
 
-        return parser.parse_args()  # Parse and return arguments
+        cli_args = parser.parse_args()  # Parse the genetic-algorithm arguments.
+        set_runtime_process_name(cli_args.process_name)  # Apply the requested htop identity before configuration and logging initialization.
+        return cli_args  # Return the parsed arguments after runtime naming.
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram

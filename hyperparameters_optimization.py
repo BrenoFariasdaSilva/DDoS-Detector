@@ -104,6 +104,7 @@ from sklearn.svm import LinearSVC, SVC  # For Support Vector Machine models
 from telegram_bot import TelegramBot, send_exception_via_telegram, send_telegram_message, setup_global_exception_hook  # For sending progress messages to Telegram
 from tqdm import tqdm  # For progress bars
 from typing import Any, cast, Dict, Union  # For type hints
+from utils.process_name import set_runtime_process_name  # Apply optional htop-visible process identities.
 from xgboost import XGBClassifier  # For XGBoost classifier
 
 try:  # Attempt to import ThunderSVM with full CUDA safety guard
@@ -401,6 +402,7 @@ def parse_cli_args() -> argparse.Namespace:
     try:
         parser = argparse.ArgumentParser(description="Hyperparameters optimization runner")  # Create CLI argument parser
         parser.add_argument("--config", type=str, default=None, help="Path to config.yaml file")  # Config path override
+        parser.add_argument("--process-name", type=str, default=None, help="Process title displayed by htop and similar tools")  # Allow concurrent runs to have distinct operating-system identities.
         parser.add_argument("--verbose", dest="verbose", action="store_true", default=None, help="Enable verbose output (overrides config)")  # Verbose enable flag
         parser.add_argument("--no-verbose", dest="verbose", action="store_false", help="Disable verbose output (overrides config)")  # Verbose disable flag
         parser.add_argument("--n-jobs", "--n_jobs", dest="n_jobs", type=int, default=None, help="Number of parallel jobs (overrides config)")  # N_JOBS override
@@ -421,7 +423,9 @@ def parse_cli_args() -> argparse.Namespace:
         parser.add_argument("--dataset-path", "--dataset_path", dest="dataset_path", type=str, default=None, help="Path to a dataset directory or single CSV file to process")  # Dataset path override
         parser.add_argument("--csv", dest="csv", type=str, default=None, help="Path to a single CSV file to process")  # Single CSV override
 
-        return parser.parse_args()  # Return parsed CLI arguments
+        cli_args = parser.parse_args()  # Parse the hyperparameter-optimization arguments.
+        set_runtime_process_name(cli_args.process_name)  # Apply the requested htop identity before configuration and logging initialization.
+        return cli_args  # Return parsed CLI arguments.
     except Exception as e:
         print(str(e))  # Print parser error message
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send parser exception via Telegram

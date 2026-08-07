@@ -71,6 +71,7 @@ if __name__ in {"__main__", "__mp_main__"}:
 
 
 import arff as liac_arff  # For loading ARFF files
+import argparse  # For parsing runtime process-name overrides
 import atexit  # For registering a function to run at exit
 import dataframe_image as dfi  # For exporting DataFrame styled tables as PNG images
 import datetime  # For timestamping
@@ -105,6 +106,7 @@ from sklearn.preprocessing import LabelEncoder, StandardScaler  # For preprocess
 from sklearn.svm import SVC  # For Support Vector Machine model
 from telegram_bot import TelegramBot, send_exception_via_telegram, send_telegram_message, setup_global_exception_hook  # For sending progress messages to Telegram
 from tqdm import tqdm  # For progress bars
+from utils.process_name import set_runtime_process_name  # Apply optional htop-visible process identities.
 from xgboost import XGBClassifier  # For XGBoost classifier
 
 
@@ -2249,6 +2251,10 @@ if __name__ == "__main__":
     """
 
     try:  # Protect main execution to ensure errors are reported and notified
+        parser = argparse.ArgumentParser(description="Modular DDoS detection evaluation framework")  # Build the minimal main-script CLI.
+        parser.add_argument("--process-name", type=str, default=None, help="Process title displayed by htop and similar tools")  # Allow concurrent runs to have distinct operating-system identities.
+        runtime_args = parser.parse_args()  # Parse the main script runtime options.
+        set_runtime_process_name(runtime_args.process_name)  # Apply the requested htop identity before pipeline initialization.
         main()  # Call the main function
     except KeyboardInterrupt:  # User-initiated interrupt
         try:  # Attempt friendly shutdown notification on interrupt

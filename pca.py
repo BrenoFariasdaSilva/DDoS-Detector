@@ -92,6 +92,7 @@ from sklearn.preprocessing import StandardScaler  # For scaling the data (standa
 from telegram_bot import TelegramBot, send_exception_via_telegram, send_telegram_message, setup_global_exception_hook  # For sending progress messages to Telegram
 from tqdm import tqdm  # For progress bars
 from typing import Any, Union, cast  # For type hints used by functions
+from utils.process_name import set_runtime_process_name  # Apply optional htop-visible process identities.
 
 
 # Macros:
@@ -244,6 +245,7 @@ def parse_cli_args() -> dict:
     try:
         parser = argparse.ArgumentParser(description="PCA Feature Extraction & Evaluation Tool")  # Initialize argument parser with description
         parser.add_argument("--config", type=str, default=None, help="Path to config.yaml (overrides auto-detection)")  # Config file path override
+        parser.add_argument("--process-name", type=str, default=None, help="Process title displayed by htop and similar tools")  # Allow concurrent runs to have distinct operating-system identities.
         parser.add_argument("--dataset_path", type=str, default=None, help="Path to the CSV dataset file")  # Dataset file path argument
         parser.add_argument("--n_components", type=int, default=None, help="Single number of PCA components to test (overrides n_components_list)")  # Single n_components override
         parser.add_argument("--n_components_list", type=str, default=None, help="Comma-separated list of PCA component counts to test")  # Comma-separated n_components list
@@ -264,6 +266,8 @@ def parse_cli_args() -> dict:
         parser.add_argument("--results_filename", type=str, default=None, help="Override results filename for PCA exports (overrides config.pca.export.results_filename)")  # Results filename override
 
         args = parser.parse_args()  # Parse all CLI arguments
+        set_runtime_process_name(args.process_name)  # Apply the requested htop identity before configuration and logging initialization.
+        delattr(args, "process_name")  # Keep the runtime-only option out of PCA configuration overrides.
         return vars(args)  # Return parsed arguments as a plain dictionary
     except Exception as e:
         print(str(e))

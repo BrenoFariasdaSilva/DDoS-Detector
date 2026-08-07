@@ -88,6 +88,7 @@ from sklearn.model_selection import StratifiedKFold, train_test_split  # For tra
 from sklearn.preprocessing import StandardScaler  # For scaling the data (standardization)
 from telegram_bot import TelegramBot, send_exception_via_telegram, send_telegram_message, setup_global_exception_hook  # For sending progress messages to Telegram
 from typing import Any, Dict, Optional, Union, Tuple, cast  # For type hinting
+from utils.process_name import set_runtime_process_name  # Apply optional htop-visible process identities.
 
 
 # Macros:
@@ -243,6 +244,7 @@ def parse_cli_args() -> Dict[str, Any]:
     try:
         parser = argparse.ArgumentParser(description="Run RFE pipeline")  # Create the argument parser
         parser.add_argument("--config", type=str, default=None)  # Config file path
+        parser.add_argument("--process-name", type=str, default=None, help="Process title displayed by htop and similar tools")  # Allow concurrent runs to have distinct operating-system identities.
         parser.add_argument("--dataset_path", type=str, default=None)  # Dataset path override
         parser.add_argument("--n_features_to_select", type=int, default=None)  # Number of features to select override
         parser.add_argument("--step", type=int, default=None)  # RFE step override
@@ -258,6 +260,8 @@ def parse_cli_args() -> Dict[str, Any]:
         parser.add_argument("--results_dir", type=str, default=None, help="Override results directory for RFE exports (overrides config.rfe.export.results_dir)")  # Results directory override
         parser.add_argument("--results_filename", type=str, default=None, help="Override results filename for RFE exports (overrides config.rfe.export.results_filename)")  # Results filename override
         args = parser.parse_args()  # Parse all arguments from sys.argv
+        set_runtime_process_name(args.process_name)  # Apply the requested htop identity before configuration and logging initialization.
+        delattr(args, "process_name")  # Keep the runtime-only option out of RFE configuration overrides.
         return vars(args)  # Return parsed arguments as a plain dict
     except Exception as e:
         print(str(e))

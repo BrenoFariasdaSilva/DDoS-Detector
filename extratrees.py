@@ -40,6 +40,7 @@ from sklearn.metrics import accuracy_score, confusion_matrix, f1_score, precisio
 from sklearn.model_selection import StratifiedKFold, train_test_split  # Split before selector fitting and optional CV diagnostics
 from tqdm import tqdm  # Show progress bars with ETA for iterable stages
 from Logger import Logger, SAO_PAULO_TIMEZONE_NAME  # Reuse project logger for terminal and file output
+from utils.process_name import set_runtime_process_name  # Apply optional htop-visible process identities.
 
 try:  # Import optional Telegram utilities
     import telegram_bot as telegram_module  # Configure Telegram message prefixes consistently with stacking.py
@@ -133,6 +134,7 @@ def parse_cli_args() -> argparse.Namespace:
 
     parser = argparse.ArgumentParser(description="Extra Trees feature selection for DDoS-Detector")  # Build CLI parser
     parser.add_argument("--config", type=str, default=None, help="Path to config.yaml")  # Add config override
+    parser.add_argument("--process-name", type=str, default=None, help="Process title displayed by htop and similar tools")  # Allow concurrent runs to have distinct operating-system identities.
     parser.add_argument("--dataset-path", "--dataset_path", dest="dataset_path", type=str, default=None, help="Path to dataset CSV")  # Add dataset override
     parser.add_argument("--combined-files", dest="combined_files", action="store_true", default=False, help="Treat dataset path as a directory of CSV files and combine them in memory")  # Add in-memory combined-files mode
     parser.add_argument("--n-features-to-select", dest="n_features_to_select", type=int, default=None, help="Number of Extra Trees features to select")  # Add selected-count override
@@ -145,7 +147,9 @@ def parse_cli_args() -> argparse.Namespace:
     parser.add_argument("--results-filename", dest="results_filename", type=str, default=None, help="Results CSV filename")  # Add export-filename override
     parser.add_argument("--results-csv-columns", dest="results_csv_columns", type=str, default=None, help="Comma-separated Extra Trees result CSV columns")  # Add configurable header override
     parser.add_argument("--verbose", action="store_true", default=False, help="Enable verbose logging")  # Add verbose override
-    return parser.parse_args()  # Return parsed CLI arguments
+    cli_args = parser.parse_args()  # Parse the Extra Trees arguments.
+    set_runtime_process_name(cli_args.process_name)  # Apply the requested htop identity before configuration and logging initialization.
+    return cli_args  # Return parsed CLI arguments.
 
 
 def build_cli_overrides(cli_args: argparse.Namespace) -> dict:
