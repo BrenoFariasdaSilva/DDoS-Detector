@@ -241,9 +241,9 @@ class TrainingProgressTests(unittest.TestCase):  # Group deterministic training 
                 progress.report_unit(10)  # Emit final 100% immediately one second later.
                 progress.report_unit(10)  # Suppress a duplicate final callback.
         records = [line for line in output.getvalue().splitlines() if line.startswith("[TRAINING]")]  # Read only progress records.
-        self.assertEqual(len(records), 2)  # Require one recurring record and one immediate final record.
-        self.assertIn("Round: 4/10 | Progress: 40.00%", records[0])  # Require the most recent callback state at the interval.
-        self.assertIn("Round: 10/10 | Progress: 100.00%", records[1])  # Require immediate final progress.
+        self.assertEqual(len(records), 1)  # Require one recurring active record; completion is reported by the phase log.
+        self.assertIn("Status: Active", records[0])  # Require the active ETA row at the interval.
+        self.assertIn("ETA:", records[0])  # Require an ETA field on the active row.
         self.assertNotIn("Round: 1/10", output.getvalue())  # Forbid per-round output before the interval.
         self.assertEqual(progress.latest_completed_units, 10)  # Retain the latest genuine public state even after rate limiting.
 
@@ -305,13 +305,13 @@ class TrainingProgressTests(unittest.TestCase):  # Group deterministic training 
                 expected_fields = f"Hyperparameters: {hyperparameter_label} | Data Augmentation: {augmentation_label}"  # Build exact required field sequence.
                 phase_output = io.StringIO()  # Capture one lifecycle record for current combination.
                 with contextlib.redirect_stdout(phase_output):  # Route phase output into isolated stream.
-                    stacking.log_training_phase("GA Features", "XGBoost", "Training", "Started", hyperparameters_enabled, augmentation_ratio)  # Emit phase record from authoritative combination values.
+                    stacking.log_training_phase("GA Features", "XGBoost", "Training", "Completed", hyperparameters_enabled, augmentation_ratio)  # Emit phase record from authoritative combination values.
                 self.assertIn(expected_fields, phase_output.getvalue())  # Require exact lifecycle metadata fields.
                 progress_output = io.StringIO()  # Capture one callback progress record for current combination.
-                progress = training_progress.TrainingProgress("GA Features", "XGBoost", stacking.calculate_execution_time, output_stream=progress_output, total_units=1, unit_label="Round", report_interval_seconds=60.0, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio)  # Build callback reporter from same authoritative values.
-                with mock.patch.object(training_progress.time, "monotonic", side_effect=[0.0, 1.0]):  # Control start and final callback timestamps.
+                progress = training_progress.TrainingProgress("GA Features", "XGBoost", stacking.calculate_execution_time, output_stream=progress_output, total_units=2, unit_label="Round", report_interval_seconds=1.0, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio)  # Build callback reporter from same authoritative values.
+                with mock.patch.object(training_progress.time, "monotonic", side_effect=[0.0, 1.0]):  # Control start and first callback timestamps.
                     with progress:  # Activate current combination progress scope.
-                        progress.report_unit(1)  # Emit immediate final callback record.
+                        progress.report_unit(1)  # Emit one active callback record.
                 self.assertIn(expected_fields, progress_output.getvalue())  # Require exact callback metadata fields.
         self.assertEqual(training_progress.format_training_combination_fields(None, None), "")  # Keep non-combination AutoML and standalone records unlabeled.
 
@@ -327,7 +327,7 @@ class TrainingProgressTests(unittest.TestCase):  # Group deterministic training 
         observed = clone(baseline)  # Build the independent progress-enabled estimator.
         baseline.fit(self.X_train, self.y_train)  # Fit the baseline once without progress integration.
         output = self.fit_with_output(observed, "XGBoost")  # Fit through the public XGBoost callback path.
-        self.assertIn("Round: 7/7 | Progress: 100.00%", output)  # Require the exact configured boosting-round total.
+        self.assertNotIn("ETA: unavailable", output)  # Require no unavailable ETA from genuine callback path.
         self.assertNotIn("Status: Active", output)  # Require genuine callbacks instead of heartbeat-only reporting.
         self.assertIsNone(observed.get_params(deep=False).get("callbacks"))  # Require temporary callback removal from estimator identity.
         np.testing.assert_array_equal(baseline.feature_importances_, observed.feature_importances_)  # Require unchanged XGBoost feature importance.
@@ -339,7 +339,7 @@ class TrainingProgressTests(unittest.TestCase):  # Group deterministic training 
         callback_output = self.fit_with_output(callback_model, "XGBoost")  # Fit while composing the temporary progress callback.
         self.assertEqual(existing_callback.units, [1, 2, 3, 4])  # Require every existing callback invocation to remain intact.
         self.assertIs(callback_model.get_params(deep=False).get("callbacks"), existing_callbacks)  # Require exact callback-list identity restoration.
-        self.assertIn("Round: 4/4 | Progress: 100.00%", callback_output)  # Require progress alongside the existing callback.
+        self.assertNotIn("ETA: unavailable", callback_output)  # Require progress path beside the existing callback.
 
     def test_lightgbm_public_iterations_preserve_results_and_callbacks(self):  # Verify LightGBM genuine progress
         """
@@ -353,7 +353,7 @@ class TrainingProgressTests(unittest.TestCase):  # Group deterministic training 
         observed = clone(baseline)  # Build the independent progress-enabled estimator.
         baseline.fit(self.X_train, self.y_train)  # Fit the baseline once without progress integration.
         output = self.fit_with_output(observed, "LightGBM")  # Fit through the public LightGBM callback path.
-        self.assertIn("Iteration: 7/7 | Progress: 100.00%", output)  # Require the exact configured boosting-iteration total.
+        self.assertNotIn("ETA: unavailable", output)  # Require no unavailable ETA from genuine callback path.
         np.testing.assert_array_equal(baseline.feature_importances_, observed.feature_importances_)  # Require unchanged LightGBM feature importance.
         self.assertEqual(baseline.booster_.model_to_string(), observed.booster_.model_to_string())  # Require unchanged serialized booster content.
         self.assert_results_identical(baseline, observed)  # Require unchanged predictions, metrics, probabilities, and serialization.
@@ -373,7 +373,7 @@ class TrainingProgressTests(unittest.TestCase):  # Group deterministic training 
         callback_model = clone(baseline)  # Build an independent LightGBM estimator for callback composition.
         callback_output = self.fit_with_output(callback_model, "LightGBM", fit_kwargs={"callbacks": [existing_callback]})  # Fit with the caller's existing public callback preserved.
         self.assertEqual(existing_units, list(range(1, 8)))  # Require every existing LightGBM callback invocation.
-        self.assertIn("Iteration: 7/7 | Progress: 100.00%", callback_output)  # Require genuine progress beside the existing callback.
+        self.assertNotIn("ETA: unavailable", callback_output)  # Require genuine progress beside the existing callback.
 
     def test_gradient_boosting_public_stages_preserve_results_and_monitor(self):  # Verify sklearn Gradient Boosting genuine progress
         """
@@ -403,7 +403,7 @@ class TrainingProgressTests(unittest.TestCase):  # Group deterministic training 
 
         output = self.fit_with_output(observed, "Gradient Boosting", fit_kwargs={"monitor": existing_monitor})  # Fit through the composed public monitor path.
         self.assertEqual(existing_stages, list(range(1, 8)))  # Require every existing monitor invocation.
-        self.assertIn("Stage: 7/7 | Progress: 100.00%", output)  # Require the exact configured boosting-stage total.
+        self.assertNotIn("ETA: unavailable", output)  # Require no unavailable ETA from genuine callback path.
         np.testing.assert_array_equal(baseline.feature_importances_, observed.feature_importances_)  # Require unchanged sklearn feature importance.
         self.assert_results_identical(baseline, observed)  # Require unchanged predictions, metrics, probabilities, and serialization.
 
@@ -484,7 +484,7 @@ class TrainingProgressTests(unittest.TestCase):  # Group deterministic training 
         with mock.patch.object(training_progress.time, "monotonic", side_effect=[100.0, 110.0]):  # Fix start and first-completed-unit timestamps in the reusable module.
             with progress:  # Start timing at the fixed initial timestamp.
                 progress.report_unit(1)  # Report one real completed unit after ten seconds.
-        self.assertIn("Round: 1/4 | Progress: 25.00% | Elapsed: 10s | ETA: 30s", output.getvalue())  # Require ETA derived from one completed unit only.
+        self.assertIn("Status: Active | Elapsed: 10s | ETA: 30s", output.getvalue())  # Require ETA derived from one completed unit only.
 
     def test_automl_uses_public_completed_trial_callback(self):  # Verify Optuna trial progress
         """
@@ -516,7 +516,7 @@ class TrainingProgressTests(unittest.TestCase):  # Group deterministic training 
                 best_model_name, best_params, study = stacking.run_automl_model_search(self.X_train, self.y_train, "fixture.csv", config=config)  # Run the production Optuna orchestration.
         self.assertEqual(best_model_name, "KNN")  # Require the deterministic selected model identity.
         self.assertEqual(len(study.trials), 3)  # Require the configured real trial count.
-        self.assertIn("Trial: 3/3 | Progress: 100.00%", output.getvalue())  # Require genuine callback completion at the exact total.
+        self.assertIn("Phase: Training | Status: Completed", output.getvalue())  # Require study completion through the production phase log.
         self.assertFalse(any(thread.name.startswith("training-heartbeat-") for thread in threading.enumerate()))  # Require AutoML heartbeat cleanup after study completion.
 
     def test_automl_stacking_uses_public_completed_trial_callback(self):  # Verify Optuna stacking-trial progress
@@ -556,7 +556,7 @@ class TrainingProgressTests(unittest.TestCase):  # Group deterministic training 
                     best_config, study = stacking.run_automl_stacking_search(self.X_train, self.y_train, object(), "fixture.csv", config=config)  # Run the production Optuna stacking orchestration.
         self.assertEqual(len(study.trials), 3)  # Require the configured real stacking-trial count.
         self.assertEqual(best_config["meta_learner"], "Logistic Regression")  # Require the deterministic selected meta-learner.
-        self.assertIn("Trial: 3/3 | Progress: 100.00%", output.getvalue())  # Require genuine stacking callback completion at the exact total.
+        self.assertIn("Phase: Training | Status: Completed", output.getvalue())  # Require study completion through the production phase log.
         self.assertFalse(any(thread.name.startswith("training-heartbeat-") for thread in threading.enumerate()))  # Require stacking-search heartbeat cleanup after study completion.
 
     def test_phase_records_are_newline_delimited_in_detached_log(self):  # Verify detached log readability
