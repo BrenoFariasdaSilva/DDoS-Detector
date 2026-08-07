@@ -1,6 +1,7 @@
 """Focused stacking-only pipeline mode coverage."""
 
 import unittest  # Provide the repository-standard focused test runner.
+from unittest import mock  # Observe CLI parsing and process-title application.
 
 import stacking  # Exercise production configuration and planning behavior.
 
@@ -25,6 +26,20 @@ class StackingOnlyModeTests(unittest.TestCase):
         self.assertFalse(config["memory_watcher"]["enabled"])  # Require no watcher sidecar.
         plan = stacking.build_evaluation_plan([(False, {"Random Forest": object()}, {})], [None], ["Full Features"], True)  # Build one individual plus one stacking combination.
         self.assertEqual(stacking.retain_stacking_classifier_plan(plan, True), [("Full Features", False, None, "StackingClassifier")])  # Retain only the requested stacking classifier combination.
+
+    def test_process_name_cli_overrides_default_title(self):
+        """
+        Verify the CLI process name is applied through setproctitle.
+
+        :return: None.
+        """
+
+        with mock.patch("sys.argv", ["stacking.py", "--process-name", "DDoSDetector-StackingOnly"]):  # Parse the same process-title form used by detached server commands.
+            cli_args = stacking.parse_cli_args()  # Resolve the requested operating-system identity.
+        process_title_module = mock.Mock()  # Provide the optional production dependency without renaming this test process.
+        with mock.patch.dict("sys.modules", {"setproctitle": process_title_module}):  # Route the local import through the isolated module.
+            stacking.set_runtime_process_name(cli_args.process_name)  # Apply the production process-title path.
+        process_title_module.setproctitle.assert_called_once_with("DDoSDetector-StackingOnly")  # Require the complete user-supplied title without rewriting.
 
 
 if __name__ == "__main__":

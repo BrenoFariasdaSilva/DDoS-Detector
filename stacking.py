@@ -1103,6 +1103,26 @@ def validate_output_path(base_dir: str, target_path: str) -> None:
         raise RuntimeError("Unsafe path detected outside stacking output directory")
 
 
+def set_runtime_process_name(process_name: Optional[str]) -> None:
+    """
+    Set the operating-system process title shown by tools such as htop.
+
+    :param process_name: Requested process title or None to preserve the default title.
+    :return: None.
+    """
+
+    if process_name is None:  # Preserve the existing DDoS-stacking title when no override is supplied.
+        return  # Leave the process title unchanged.
+    normalized_name = str(process_name).strip()  # Normalize surrounding shell or configuration whitespace.
+    if not normalized_name or "\0" in normalized_name:  # Reject names that cannot form a valid process title.
+        raise ValueError("--process-name must be a non-empty string without null bytes")  # Surface an actionable CLI error.
+    try:  # Load the existing optional process-title dependency only when requested.
+        from setproctitle import setproctitle  # Import the platform process-title setter.
+    except ImportError as error:  # Fail explicitly because the requested htop identity cannot be applied.
+        raise RuntimeError("--process-name requires the setproctitle package") from error  # Preserve the missing dependency cause.
+    setproctitle(normalized_name)  # Replace the default DDoS-stacking title with the requested identity.
+
+
 def parse_cli_args():
     """
     Parse command-line arguments for stacking pipeline.
@@ -1115,6 +1135,7 @@ def parse_cli_args():
             description="Run stacking classifier evaluation pipeline with optional AutoML and data augmentation testing."
         )  # Create argument parser
         parser.add_argument("--config", type=str, default=None, help="Path to config.yaml file")
+        parser.add_argument("--process-name", type=str, default=None, help="Process title displayed by htop and similar tools")  # Allow concurrent runs to have distinct operating-system identities.
         parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
         parser.add_argument("--skip-train-if-model-exists", dest="skip_train", action="store_true", help="Load existing models instead of retraining")
         parser.add_argument("--csv", type=str, default=None, help="Path to specific CSV file to process")
@@ -18350,6 +18371,7 @@ if __name__ == "__main__":
     
     try:  # Protect top-level execution to ensure errors are reported and notified
         cli_args = parse_cli_args()  # Parse command-line arguments into namespace
+        set_runtime_process_name(cli_args.process_name)  # Apply the requested htop identity before configuration and logging initialization.
         config = initialize_config(config_path=cli_args.config, cli_args=cli_args)  # Merge configuration from file and CLI
         initialize_logger(config=config)  # Initialize logger and redirect stdout/stderr to logger
         try:  # Run main and handle user interrupts separately
