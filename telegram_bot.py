@@ -60,13 +60,17 @@ if __name__ in {"__main__", "__mp_main__"}:
 
 import atexit  # For playing a sound when the program finishes
 import asyncio  # For asynchronous operations
+import hashlib  # For non-secret local Telegram lock and bus names
+import json  # For process-local inbound message fan-out
 import os  # For environment variables and file operations
 import platform  # For getting the operating system name
 import queue  # For thread-safe inbound Telegram message delivery
 import re  # For stripping ANSI sequences
 import socket  # For getting the local IP address
 import sys  # For system-level hooks and excepthook manipulation
+import tempfile  # For per-machine Telegram polling lock and message bus paths
 import threading  # For non-blocking inbound Telegram polling
+import time  # For bounded local polling-lock takeover retries
 import traceback  # For formatting and printing exception tracebacks
 from colorama import Style  # For coloring the terminal
 from dotenv import load_dotenv  # For loading .env file
@@ -131,6 +135,14 @@ class TelegramBot:
         self._inbound_listener_callback = None  # Optional application callback for validated inbound messages
         self._inbound_listener_owner_pid = None  # Tracks the process that owns the active listener
         self._last_inbound_update_id = None  # Deduplicates repeated Telegram API responses
+        self._inbound_lock_file = None  # Holds the per-machine getUpdates ownership lock.
+        self._inbound_lock_path = None  # Path to the per-machine getUpdates ownership lock.
+        self._inbound_bus_path = None  # Path to the local validated-message fan-out bus.
+        self._inbound_bus_offset = 0  # Current read offset in the local fan-out bus.
+        self._inbound_bus_seen_update_ids = set()  # Deduplicate messages read from local fan-out.
+        self._last_inbound_lock_attempt_time = 0.0  # Bound local polling-lock takeover retries.
+        self._inbound_poll_timeout_seconds = 10  # Preserve listener settings for later local ownership takeover.
+        self._inbound_retry_delay_seconds = 5  # Preserve listener settings for later local ownership takeover.
 
         if not verify_filepath_exists(env_path):  # Verify if the .env file exists
             print(
@@ -286,7 +298,14 @@ class TelegramBot:
         with self._inbound_listener_lock:  # Serialize startup so one process cannot create duplicate pollers
             if self._inbound_listener_thread is not None and self._inbound_listener_thread.is_alive():  # Listener already active
                 return True  # Report the existing listener
-            self._inbound_listener_callback = callback  # Store application delivery callback
+            self._initialize_inbound_bus_paths()  # Prepare shared local fan-out before deciding poll ownership.
+            self._inbound_bus_offset = self._get_inbound_bus_size()  # Ignore historical local bus entries on startup.
+            self._inbound_listener_callback = callback  # Store application delivery callback for this process.
+            self._inbound_poll_timeout_seconds = poll_timeout_seconds  # Preserve caller-selected polling timeout.
+            self._inbound_retry_delay_seconds = retry_delay_seconds  # Preserve caller-selected retry delay.
+            if not self._acquire_inbound_polling_lock():  # Telegram allows only one getUpdates poller per bot token.
+                print(f"{BackgroundColors.YELLOW}Telegram inbound polling owned by another local process; using local inbound message bus only.{Style.RESET_ALL}")  # Explain why this process will not poll.
+                return False  # Outbound Telegram still works; inbound commands arrive through the local bus.
             self._inbound_listener_stop_event.clear()  # Reset stop signal before starting
             self._inbound_listener_owner_pid = os.getpid()  # Own listener in the creating process only
             self._inbound_listener_thread = threading.Thread(
@@ -319,6 +338,7 @@ class TelegramBot:
             if self._inbound_listener_thread is thread and not thread.is_alive():  # Clear only the stopped listener
                 self._inbound_listener_thread = None  # Mark listener stopped
                 self._inbound_listener_owner_pid = None  # Clear owner identity
+                self._release_inbound_polling_lock()  # Release per-machine getUpdates ownership.
 
     def get_inbound_message(self, timeout=None):
         """
@@ -347,7 +367,166 @@ class TelegramBot:
             try:  # Read one queued message
                 messages.append(self.inbound_messages.get_nowait())  # Add message to result list
             except queue.Empty:  # Queue drained
-                return messages  # Return all available messages
+                break  # Continue with local bus drain when applicable.
+        self._maybe_take_over_inbound_polling()  # Let a sibling become poller if the previous local owner exited.
+        if self._inbound_listener_owner_pid != os.getpid():  # Non-polling sibling processes consume validated messages from the local fan-out bus.
+            messages.extend(self._drain_inbound_bus_messages())  # Read messages produced by the single local poller.
+        return messages  # Return all available messages
+
+    def _initialize_inbound_bus_paths(self):
+        """
+        Initialize per-bot local paths for getUpdates ownership and validated-message fan-out.
+
+        :return: None.
+        """
+
+        if self._inbound_lock_path and self._inbound_bus_path:  # Already initialized
+            return  # Preserve existing paths
+        identity = f"{self.TELEGRAM_BOT_TOKEN}:{self.CHAT_ID}".encode("utf-8", errors="ignore")  # Include token only in memory.
+        digest = hashlib.sha256(identity).hexdigest()[:24]  # Non-secret stable key for local filenames.
+        base_dir = tempfile.gettempdir()  # Use per-machine temp storage shared by same-user processes.
+        self._inbound_lock_path = os.path.join(base_dir, f"ddos_detector_telegram_{digest}.lock")  # Lock one getUpdates owner per bot/chat.
+        self._inbound_bus_path = os.path.join(base_dir, f"ddos_detector_telegram_{digest}.jsonl")  # Fan out validated updates to sibling executions.
+
+    def _get_inbound_bus_size(self):
+        """
+        Return current local inbound bus size.
+
+        :return: Bus file size in bytes.
+        """
+
+        if not self._inbound_bus_path:
+            return 0
+        try:
+            return os.path.getsize(self._inbound_bus_path)
+        except OSError:
+            return 0
+
+    def _acquire_inbound_polling_lock(self):
+        """
+        Try to acquire the per-machine Telegram getUpdates ownership lock.
+
+        :return: True when this process owns polling, False when another local process owns it.
+        """
+
+        self._initialize_inbound_bus_paths()
+        try:
+            import fcntl  # Unix advisory locks cover the Linux SSH server use case.
+            lock_file = open(self._inbound_lock_path, "a+", encoding="utf-8")
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            lock_file.seek(0)
+            lock_file.truncate()
+            lock_file.write(str(os.getpid()))
+            lock_file.flush()
+            self._inbound_lock_file = lock_file
+            return True
+        except BlockingIOError:
+            try:
+                lock_file.close()
+            except Exception:
+                pass
+            return False
+        except Exception as e:
+            print(f"{BackgroundColors.YELLOW}Telegram inbound polling lock unavailable: {self._safe_inbound_error(e)}{Style.RESET_ALL}")
+            return False
+
+    def _release_inbound_polling_lock(self):
+        """
+        Release the per-machine Telegram getUpdates ownership lock held by this process.
+
+        :return: None.
+        """
+
+        lock_file = self._inbound_lock_file
+        self._inbound_lock_file = None
+        if lock_file is None:
+            return
+        try:
+            import fcntl
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        except Exception:
+            pass
+        try:
+            lock_file.close()
+        except Exception:
+            pass
+
+    def _maybe_take_over_inbound_polling(self):
+        """
+        Try to become the local getUpdates poller after another owner exits.
+
+        :return: None.
+        """
+
+        if self._inbound_listener_owner_pid == os.getpid():  # This process already owns polling.
+            return
+        now = time.monotonic()
+        if now - self._last_inbound_lock_attempt_time < 30.0:  # Avoid tight lock retry loops during coordinator polling.
+            return
+        self._last_inbound_lock_attempt_time = now
+        with self._inbound_listener_lock:
+            if self._inbound_listener_thread is not None and self._inbound_listener_thread.is_alive():
+                return
+            if not self._acquire_inbound_polling_lock():
+                return
+            self._inbound_listener_stop_event.clear()
+            self._inbound_listener_owner_pid = os.getpid()
+            self._inbound_listener_thread = threading.Thread(
+                target=self._run_inbound_listener,
+                args=(self._inbound_poll_timeout_seconds, self._inbound_retry_delay_seconds),
+                name="telegram-inbound-listener",
+                daemon=True,
+            )
+            self._inbound_listener_thread.start()
+            print(f"{BackgroundColors.YELLOW}Telegram inbound polling ownership moved to this process.{Style.RESET_ALL}")
+
+    def _append_inbound_bus_message(self, inbound_message):
+        """
+        Append one validated Telegram message to the local fan-out bus.
+
+        :param inbound_message: Validated inbound message dictionary.
+        :return: None.
+        """
+
+        self._initialize_inbound_bus_paths()
+        try:
+            with open(self._inbound_bus_path, "a", encoding="utf-8") as bus_file:
+                bus_file.write(json.dumps(inbound_message, default=str, ensure_ascii=True) + "\n")
+        except Exception as e:
+            print(f"{BackgroundColors.YELLOW}Telegram inbound bus write failed: {self._safe_inbound_error(e)}{Style.RESET_ALL}")
+
+    def _drain_inbound_bus_messages(self):
+        """
+        Read newly appended validated Telegram messages from the local fan-out bus.
+
+        :return: List of validated inbound message dictionaries.
+        """
+
+        self._initialize_inbound_bus_paths()
+        messages = []
+        try:
+            with open(self._inbound_bus_path, "r", encoding="utf-8") as bus_file:
+                bus_file.seek(self._inbound_bus_offset)
+                for line in bus_file:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        inbound_message = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    update_id = inbound_message.get("update_id")
+                    if update_id is not None and update_id in self._inbound_bus_seen_update_ids:
+                        continue
+                    if update_id is not None:
+                        self._inbound_bus_seen_update_ids.add(update_id)
+                    messages.append(inbound_message)
+                self._inbound_bus_offset = bus_file.tell()
+        except FileNotFoundError:
+            self._inbound_bus_offset = 0
+        except Exception as e:
+            print(f"{BackgroundColors.YELLOW}Telegram inbound bus read failed: {self._safe_inbound_error(e)}{Style.RESET_ALL}")
+        return messages
 
     def _run_inbound_listener(self, poll_timeout_seconds, retry_delay_seconds):
         """
@@ -458,6 +637,7 @@ class TelegramBot:
         """
 
         self.inbound_messages.put(inbound_message)  # Preserve message for application polling
+        self._append_inbound_bus_message(inbound_message)  # Fan out validated messages to sibling executions using the same bot.
         callback = self._inbound_listener_callback  # Read optional callback
         if callback is None:  # No callback registered
             return  # Queue delivery is enough for this step
