@@ -6,7 +6,7 @@ import uuid  # For collision-resistant execution identifiers
 from typing import Optional  # For optional type hints
 
 
-EXECUTION_ID_LENGTH = 10  # 40 bits from UUID4, short enough to type and large enough for concurrent runs.
+EXECUTION_ID_LENGTH = 3  # Keep the default execution ID very short for manual Telegram targeting.
 
 
 def create_execution_id(length: int = EXECUTION_ID_LENGTH) -> str:
@@ -17,7 +17,7 @@ def create_execution_id(length: int = EXECUTION_ID_LENGTH) -> str:
     :return: Short uppercase execution identifier.
     """
 
-    safe_length = max(6, min(32, int(length)))  # Keep IDs readable without allowing an empty identifier.
+    safe_length = max(2, min(32, int(length)))  # Allow very short IDs while still rejecting empty identifiers.
     return uuid.uuid4().hex[:safe_length].upper()  # Return a compact UUID4-derived identifier.
 
 
