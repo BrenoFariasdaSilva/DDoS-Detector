@@ -27,9 +27,10 @@ ENSURE_LOG_DIR := @mkdir -p $(LOG_DIR) 2>/dev/null || $(PYTHON_CMD) -c "import o
 # Run-and-log function
 # On Windows: simply runs the Python script normally
 # On Unix-like systems: supports DETACH and LOG_FILE variables
-#   - If DETACH is set, runs the script in detached mode and tails the selected log file
+#   - If DETACH is set, runs the script detached and redirects all output to the selected log file
 #   - If LOG_FILE is set, uses that filename inside LOG_DIR
 #   - Else, uses the script basename as the log filename
+#   - The caller is responsible for tailing the log file
 #   - If DETACH is not set, runs the script normally
 ifeq ($(OS), Windows) # Windows
 RUN_AND_LOG = $(PYTHON) $(1)
@@ -45,13 +46,9 @@ else \
 		ACTIVE_LOG_FILE="$(LOG_DIR)/$$(basename "$$SCRIPT_NAME" .py).log"; \
 	fi; \
 	: > "$$ACTIVE_LOG_FILE"; \
-	if command -v setsid >/dev/null 2>&1; then \
-		nohup setsid -f $(PYTHON) -u $(1) </dev/null >"$$ACTIVE_LOG_FILE" 2>&1; \
-	else \
-		nohup $(PYTHON) -u $(1) </dev/null >"$$ACTIVE_LOG_FILE" 2>&1 & \
-	fi; \
+	nohup setsid -f $(PYTHON) -u $(1) </dev/null >"$$ACTIVE_LOG_FILE" 2>&1; \
 	sleep 2; \
-	exec tail -f -n +1 "$$ACTIVE_LOG_FILE"; \
+	echo "Detached process started | Log: $$ACTIVE_LOG_FILE"; \
 fi
 endif
 
