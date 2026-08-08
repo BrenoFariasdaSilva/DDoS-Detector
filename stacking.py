@@ -16678,7 +16678,7 @@ def resolve_runtime_skip_command_target(command: Any, execution_id: str) -> Tupl
 
 
 def handle_feature_process_runtime_skip_message(message: dict, execution_id: str, skip_state: dict, active_cancel_global_ids: Optional[set] = None) -> None:
-    """Handle one configured-chat Telegram skip command for pending combinations only."""
+    """Handle one configured-chat Telegram skip command for pending or safely cancellable active combinations."""
 
     text = str(message.get("text", "")).strip()
     if not text.startswith("skip "):
@@ -16696,14 +16696,17 @@ def handle_feature_process_runtime_skip_message(message: dict, execution_id: str
             return
         global_id = int(target["global_combination_id"])
         lifecycle_state = target.get("lifecycle_state")
-        if active_cancel_global_ids is not None and global_id in active_cancel_global_ids:
-            send_telegram_message(TELEGRAM_BOT, format_skip_ack("Cancellation in progress", execution_id, global_id))
-            return
         if lifecycle_state == REGISTRY_SKIPPED:
             send_telegram_message(TELEGRAM_BOT, format_skip_ack("Already skipped", execution_id, global_id))
             return
         if lifecycle_state == REGISTRY_COMPLETED:
             send_telegram_message(TELEGRAM_BOT, format_skip_ack("Already completed", execution_id, global_id))
+            return
+        if lifecycle_state == REGISTRY_FAILED:
+            send_telegram_message(TELEGRAM_BOT, format_skip_ack("Already failed", execution_id, global_id))
+            return
+        if active_cancel_global_ids is not None and global_id in active_cancel_global_ids:
+            send_telegram_message(TELEGRAM_BOT, format_skip_ack("Cancellation in progress", execution_id, global_id))
             return
         if lifecycle_state in {REGISTRY_STARTING, REGISTRY_ACTIVE}:
             if lifecycle_state == REGISTRY_ACTIVE and not feature_process_active_cancel_supported(target):
@@ -17183,7 +17186,7 @@ def execute_feature_set_processes(pending_by_feature: dict, process_payload: dic
                     handle_feature_process_result_notification(status, tasks_by_global_id, len(tasks), notified_global_ids, notification_acknowledgements)  # Send only after persisted status no longer identifies this combination as running
                 elif status.get("global_id") in active_cancel_global_ids:
                     send_telegram_message(TELEGRAM_BOT, format_skip_ack("Successfully aborted", execution_id, status.get("global_id"), detail="Execution continuing"))
-                    active_cancel_global_ids.discard(status.get("global_id"))
+                active_cancel_global_ids.discard(status.get("global_id"))  # Clear stale accepted-cancel markers when natural completion wins the race
         if failure is not None:  # Stop sibling work after preserving already persisted results from the failed grid
             empty_notification_polls = 0  # Bound coordinator shutdown draining after the first surfaced worker failure
             while empty_notification_polls < 2:  # Allow already-published persisted-result events to reach the coordinator before termination
