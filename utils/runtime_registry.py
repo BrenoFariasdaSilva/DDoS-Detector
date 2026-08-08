@@ -86,6 +86,18 @@ class RuntimeCombinationRegistry:
                 items = ((key, value) for key, value in items if key[0] == execution_id)
             return {key: deepcopy(value) for key, value in items}
 
+    def find_by_metadata(self, execution_id: str, metadata: dict[str, Any]) -> list[dict[str, Any]]:
+        """Return exact metadata matches for one execution."""
+
+        with self._lock:
+            matches = []
+            for (candidate_execution_id, _), value in self._combinations.items():
+                if candidate_execution_id != execution_id:
+                    continue
+                if all(value.get(name) == expected for name, expected in metadata.items()):
+                    matches.append(deepcopy(value))
+            return matches
+
 
 def build_runtime_combination_metadata(execution_id: str, task: dict[str, Any]) -> dict[str, Any]:
     """Build registry metadata from the existing feature-process task descriptor."""
