@@ -2464,11 +2464,12 @@ def verify_dot_env_file(config=None):
         raise  # Re-raise to preserve original failure semantics
 
 
-def setup_telegram_bot(config=None):
+def setup_telegram_bot(config=None, start_inbound_listener=False):
     """
     Set up the Telegram bot for progress messages.
 
     :param config: Configuration dictionary (uses global CONFIG if None)
+    :param start_inbound_listener: Whether this process should own inbound Telegram polling
     :return: None.
     """
 
@@ -2494,6 +2495,8 @@ def setup_telegram_bot(config=None):
             telegram_module.TELEGRAM_BOT = TELEGRAM_BOT  # Share the initialized bot with the imported exception sender
             telegram_module.TELEGRAM_DEVICE_INFO = f"{telegram_module.get_local_ip()} - {platform.system()}"  # Set device info string with IP and OS
             telegram_module.RUNNING_CODE = os.path.basename(__file__)  # Set currently running script name
+            if start_inbound_listener:  # Only the top-level controller should consume Telegram updates
+                TELEGRAM_BOT.start_inbound_listener()  # Start non-blocking configured-chat inbound delivery
         except Exception as e:
             print(f"{BackgroundColors.RED}Failed to initialize Telegram bot: {e}{Style.RESET_ALL}")  # Report initialization failure to terminal
             TELEGRAM_BOT = None  # Set to None if initialization fails
@@ -18340,7 +18343,7 @@ def main(config=None):
 
         start_time = datetime.datetime.now()  # Get the start time of the program
 
-        setup_telegram_bot(config=config)  # Setup Telegram bot if configured
+        setup_telegram_bot(config=config, start_inbound_listener=True)  # Setup Telegram bot and top-level inbound listener if configured
         start_message = f"Starting Classifiers Stacking at {start_time.strftime('%Y-%m-%d %H:%M:%S')}"  # Build the isolated startup timestamp notification
         send_telegram_message(TELEGRAM_BOT, start_message)  # Send the startup timestamp as exactly one Telegram message
 
@@ -18398,6 +18401,11 @@ def main(config=None):
             finalize_memory_watcher(config=config, phase="abnormal_completion", event_outcome="leaving_main_without_normal_completion")  # Publish abnormal terminal phase if no earlier terminal event exists
             finalize_pending_explainability_jobs(config=config, terminate=not normal_completion)  # Finalize or terminate asynchronous explainability work before main exits
         finally:
+            try:  # Stop only the top-level inbound listener owned by this process
+                if TELEGRAM_BOT is not None:  # Listener exists only when Telegram setup succeeded
+                    TELEGRAM_BOT.stop_inbound_listener()  # Stop long-polling before final cleanup leaves main
+            except Exception:  # Keep shutdown cleanup from changing pipeline outcome
+                pass  # Preserve original main result
             cleanup_tracked_feature_source_directories(config=config)  # Retry exact current-run spill cleanup after every normal, failed, or interrupted execution
 
 
