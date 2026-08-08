@@ -160,8 +160,9 @@ from utils.execution_identity import assign_execution_id, ensure_execution_id  #
 from utils.lstm_sequences import LSTMSequenceMetadataError, build_lstm_sequence_windows  # Build verified partition-local LSTM windows.
 from utils.oom_restart import AUTO_RESTART_ATTEMPT_ENV, build_exact_oom_skip_rule, capture_oom_baseline, oom_kill_delta, recover_launch_command, schedule_detached_restart, transform_command_with_skip_rule  # Import focused OOM restart planning utilities.
 from utils.process_name import set_runtime_process_name  # Apply optional htop-visible process identities.
-from utils.runtime_registry import ACTIVE as REGISTRY_ACTIVE, COMPLETED as REGISTRY_COMPLETED, FAILED as REGISTRY_FAILED, RUNTIME_COMBINATION_REGISTRY, STARTING as REGISTRY_STARTING  # Track runtime combination lifecycle in the coordinator.
+from utils.runtime_registry import ACTIVE as REGISTRY_ACTIVE, COMPLETED as REGISTRY_COMPLETED, FAILED as REGISTRY_FAILED, RUNTIME_COMBINATION_REGISTRY, SKIPPED as REGISTRY_SKIPPED, STARTING as REGISTRY_STARTING  # Track runtime combination lifecycle in the coordinator.
 from utils.skip_combinations import apply_only_combination_rules, apply_skip_combination_rules, build_alias_lookup, compile_only_combination_rules, compile_skip_combination_rules, filter_models_for_plan_group, format_only_rules_for_info, format_only_summary_line, format_skip_rule_match_lines, format_skip_rules_for_info, format_skip_rules_for_telegram, format_skip_summary_line, normalize_plan_augmentation_ratio  # Import reusable combination-rule parsing and plan filtering.
+from utils.telegram_control import format_skip_ack, parse_skip_command  # Parse strict Telegram runtime control commands.
 
 
 # Macros:
@@ -2047,7 +2048,7 @@ def migrate_experiment_result_files_for_startup(input_path: str, files_to_proces
 
 
 FEATURE_PROCESS_START_METHOD = "spawn"  # Select clean-interpreter feature workers without inheriting initialized native thread pools
-FEATURE_PROCESS_STATUS_FIELDS = ("total", "cached", "pending", "running", "computed", "failed", "completed")  # Define synchronized global and feature-local status fields
+FEATURE_PROCESS_STATUS_FIELDS = ("total", "cached", "pending", "running", "computed", "failed", "skipped", "completed")  # Define synchronized global and feature-local status fields
 FEATURE_PROCESS_STATUS_INDEX = {name: index for index, name in enumerate(FEATURE_PROCESS_STATUS_FIELDS)}  # Resolve compact shared-array positions by status name
 SKIP_RULE_FEATURE_ALIASES = {"Full Features": ("full", "full_features", "full-features", "Full Features"), "Explicit Features": ("explicit", "explicit_features", "explicit-features", "Explicit Features"), "Extra Trees Features": ("extra_trees", "extratrees", "extra-trees", "Extra Trees", "Extra Trees Features"), "GA Features": ("ga", "genetic_algorithm", "genetic-algorithm", "Genetic Algorithm", "GA Features"), "PCA Components": ("pca", "pca_components", "pca-components", "PCA Components"), "RFE Features": ("rfe", "rfe_features", "rfe-features", "RFE Features")}  # Map feature-set aliases to runtime names.
 SKIP_RULE_CLASSIFIER_ALIASES = {"Random Forest": ("random_forest", "randomforest", "random-forest", "Random Forest"), "SVM": ("svm", "support_vector_machine", "support-vector-machine", "Support Vector Machine"), "XGBoost": ("xgboost", "xgb", "XGBoost"), "Logistic Regression": ("logistic_regression", "logistic-regression", "Logistic Regression"), "KNN": ("knn", "k_nearest_neighbors", "k-nearest-neighbors", "K Nearest Neighbors"), "Nearest Centroid": ("nearest_centroid", "nearest-centroid", "Nearest Centroid"), "Gradient Boosting": ("gradient_boosting", "gradient-boosting", "Gradient Boosting"), "LightGBM": ("lightgbm", "lgbm", "LightGBM"), "MLP (Neural Net)": ("mlp", "mlp_neural_net", "mlp-neural-net", "neural_net", "Neural Net", "MLP Neural Net"), "FT-Transformer": ("ft_transformer", "ft-transformer", "FT Transformer"), "Tabular ResNet": ("tabular_resnet", "tabular-resnet", "Tabular ResNet"), "ResNet18": ("resnet18", "resnet_18", "resnet-18", "ResNet18"), "AutoEncoder": ("autoencoder", "auto_encoder", "auto-encoder", "AutoEncoder"), "LSTM": ("lstm", "LSTM"), "StackingClassifier": ("stacking", "stacking_classifier", "stacking-classifier", "StackingClassifier")}  # Map classifier aliases to runtime names.
@@ -16192,13 +16193,13 @@ def create_feature_process_status(process_context: Any, tasks: List[dict], pendi
 
     feature_names = list(pending_by_feature)  # Preserve active feature-set order from cache partitioning
     total_pending = sum(len(queue_tasks) for queue_tasks in pending_by_feature.values())  # Derive current global pending count from actual queues
-    global_values = [len(tasks), len(tasks) - total_pending, total_pending, 0, 0, 0, len(tasks) - total_pending]  # Initialize authoritative global totals after cache classification
+    global_values = [len(tasks), len(tasks) - total_pending, total_pending, 0, 0, 0, 0, len(tasks) - total_pending]  # Initialize authoritative global totals after cache classification
     feature_values = {}  # Accumulate one compact shared counter array per active feature set
     running_global_ids = {}  # Track exact active task identities outside queue-feeder timing
     for feature_name in feature_names:  # Build counters from this feature's actual plan and pending queue
         feature_total = sum(task["feature_set"] == feature_name for task in tasks)  # Derive complete feature-local plan size
         feature_pending = len(pending_by_feature[feature_name])  # Derive current feature-local pending queue size
-        feature_values[feature_name] = process_context.Array("q", [feature_total, feature_total - feature_pending, feature_pending, 0, 0, 0, feature_total - feature_pending], lock=False)  # Store synchronized feature-local counters without per-array locks
+        feature_values[feature_name] = process_context.Array("q", [feature_total, feature_total - feature_pending, feature_pending, 0, 0, 0, 0, feature_total - feature_pending], lock=False)  # Store synchronized feature-local counters without per-array locks
         running_global_ids[feature_name] = process_context.Value("q", 0, lock=False)  # Store one shared active Global ID under the common status lock
     return {"lock": process_context.RLock(), "global": process_context.Array("q", global_values, lock=False), "features": feature_values, "running_global_ids": running_global_ids}  # Return one-lock state suitable for spawn
 
@@ -16223,15 +16224,15 @@ def transition_feature_process_status(status_state: dict, task: dict, event: str
 
     :param status_state: Shared status mapping created by create_feature_process_status.
     :param task: Current feature-process task descriptor.
-    :param event: One of started, cached, computed, or failed.
+    :param event: One of started, cached, computed, failed, skipped, or skipped_running.
     :return: Status snapshot after the transition.
     """
 
     with status_state["lock"]:  # Update global and feature-local counters as one indivisible transition
         counter_groups = (status_state["global"], status_state["features"][task["feature_set"]])  # Resolve both scopes affected by this task
-        if event not in {"started", "cached", "computed", "failed"}:  # Reject unknown lifecycle events before mutating either scope
+        if event not in {"started", "cached", "computed", "failed", "skipped", "skipped_running"}:  # Reject unknown lifecycle events before mutating either scope
             raise ValueError(f"Unsupported feature-process status event: {event}")  # Prevent partial counter mutation
-        required_field = "pending" if event == "started" else "running"  # Resolve source state consumed by this transition
+        required_field = "pending" if event in {"started", "skipped"} else "running"  # Resolve source state consumed by this transition
         if any(values[FEATURE_PROCESS_STATUS_INDEX[required_field]] <= 0 for values in counter_groups):  # Validate both scopes before changing either
             raise RuntimeError(f"Cannot apply {event} to feature-process task outside {required_field}: {task.get('global_id')}")  # Surface duplicate or impossible transition atomically
         for values in counter_groups:  # Apply identical lifecycle movement to global and feature-local counters
@@ -16249,8 +16250,14 @@ def transition_feature_process_status(status_state: dict, task: dict, event: str
             elif event == "failed":  # Finish one running task without successful completion
                 values[FEATURE_PROCESS_STATUS_INDEX["running"]] -= 1  # Remove the failed task from active execution
                 values[FEATURE_PROCESS_STATUS_INDEX["failed"]] += 1  # Count failure without increasing completed
+            elif event == "skipped":  # Remove one pending task by runtime Telegram control
+                values[FEATURE_PROCESS_STATUS_INDEX["pending"]] -= 1  # Remove skipped task from pending execution
+                values[FEATURE_PROCESS_STATUS_INDEX["skipped"]] += 1  # Count skip without claiming success
+            elif event == "skipped_running":  # Remove one just-started task before cache, fit, or persistence
+                values[FEATURE_PROCESS_STATUS_INDEX["running"]] -= 1  # Remove skipped task from active worker ownership
+                values[FEATURE_PROCESS_STATUS_INDEX["skipped"]] += 1  # Count skip without claiming success
             total = int(values[FEATURE_PROCESS_STATUS_INDEX["total"]])  # Read fixed plan total for invariant validation
-            accounted = sum(int(values[FEATURE_PROCESS_STATUS_INDEX[name]]) for name in ("pending", "running", "completed", "failed"))  # Count every terminal and nonterminal task state
+            accounted = sum(int(values[FEATURE_PROCESS_STATUS_INDEX[name]]) for name in ("pending", "running", "completed", "failed", "skipped"))  # Count every terminal and nonterminal task state
             if accounted != total:  # Require every generated task to occupy exactly one lifecycle state
                 raise RuntimeError(f"Feature-process status invariant failed: accounted={accounted}, total={total}")  # Surface lost or duplicated state immediately
             if int(values[FEATURE_PROCESS_STATUS_INDEX["completed"]]) != int(values[FEATURE_PROCESS_STATUS_INDEX["cached"]]) + int(values[FEATURE_PROCESS_STATUS_INDEX["computed"]]):  # Require completed to mean cached plus computed
@@ -16278,7 +16285,7 @@ def reconcile_feature_process_status_after_failure(status_state: dict, failing_f
             destination = "failed" if feature_name == failing_feature else "pending"  # Count failing work as failed and sibling interruption as resumable pending
             feature_values[FEATURE_PROCESS_STATUS_INDEX[destination]] += interrupted  # Preserve every interrupted task without claiming completion
         global_values = status_state["global"]  # Rebuild global mutable counters from reconciled feature scopes
-        for field_name in ("cached", "pending", "running", "computed", "failed", "completed"):  # Aggregate every nonconstant runtime field
+        for field_name in ("cached", "pending", "running", "computed", "failed", "skipped", "completed"):  # Aggregate every nonconstant runtime field
             global_values[FEATURE_PROCESS_STATUS_INDEX[field_name]] = sum(int(values[FEATURE_PROCESS_STATUS_INDEX[field_name]]) for values in status_state["features"].values())  # Restore exact global status from feature-local truth
     return read_feature_process_status(status_state)  # Return reconciled terminal failure status
 
@@ -16300,7 +16307,7 @@ def format_feature_process_progress(task: dict, status_state: dict, pid: Optiona
     feature_label = task["worker_key"].upper()  # Use concise Full, GA, PCA, or RFE identity
     queue_position = f"{task['pending_queue_position']}/{task['pending_queue_total']}" if task.get("pending_queue_position") is not None else "cached"  # Distinguish pending queue order from pre-start cache recovery
     canonical_total = int(task.get("canonical_total", global_status["total"]))  # Resolve original canonical denominator for stable identity display.
-    return f"[{feature_label} {feature_status['completed']}/{feature_status['total']} | Feature Cached {feature_status['cached']} | Feature Pending {feature_status['pending']} | Feature Running {feature_status['running']} | Feature Computed {feature_status['computed']} | Feature Failed {feature_status['failed']} | Local ID {task['feature_local_position']}/{task['feature_local_total']} | Queue {queue_position} | Global ID {task['global_id']}/{canonical_total} | Completed {global_status['completed']}/{global_status['total']} | Cached {global_status['cached']} | Pending {global_status['pending']} | Running {global_status['running']} | Computed {global_status['computed']} | Failed {global_status['failed']} | PID {process_id}]"  # Return complete dynamic status without fixed denominators
+    return f"[{feature_label} {feature_status['completed']}/{feature_status['total']} | Feature Cached {feature_status['cached']} | Feature Pending {feature_status['pending']} | Feature Running {feature_status['running']} | Feature Computed {feature_status['computed']} | Feature Failed {feature_status['failed']} | Feature Skipped {feature_status['skipped']} | Local ID {task['feature_local_position']}/{task['feature_local_total']} | Queue {queue_position} | Global ID {task['global_id']}/{canonical_total} | Completed {global_status['completed']}/{global_status['total']} | Cached {global_status['cached']} | Pending {global_status['pending']} | Running {global_status['running']} | Computed {global_status['computed']} | Failed {global_status['failed']} | Skipped {global_status['skipped']} | PID {process_id}]"  # Return complete dynamic status without fixed denominators
 
 
 def initialize_feature_process_logger(config: dict) -> None:  # Initialize one spawned worker logger in append-only process-safe mode
@@ -16566,6 +16573,103 @@ def await_feature_process_notification_acknowledgement(task: dict, process_paylo
         time.sleep(0.01)  # Poll tiny shared state without extra threads or dependencies.
 
 
+def create_feature_process_runtime_skip_state(process_context: Any, tasks: List[dict]) -> dict:
+    """Create spawn-safe runtime skip flags indexed by real global combination ID."""
+
+    max_global_id = max((int(task["global_id"]) for task in tasks if task.get("global_id") is not None), default=0)
+    return {"lock": process_context.RLock(), "flags": process_context.Array("b", [0] * (max_global_id + 1), lock=False)}
+
+
+def mark_feature_process_runtime_skip(skip_state: Optional[dict], global_id: Optional[int]) -> bool:
+    """Mark one pending global ID as runtime-skipped for worker-side checks."""
+
+    if skip_state is None or global_id is None:
+        return False
+    flags = skip_state["flags"]
+    global_index = int(global_id)
+    if global_index < 0 or global_index >= len(flags):
+        return False
+    with skip_state["lock"]:
+        flags[global_index] = 1
+    return True
+
+
+def feature_process_runtime_skip_requested(task: dict, process_payload: dict) -> bool:
+    """Return whether Telegram control marked this task skipped before fitting."""
+
+    skip_state = process_payload.get("runtime_skip_state")
+    if skip_state is None:
+        return False
+    global_index = int(task.get("global_id", 0))
+    flags = skip_state["flags"]
+    if global_index < 0 or global_index >= len(flags):
+        return False
+    with skip_state["lock"]:
+        return bool(flags[global_index])
+
+
+def resolve_runtime_skip_command_target(command: Any, execution_id: str) -> Tuple[Optional[dict], str]:
+    """Resolve one parsed skip command against the current execution registry."""
+
+    if command.execution_id != execution_id:
+        return None, "foreign_execution"
+    if command.combination_id is not None:
+        target = RUNTIME_COMBINATION_REGISTRY.get(execution_id, command.combination_id)
+        return target, "not_found" if target is None else "matched"
+    matches = RUNTIME_COMBINATION_REGISTRY.find_by_metadata(execution_id, command.metadata or {})
+    if not matches:
+        return None, "not_found"
+    if len(matches) > 1:
+        return {"matches": matches}, "ambiguous"
+    return matches[0], "matched"
+
+
+def handle_feature_process_runtime_skip_message(message: dict, execution_id: str, skip_state: dict) -> None:
+    """Handle one configured-chat Telegram skip command for pending combinations only."""
+
+    text = str(message.get("text", "")).strip()
+    if not text.startswith("skip "):
+        return
+    try:
+        command = parse_skip_command(text)
+        target, outcome = resolve_runtime_skip_command_target(command, execution_id)
+        if outcome == "foreign_execution":
+            return
+        if outcome == "not_found":
+            send_telegram_message(TELEGRAM_BOT, format_skip_ack("Unknown combination", command.execution_id, command.combination_id))
+            return
+        if outcome == "ambiguous":
+            send_telegram_message(TELEGRAM_BOT, format_skip_ack("Ambiguous metadata target", command.execution_id, detail="Use combination=<global_id>"))
+            return
+        global_id = int(target["global_combination_id"])
+        lifecycle_state = target.get("lifecycle_state")
+        if lifecycle_state == REGISTRY_SKIPPED:
+            send_telegram_message(TELEGRAM_BOT, format_skip_ack("Already skipped", execution_id, global_id))
+            return
+        if lifecycle_state == REGISTRY_COMPLETED:
+            send_telegram_message(TELEGRAM_BOT, format_skip_ack("Already completed", execution_id, global_id))
+            return
+        if lifecycle_state != "pending":
+            send_telegram_message(TELEGRAM_BOT, format_skip_ack("Active combination not cancelled; active cancellation is not enabled", execution_id, global_id))
+            return
+        if not mark_feature_process_runtime_skip(skip_state, global_id):
+            send_telegram_message(TELEGRAM_BOT, format_skip_ack("Unable to mark pending skip", execution_id, global_id))
+            return
+        RUNTIME_COMBINATION_REGISTRY.update_state(execution_id, global_id, REGISTRY_SKIPPED, last_event="telegram_skip_requested")
+        send_telegram_message(TELEGRAM_BOT, format_skip_ack("Removed from pending execution", execution_id, global_id))
+    except ValueError as error:
+        send_telegram_message(TELEGRAM_BOT, format_skip_ack("Invalid command", execution_id, detail=str(error)))
+
+
+def drain_feature_process_runtime_skip_messages(execution_id: str, skip_state: dict) -> None:
+    """Drain validated inbound Telegram messages into pending skip flags."""
+
+    if TELEGRAM_BOT is None:
+        return
+    for message in TELEGRAM_BOT.drain_inbound_messages():
+        handle_feature_process_runtime_skip_message(message, execution_id, skip_state)
+
+
 def process_feature_process_task(task: dict, process_payload: dict, model_maps: dict, resource_state: dict, status_queue: Any, status_state: dict) -> None:  # Process one matrix-free task under a complete combination reservation
     """
     Process one feature-set task under final cache and computation serialization.
@@ -16581,8 +16685,17 @@ def process_feature_process_task(task: dict, process_payload: dict, model_maps: 
 
     combination_lock = None  # Track exact combination reservation for exception-safe release
     task_finished = False  # Prevent duplicate terminal status transitions
+    if feature_process_runtime_skip_requested(task, process_payload):  # Honor Telegram pending skip before any cache, fit, or artifact path
+        transition_feature_process_status(status_state, task, "skipped")  # Count skipped work without marking it successful
+        status_queue.put({"status": "progress", "feature_set": process_payload["feature_set"], "global_id": task["global_id"], "event": "skipped", "pid": os.getpid(), **build_feature_process_task_status_fields(task)})  # Publish terminal skip without result metadata
+        return  # Move to the next pending task without producing cache, metrics, or artifacts
     transition_feature_process_status(status_state, task, "started")  # Move this dequeued task atomically from pending to running
     status_queue.put({"status": "running", "feature_set": process_payload["feature_set"], "global_id": task["global_id"], "pending_queue_position": task.get("pending_queue_position"), "pid": os.getpid(), **build_feature_process_task_status_fields(task)})  # Report small current-task identity for abrupt-death accounting
+    if feature_process_runtime_skip_requested(task, process_payload):  # Catch a command accepted while the worker was publishing starting state
+        transition_feature_process_status(status_state, task, "skipped_running")  # Remove worker ownership before expensive work begins
+        task_finished = True  # Prevent failure accounting after an intentional skip
+        status_queue.put({"status": "progress", "feature_set": process_payload["feature_set"], "global_id": task["global_id"], "event": "skipped", "pid": os.getpid(), **build_feature_process_task_status_fields(task)})  # Publish terminal skip without result metadata
+        return  # No cache, metrics, fit, prediction, or artifact persistence for skipped work
     try:  # Keep exact reservation through final cache validation, computation, and durable persistence
         combination_lock = acquire_feature_process_combination_lock(task, process_payload)  # Block only duplicate computation of this exact cache identity
         model_prototype = model_maps[task["hyperparameters_enabled"]][task["classifier_name"]]  # Resolve the process-local estimator prototype
@@ -16881,7 +16994,12 @@ def execute_feature_set_processes(pending_by_feature: dict, process_payload: dic
     status_state = create_feature_process_status(context, tasks, pending_by_feature)  # Initialize all shared counters from dynamic plan and cache state
     tasks_by_global_id = {task["global_id"]: task for task in tasks}  # Index the authoritative dynamic plan for completion-event verification
     execution_id = ensure_execution_id(process_payload["config"])  # Resolve the one top-level execution identity for coordinator-owned registry updates
+    runtime_skip_state = create_feature_process_runtime_skip_state(context, tasks)  # Create tiny shared skip flags before workers receive task lists
     RUNTIME_COMBINATION_REGISTRY.register_tasks(execution_id, tasks)  # Register the authoritative plan before child processes can report lifecycle events
+    for task in tasks:  # Mark cache-recovered tasks before accepting Telegram skip commands
+        if task.get("global_id") in cached_results:
+            RUNTIME_COMBINATION_REGISTRY.update_state(execution_id, task.get("global_id"), REGISTRY_COMPLETED, last_event="cached")  # Cache hits are not pending runtime work
+    drain_feature_process_runtime_skip_messages(execution_id, runtime_skip_state)  # Apply already-received pending skip commands before worker startup
     notified_global_ids = set()  # Track one coordinator-owned result notification attempt per combination
     notified_training_start_global_ids = set()  # Track one coordinator-owned training-start notification attempt per non-cached combination
     notified_training_eta_global_ids = set()  # Track one coordinator-owned training-ETA notification attempt per non-cached combination
@@ -16920,6 +17038,7 @@ def execute_feature_set_processes(pending_by_feature: dict, process_payload: dic
             child_payload["tasks"] = list(pending_by_feature[feature_set_name])  # Assign only matrix-free feature-local pending descriptors
             child_payload["feature_metadata"] = process_payload["feature_metadata_by_name"][feature_set_name]  # Assign only this feature set's small names and indices
             child_payload["notification_acknowledgement"] = notification_acknowledgements[feature_set_name]  # Pass one small feature-local synchronization value without Telegram credentials or result data
+            child_payload["runtime_skip_state"] = runtime_skip_state  # Pass only spawn-safe skip flags to workers
             child_payload["capacity_gate"] = capacity_gate  # Share only the coordinator-owned admission semaphore with every configured worker
             child_payload["augmented_capacity_gate"] = augmented_capacity_gate  # Share one admission slot for persisted-model augmented evaluation
             child_payload["phase_order"] = phase_order  # Give every worker identical canonical global phase order.
@@ -16933,6 +17052,7 @@ def execute_feature_set_processes(pending_by_feature: dict, process_payload: dic
         print(f"[CONCURRENCY] Started {len(process_records)} feature workers with start method={FEATURE_PROCESS_START_METHOD} and workers={process_payload['config']['evaluation']['feature_set_workers']}")  # Log feature-worker count without claiming total OS child count
         log_feature_process_tree(process_records)  # Distinguish feature workers from watcher, resource tracker, and other auxiliary children
         while len(terminal_features) < len(process_records) and failure is None:  # Monitor until every worker completes or one failure surfaces
+            drain_feature_process_runtime_skip_messages(execution_id, runtime_skip_state)  # Apply configured-chat skip commands without blocking status monitoring
             try:  # Receive one small child lifecycle record with bounded coordinator polling
                 status = status_queue.get(timeout=0.25)  # Poll without blocking deterministic child-death detection
             except queue_module.Empty:  # Inspect child exit codes when no lifecycle record arrives
@@ -16976,11 +17096,13 @@ def execute_feature_set_processes(pending_by_feature: dict, process_payload: dic
                 send_feature_process_training_eta_notification(status, tasks_by_global_id, len(tasks), notified_training_eta_global_ids, training_start_unavailable_global_ids)  # Deliver or isolate the ETA event without releasing worker state
             elif status_type == "progress":  # Surface one cache or computation completion from shared authoritative state
                 running_task_by_feature.pop(feature_set_name, None)  # Clear completed current-task identity
-                RUNTIME_COMBINATION_REGISTRY.update_state(execution_id, status.get("global_id"), REGISTRY_COMPLETED, worker_pid=status.get("pid"), last_event=status.get("event"))  # Remove worker PID ownership before the worker can take another task
+                registry_state = REGISTRY_SKIPPED if status.get("event") == "skipped" else REGISTRY_COMPLETED  # Keep skipped work terminal but unsuccessful
+                RUNTIME_COMBINATION_REGISTRY.update_state(execution_id, status.get("global_id"), registry_state, worker_pid=status.get("pid"), last_event=status.get("event"))  # Remove worker PID ownership before the worker can take another task
                 progress_snapshot = read_feature_process_status(status_state)  # Read consistent cross-process counters after transition
                 feature_snapshot = progress_snapshot["features"][feature_set_name]  # Resolve feature-local status for concise coordinator logging
                 print(f"[COORDINATOR STATUS] Feature Set={feature_set_name} | Global ID={status.get('global_id')} | Event={status.get('event')} | Global={progress_snapshot['global']} | Feature={feature_snapshot}")  # Log dynamic global and feature-local runtime state
-                handle_feature_process_result_notification(status, tasks_by_global_id, len(tasks), notified_global_ids, notification_acknowledgements)  # Send only after persisted status no longer identifies this combination as running
+                if status.get("event") != "skipped":  # Skipped work has no persisted result to notify or acknowledge
+                    handle_feature_process_result_notification(status, tasks_by_global_id, len(tasks), notified_global_ids, notification_acknowledgements)  # Send only after persisted status no longer identifies this combination as running
         if failure is not None:  # Stop sibling work after preserving already persisted results from the failed grid
             empty_notification_polls = 0  # Bound coordinator shutdown draining after the first surfaced worker failure
             while empty_notification_polls < 2:  # Allow already-published persisted-result events to reach the coordinator before termination
@@ -17000,8 +17122,10 @@ def execute_feature_set_processes(pending_by_feature: dict, process_payload: dic
                     continue  # Continue draining remaining queued events
                 if pending_status.get("status") == "progress":  # Preserve terminal registry state for already-queued completion records
                     running_task_by_feature.pop(pending_status.get("feature_set"), None)  # Clear completed current-task identity from the coordinator mirror
-                    RUNTIME_COMBINATION_REGISTRY.update_state(execution_id, pending_status.get("global_id"), REGISTRY_COMPLETED, worker_pid=pending_status.get("pid"), last_event=pending_status.get("event"))  # Remove worker PID ownership before sibling termination
-                handle_feature_process_result_notification(pending_status, tasks_by_global_id, len(tasks), notified_global_ids, notification_acknowledgements)  # Send or acknowledge any persisted result event without changing scientific status
+                    registry_state = REGISTRY_SKIPPED if pending_status.get("event") == "skipped" else REGISTRY_COMPLETED  # Keep skipped work terminal but unsuccessful
+                    RUNTIME_COMBINATION_REGISTRY.update_state(execution_id, pending_status.get("global_id"), registry_state, worker_pid=pending_status.get("pid"), last_event=pending_status.get("event"))  # Remove worker PID ownership before sibling termination
+                if pending_status.get("event") != "skipped":  # Skipped work has no persisted result to notify or acknowledge
+                    handle_feature_process_result_notification(pending_status, tasks_by_global_id, len(tasks), notified_global_ids, notification_acknowledgements)  # Send or acknowledge any persisted result event without changing scientific status
             for record in process_records:  # Terminate only children that remain active
                 running_task = running_task_by_feature.get(record["feature_set"], {})  # Resolve any current task owned by this worker before termination
                 if running_task.get("global_id") is not None:  # Mark interrupted sibling ownership before signaling the process
@@ -17045,7 +17169,7 @@ def execute_feature_set_processes(pending_by_feature: dict, process_payload: dic
             raise failure_error  # Surface child exception, task identity, traceback, and accurate status
         final_snapshot = read_feature_process_status(status_state)  # Read synchronized terminal status after every child exit
         final_global = final_snapshot["global"]  # Resolve global completion invariants
-        if final_global["completed"] != final_global["total"] or final_global["pending"] != 0 or final_global["running"] != 0 or final_global["failed"] != 0:  # Reject lost, duplicated, failed, or unpersisted combinations
+        if final_global["completed"] + final_global["skipped"] != final_global["total"] or final_global["pending"] != 0 or final_global["running"] != 0 or final_global["failed"] != 0:  # Reject lost, duplicated, failed, or unpersisted combinations
             terminal_error = RuntimeError(f"Persistent feature-set grid terminal status is incomplete: {final_global}")  # Build exact dynamic process accounting error
             report_stacking_execution_failure("Persistent feature-set grid terminal status failure", terminal_error, {"process_payload": process_payload, "status_snapshot": final_snapshot})  # Notify before raising incomplete coordinator status
             raise terminal_error  # Surface exact dynamic process accounting
@@ -17079,16 +17203,20 @@ def collect_feature_process_results(tasks: List[dict], process_payload: dict) ->
     :return: Tuple of globally ordered result rows and comparison rows.
     """
 
+    execution_id = ensure_execution_id(process_payload["config"])  # Resolve current execution identity for skipped-combination filtering
+    skipped_global_ids = {global_id for (_, global_id), metadata in RUNTIME_COMBINATION_REGISTRY.snapshot(execution_id).items() if metadata.get("lifecycle_state") == REGISTRY_SKIPPED}  # Exclude runtime-skipped work from required persisted results
     final_cache = load_cache_results(process_payload["cache_ref_file"], config=process_payload["config"], notify_discovery=False)  # Reload the authoritative cache after all child transactions
     results_by_global_id = {}  # Accumulate exact final rows under original global identities
     results_by_mode = {}  # Group rows by HP and testing mode for existing comparison generation
     for task in tasks:  # Verify every dynamic plan combination exactly once
+        if int(task["global_id"]) in skipped_global_ids:  # Runtime skip intentionally produces no successful row
+            continue  # Preserve current-execution-only skip semantics without poisoning cache
         result_entry = feature_process_cache_result(task, final_cache, process_payload["attack_types_combined"])  # Recover the exact final shape-compatible row
         if result_entry is None:  # Reject a missing or incompatible final combination
             raise RuntimeError(f"Final cache is missing Global ID {task['global_id']}: {task['feature_set']} - {task['classifier_name']}")  # Surface exact missing identity
         results_by_global_id[task["global_id"]] = result_entry  # Preserve the original global ordering identity
         results_by_mode.setdefault((task["hyperparameters_enabled"], task["augmentation_ratio"]), {})[(task["feature_set"], task["classifier_name"])] = result_entry  # Build existing comparison input mappings
-    ordered_results = [results_by_global_id[task["global_id"]] for task in tasks]  # Restore the authoritative evaluation-plan order
+    ordered_results = [results_by_global_id[task["global_id"]] for task in tasks if int(task["global_id"]) not in skipped_global_ids]  # Restore the authoritative evaluation-plan order for successful work only
     comparison_results = []  # Accumulate existing ratio comparison rows across HP modes
     hp_modes = list(dict.fromkeys(task["hyperparameters_enabled"] for task in tasks))  # Preserve default-first hyperparameter mode order
     augmentation_ratios = list(dict.fromkeys(task["augmentation_ratio"] for task in tasks if task["augmentation_ratio"] is not None))  # Preserve configured ratio order
