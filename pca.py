@@ -92,7 +92,7 @@ from sklearn.preprocessing import StandardScaler  # For scaling the data (standa
 from telegram_bot import TelegramBot, send_exception_via_telegram, send_telegram_message, setup_global_exception_hook  # For sending progress messages to Telegram
 from tqdm import tqdm  # For progress bars
 from typing import Any, Union, cast  # For type hints used by functions
-from utils.process_name import set_runtime_process_name  # Apply optional htop-visible process identities.
+from utils.process_name import resolve_runtime_process_name, set_runtime_process_name  # Apply optional htop-visible process identities.
 
 
 # Macros:
@@ -116,6 +116,7 @@ CPU_PROCESSES = None
 CACHING_ENABLED = None
 PICKLE_PROTOCOL = None
 CONFIG_FILE = None
+CURRENT_RUNTIME_PROCESS_NAME = None
 
 # Telegram Bot Setup placeholder (initialized in runtime)
 TELEGRAM_BOT = None
@@ -2082,7 +2083,7 @@ def execute_pca_parallel(X_train, y_train, X_test, y_test, n_components_list: li
         results_map = {}  # Map to store results by n_components
         future_to_ncomp = {}  # Map each future to its n_components value
 
-        with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as executor:  # Create a process pool executor
+        with concurrent.futures.ProcessPoolExecutor(max_workers=workers, initializer=set_runtime_process_name, initargs=(CURRENT_RUNTIME_PROCESS_NAME,)) as executor:  # Create a process pool executor
             for n_components in n_components_list:  # Loop over each number of components
                 scaling_time_val = getattr(scaler, "_scaling_time", 0.0)  # Retrieve scaling_time attached to scaler
                 fut = executor.submit(
@@ -2411,8 +2412,10 @@ def main():
     """
     
     try:
+        global CURRENT_RUNTIME_PROCESS_NAME  # Preserve one exact resolved runtime title for child-worker reuse
         merged_cfg, sources = get_config()  # Load and merge configuration sources
         set_runtime_process_name(None, script_path=__file__, config=merged_cfg)  # Re-apply with merged config so config.yaml can override when CLI omitted the process name.
+        CURRENT_RUNTIME_PROCESS_NAME = resolve_runtime_process_name(None, script_path=__file__, config=merged_cfg)  # Preserve one exact resolved runtime title for child workers.
 
         global cfg, app_cfg  # Declare global config variables for module-wide access
         app_cfg = merged_cfg  # Store full merged config in global

@@ -104,7 +104,7 @@ from sklearn.svm import LinearSVC, SVC  # For Support Vector Machine models
 from telegram_bot import TelegramBot, send_exception_via_telegram, send_telegram_message, setup_global_exception_hook  # For sending progress messages to Telegram
 from tqdm import tqdm  # For progress bars
 from typing import Any, cast, Dict, Union  # For type hints
-from utils.process_name import set_runtime_process_name  # Apply optional htop-visible process identities.
+from utils.process_name import resolve_runtime_process_name, set_runtime_process_name  # Apply optional htop-visible process identities.
 from xgboost import XGBClassifier  # For XGBoost classifier
 
 try:  # Attempt to import ThunderSVM with full CUDA safety guard
@@ -208,6 +208,7 @@ WORKER_SVM_MAX_ITER = -1  # Use -1 to disable iteration limit as required by skl
 
 # Telegram Bot Setup:
 TELEGRAM_BOT = None  # Global Telegram bot instance (initialized in setup_telegram_bot)
+CURRENT_RUNTIME_PROCESS_NAME = None  # Preserve one exact resolved runtime title for pool-worker reuse.
 
 # Logger placeholder (no side-effects at import-time):
 logger = None
@@ -2905,7 +2906,7 @@ def compute_max_parallel_jobs(memory_per_job_mb: float) -> int:
         return 1  # Return minimum safe fallback of one worker on any computation failure
 
 
-def init_combination_worker(X_train, y_train, use_linear_svc, svm_max_iter):
+def init_combination_worker(X_train, y_train, use_linear_svc, svm_max_iter, runtime_process_name=None):
     """
     Initialize shared worker process globals for multiprocessing pool combination evaluation.
 
@@ -2916,6 +2917,8 @@ def init_combination_worker(X_train, y_train, use_linear_svc, svm_max_iter):
     :return: None.
     """
 
+    if runtime_process_name is not None:  # Re-apply parent-selected runtime title inside pool workers.
+        set_runtime_process_name(runtime_process_name)  # Prevent pool workers from showing generic import-time titles in htop.
     global WORKER_X_TRAIN, WORKER_Y_TRAIN, WORKER_USE_LINEAR_SVC, WORKER_SVM_MAX_ITER  # Declare worker-process globals for assignment
     WORKER_X_TRAIN = X_train  # Set training features reference in this worker process
     WORKER_Y_TRAIN = y_train  # Set training labels reference in this worker process
@@ -3110,7 +3113,7 @@ def run_parallel_grid_search(
             with multiprocessing.Pool(
                 processes=n_parallel_jobs,
                 initializer=init_combination_worker,
-                initargs=(X_train, y_train, USE_LINEAR_SVC_FOR_LINEAR_KERNEL, SVM_MAX_ITER),
+                initargs=(X_train, y_train, USE_LINEAR_SVC_FOR_LINEAR_KERNEL, SVM_MAX_ITER, CURRENT_RUNTIME_PROCESS_NAME),
             ) as pool:  # Launch worker pool with training data shared via initializer to minimize serialization overhead
                 for result in pool.imap_unordered(execute_single_combination, tasks):  # Process results in completion order for minimal latency
                     current_params, metrics, elapsed, train_time, eval_time = result  # Unpack result fields from completed worker
@@ -4146,7 +4149,9 @@ def main():
     merged = deep_merge(defaults, file_cfg)  # Deep-merge file config over defaults
     merged = apply_cli_overrides_to_cfg(merged, args)  # Apply CLI overrides to merged config
     merged = validate_hyperopt_config(merged)  # Validate required configuration fields
+    global CURRENT_RUNTIME_PROCESS_NAME  # Preserve one exact resolved runtime title for pool-worker reuse.
     set_runtime_process_name(getattr(args, "process_name", None), script_path=__file__, config=merged)  # Re-apply with merged config so config.yaml can override only when CLI omitted the process name.
+    CURRENT_RUNTIME_PROCESS_NAME = resolve_runtime_process_name(getattr(args, "process_name", None), script_path=__file__, config=merged)  # Preserve one exact resolved runtime title for child workers.
 
     results_path = build_results_path(merged)  # Build configured results CSV path for logging without creating directories
 

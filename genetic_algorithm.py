@@ -105,7 +105,7 @@ from sklearn.preprocessing import StandardScaler  # For feature scaling
 from telegram_bot import TelegramBot, send_exception_via_telegram, send_telegram_message, setup_global_exception_hook  # For Telegram notifications
 from tqdm import tqdm  # For progress bars
 from typing import Any, Callable, Union, cast  # For type hints
-from utils.process_name import set_runtime_process_name  # Apply optional htop-visible process identities.
+from utils.process_name import resolve_runtime_process_name, set_runtime_process_name  # Apply optional htop-visible process identities.
 
 psutil = (
     __import__("psutil") if __import__("importlib").util.find_spec("psutil") else None
@@ -128,6 +128,7 @@ CONFIG: dict[str, Any] = {}  # Global configuration dictionary (initialized in m
 
 # Runtime State Variables (DO NOT configure these):
 CPU_PROCESSES = None  # Number of CPU processes for multiprocessing (dynamically updated by monitor)
+CURRENT_RUNTIME_PROCESS_NAME = None  # Preserve one exact resolved runtime title for pool-worker reuse.
 GA_GENERATIONS_COMPLETED = 0  # Updated by GA loop to inform monitor when some generations have run
 RESOURCE_MONITOR_LAST_FILE = None  # Path of the file currently being processed (monitor uses this)
 RESOURCE_MONITOR_UPDATED_FOR_CURRENT_FILE = False  # Whether monitor already applied an update for the current file
@@ -139,6 +140,18 @@ TELEGRAM_BOT = None  # Global Telegram bot instance (initialized in setup_telegr
 logger = None  # Global logger instance (initialized in initialize_logger)
 
 LAST_RESOLVED_N_JOBS = None  # Cache the last resolved n_jobs to avoid noisy repeated prints during GA loops
+
+
+def init_pool_process_name(runtime_process_name=None):
+    """
+    Re-apply the parent-selected runtime process title inside multiprocessing pool children.
+
+    :param runtime_process_name: Resolved parent runtime process title.
+    :return: None.
+    """
+
+    if runtime_process_name is not None:  # Re-apply only when the parent resolved an exact runtime title.
+        set_runtime_process_name(runtime_process_name)  # Prevent pool workers from showing generic import-time titles in htop.
 
 # Fitness Cache:
 fitness_cache = {}  # Cache for fitness results to avoid re-evaluating same feature masks
@@ -2207,10 +2220,12 @@ def setup_genetic_algorithm(n_features, population_size=None, pool=None):
             with global_state_lock:  # Thread-safe read of CPU_PROCESSES
                 cpu_procs = CPU_PROCESSES  # Read CPU_PROCESSES value
             if cpu_procs is None:  # If CPU_PROCESSES is not set
-                pool = multiprocessing.Pool()  # Create a multiprocessing pool with all available CPUs
+                pool = multiprocessing.Pool(initializer=init_pool_process_name, initargs=(CURRENT_RUNTIME_PROCESS_NAME,))  # Create a multiprocessing pool with all available CPUs
             else:  # If CPU_PROCESSES is set
                 pool = multiprocessing.Pool(
-                    processes=cpu_procs
+                    processes=cpu_procs,
+                    initializer=init_pool_process_name,
+                    initargs=(CURRENT_RUNTIME_PROCESS_NAME,),
                 )  # Create a multiprocessing pool with specified number of CPUs
         toolbox.register("map", pool.map)  # Register parallel map for fitness evaluation
 
@@ -7347,7 +7362,7 @@ def create_sweep_results_and_pool(min_pop, max_pop):
         with global_state_lock:  # Thread-safe read of CPU_PROCESSES
             cpu_procs = CPU_PROCESSES  # Read CPU_PROCESSES value
 
-        shared_pool = multiprocessing.Pool(processes=cpu_procs if cpu_procs else None)  # Create a shared multiprocessing pool for parallel GA runs
+        shared_pool = multiprocessing.Pool(processes=cpu_procs if cpu_procs else None, initializer=init_pool_process_name, initargs=(CURRENT_RUNTIME_PROCESS_NAME,))  # Create a shared multiprocessing pool for parallel GA runs
 
         return results, shared_pool  # Return initialised results and pool
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
@@ -8028,12 +8043,13 @@ def main():
     """
 
     try:
-        global CONFIG, logger  # Declare global variables
+        global CONFIG, logger, CURRENT_RUNTIME_PROCESS_NAME  # Declare global variables
 
         cli_args = parse_cli_args()  # Parse command-line arguments
 
         CONFIG = initialize_config(config_path=cli_args.config if hasattr(cli_args, "config") else None, cli_args=cli_args)  # Initialize merged configuration
         set_runtime_process_name(getattr(cli_args, "process_name", None), script_path=__file__, config=CONFIG)  # Re-apply with merged config so config.yaml can override only when CLI omitted the process name.
+        CURRENT_RUNTIME_PROCESS_NAME = resolve_runtime_process_name(getattr(cli_args, "process_name", None), script_path=__file__, config=CONFIG)  # Preserve one exact resolved runtime title for child workers.
 
         logger = initialize_logger(CONFIG)  # Initialize logger with configuration
 

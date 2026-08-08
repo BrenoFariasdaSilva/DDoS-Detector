@@ -156,6 +156,22 @@ def build_runtime_process_name(script_path: Optional[str], argv: Optional[Sequen
     return "-".join(title_parts)
 
 
+def resolve_runtime_process_name(process_name: Optional[str], script_path: Optional[str] = None, argv: Optional[Sequence[str]] = None, config: Optional[dict[str, Any]] = None) -> str:
+    """
+    Resolve one exact runtime process title from CLI, config, or generated fallback.
+
+    :param process_name: Requested exact process title from CLI, when provided.
+    :param script_path: Optional script path used to include the current filename in the generated title.
+    :param argv: Optional CLI argument sequence excluding the executable.
+    :param config: Optional merged configuration used for exact process-name overrides when CLI did not specify one.
+    :return: Resolved process title.
+    """
+
+    normalized_name = _normalize_requested_process_name(process_name)  # Prefer exact CLI override when present.
+    configured_name = resolve_configured_process_name(config, script_path=script_path) if normalized_name is None else None  # Fall back to exact config override only when CLI omitted one.
+    return normalized_name or configured_name or build_runtime_process_name(script_path=script_path, argv=argv)  # Resolve one stable runtime title for parent and child processes.
+
+
 def set_runtime_process_name(process_name: Optional[str], script_path: Optional[str] = None, argv: Optional[Sequence[str]] = None, config: Optional[dict[str, Any]] = None) -> None:
     """
     Set the operating-system process title shown by tools such as htop.
@@ -169,10 +185,8 @@ def set_runtime_process_name(process_name: Optional[str], script_path: Optional[
 
     if script_path is None and process_name is None and config is None:  # Preserve the legacy exact-title behavior for old direct calls.
         return  # Leave the process title unchanged.
-    normalized_name = _normalize_requested_process_name(process_name)  # Prefer exact CLI override when present.
-    configured_name = resolve_configured_process_name(config, script_path=script_path) if normalized_name is None else None  # Fall back to exact config override only when CLI omitted one.
     try:  # Load the existing optional process-title dependency only when requested.
         from setproctitle import setproctitle  # Import the platform process-title setter.
     except ImportError as error:  # Fail explicitly because the requested htop identity cannot be applied.
         raise RuntimeError("--process-name requires the setproctitle package") from error  # Preserve the missing dependency cause.
-    setproctitle(normalized_name or configured_name or build_runtime_process_name(script_path=script_path, argv=argv))  # Apply exact CLI, then exact config, then generated default.
+    setproctitle(resolve_runtime_process_name(process_name, script_path=script_path, argv=argv, config=config))  # Apply exact CLI, then exact config, then generated default.

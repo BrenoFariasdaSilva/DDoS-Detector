@@ -159,7 +159,7 @@ from utils.stacking.planning import FEATURE_SET_WORKER_KEYS, build_evaluation_pl
 from utils.execution_identity import assign_execution_id, ensure_execution_id  # For one top-level execution identity shared with workers
 from utils.lstm_sequences import LSTMSequenceMetadataError, build_lstm_sequence_windows  # Build verified partition-local LSTM windows.
 from utils.oom_restart import AUTO_RESTART_ATTEMPT_ENV, build_exact_oom_skip_rule, capture_oom_baseline, oom_kill_delta, recover_launch_command, schedule_detached_restart, transform_command_with_skip_rule  # Import focused OOM restart planning utilities.
-from utils.process_name import set_runtime_process_name  # Apply optional htop-visible process identities.
+from utils.process_name import resolve_runtime_process_name, set_runtime_process_name  # Apply optional htop-visible process identities.
 from utils.runtime_registry import ACTIVE as REGISTRY_ACTIVE, COMPLETED as REGISTRY_COMPLETED, FAILED as REGISTRY_FAILED, RUNTIME_COMBINATION_REGISTRY, SKIPPED as REGISTRY_SKIPPED, STARTING as REGISTRY_STARTING  # Track runtime combination lifecycle in the coordinator.
 from utils.skip_combinations import apply_only_combination_rules, apply_skip_combination_rules, build_alias_lookup, compile_only_combination_rules, compile_skip_combination_rules, filter_models_for_plan_group, format_only_rules_for_info, format_only_summary_line, format_skip_rule_match_lines, format_skip_rules_for_info, format_skip_rules_for_telegram, format_skip_summary_line, normalize_plan_augmentation_ratio  # Import reusable combination-rule parsing and plan filtering.
 from utils.telegram_control import format_skip_ack, parse_skip_command  # Parse strict Telegram runtime control commands.
@@ -183,6 +183,7 @@ CONFIG = {}  # Will be initialized by initialize_config() - holds all runtime se
 TELEGRAM_BOT = None  # Global Telegram bot instance (initialized in setup_telegram_bot)
 STACKING_FAILURE_TELEGRAM_IDENTITIES: set[str] = set()  # Track failure Telegram identities already emitted in this process
 OOM_RESTART_SCHEDULED = False  # Track whether this coordinator has already scheduled an OOM restart.
+CURRENT_RUNTIME_PROCESS_NAME = None  # Preserve one exact resolved runtime title for child-process reuse.
 
 # Logger Setup:
 logger = None  # Will be initialized in initialize_logger()
@@ -8670,7 +8671,7 @@ def prepare_explainability_child_config(config: dict) -> dict:
     return config_snapshot  # Return child-safe configuration snapshot.
 
 
-def run_explainability_process(status_queue: Any, model: Any, model_name: str, X_test: Any, y_test: Any, feature_names: List[Any], dataset_file: str, feature_set: str, execution_mode: str, config: dict) -> None:
+def run_explainability_process(status_queue: Any, model: Any, model_name: str, X_test: Any, y_test: Any, feature_names: List[Any], dataset_file: str, feature_set: str, execution_mode: str, config: dict, runtime_process_name: Optional[str] = None) -> None:
     """
     Run explainability inside a child process and report lifecycle status.
 
@@ -8690,6 +8691,8 @@ def run_explainability_process(status_queue: Any, model: Any, model_name: str, X
     global CONFIG  # Allow the child process to reuse the standard CONFIG fallback.
     global logger  # Allow child logger initialization to update the module logger.
     try:  # Initialize child-side runtime state before reporting startup.
+        if runtime_process_name is not None:  # Re-apply parent-selected runtime title inside spawned explainability children.
+            set_runtime_process_name(runtime_process_name)  # Prevent spawn import fallback names from leaking into htop.
         CONFIG = config  # Set child CONFIG so existing fallback logic remains valid.
         if logger is None:  # Initialize child logging only when the child has no logger.
             initialize_logger(config=config)  # Attach child stdout and stderr to the existing log file in append mode.
@@ -8850,7 +8853,7 @@ def start_explainability_process(model: Any, model_name: str, X_test: Any, y_tes
     config_snapshot = prepare_explainability_child_config(config_snapshot)  # Prepare child configuration without truncating logs.
     context = mp.get_context("spawn")  # Use spawn context for deterministic process isolation across platforms.
     status_queue = context.Queue()  # Create a status queue owned by the same multiprocessing context.
-    process = context.Process(target=run_explainability_process, args=(status_queue, model_snapshot, model_name, X_test_snapshot, y_test_snapshot, feature_names_snapshot, dataset_file, feature_set, execution_mode, config_snapshot), name=f"Explainability-{model_name}")  # Build child process for existing explainability pipeline.
+    process = context.Process(target=run_explainability_process, args=(status_queue, model_snapshot, model_name, X_test_snapshot, y_test_snapshot, feature_names_snapshot, dataset_file, feature_set, execution_mode, config_snapshot, CURRENT_RUNTIME_PROCESS_NAME), name=f"Explainability-{model_name}")  # Build child process for existing explainability pipeline.
     process.daemon = False  # Keep child non-daemonic so it can finish artifact writes and queue status.
     process_record = {"process": process, "status_queue": status_queue, "model_name": model_name, "feature_set": feature_set, "statuses": []}  # Build process record before startup.
     try:  # Ensure failed startup leaves no live child behind.
@@ -16865,6 +16868,8 @@ def run_feature_set_process_worker(process_payload: dict, status_queue: Any, sta
     acquired_capacity_gate: Any = None  # Track the exact phase gate owned for exception-safe release
     capacity_acquired = False  # Track admission ownership for exception-safe release
     try:  # Surface every child failure through both status queue and nonzero exit code
+        if process_payload.get("runtime_process_name") is not None:  # Re-apply parent-selected runtime title inside spawned feature workers.
+            set_runtime_process_name(process_payload["runtime_process_name"])  # Prevent spawn import fallback names from leaking into htop.
         configure_feature_process_parent_death(process_payload["coordinator_pid"])  # Prevent spawned work from surviving a killed detached coordinator
         initialize_feature_process_logger(process_payload["config"])  # Initialize append-only process-safe child logging after spawn
         task_queue = list(process_payload["tasks"])  # Copy only matrix-free descriptors into feature-local sequential order
@@ -17362,7 +17367,7 @@ def run_persistent_feature_set_grid(original_df: pd.DataFrame, file: str, source
         coordinator_model_maps[bool(hyperparameters_enabled)] = models_map  # Store coordinator-only prototypes by HP mode
         if hyperparameters_enabled:  # Capture only the optimized parameter mapping for worker-local reconstruction
             optimized_params.update(params_map)  # Preserve exact applied optimized parameters by classifier
-    process_payload = {"file": file, "source_files": [str(path) for path in source_files], "attack_types_combined": attack_types_combined, "input_feature_names": [str(name) for name in feature_names], "target_column": target_column, "label_classes": label_classes, "execution_mode": execution_mode_str, "cache_ref_file": file, "config": config, "optimized_params": optimized_params, "augmentation_file_paths": [str(path) for path in augmentation_file_paths], "original_sample_count": original_sample_count, "expected_train_count": int(original_sample_count - math.ceil(original_sample_count * 0.2)), "feature_mode_names": feature_mode_names, "feature_metadata_by_name": feature_metadata_by_name}  # Build one matrix-free shared worker payload
+    process_payload = {"file": file, "source_files": [str(path) for path in source_files], "attack_types_combined": attack_types_combined, "input_feature_names": [str(name) for name in feature_names], "target_column": target_column, "label_classes": label_classes, "execution_mode": execution_mode_str, "cache_ref_file": file, "config": config, "optimized_params": optimized_params, "augmentation_file_paths": [str(path) for path in augmentation_file_paths], "original_sample_count": original_sample_count, "expected_train_count": int(original_sample_count - math.ceil(original_sample_count * 0.2)), "feature_mode_names": feature_mode_names, "feature_metadata_by_name": feature_metadata_by_name, "runtime_process_name": CURRENT_RUNTIME_PROCESS_NAME}  # Build one matrix-free shared worker payload
     process_payload["launch_command"] = recover_launch_command(str(Path(__file__).resolve().parent))  # Capture exact launch command before workers start.
     process_payload["oom_kill_baseline"] = capture_oom_baseline()  # Capture fresh cgroup OOM baseline before workers start.
     cached_results, pending_by_feature = partition_feature_process_tasks(tasks, cache_dict, process_payload, coordinator_model_maps)  # Mark every combination cached or pending before any child starts
@@ -18660,6 +18665,7 @@ if __name__ == "__main__":
         set_runtime_process_name(cli_args.process_name, script_path=__file__)  # Apply immediate CLI or generated htop identity before configuration and logging initialization.
         config = initialize_config(config_path=cli_args.config, cli_args=cli_args)  # Merge configuration from file and CLI
         set_runtime_process_name(cli_args.process_name, script_path=__file__, config=config)  # Re-apply with merged config so config.yaml can override only when CLI omitted the process name.
+        CURRENT_RUNTIME_PROCESS_NAME = resolve_runtime_process_name(cli_args.process_name, script_path=__file__, config=config)  # Preserve one exact resolved runtime title for spawned children.
         initialize_logger(config=config)  # Initialize logger and redirect stdout/stderr to logger
         try:  # Run main and handle user interrupts separately
             main(config=config)  # Invoke main business logic for stacking pipeline
