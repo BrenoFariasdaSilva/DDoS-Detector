@@ -77,6 +77,7 @@ from telegram.error import BadRequest  # For handling Telegram errors
 # Telegram Configuration:
 TELEGRAM_DEVICE_INFO = ""  # Device info for Telegram messages, set by calling script
 RUNNING_CODE = ""  # Name of the running script, set by calling script
+EXECUTION_ID = ""  # Stable top-level execution ID, set by calling script when available
 TELEGRAM_BOT = None  # Optional module-level TelegramBot instance usable by the global handler
 
 # Macros:
@@ -550,10 +551,11 @@ def send_telegram_message(bot, messages, condition=True):
             if isinstance(messages, str):  # If a single string is provided
                 messages = [messages]  # Convert it to a list
             
+            execution_suffix = f" - Execution ID: {str(EXECUTION_ID)}" if EXECUTION_ID else ""  # Preserve old prefix when no execution ID is set
             prefixed_messages = [  # Prefix each message with device info and running code
                 escape_markdown_v2(
                     strip_ansi(
-                        f"{str(TELEGRAM_DEVICE_INFO)} - {str(RUNNING_CODE)}: {str(msg)}"
+                        f"{str(TELEGRAM_DEVICE_INFO)} - {str(RUNNING_CODE)}{execution_suffix}: {str(msg)}"
                     )
                 )
                 for msg in messages
