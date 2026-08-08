@@ -115,9 +115,7 @@ from colorama import Style  # For terminal text styling
 from joblib import dump, load  # For exporting and loading trained models and scalers
 from lime.lime_tabular import LimeTabularExplainer  # Import LIME library
 from Logger import Logger, SAO_PAULO_TIMEZONE_NAME  # For process-safe São Paulo timestamped runtime logging
-from execution_identity import assign_execution_id, ensure_execution_id  # For one top-level execution identity shared with workers
 from pathlib import Path  # For handling file paths
-from runtime_registry import ACTIVE as REGISTRY_ACTIVE, COMPLETED as REGISTRY_COMPLETED, FAILED as REGISTRY_FAILED, RUNTIME_COMBINATION_REGISTRY, STARTING as REGISTRY_STARTING  # Track runtime combination lifecycle in the coordinator.
 from scipy.io import arff as scipy_arff  # Used to read ARFF files
 from sklearn.base import clone  # Clone estimator prototypes before each atomic fit
 from sklearn.decomposition import PCA  # For Principal Component Analysis
@@ -158,9 +156,11 @@ from lstm import LSTMClassifier  # Import the standalone sklearn-compatible supe
 from training_progress import DEFAULT_TRAINING_PROGRESS_INTERVAL_MINUTES, TrainingProgress, XGBoostProgressCallback, format_training_combination_fields, format_training_feature_set, interactive_terminal_attached  # Import reusable training progress infrastructure.
 from utils.stacking.shap import aggregate_mean_shap_importance, build_kernel_explainer, build_shap_progress_description, compute_shap_values_with_context, create_shap_progress_wrapper, describe_raw_shap_result, get_shap_prediction_function, normalize_shap_output, resolve_model_class_count, resolve_shap_progress_target, sample_shap_test_data, select_shap_explainer, supports_predict_proba  # Re-export stateless SHAP utilities.
 from utils.stacking.planning import FEATURE_SET_WORKER_KEYS, build_evaluation_plan, build_feature_process_metadata, resolve_feature_set_worker_key, retain_stacking_classifier_plan  # Re-export pure evaluation planning utilities.
+from utils.execution_identity import assign_execution_id, ensure_execution_id  # For one top-level execution identity shared with workers
 from utils.lstm_sequences import LSTMSequenceMetadataError, build_lstm_sequence_windows  # Build verified partition-local LSTM windows.
 from utils.oom_restart import AUTO_RESTART_ATTEMPT_ENV, build_exact_oom_skip_rule, capture_oom_baseline, oom_kill_delta, recover_launch_command, schedule_detached_restart, transform_command_with_skip_rule  # Import focused OOM restart planning utilities.
 from utils.process_name import set_runtime_process_name  # Apply optional htop-visible process identities.
+from utils.runtime_registry import ACTIVE as REGISTRY_ACTIVE, COMPLETED as REGISTRY_COMPLETED, FAILED as REGISTRY_FAILED, RUNTIME_COMBINATION_REGISTRY, STARTING as REGISTRY_STARTING  # Track runtime combination lifecycle in the coordinator.
 from utils.skip_combinations import apply_only_combination_rules, apply_skip_combination_rules, build_alias_lookup, compile_only_combination_rules, compile_skip_combination_rules, filter_models_for_plan_group, format_only_rules_for_info, format_only_summary_line, format_skip_rule_match_lines, format_skip_rules_for_info, format_skip_rules_for_telegram, format_skip_summary_line, normalize_plan_augmentation_ratio  # Import reusable combination-rule parsing and plan filtering.
 
 
