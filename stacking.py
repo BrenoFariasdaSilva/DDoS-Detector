@@ -117,6 +117,7 @@ from lime.lime_tabular import LimeTabularExplainer  # Import LIME library
 from Logger import Logger, SAO_PAULO_TIMEZONE_NAME  # For process-safe São Paulo timestamped runtime logging
 from execution_identity import assign_execution_id, ensure_execution_id  # For one top-level execution identity shared with workers
 from pathlib import Path  # For handling file paths
+from runtime_registry import ACTIVE as REGISTRY_ACTIVE, COMPLETED as REGISTRY_COMPLETED, FAILED as REGISTRY_FAILED, RUNTIME_COMBINATION_REGISTRY, STARTING as REGISTRY_STARTING  # Track runtime combination lifecycle in the coordinator.
 from scipy.io import arff as scipy_arff  # Used to read ARFF files
 from sklearn.base import clone  # Clone estimator prototypes before each atomic fit
 from sklearn.decomposition import PCA  # For Principal Component Analysis
@@ -15519,7 +15520,7 @@ def build_feature_process_plan(evaluation_plan: List[Tuple[str, bool, Optional[f
             identity_mode = "combined_files_original_only" if execution_mode_str == "combined_files" and augmentation_ratio is None else ("combined_files_original_training_augmented_testing" if execution_mode_str == "combined_files" else experiment_mode)  # Preserve the established experiment-ID mode text
             experiment_ids[experiment_key] = generate_experiment_id(file, identity_mode, augmentation_ratio)  # Generate the existing traceability identity
         descriptor = feature_metadata[feature_set_name]  # Resolve small feature metadata for this combination
-        tasks.append({"feature_set": feature_set_name, "worker_key": resolve_feature_set_worker_key(feature_set_name), "global_id": stable_global_index, "canonical_total": stable_canonical_total, "total_combinations": len(evaluation_plan), "feature_local_position": feature_positions[feature_set_name], "feature_local_total": feature_totals[feature_set_name], "hyperparameters_enabled": bool(hyperparameters_enabled), "augmentation_ratio": augmentation_ratio, "classifier_name": classifier_name, "experiment_mode": experiment_mode, "data_source_label": data_source_label, "experiment_id": experiment_ids[experiment_key], "experiment_run": run_index, "execution_mode": execution_mode_str, "expected_n_features": descriptor["feature_count"], "expected_feature_names": list(descriptor["feature_names"]), "expected_n_samples_train": expected_train_count, "expected_n_samples_test": expected_test_count, "requires_model_artifact": False})  # Store one matrix-free task descriptor
+        tasks.append({"feature_set": feature_set_name, "worker_key": resolve_feature_set_worker_key(feature_set_name), "global_id": stable_global_index, "canonical_total": stable_canonical_total, "total_combinations": len(evaluation_plan), "feature_local_position": feature_positions[feature_set_name], "feature_local_total": feature_totals[feature_set_name], "hyperparameters_enabled": bool(hyperparameters_enabled), "augmentation_ratio": augmentation_ratio, "classifier_name": classifier_name, "experiment_mode": experiment_mode, "data_source_label": data_source_label, "experiment_id": experiment_ids[experiment_key], "experiment_run": run_index, "execution_mode": execution_mode_str, "dataset": file, "expected_n_features": descriptor["feature_count"], "expected_feature_names": list(descriptor["feature_names"]), "expected_n_samples_train": expected_train_count, "expected_n_samples_test": expected_test_count, "requires_model_artifact": False})  # Store one matrix-free task descriptor
     return tasks  # Return the complete authoritative task sequence
 
 
@@ -16879,6 +16880,8 @@ def execute_feature_set_processes(pending_by_feature: dict, process_payload: dic
         raise RuntimeError(f"Feature-process partition mismatch: cached={len(cached_results)}, pending={pending_count}, total={len(tasks)}")  # Surface authoritative plan mismatch
     status_state = create_feature_process_status(context, tasks, pending_by_feature)  # Initialize all shared counters from dynamic plan and cache state
     tasks_by_global_id = {task["global_id"]: task for task in tasks}  # Index the authoritative dynamic plan for completion-event verification
+    execution_id = ensure_execution_id(process_payload["config"])  # Resolve the one top-level execution identity for coordinator-owned registry updates
+    RUNTIME_COMBINATION_REGISTRY.register_tasks(execution_id, tasks)  # Register the authoritative plan before child processes can report lifecycle events
     notified_global_ids = set()  # Track one coordinator-owned result notification attempt per combination
     notified_training_start_global_ids = set()  # Track one coordinator-owned training-start notification attempt per non-cached combination
     notified_training_eta_global_ids = set()  # Track one coordinator-owned training-ETA notification attempt per non-cached combination
@@ -16887,6 +16890,7 @@ def execute_feature_set_processes(pending_by_feature: dict, process_payload: dic
     for task in tasks:  # Log each valid pre-start cache result without changing already initialized counters
         if task.get("global_id") not in cached_results:  # Skip pending tasks during cache recovery reporting
             continue  # Move to next authoritative task
+        RUNTIME_COMBINATION_REGISTRY.update_state(execution_id, task.get("global_id"), REGISTRY_COMPLETED, last_event="cached")  # Mark pre-start cache recovery without assigning worker PID
         prefix = format_feature_process_progress(task, status_state, pid=os.getpid())  # Build dynamic cache-first status from shared counters
         print(f"{prefix} Cache recovery completed | Feature Set={task['feature_set']} | Classifier={task['classifier_name']} | Hyperparameters={'Optimized' if task['hyperparameters_enabled'] else 'Default'} | Augmentation Ratio={task['augmentation_ratio']} | Testing={'Original' if task['augmentation_ratio'] is None else 'Augmented'}")  # Report valid cached combination without data loading
         send_feature_process_result_notification(task, build_feature_process_notification_result(cached_results[task["global_id"]]), "cached", len(tasks), notified_global_ids)  # Preserve established sequential cache notification semantics without a Finished message
@@ -16942,6 +16946,7 @@ def execute_feature_set_processes(pending_by_feature: dict, process_payload: dic
                         running_task = running_task_by_feature.get(feature_set_name, {})  # Recover last reported current task when available
                         shared_global_id = int(status_state["running_global_ids"][feature_set_name].value)  # Recover active identity even when queue feeder transport was interrupted
                         failure = {"feature_set": feature_set_name, "global_id": running_task.get("global_id") or shared_global_id or None, "error": f"Child exited without terminal status, exitcode={process.exitcode}", "traceback": ""}  # Preserve deterministic child-death evidence
+                        RUNTIME_COMBINATION_REGISTRY.update_state(execution_id, failure.get("global_id"), REGISTRY_FAILED, worker_pid=process.pid, last_event="child_exit", error=failure["error"])  # Mark the recovered active task failed in the coordinator registry
                         break  # Stop inspecting after the first failure
                 continue  # Resume status monitoring or leave after failure assignment
             except Exception as transport_error:  # Surface lifecycle queue failures as coordinator-owned run failures
@@ -16952,6 +16957,7 @@ def execute_feature_set_processes(pending_by_feature: dict, process_payload: dic
             if status_type == "error":  # Preserve the first complete child exception and traceback
                 if status.get("global_id") is None:  # Recover task identity when exception transport lacked it
                     status["global_id"] = running_task_by_feature.get(feature_set_name, {}).get("global_id")  # Use last explicit running event from this worker
+                RUNTIME_COMBINATION_REGISTRY.update_state(execution_id, status.get("global_id"), REGISTRY_FAILED, worker_pid=status.get("pid"), last_event="error", error=status.get("error"))  # Mark exact child failure without interpreting it operationally
                 failure = status  # Store the surfaced child failure for deterministic sibling termination
                 terminal_features.add(feature_set_name)  # Mark the reporting worker terminal
             elif status_type == "done":  # Record one successful worker terminal state
@@ -16961,12 +16967,16 @@ def execute_feature_set_processes(pending_by_feature: dict, process_payload: dic
                 continue  # Preserve startup status consumption while keeping normal logs active-only.
             elif status_type == "running":  # Track exact current combination for abrupt-death status reconciliation
                 running_task_by_feature[feature_set_name] = status  # Store only small task identity metadata
+                RUNTIME_COMBINATION_REGISTRY.update_state(execution_id, status.get("global_id"), REGISTRY_STARTING, worker_pid=status.get("pid"), last_event="running")  # Associate this worker PID with only its current task
             elif status_type == "training_start":  # Send one coordinator-owned start notification before worker fitting begins
+                RUNTIME_COMBINATION_REGISTRY.update_state(execution_id, status.get("global_id"), REGISTRY_ACTIVE, worker_pid=status.get("pid"), last_event="training_start")  # Mark expensive classifier work active at the real start event
                 send_feature_process_training_start_notification(status, tasks_by_global_id, len(tasks), notified_training_start_global_ids, training_start_unavailable_global_ids, notification_acknowledgements)  # Deliver or isolate the start event and release the worker
             elif status_type == "training_eta":  # Send one coordinator-owned ETA notification after real progress reports ETA
+                RUNTIME_COMBINATION_REGISTRY.update_state(execution_id, status.get("global_id"), REGISTRY_ACTIVE, worker_pid=status.get("pid"), last_event="training_eta", eta=status.get("eta"))  # Keep active state and latest ETA metadata only
                 send_feature_process_training_eta_notification(status, tasks_by_global_id, len(tasks), notified_training_eta_global_ids, training_start_unavailable_global_ids)  # Deliver or isolate the ETA event without releasing worker state
             elif status_type == "progress":  # Surface one cache or computation completion from shared authoritative state
                 running_task_by_feature.pop(feature_set_name, None)  # Clear completed current-task identity
+                RUNTIME_COMBINATION_REGISTRY.update_state(execution_id, status.get("global_id"), REGISTRY_COMPLETED, worker_pid=status.get("pid"), last_event=status.get("event"))  # Remove worker PID ownership before the worker can take another task
                 progress_snapshot = read_feature_process_status(status_state)  # Read consistent cross-process counters after transition
                 feature_snapshot = progress_snapshot["features"][feature_set_name]  # Resolve feature-local status for concise coordinator logging
                 print(f"[COORDINATOR STATUS] Feature Set={feature_set_name} | Global ID={status.get('global_id')} | Event={status.get('event')} | Global={progress_snapshot['global']} | Feature={feature_snapshot}")  # Log dynamic global and feature-local runtime state
@@ -16981,13 +16991,21 @@ def execute_feature_set_processes(pending_by_feature: dict, process_payload: dic
                     continue  # Poll once more or continue to sibling termination
                 empty_notification_polls = 0  # Continue draining while queued events remain available
                 if pending_status.get("status") == "training_start":  # Handle any already-queued start event before terminating siblings
+                    RUNTIME_COMBINATION_REGISTRY.update_state(execution_id, pending_status.get("global_id"), REGISTRY_ACTIVE, worker_pid=pending_status.get("pid"), last_event="training_start")  # Preserve active registry state for already-queued start records
                     send_feature_process_training_start_notification(pending_status, tasks_by_global_id, len(tasks), notified_training_start_global_ids, training_start_unavailable_global_ids, notification_acknowledgements)  # Release a worker waiting on start notification handling
                     continue  # Continue draining remaining queued events
                 if pending_status.get("status") == "training_eta":  # Handle any already-queued ETA event before terminating siblings
+                    RUNTIME_COMBINATION_REGISTRY.update_state(execution_id, pending_status.get("global_id"), REGISTRY_ACTIVE, worker_pid=pending_status.get("pid"), last_event="training_eta", eta=pending_status.get("eta"))  # Preserve active ETA metadata for already-queued records
                     send_feature_process_training_eta_notification(pending_status, tasks_by_global_id, len(tasks), notified_training_eta_global_ids, training_start_unavailable_global_ids)  # Send or suppress one queued ETA notification
                     continue  # Continue draining remaining queued events
+                if pending_status.get("status") == "progress":  # Preserve terminal registry state for already-queued completion records
+                    running_task_by_feature.pop(pending_status.get("feature_set"), None)  # Clear completed current-task identity from the coordinator mirror
+                    RUNTIME_COMBINATION_REGISTRY.update_state(execution_id, pending_status.get("global_id"), REGISTRY_COMPLETED, worker_pid=pending_status.get("pid"), last_event=pending_status.get("event"))  # Remove worker PID ownership before sibling termination
                 handle_feature_process_result_notification(pending_status, tasks_by_global_id, len(tasks), notified_global_ids, notification_acknowledgements)  # Send or acknowledge any persisted result event without changing scientific status
             for record in process_records:  # Terminate only children that remain active
+                running_task = running_task_by_feature.get(record["feature_set"], {})  # Resolve any current task owned by this worker before termination
+                if running_task.get("global_id") is not None:  # Mark interrupted sibling ownership before signaling the process
+                    RUNTIME_COMBINATION_REGISTRY.update_state(execution_id, running_task.get("global_id"), REGISTRY_FAILED, worker_pid=running_task.get("pid") or record["process"].pid, last_event="terminated_after_failure", error="Terminated after sibling failure")  # Clear PID ownership for later safe control logic
                 process = record["process"]  # Resolve one tracked child
                 if process.is_alive():  # Avoid signaling a child that already exited
                     process.terminate()  # Request deterministic sibling termination
@@ -17000,6 +17018,7 @@ def execute_feature_set_processes(pending_by_feature: dict, process_payload: dic
             if failure is None and process.exitcode != 0:  # Surface any nonzero exit missed by the status channel
                 running_task = running_task_by_feature.get(record["feature_set"], {})  # Recover last reported active task when available
                 failure = {"feature_set": record["feature_set"], "global_id": running_task.get("global_id"), "error": f"Child exited with code {process.exitcode}", "traceback": ""}  # Preserve exact exit evidence
+                RUNTIME_COMBINATION_REGISTRY.update_state(execution_id, failure.get("global_id"), REGISTRY_FAILED, worker_pid=process.pid, last_event="child_exit", error=failure["error"])  # Mark missed nonzero child exit in the coordinator registry
         if failure is not None:  # Raise the complete child failure after every process has been reaped
             failure_snapshot = reconcile_feature_process_status_after_failure(status_state, failure.get("feature_set"))  # Reconcile interrupted sibling tasks without claiming completion
             print(f"[COORDINATOR FAILURE STATUS] Global={failure_snapshot['global']} | Features={failure_snapshot['features']}")  # Persist accurate terminal failure counters
