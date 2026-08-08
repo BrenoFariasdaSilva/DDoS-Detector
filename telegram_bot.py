@@ -361,7 +361,7 @@ class TelegramBot:
         try:  # Keep listener failures isolated from experiments
             asyncio.run(self._poll_inbound_messages(poll_timeout_seconds, retry_delay_seconds))  # Run async getUpdates loop in this thread
         except Exception as e:  # Listener thread must never crash the experiment
-            print(f"{BackgroundColors.YELLOW}Telegram inbound listener stopped: {e}{Style.RESET_ALL}")  # Report listener failure without token data
+            print(f"{BackgroundColors.YELLOW}Telegram inbound listener stopped: {self._safe_inbound_error(e)}{Style.RESET_ALL}")  # Report listener failure without token data
 
     async def _poll_inbound_messages(self, poll_timeout_seconds, retry_delay_seconds):
         """
@@ -384,7 +384,7 @@ class TelegramBot:
                 try:  # Isolate every Telegram API poll
                     updates = await polling_bot.get_updates(offset=update_offset, timeout=safe_poll_timeout, allowed_updates=["message"])  # Long-poll text message updates
                 except Exception as e:  # Temporary Telegram/network failure
-                    print(f"{BackgroundColors.YELLOW}Telegram inbound polling failed: {e}{Style.RESET_ALL}")  # Report without token data
+                    print(f"{BackgroundColors.YELLOW}Telegram inbound polling failed: {self._safe_inbound_error(e)}{Style.RESET_ALL}")  # Report without token data
                     await asyncio.sleep(safe_retry_delay)  # Back off before retrying
                     continue  # Keep experiments unaffected
                 for update in updates:  # Process each returned update once
@@ -410,7 +410,7 @@ class TelegramBot:
         try:  # Best-effort backlog discard before normal polling
             updates = await polling_bot.get_updates(offset=-1, limit=1, timeout=0, allowed_updates=["message"])  # Ask Telegram for only the newest queued update
         except Exception as e:  # Startup discard failure should not stop listener
-            print(f"{BackgroundColors.YELLOW}Telegram inbound backlog discard failed: {e}{Style.RESET_ALL}")  # Report without token data
+            print(f"{BackgroundColors.YELLOW}Telegram inbound backlog discard failed: {self._safe_inbound_error(e)}{Style.RESET_ALL}")  # Report without token data
             return False, None  # Retry discard before normal polling
         if not updates:  # No pending backlog
             return True, None  # Start normal polling without offset
@@ -464,7 +464,19 @@ class TelegramBot:
         try:  # Keep callback failures isolated from Telegram polling and experiments
             callback(inbound_message)  # Notify application-owned callback
         except Exception as e:  # Callback failed
-            print(f"{BackgroundColors.YELLOW}Telegram inbound callback failed: {e}{Style.RESET_ALL}")  # Report without stopping polling
+            print(f"{BackgroundColors.YELLOW}Telegram inbound callback failed: {self._safe_inbound_error(e)}{Style.RESET_ALL}")  # Report without stopping polling
+
+    def _safe_inbound_error(self, error):
+        """
+        Return an inbound-listener error string with Telegram token redacted.
+
+        :param error: Exception or message object.
+        :return: Safe message string.
+        """
+
+        message = str(error)  # Preserve existing concise error reporting.
+        token = str(self.TELEGRAM_BOT_TOKEN or "")  # Resolve configured token without logging it.
+        return message.replace(token, "[redacted]") if token else message  # Remove token if any dependency included it.
 
 
 def verbose_output(true_string="", false_string=""):
