@@ -115,6 +115,7 @@ from colorama import Style  # For terminal text styling
 from joblib import dump, load  # For exporting and loading trained models and scalers
 from lime.lime_tabular import LimeTabularExplainer  # Import LIME library
 from Logger import Logger, SAO_PAULO_TIMEZONE_NAME  # For process-safe São Paulo timestamped runtime logging
+from execution_identity import assign_execution_id, ensure_execution_id  # For one top-level execution identity shared with workers
 from pathlib import Path  # For handling file paths
 from scipy.io import arff as scipy_arff  # Used to read ARFF files
 from sklearn.base import clone  # Clone estimator prototypes before each atomic fit
@@ -2368,6 +2369,7 @@ def initialize_config(config_path=None, cli_args=None):
         defaults = get_default_config()  # Get default configuration
         file_config = load_config_file(config_path)  # Load file configuration
         config = merge_configs(defaults, file_config, cli_args)  # Merge all configurations
+        assign_execution_id(config)  # Create one unique top-level execution ID before workers receive config copies.
         
         global CONFIG  # Access global CONFIG
         CONFIG = config  # Set global CONFIG
@@ -2495,6 +2497,7 @@ def setup_telegram_bot(config=None, start_inbound_listener=False):
             telegram_module.TELEGRAM_BOT = TELEGRAM_BOT  # Share the initialized bot with the imported exception sender
             telegram_module.TELEGRAM_DEVICE_INFO = f"{telegram_module.get_local_ip()} - {platform.system()}"  # Set device info string with IP and OS
             telegram_module.RUNNING_CODE = os.path.basename(__file__)  # Set currently running script name
+            telegram_module.EXECUTION_ID = ensure_execution_id(config)  # Share the stable execution identity with outbound Telegram formatting
             if start_inbound_listener:  # Only the top-level controller should consume Telegram updates
                 TELEGRAM_BOT.start_inbound_listener()  # Start non-blocking configured-chat inbound delivery
         except Exception as e:
@@ -18161,6 +18164,7 @@ def log_resolved_configuration(config: dict) -> None:
             print(f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}[INFO] Dataset path override (CLI): {BackgroundColors.CYAN}{dataset_path_cli}{Style.RESET_ALL}")  # Log CLI dataset path override
         else:  # Dataset path is from config.yaml or default
             print(f"{BackgroundColors.GREEN}[INFO] Dataset path source: {BackgroundColors.CYAN}config.yaml (default){Style.RESET_ALL}")  # Log config-based dataset path
+        print(f"{BackgroundColors.GREEN}[INFO] Execution ID: {BackgroundColors.CYAN}{ensure_execution_id(config)}{Style.RESET_ALL}")  # Log the stable top-level execution identity.
         
         available_classifiers = ["Random Forest", "SVM", "XGBoost", "Logistic Regression", "KNN", "Nearest Centroid", "Gradient Boosting", "LightGBM", "MLP (Neural Net)", "FT-Transformer", "Tabular ResNet", "ResNet18", "AutoEncoder", "LSTM"]  # Mirror the classifier identities and order exposed by the model factory
         configured_classifiers = config.get("stacking", {}).get("enabled_classifiers", None)  # Read the optional classifier filter with model-factory fallback semantics
@@ -18278,12 +18282,14 @@ def build_telegram_pipeline_summary(config: Optional[dict], dataset_path: Option
         only_rules = tuple(stacking_cfg.get("compiled_only_combinations", ()))  # Read compiled allowlist rules for startup notification.
         only_source = stacking_cfg.get("only_combinations_source", "Default")  # Read resolved allowlist source for startup notification.
         auto_restart_on_oom = bool(stacking_cfg.get("auto_restart_on_oom", True))  # Read OOM restart toggle for startup notification.
+        execution_id = ensure_execution_id(config)  # Resolve the stable top-level execution identity for startup visibility.
 
         dataset_display = dataset_path if dataset_path else "config.yaml (default)"  # Resolve the effective dataset source for the consolidated notification
         resolved_mode = classification_mode or execution_cfg.get("execution_mode", "both")  # Resolve one authoritative execution mode label
         lines = [  # Assemble the complete startup configuration in display order
             f"Dataset: {dataset_display}",  # Report every resolved dataset path
             f"Dataset name: {dataset_name}" if dataset_name else None,  # Report every resolved dataset identity when available
+            f"Execution ID: {execution_id}",  # Report copyable top-level execution identity.
             f"Execution mode: {resolved_mode}",  # Report the authoritative classification mode once
             f"Experiment runs: {experiment_runs}",  # Report repeated-run count in the first Telegram summary
             f"Methods: Feature Selection: {'ON' if feature_selection_enabled else 'OFF'}, Hyperparameters: {'ON' if hyperparameters_enabled else 'OFF'}, Data Augmentation: {'ON' if augmentation_enabled else 'OFF'}, AutoML: {'ON' if automl_enabled else 'OFF'}, Stacking: {'ON' if stacking_enabled else 'OFF'}",  # Report all pipeline method toggles
@@ -18322,6 +18328,8 @@ def main(config=None):
     try:
         if config is None:  # If no config provided
             config = CONFIG  # Use global CONFIG
+        execution_id = ensure_execution_id(config)  # Preserve or create the one execution ID for this top-level run.
+        telegram_module.EXECUTION_ID = execution_id  # Make early Telegram exception formatting use the same ID after setup.
 
         print(
             f"{BackgroundColors.CLEAR_TERMINAL}{BackgroundColors.BOLD}{BackgroundColors.GREEN}Welcome to the {BackgroundColors.CYAN}Classifiers Stacking{BackgroundColors.GREEN} program!{Style.RESET_ALL}\n"
