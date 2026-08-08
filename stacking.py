@@ -202,6 +202,11 @@ CACHE_THREAD_LOCKS: dict = {}  # Stores process-local cache locks by normalized 
 CACHE_THREAD_LOCKS_GUARD = threading.Lock()  # Serializes process-local cache lock creation
 LSTM_SOURCE_FILE_COLUMN = "__stacking_lstm_source_file"  # Reserved nonnumeric source identity for verified LSTM windows.
 LSTM_ROW_ORDER_COLUMN = "__stacking_lstm_row_order"  # Reserved nonnumeric row chronology for verified LSTM windows.
+COOPERATIVE_CANCEL_CLASSIFIERS = {"XGBoost", "LightGBM", "Gradient Boosting", "FT-Transformer", "Tabular ResNet", "ResNet18", "AutoEncoder", "LSTM"}  # Classifiers with public training boundaries used for active Telegram skip.
+
+
+class RuntimeSkipRequested(Exception):
+    """Raised inside a worker when a Telegram skip wins before persistence."""
 
 
 # Functions Definitions:
@@ -467,7 +472,7 @@ def build_training_progress(feature_set: Optional[str], classifier_name: str, to
     return TrainingProgress(feature_set, classifier_name, calculate_execution_time, output_stream=sys.stdout, total_units=total_units, unit_label=unit_label, heartbeat=heartbeat, report_interval_seconds=interval_seconds, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio, eta_callback=eta_callback, resource_suffix_callback=resource_suffix_callback, estimated_total_seconds=estimated_total_seconds)  # Pass required progress and combination context explicitly.
 
 
-def fit_classifier_with_progress(model: Any, X_train: Any, y_train: Any, feature_set: Optional[str], classifier_name: str, config: Optional[dict] = None, fit_kwargs: Optional[dict] = None, hyperparameters_enabled: Optional[bool] = None, augmentation_ratio: Optional[float] = None, eta_callback: Optional[Callable[[str], None]] = None, estimated_total_seconds: Optional[float] = None) -> Any:  # Fit one estimator with safe progress reporting
+def fit_classifier_with_progress(model: Any, X_train: Any, y_train: Any, feature_set: Optional[str], classifier_name: str, config: Optional[dict] = None, fit_kwargs: Optional[dict] = None, hyperparameters_enabled: Optional[bool] = None, augmentation_ratio: Optional[float] = None, eta_callback: Optional[Callable[[str], None]] = None, estimated_total_seconds: Optional[float] = None, cancellation_checker: Optional[Callable[[], bool]] = None) -> Any:  # Fit one estimator with safe progress reporting
     """
     Fit one estimator with public training-unit callbacks or heartbeat reporting.
 
@@ -482,17 +487,27 @@ def fit_classifier_with_progress(model: Any, X_train: Any, y_train: Any, feature
     :param augmentation_ratio: Authoritative augmentation ratio, or None for original data.
     :param eta_callback: Optional callback receiving the first emitted nonfinal ETA label.
     :param estimated_total_seconds: Optional historical total duration for heartbeat-only ETA.
+    :param cancellation_checker: Optional callable returning True when this active fit should abort at a safe boundary.
     :return: The fitted estimator returned by its original fit method.
     """
 
     options = dict(fit_kwargs or {})  # Copy only the small fit-options mapping without copying training data.
     model_type = type(model)  # Require the exact installed estimator class before enabling genuine progress.
 
+    def raise_if_cancelled() -> None:
+        if callable(cancellation_checker) and cancellation_checker():
+            raise RuntimeSkipRequested(f"Runtime skip requested for active {classifier_name}")
+
     if model_type is XGBClassifier:  # Use XGBoost's public boosting callback for exact rounds.
         total_rounds = int(model.get_num_boosting_rounds())  # Read the public configured boosting-round total.
         progress = build_training_progress(feature_set, classifier_name, total_rounds, "Round", heartbeat=False, config=config, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio, eta_callback=eta_callback)  # Create contextual genuine XGBoost round reporter.
         existing_callbacks = model.get_params(deep=False).get("callbacks")  # Preserve the estimator's existing public callbacks exactly.
-        callback_list = [XGBoostProgressCallback(progress)] + list(existing_callbacks or [])  # Prepend the non-stopping progress callback while preserving existing callback order.
+        class CancellableXGBoostProgressCallback(XGBoostProgressCallback):
+            def after_iteration(self, model, epoch, evals_log):
+                raise_if_cancelled()
+                return super().after_iteration(model, epoch, evals_log)
+
+        callback_list = [CancellableXGBoostProgressCallback(progress)] + list(existing_callbacks or [])  # Prepend the non-stopping progress callback while preserving existing callback order.
         model.set_params(callbacks=callback_list)  # Install callbacks through XGBoost's public estimator parameter API.
         try:  # Restore the original callback parameter after every fit outcome.
             with progress:  # Scope callback timing to the original blocking fit.
@@ -513,6 +528,7 @@ def fit_classifier_with_progress(model: Any, X_train: Any, y_train: Any, feature
             :return: None.
             """
 
+            raise_if_cancelled()
             progress.report_unit(environment.iteration - environment.begin_iteration + 1)  # Convert the public iteration index into completed iterations.
 
         report_lightgbm_iteration.order = 0  # Run non-mutating progress before callbacks that may stop training.
@@ -537,6 +553,7 @@ def fit_classifier_with_progress(model: Any, X_train: Any, y_train: Any, feature
             """
 
             stop_training = bool(existing_monitor(stage_index, estimator, local_variables)) if callable(existing_monitor) else False  # Preserve an existing monitor's stop decision.
+            raise_if_cancelled()
             progress.report_unit(stage_index + 1)  # Convert the zero-based monitor index into completed stages.
             return stop_training  # Preserve existing early-stop behavior without adding any stop condition.
 
@@ -548,7 +565,11 @@ def fit_classifier_with_progress(model: Any, X_train: Any, y_train: Any, feature
         total_epochs = int(model.get_params(deep=False).get("epochs", 1))  # Read the configured neural epoch total.
         progress = build_training_progress(feature_set, classifier_name, total_epochs, "Epoch", heartbeat=True, config=config, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio, eta_callback=eta_callback)  # Create contextual genuine neural epoch reporter with heartbeat ETA.
         existing_progress_callback = getattr(model, "progress_callback", None)  # Preserve any caller-installed callback.
-        model.progress_callback = progress.report_unit  # Attach only the temporary reporting callback.
+        def report_neural_epoch(epoch: int) -> None:
+            raise_if_cancelled()
+            progress.report_unit(epoch)
+
+        model.progress_callback = report_neural_epoch  # Attach only the temporary reporting callback.
         try:  # Restore callback state after every fit outcome.
             with progress:  # Scope callback timing to the original blocking fit.
                 return model.fit(X_train, y_train, **options)  # Execute one unchanged neural fit call.
@@ -7541,7 +7562,7 @@ def load_existing_model_if_available(model_name, dataset_file, dataset_name, fea
             artifact_lock.close()  # Closing the descriptor releases flock automatically
 
 
-def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, y_test, dataset_file=None, scaler=None, feature_names=None, feature_set=None, config=None, phase_metadata=None, training_ram_stats=None, fit_model=True, notification_context=None, hyperparameters_enabled: Optional[bool] = None, augmentation_ratio: Optional[float] = None, precomputed_predictions: Optional[np.ndarray] = None, precomputed_prediction_seconds: float = 0.0, training_eta_callback: Optional[Callable[[str], None]] = None, estimated_training_seconds: Optional[float] = None):  # Evaluate one classifier with watcher metadata, RAM statistics, and optional bounded predictions
+def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, y_test, dataset_file=None, scaler=None, feature_names=None, feature_set=None, config=None, phase_metadata=None, training_ram_stats=None, fit_model=True, notification_context=None, hyperparameters_enabled: Optional[bool] = None, augmentation_ratio: Optional[float] = None, precomputed_predictions: Optional[np.ndarray] = None, precomputed_prediction_seconds: float = 0.0, training_eta_callback: Optional[Callable[[str], None]] = None, estimated_training_seconds: Optional[float] = None, cancellation_checker: Optional[Callable[[], bool]] = None):  # Evaluate one classifier with watcher metadata, RAM statistics, optional bounded predictions, and cooperative cancellation
     """
     Trains an individual classifier and evaluates its performance on the test set.
 
@@ -7566,6 +7587,7 @@ def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, 
     :param precomputed_prediction_seconds: Time already spent producing bounded predictions.
     :param training_eta_callback: Optional callback receiving the first emitted nonfinal training ETA.
     :param estimated_training_seconds: Optional historical total training duration for heartbeat-only ETA.
+    :param cancellation_checker: Optional callable returning True when this active evaluation should abort before persistence.
     :return: Metrics tuple (acc, prec, rec, f1, fpr, fnr, elapsed_time)
     """
     
@@ -7610,7 +7632,7 @@ def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, 
             sys.stdout.flush()  # Flush stdout before model training to ensure logs are visible under nohup
             training_ram_monitor = start_training_ram_monitor(TRAINING_RAM_SAMPLE_INTERVAL_SECONDS)  # Start RAM monitoring immediately before classifier fit.
             try:  # Ensure RAM monitoring stops even when classifier fit fails.
-                fit_classifier_with_progress(model, X_train, y_train, feature_set, model_name, config=config, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio, eta_callback=training_eta_callback, estimated_total_seconds=estimated_training_seconds)  # Fit once with contextual public callbacks or heartbeat reporting.
+                fit_classifier_with_progress(model, X_train, y_train, feature_set, model_name, config=config, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio, eta_callback=training_eta_callback, estimated_total_seconds=estimated_training_seconds, cancellation_checker=cancellation_checker)  # Fit once with contextual public callbacks or heartbeat reporting.
             finally:  # Stop RAM monitoring immediately after classifier fit exits.
                 classifier_ram_stats = stop_training_ram_monitor(training_ram_monitor)  # Summarize RAM usage across this classifier fit.
                 store_training_ram_stats(training_ram_stats, classifier_ram_stats)  # Associate RAM statistics with this classifier only.
@@ -7626,9 +7648,13 @@ def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, 
             store_training_ram_stats(training_ram_stats, stop_training_ram_monitor(None))  # Preserve RAM-stat shape without starting a training monitor.
             log_training_phase(feature_set, model_name, "Training", "Skipped (persisted model)", hyperparameters_enabled, augmentation_ratio)  # Record contextual loaded-model evaluation without fit.
 
+        if callable(cancellation_checker) and cancellation_checker():
+            raise RuntimeSkipRequested(f"Runtime skip requested before prediction for active {model_name}")
         log_training_phase(feature_set, model_name, "Prediction", "Started", hyperparameters_enabled, augmentation_ratio)  # Mark contextual prediction as distinct from model training.
         y_pred = model.predict(X_test) if precomputed_predictions is None else np.asarray(precomputed_predictions)  # Predict normally or reuse bounded augmented-data predictions
         log_training_phase(feature_set, model_name, "Prediction", "Completed", hyperparameters_enabled, augmentation_ratio)  # Mark contextual prediction completion before metric computation.
+        if callable(cancellation_checker) and cancellation_checker():
+            raise RuntimeSkipRequested(f"Runtime skip requested after prediction for active {model_name}")
 
         elapsed_time = time.time() - start_time + float(precomputed_prediction_seconds)  # Include bounded prediction time already completed by the augmented caller
 
@@ -7640,6 +7666,8 @@ def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, 
 
         fpr, fnr = compute_fpr_fnr(y_test, y_pred)  # Compute False Positive and False Negative rates
         log_training_phase(feature_set, model_name, "Metrics", "Completed", hyperparameters_enabled, augmentation_ratio)  # Mark contextual metrics completion before reporting and persistence.
+        if callable(cancellation_checker) and cancellation_checker():
+            raise RuntimeSkipRequested(f"Runtime skip requested after metrics for active {model_name}")
 
         human_time = calculate_execution_time(elapsed_time)  # Convert elapsed duration to human-readable string using helper
         total_seconds = int(round(elapsed_time))  # Reuse elapsed_time as total seconds for reporting
@@ -7661,6 +7689,13 @@ def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, 
         send_telegram_message(TELEGRAM_BOT, telegram_msg)  # Send the provenance-aware individual-classifier result
 
         return (acc, prec, rec, f1, fpr, fnr, int(round(elapsed_time)))  # Return the metrics tuple
+    except RuntimeSkipRequested:
+        try:
+            model = None
+            gc.collect()
+        except Exception:
+            pass
+        raise
     except MemoryError as e:  # Handle classifier memory errors with a diagnostic phase
         error_metadata = dict(phase_metadata or {})  # Copy watcher metadata for memory error
         error_metadata.update({"dataset_identity": os.path.basename(str(dataset_file)) if dataset_file is not None else error_metadata.get("dataset_identity"), "classifier_name": model_name, "train_sample_count": len(y_train) if y_train is not None else error_metadata.get("train_sample_count"), "test_sample_count": len(y_test) if y_test is not None else error_metadata.get("test_sample_count"), "feature_count": classifier_feature_count(X_train, error_metadata.get("feature_count")), "n_jobs": get_classifier_n_jobs(model), "event_outcome": str(e)})  # Build memory error watcher metadata
@@ -16398,9 +16433,12 @@ def evaluate_feature_process_original_task(task: dict, process_payload: dict, re
     phase_metadata = {"dataset_identity": os.path.basename(str(process_payload["file"])), "dataset_source": process_payload["file"], "experiment_run": task["experiment_run"], "execution_mode": process_payload["execution_mode"], "attack_scope": process_payload["attack_types_combined"], "data_source": task["data_source_label"], "experiment_mode": task["experiment_mode"], "augmentation_ratio": task["augmentation_ratio"], "feature_set_name": task["feature_set"], "hyperparameter_mode": "Optimized Hyperparameters" if task["hyperparameters_enabled"] else "Default Hyperparameters", "classifier_name": task["classifier_name"], "train_sample_count": len(model_y_train), "test_sample_count": len(model_y_test), "feature_count": task["expected_n_features"], "n_jobs": get_classifier_n_jobs(active_model), "combination_index": task["global_id"], "total_combinations": task["total_combinations"], "sequence_metadata": sequence_metadata}  # Build compact existing watcher metadata without matrices
     training_ram_stats = {}  # Hold only this classifier's bounded RAM statistics
     training_eta_callback = lambda eta_label: publish_feature_process_training_eta_event(task, process_payload, status_queue, eta_label)  # Publish the first emitted factual progress ETA through the coordinator.
+    cancellation_checker = lambda: feature_process_runtime_skip_requested(task, process_payload)  # Check Telegram active-skip flag only at safe boundaries.
     log_feature_process_combination(task, status_state, "Fit started")  # Announce the blocking fit before existing heartbeat or unit progress begins
     estimated_training_seconds = task.get("pending_elapsed_time_estimate_s") or estimate_feature_process_task_elapsed_seconds(task, cache_dict, process_payload)  # Use runtime-sort estimate or compute one from cache without reordering.
-    metrics = evaluate_individual_classifier(active_model, task["classifier_name"], model_X_train, model_y_train, model_X_test, model_y_test, process_payload["file"], resources["scaler"], task["expected_feature_names"], artifact_feature_set, config=process_payload["config"], phase_metadata=phase_metadata, training_ram_stats=training_ram_stats, fit_model=True, notification_context=build_telegram_combination_header(task["feature_set"], task["classifier_name"], None, task["hyperparameters_enabled"], experiment_run=task["experiment_run"]), hyperparameters_enabled=task["hyperparameters_enabled"], augmentation_ratio=task["augmentation_ratio"], training_eta_callback=training_eta_callback, estimated_training_seconds=estimated_training_seconds)  # Reuse unchanged evaluation with serialized authoritative combination metadata.
+    metrics = evaluate_individual_classifier(active_model, task["classifier_name"], model_X_train, model_y_train, model_X_test, model_y_test, process_payload["file"], resources["scaler"], task["expected_feature_names"], artifact_feature_set, config=process_payload["config"], phase_metadata=phase_metadata, training_ram_stats=training_ram_stats, fit_model=True, notification_context=build_telegram_combination_header(task["feature_set"], task["classifier_name"], None, task["hyperparameters_enabled"], experiment_run=task["experiment_run"]), hyperparameters_enabled=task["hyperparameters_enabled"], augmentation_ratio=task["augmentation_ratio"], training_eta_callback=training_eta_callback, estimated_training_seconds=estimated_training_seconds, cancellation_checker=cancellation_checker)  # Reuse unchanged evaluation with serialized authoritative combination metadata.
+    if cancellation_checker():
+        raise RuntimeSkipRequested(f"Runtime skip requested before persistence for active {task['classifier_name']}")
     log_feature_process_combination(task, status_state, "Prediction and metrics completed")  # Announce completion of existing prediction and metric phases
     result_entry = build_classifier_result_entry(active_model.__class__.__name__, process_payload["file"], process_payload["execution_mode"], process_payload["attack_types_combined"], task["feature_set"], "Individual", task["classifier_name"], task["data_source_label"], task["experiment_id"], task["experiment_mode"], None, task["expected_n_features"], len(model_y_train), len(model_y_test), metrics, task["expected_feature_names"], hyperparams_map=process_payload["optimized_params"] if task["hyperparameters_enabled"] else {}, hyperparameters_enabled=task["hyperparameters_enabled"], effective_hyperparameters=serialize_effective_estimator_parameters(active_model), experiment_run=task["experiment_run"])  # Build the run-scoped cache and export result payload
     log_feature_process_combination(task, status_state, "Persistence started")  # Announce the atomic result transaction
@@ -16441,6 +16479,8 @@ def evaluate_feature_process_augmented_task(task: dict, process_payload: dict, r
     log_feature_process_combination(task, status_state, f"Bounded transformation and prediction started (Batch Rows={prediction_rows})")  # Announce the memory-bounded inference phase
     prediction_started_at = time.time()  # Measure the complete bounded transform and prediction phase
     for start in range(0, len(y_augmented), prediction_rows):  # Transform and predict one bounded row batch at a time
+        if feature_process_runtime_skip_requested(task, process_payload):
+            raise RuntimeSkipRequested(f"Runtime skip requested during augmented prediction for active {task['classifier_name']}")
         end = min(start + prediction_rows, len(y_augmented))  # Resolve the current bounded batch end
         scaled_batch = np.asarray(artifact_bundle["scaler"].transform(ratio_data["X_raw"][start:end]))  # Scale only the current raw memmap slice
         if artifact_bundle["transformer"] is not None:  # Apply the persisted PCA transformer to the current batch
@@ -16451,11 +16491,16 @@ def evaluate_feature_process_augmented_task(task: dict, process_payload: dict, r
             model_batch = scaled_batch[:, model_feature_indices]  # Materialize only selected columns for the current bounded batch
         y_predicted[start:end] = np.asarray(loaded_model.predict(model_batch), dtype=np.int64)  # Persist compact predictions and release batch features immediately
         del scaled_batch, model_batch  # Release current batch matrices before the next transformation
+    if feature_process_runtime_skip_requested(task, process_payload):
+        raise RuntimeSkipRequested(f"Runtime skip requested before augmented persistence for active {task['classifier_name']}")
     prediction_seconds = time.time() - prediction_started_at  # Preserve inference duration for the established execution-time metric
     log_feature_process_combination(task, status_state, "Bounded transformation and prediction completed")  # Confirm complete bounded inference before metrics
     training_ram_stats = {}  # Hold the established loaded-model evaluation RAM record shape
     log_feature_process_combination(task, status_state, "Metrics started")  # Announce persisted-model metrics after bounded prediction
-    metrics = evaluate_individual_classifier(loaded_model, task["classifier_name"], None, None, None, y_augmented, process_payload["file"], artifact_bundle["scaler"], task["expected_feature_names"], artifact_feature_set, config=process_payload["config"], training_ram_stats=training_ram_stats, fit_model=False, notification_context=build_telegram_combination_header(task["feature_set"], task["classifier_name"], task["augmentation_ratio"], task["hyperparameters_enabled"], experiment_run=task["experiment_run"]), hyperparameters_enabled=task["hyperparameters_enabled"], augmentation_ratio=task["augmentation_ratio"], precomputed_predictions=y_predicted, precomputed_prediction_seconds=prediction_seconds)  # Reuse unchanged metrics and reporting without reconstructing a complete transformed matrix
+    cancellation_checker = lambda: feature_process_runtime_skip_requested(task, process_payload)  # Check Telegram active-skip flag before metrics and persistence.
+    metrics = evaluate_individual_classifier(loaded_model, task["classifier_name"], None, None, None, y_augmented, process_payload["file"], artifact_bundle["scaler"], task["expected_feature_names"], artifact_feature_set, config=process_payload["config"], training_ram_stats=training_ram_stats, fit_model=False, notification_context=build_telegram_combination_header(task["feature_set"], task["classifier_name"], task["augmentation_ratio"], task["hyperparameters_enabled"], experiment_run=task["experiment_run"]), hyperparameters_enabled=task["hyperparameters_enabled"], augmentation_ratio=task["augmentation_ratio"], precomputed_predictions=y_predicted, precomputed_prediction_seconds=prediction_seconds, cancellation_checker=cancellation_checker)  # Reuse unchanged metrics and reporting without reconstructing a complete transformed matrix
+    if cancellation_checker():
+        raise RuntimeSkipRequested(f"Runtime skip requested before augmented persistence for active {task['classifier_name']}")
     log_feature_process_combination(task, status_state, "Prediction and metrics completed")  # Confirm existing loaded-model phases completed
     result_entry = build_classifier_result_entry(loaded_model.__class__.__name__, process_payload["file"], process_payload["execution_mode"], process_payload["attack_types_combined"], task["feature_set"], "Individual", task["classifier_name"], task["data_source_label"], task["experiment_id"], task["experiment_mode"], task["augmentation_ratio"], task["expected_n_features"], task["expected_n_samples_train"], len(y_augmented), metrics, task["expected_feature_names"], hyperparams_map=process_payload["optimized_params"] if task["hyperparameters_enabled"] else {}, hyperparameters_enabled=task["hyperparameters_enabled"], effective_hyperparameters=serialize_effective_estimator_parameters(loaded_model), experiment_run=task["experiment_run"])  # Build the run-scoped augmented-testing result payload
     log_feature_process_combination(task, status_state, "Persistence started")  # Announce the atomic augmented result transaction
@@ -16608,6 +16653,14 @@ def feature_process_runtime_skip_requested(task: dict, process_payload: dict) ->
         return bool(flags[global_index])
 
 
+def feature_process_active_cancel_supported(task: dict) -> bool:
+    """Return whether active skip can safely abort this task at public boundaries."""
+
+    if task.get("augmentation_ratio") is not None:
+        return True
+    return task.get("classifier_name") in COOPERATIVE_CANCEL_CLASSIFIERS
+
+
 def resolve_runtime_skip_command_target(command: Any, execution_id: str) -> Tuple[Optional[dict], str]:
     """Resolve one parsed skip command against the current execution registry."""
 
@@ -16624,7 +16677,7 @@ def resolve_runtime_skip_command_target(command: Any, execution_id: str) -> Tupl
     return matches[0], "matched"
 
 
-def handle_feature_process_runtime_skip_message(message: dict, execution_id: str, skip_state: dict) -> None:
+def handle_feature_process_runtime_skip_message(message: dict, execution_id: str, skip_state: dict, active_cancel_global_ids: Optional[set] = None) -> None:
     """Handle one configured-chat Telegram skip command for pending combinations only."""
 
     text = str(message.get("text", "")).strip()
@@ -16643,14 +16696,29 @@ def handle_feature_process_runtime_skip_message(message: dict, execution_id: str
             return
         global_id = int(target["global_combination_id"])
         lifecycle_state = target.get("lifecycle_state")
+        if active_cancel_global_ids is not None and global_id in active_cancel_global_ids:
+            send_telegram_message(TELEGRAM_BOT, format_skip_ack("Cancellation in progress", execution_id, global_id))
+            return
         if lifecycle_state == REGISTRY_SKIPPED:
             send_telegram_message(TELEGRAM_BOT, format_skip_ack("Already skipped", execution_id, global_id))
             return
         if lifecycle_state == REGISTRY_COMPLETED:
             send_telegram_message(TELEGRAM_BOT, format_skip_ack("Already completed", execution_id, global_id))
             return
+        if lifecycle_state in {REGISTRY_STARTING, REGISTRY_ACTIVE}:
+            if lifecycle_state == REGISTRY_ACTIVE and not feature_process_active_cancel_supported(target):
+                send_telegram_message(TELEGRAM_BOT, format_skip_ack("Unsupported immediate cancellation", execution_id, global_id, detail="Execution continuing"))
+                return
+            if not mark_feature_process_runtime_skip(skip_state, global_id):
+                send_telegram_message(TELEGRAM_BOT, format_skip_ack("Internal cancellation failure", execution_id, global_id, detail="Execution continuing"))
+                return
+            if active_cancel_global_ids is not None:
+                active_cancel_global_ids.add(global_id)
+            RUNTIME_COMBINATION_REGISTRY.update_state(execution_id, global_id, REGISTRY_SKIPPED, worker_pid=target.get("worker_pid"), last_event="telegram_active_cancel_requested")
+            send_telegram_message(TELEGRAM_BOT, format_skip_ack("Cancellation accepted", execution_id, global_id, detail="Cancellation in progress"))
+            return
         if lifecycle_state != "pending":
-            send_telegram_message(TELEGRAM_BOT, format_skip_ack("Active combination not cancelled; active cancellation is not enabled", execution_id, global_id))
+            send_telegram_message(TELEGRAM_BOT, format_skip_ack("Combination is not pending or active", execution_id, global_id, detail="Execution continuing"))
             return
         if not mark_feature_process_runtime_skip(skip_state, global_id):
             send_telegram_message(TELEGRAM_BOT, format_skip_ack("Unable to mark pending skip", execution_id, global_id))
@@ -16661,13 +16729,13 @@ def handle_feature_process_runtime_skip_message(message: dict, execution_id: str
         send_telegram_message(TELEGRAM_BOT, format_skip_ack("Invalid command", execution_id, detail=str(error)))
 
 
-def drain_feature_process_runtime_skip_messages(execution_id: str, skip_state: dict) -> None:
+def drain_feature_process_runtime_skip_messages(execution_id: str, skip_state: dict, active_cancel_global_ids: Optional[set] = None) -> None:
     """Drain validated inbound Telegram messages into pending skip flags."""
 
     if TELEGRAM_BOT is None:
         return
     for message in TELEGRAM_BOT.drain_inbound_messages():
-        handle_feature_process_runtime_skip_message(message, execution_id, skip_state)
+        handle_feature_process_runtime_skip_message(message, execution_id, skip_state, active_cancel_global_ids)
 
 
 def process_feature_process_task(task: dict, process_payload: dict, model_maps: dict, resource_state: dict, status_queue: Any, status_state: dict) -> None:  # Process one matrix-free task under a complete combination reservation
@@ -16719,6 +16787,8 @@ def process_feature_process_task(task: dict, process_payload: dict, model_maps: 
         if task["augmentation_ratio"] is None:  # Load only original resources required for a pending fit
             publish_feature_process_training_start_event(task, process_payload, status_queue)  # Publish one non-cached original-data start event before data loading or fit begins.
             await_feature_process_notification_acknowledgement(task, process_payload)  # Let the coordinator send or isolate failure before expensive fitting starts.
+            if feature_process_runtime_skip_requested(task, process_payload):  # Honor active skip accepted after training-start notification but before data loading
+                raise RuntimeSkipRequested(f"Runtime skip requested before fit for active {task['classifier_name']}")
             if resource_state["ratio_data"] is not None:  # Release the previous augmentation ratio before returning to original fitting
                 log_feature_process_combination(task, status_state, f"Augmentation ratio {resource_state['active_ratio']} release started")  # Announce exact previous ratio closure
                 cleanup_feature_process_ratio_data(resource_state["ratio_data"])  # Drop the previous sampled augmented rows
@@ -16757,6 +16827,13 @@ def process_feature_process_task(task: dict, process_payload: dict, model_maps: 
         del result_entry  # Drop the completed result record after durable cache persistence
         gc.collect()  # Reclaim estimator, prediction, probability, metric, and temporary array memory
         log_feature_process_combination(task, status_state, "Combination cleanup completed")  # Confirm bounded cleanup before next task
+    except RuntimeSkipRequested as error:  # Convert cooperative active cancellation into a skipped terminal state
+        if not task_finished:  # Prevent completed or cached work from being recounted
+            transition_feature_process_status(status_state, task, "skipped_running")  # Count active cancellation without success or failure
+            task_finished = True  # Prevent failure accounting during propagation
+            log_feature_process_combination(task, status_state, f"Combination skipped by Telegram control: {error}")  # Persist exact cancellation reason in logs
+            status_queue.put({"status": "progress", "feature_set": process_payload["feature_set"], "global_id": task["global_id"], "event": "skipped", "pid": os.getpid(), **build_feature_process_task_status_fields(task)})  # Publish skipped terminal event without result metadata
+        return  # Continue this worker's queue after safe cooperative cancellation
     except BaseException as error:  # Convert one active task exception into an exact failed transition
         if not task_finished:  # Prevent completed or cached work from being counted as failed
             transition_feature_process_status(status_state, task, "failed")  # Count failure without increasing completed
@@ -16999,7 +17076,8 @@ def execute_feature_set_processes(pending_by_feature: dict, process_payload: dic
     for task in tasks:  # Mark cache-recovered tasks before accepting Telegram skip commands
         if task.get("global_id") in cached_results:
             RUNTIME_COMBINATION_REGISTRY.update_state(execution_id, task.get("global_id"), REGISTRY_COMPLETED, last_event="cached")  # Cache hits are not pending runtime work
-    drain_feature_process_runtime_skip_messages(execution_id, runtime_skip_state)  # Apply already-received pending skip commands before worker startup
+    active_cancel_global_ids = set()  # Track accepted active cancellations until the worker reports skipped
+    drain_feature_process_runtime_skip_messages(execution_id, runtime_skip_state, active_cancel_global_ids)  # Apply already-received pending skip commands before worker startup
     notified_global_ids = set()  # Track one coordinator-owned result notification attempt per combination
     notified_training_start_global_ids = set()  # Track one coordinator-owned training-start notification attempt per non-cached combination
     notified_training_eta_global_ids = set()  # Track one coordinator-owned training-ETA notification attempt per non-cached combination
@@ -17052,7 +17130,7 @@ def execute_feature_set_processes(pending_by_feature: dict, process_payload: dic
         print(f"[CONCURRENCY] Started {len(process_records)} feature workers with start method={FEATURE_PROCESS_START_METHOD} and workers={process_payload['config']['evaluation']['feature_set_workers']}")  # Log feature-worker count without claiming total OS child count
         log_feature_process_tree(process_records)  # Distinguish feature workers from watcher, resource tracker, and other auxiliary children
         while len(terminal_features) < len(process_records) and failure is None:  # Monitor until every worker completes or one failure surfaces
-            drain_feature_process_runtime_skip_messages(execution_id, runtime_skip_state)  # Apply configured-chat skip commands without blocking status monitoring
+            drain_feature_process_runtime_skip_messages(execution_id, runtime_skip_state, active_cancel_global_ids)  # Apply configured-chat skip commands without blocking status monitoring
             try:  # Receive one small child lifecycle record with bounded coordinator polling
                 status = status_queue.get(timeout=0.25)  # Poll without blocking deterministic child-death detection
             except queue_module.Empty:  # Inspect child exit codes when no lifecycle record arrives
@@ -17103,6 +17181,9 @@ def execute_feature_set_processes(pending_by_feature: dict, process_payload: dic
                 print(f"[COORDINATOR STATUS] Feature Set={feature_set_name} | Global ID={status.get('global_id')} | Event={status.get('event')} | Global={progress_snapshot['global']} | Feature={feature_snapshot}")  # Log dynamic global and feature-local runtime state
                 if status.get("event") != "skipped":  # Skipped work has no persisted result to notify or acknowledge
                     handle_feature_process_result_notification(status, tasks_by_global_id, len(tasks), notified_global_ids, notification_acknowledgements)  # Send only after persisted status no longer identifies this combination as running
+                elif status.get("global_id") in active_cancel_global_ids:
+                    send_telegram_message(TELEGRAM_BOT, format_skip_ack("Successfully aborted", execution_id, status.get("global_id"), detail="Execution continuing"))
+                    active_cancel_global_ids.discard(status.get("global_id"))
         if failure is not None:  # Stop sibling work after preserving already persisted results from the failed grid
             empty_notification_polls = 0  # Bound coordinator shutdown draining after the first surfaced worker failure
             while empty_notification_polls < 2:  # Allow already-published persisted-result events to reach the coordinator before termination
