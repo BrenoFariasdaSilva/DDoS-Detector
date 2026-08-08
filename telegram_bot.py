@@ -62,9 +62,11 @@ import atexit  # For playing a sound when the program finishes
 import asyncio  # For asynchronous operations
 import os  # For environment variables and file operations
 import platform  # For getting the operating system name
+import queue  # For thread-safe inbound Telegram message delivery
 import re  # For stripping ANSI sequences
 import socket  # For getting the local IP address
 import sys  # For system-level hooks and excepthook manipulation
+import threading  # For non-blocking inbound Telegram polling
 import traceback  # For formatting and printing exception tracebacks
 from colorama import Style  # For coloring the terminal
 from dotenv import load_dotenv  # For loading .env file
@@ -118,6 +120,16 @@ class TelegramBot:
         """
 
         env_path = env_file if env_file else ".env"  # Determine the .env file path
+        self.TELEGRAM_BOT_TOKEN = None  # Default token state when configuration is missing
+        self.CHAT_ID = None  # Default chat state when configuration is missing
+        self.bot = None  # Default bot state before successful initialization
+        self.inbound_messages = queue.Queue()  # Store validated inbound messages for application-owned consumers
+        self._inbound_listener_thread = None  # Holds the single listener thread owned by this bot instance
+        self._inbound_listener_stop_event = threading.Event()  # Signals the listener loop to stop
+        self._inbound_listener_lock = threading.Lock()  # Prevents duplicate listener startup in one process
+        self._inbound_listener_callback = None  # Optional application callback for validated inbound messages
+        self._inbound_listener_owner_pid = None  # Tracks the process that owns the active listener
+        self._last_inbound_update_id = None  # Deduplicates repeated Telegram API responses
 
         if not verify_filepath_exists(env_path):  # Verify if the .env file exists
             print(
@@ -257,6 +269,201 @@ class TelegramBot:
             return  # Exit the function
 
         await self.run_bot(messages, chat_id)  # Run the bot to send messages
+
+    def start_inbound_listener(self, callback=None, poll_timeout_seconds=10, retry_delay_seconds=5):
+        """
+        Start one non-blocking Telegram getUpdates listener for configured chat text messages.
+
+        :param callback: Optional callable receiving one validated inbound message dictionary
+        :param poll_timeout_seconds: Telegram long-poll timeout in seconds
+        :param retry_delay_seconds: Delay after temporary Telegram/network failures
+        :return: True if a listener is running, False otherwise
+        """
+
+        if not self.TELEGRAM_BOT_TOKEN or not self.CHAT_ID or self.bot is None:  # Require the same configured bot used by outbound messages
+            return False  # Cannot listen without configured Telegram credentials
+        with self._inbound_listener_lock:  # Serialize startup so one process cannot create duplicate pollers
+            if self._inbound_listener_thread is not None and self._inbound_listener_thread.is_alive():  # Listener already active
+                return True  # Report the existing listener
+            self._inbound_listener_callback = callback  # Store application delivery callback
+            self._inbound_listener_stop_event.clear()  # Reset stop signal before starting
+            self._inbound_listener_owner_pid = os.getpid()  # Own listener in the creating process only
+            self._inbound_listener_thread = threading.Thread(
+                target=self._run_inbound_listener,
+                args=(poll_timeout_seconds, retry_delay_seconds),
+                name="telegram-inbound-listener",
+                daemon=True,
+            )  # Create one daemon thread so experiment shutdown cannot be blocked forever by network I/O
+            self._inbound_listener_thread.start()  # Start polling without blocking the experiment
+            return True  # Report that the listener is active
+
+    def stop_inbound_listener(self, timeout_seconds=12):
+        """
+        Stop the inbound Telegram listener owned by this process.
+
+        :param timeout_seconds: Maximum join time for the listener thread
+        :return: None
+        """
+
+        with self._inbound_listener_lock:  # Serialize shutdown with startup
+            thread = self._inbound_listener_thread  # Read current listener thread
+            if thread is None:  # No listener to stop
+                return  # Nothing to do
+            if self._inbound_listener_owner_pid != os.getpid():  # Do not stop a listener owned by another process
+                return  # Preserve process ownership boundary
+            self._inbound_listener_stop_event.set()  # Ask polling loop to stop after current request
+        if thread is not threading.current_thread():  # Avoid joining the current listener thread
+            thread.join(timeout_seconds)  # Wait for bounded long-poll shutdown
+        with self._inbound_listener_lock:  # Clear stopped thread state
+            if self._inbound_listener_thread is thread and not thread.is_alive():  # Clear only the stopped listener
+                self._inbound_listener_thread = None  # Mark listener stopped
+                self._inbound_listener_owner_pid = None  # Clear owner identity
+
+    def get_inbound_message(self, timeout=None):
+        """
+        Read one validated inbound Telegram message from the listener queue.
+
+        :param timeout: Optional queue timeout in seconds, None blocks until one message is available
+        :return: Message dictionary, or None when no message is available before timeout
+        """
+
+        try:  # Read without exposing queue exceptions to callers
+            if timeout is None:  # Blocking read
+                return self.inbound_messages.get()  # Return one validated inbound message
+            return self.inbound_messages.get(timeout=timeout)  # Return one message within timeout
+        except queue.Empty:  # No message available before timeout
+            return None  # Preserve narrow, simple consumer API
+
+    def drain_inbound_messages(self):
+        """
+        Return all currently queued validated inbound Telegram messages.
+
+        :return: List of message dictionaries
+        """
+
+        messages = []  # Accumulate currently queued messages
+        while True:  # Drain without blocking
+            try:  # Read one queued message
+                messages.append(self.inbound_messages.get_nowait())  # Add message to result list
+            except queue.Empty:  # Queue drained
+                return messages  # Return all available messages
+
+    def _run_inbound_listener(self, poll_timeout_seconds, retry_delay_seconds):
+        """
+        Run the async Telegram polling loop inside the listener thread.
+
+        :param poll_timeout_seconds: Telegram long-poll timeout in seconds
+        :param retry_delay_seconds: Delay after temporary Telegram/network failures
+        :return: None
+        """
+
+        try:  # Keep listener failures isolated from experiments
+            asyncio.run(self._poll_inbound_messages(poll_timeout_seconds, retry_delay_seconds))  # Run async getUpdates loop in this thread
+        except Exception as e:  # Listener thread must never crash the experiment
+            print(f"{BackgroundColors.YELLOW}Telegram inbound listener stopped: {e}{Style.RESET_ALL}")  # Report listener failure without token data
+
+    async def _poll_inbound_messages(self, poll_timeout_seconds, retry_delay_seconds):
+        """
+        Poll Telegram updates, validate configured chat, and deliver text messages.
+
+        :param poll_timeout_seconds: Telegram long-poll timeout in seconds
+        :param retry_delay_seconds: Delay after temporary Telegram/network failures
+        :return: None
+        """
+
+        polling_bot = Bot(token=self.TELEGRAM_BOT_TOKEN)  # Use a separate bot instance so outbound sends keep their existing context behavior
+        safe_poll_timeout = max(1, int(poll_timeout_seconds))  # Avoid tight polling loops
+        safe_retry_delay = max(1, int(retry_delay_seconds))  # Avoid tight retry loops on network failures
+        async with polling_bot:  # Initialize and close the polling bot in this listener thread
+            discard_ok, update_offset = await self._discard_pending_inbound_updates(polling_bot)  # Avoid replaying historical startup backlog
+            while not discard_ok and not self._inbound_listener_stop_event.is_set():  # Never process backlog if startup discard failed
+                await asyncio.sleep(safe_retry_delay)  # Back off before retrying startup discard
+                discard_ok, update_offset = await self._discard_pending_inbound_updates(polling_bot)  # Retry until backlog state is known
+            while not self._inbound_listener_stop_event.is_set():  # Continue until owner asks for shutdown
+                try:  # Isolate every Telegram API poll
+                    updates = await polling_bot.get_updates(offset=update_offset, timeout=safe_poll_timeout, allowed_updates=["message"])  # Long-poll text message updates
+                except Exception as e:  # Temporary Telegram/network failure
+                    print(f"{BackgroundColors.YELLOW}Telegram inbound polling failed: {e}{Style.RESET_ALL}")  # Report without token data
+                    await asyncio.sleep(safe_retry_delay)  # Back off before retrying
+                    continue  # Keep experiments unaffected
+                for update in updates:  # Process each returned update once
+                    update_id = getattr(update, "update_id", None)  # Read Telegram update identity
+                    if update_id is not None and self._last_inbound_update_id is not None and int(update_id) <= int(self._last_inbound_update_id):  # Skip duplicate API responses
+                        continue  # Do not deliver duplicate update
+                    self._last_inbound_update_id = update_id  # Mark update consumed even if chat is unrelated
+                    if update_id is not None:  # Advance offset past every seen update, including ignored chats
+                        update_offset = int(update_id) + 1  # Prevent repeated processing
+                    inbound_message = self._build_inbound_message(update)  # Validate chat and text content
+                    if inbound_message is None:  # Ignore unrelated chats or non-text messages
+                        continue  # Move to next update
+                    self._deliver_inbound_message(inbound_message)  # Expose validated message without interpreting it
+
+    async def _discard_pending_inbound_updates(self, polling_bot):
+        """
+        Drop historical pending updates on listener startup and return the next offset.
+
+        :param polling_bot: Telegram Bot instance used for polling
+        :return: Tuple of discard success flag and update offset for the next polling request
+        """
+
+        try:  # Best-effort backlog discard before normal polling
+            updates = await polling_bot.get_updates(offset=-1, limit=1, timeout=0, allowed_updates=["message"])  # Ask Telegram for only the newest queued update
+        except Exception as e:  # Startup discard failure should not stop listener
+            print(f"{BackgroundColors.YELLOW}Telegram inbound backlog discard failed: {e}{Style.RESET_ALL}")  # Report without token data
+            return False, None  # Retry discard before normal polling
+        if not updates:  # No pending backlog
+            return True, None  # Start normal polling without offset
+        update_id = getattr(updates[-1], "update_id", None)  # Read newest update id
+        if update_id is None:  # Defensive fallback for unexpected Telegram object shape
+            return True, None  # Start normal polling without offset
+        self._last_inbound_update_id = int(update_id)  # Do not deliver the startup backlog update
+        return True, int(update_id) + 1  # Start after newest queued update
+
+    def _build_inbound_message(self, update):
+        """
+        Convert one Telegram update into a validated inbound message dictionary.
+
+        :param update: Telegram Update object
+        :return: Message dictionary, or None when update is not a configured-chat text message
+        """
+
+        message = getattr(update, "effective_message", None) or getattr(update, "message", None)  # Resolve message payload across python-telegram-bot versions
+        if message is None:  # Ignore non-message updates
+            return None  # No application delivery
+        chat = getattr(message, "chat", None)  # Resolve chat metadata
+        chat_id = getattr(chat, "id", None)  # Resolve chat id
+        if str(chat_id) != str(self.CHAT_ID):  # Validate configured chat exactly
+            return None  # Ignore unrelated chats
+        text = getattr(message, "text", None)  # Receive text messages only
+        if not text:  # Ignore non-text or empty messages
+            return None  # No application delivery
+        from_user = getattr(message, "from_user", None)  # Capture sender metadata without requiring it
+        return {
+            "update_id": getattr(update, "update_id", None),
+            "chat_id": chat_id,
+            "message_id": getattr(message, "message_id", None),
+            "date": getattr(message, "date", None),
+            "text": text,
+            "from_user_id": getattr(from_user, "id", None),
+            "from_username": getattr(from_user, "username", None),
+        }  # Return narrow validated inbound message payload
+
+    def _deliver_inbound_message(self, inbound_message):
+        """
+        Deliver one validated inbound message through queue and optional callback.
+
+        :param inbound_message: Validated inbound message dictionary
+        :return: None
+        """
+
+        self.inbound_messages.put(inbound_message)  # Preserve message for application polling
+        callback = self._inbound_listener_callback  # Read optional callback
+        if callback is None:  # No callback registered
+            return  # Queue delivery is enough for this step
+        try:  # Keep callback failures isolated from Telegram polling and experiments
+            callback(inbound_message)  # Notify application-owned callback
+        except Exception as e:  # Callback failed
+            print(f"{BackgroundColors.YELLOW}Telegram inbound callback failed: {e}{Style.RESET_ALL}")  # Report without stopping polling
 
 
 def verbose_output(true_string="", false_string=""):
