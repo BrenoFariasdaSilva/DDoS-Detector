@@ -19,15 +19,18 @@ endif
 
 # Logs directory
 LOG_DIR := ./Logs
+LOG_FILE :=
 
 # Ensure logs directory exists (cross-platform)
 ENSURE_LOG_DIR := @mkdir -p $(LOG_DIR) 2>/dev/null || $(PYTHON_CMD) -c "import os; os.makedirs('$(LOG_DIR)', exist_ok=True)"
 
 # Run-and-log function
 # On Windows: simply runs the Python script normally
-# On Unix-like systems: supports DETACH variable
-#   - If DETACH is set, runs the script in detached mode and tails the log file
-#   - Else, runs the script normally
+# On Unix-like systems: supports DETACH and LOG_FILE variables
+#   - If DETACH is set, runs the script in detached mode and tails the selected log file
+#   - If LOG_FILE is set, uses that filename inside LOG_DIR
+#   - Else, uses the script basename as the log filename
+#   - If DETACH is not set, runs the script normally
 ifeq ($(OS), Windows) # Windows
 RUN_AND_LOG = $(PYTHON) $(1)
 else
@@ -35,11 +38,20 @@ RUN_AND_LOG = \
 if [ -z "$(DETACH)" ]; then \
 	$(PYTHON) $(1); \
 else \
-	SCRIPT_NAME=$$(echo "$(1)" | awk '{print $$1}'); \
-	LOG_FILE="$(LOG_DIR)/$$(basename "$$SCRIPT_NAME" .py).log"; \
-	nohup $(PYTHON) $(1) >/dev/null 2>&1 & \
+	SCRIPT_NAME="$(word 1,$(1))"; \
+	if [ -n "$(LOG_FILE)" ]; then \
+		ACTIVE_LOG_FILE="$(LOG_DIR)/$(LOG_FILE)"; \
+	else \
+		ACTIVE_LOG_FILE="$(LOG_DIR)/$$(basename "$$SCRIPT_NAME" .py).log"; \
+	fi; \
+	: > "$$ACTIVE_LOG_FILE"; \
+	if command -v setsid >/dev/null 2>&1; then \
+		nohup setsid -f $(PYTHON) -u $(1) </dev/null >"$$ACTIVE_LOG_FILE" 2>&1; \
+	else \
+		nohup $(PYTHON) -u $(1) </dev/null >"$$ACTIVE_LOG_FILE" 2>&1 & \
+	fi; \
 	sleep 2; \
-	tail -n +1 -F "$$LOG_FILE"; \
+	exec tail -f -n +1 "$$ACTIVE_LOG_FILE"; \
 fi
 endif
 
