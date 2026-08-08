@@ -5623,9 +5623,10 @@ def initialize_cli_and_config() -> Dict:
 
     global CONFIG  # Declare global CONFIG for mutation
     args = parse_args()  # Parse command-line arguments from CLI
-    set_runtime_process_name(args.process_name)  # Apply the requested htop identity before configuration and logging initialization.
+    set_runtime_process_name(args.process_name, script_path=__file__)  # Apply immediate CLI or generated htop identity before configuration and logging initialization.
     cli_overrides = args_to_config_overrides(args)  # Convert parsed CLI args to configuration overrides dict
     config = load_configuration(config_path=args.config, cli_overrides=cli_overrides)  # Load and merge configuration from file and CLI
+    set_runtime_process_name(getattr(args, "process_name", None), script_path=__file__, config=config)  # Re-apply with merged config so config.yaml can override only when CLI omitted the process name.
     force_source = resolve_force_regenerate_samples_source(args)  # Resolve effective force-regeneration source for logging.
     print(f"{BackgroundColors.GREEN}[CONFIG] force_regenerate_samples={BackgroundColors.CYAN}{bool(config.get('generation', {}).get('force_regenerate_samples', False))}{BackgroundColors.GREEN} | Source: {BackgroundColors.CYAN}{force_source}{Style.RESET_ALL}")  # Log effective force-regeneration value and source.
     CONFIG = config  # Persist loaded configuration in global registry

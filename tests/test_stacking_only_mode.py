@@ -27,19 +27,19 @@ class StackingOnlyModeTests(unittest.TestCase):
         plan = stacking.build_evaluation_plan([(False, {"Random Forest": object()}, {})], [None], ["Full Features"], True)  # Build one individual plus one stacking combination.
         self.assertEqual(stacking.retain_stacking_classifier_plan(plan, True), [("Full Features", False, None, "StackingClassifier")])  # Retain only the requested stacking classifier combination.
 
-    def test_process_name_cli_overrides_default_title(self):
+    def test_process_name_cli_overrides_generated_default(self):
         """
-        Verify the CLI process name is applied through setproctitle.
+        Verify the CLI process name is honored exactly when explicitly provided.
 
         :return: None.
         """
 
-        with mock.patch("sys.argv", ["stacking.py", "--process-name", "DDoSDetector-StackingOnly"]):  # Parse the same process-title form used by detached server commands.
+        with mock.patch("sys.argv", ["stacking.py", "--process-name", "DDoSDetector-AutoMLOnly", "--automl-only", "--combined-files", "--dataset-path", "./Datasets/CICDDoS2019/01-12/", "--n-jobs", "1", "--experiment-runs", "1"]):  # Parse the same process-title form used by detached server commands.
             cli_args = stacking.parse_cli_args()  # Resolve the requested operating-system identity.
         process_title_module = mock.Mock()  # Provide the optional production dependency without renaming this test process.
         with mock.patch.dict("sys.modules", {"setproctitle": process_title_module}):  # Route the local import through the isolated module.
-            stacking.set_runtime_process_name(cli_args.process_name)  # Apply the production process-title path.
-        process_title_module.setproctitle.assert_called_once_with("DDoSDetector-StackingOnly")  # Require the complete user-supplied title without rewriting.
+            stacking.set_runtime_process_name(cli_args.process_name, script_path=stacking.__file__)  # Apply the production process-title path.
+        process_title_module.setproctitle.assert_called_once_with("DDoSDetector-AutoMLOnly")  # Require the explicit user-supplied title without rewriting.
 
 
 if __name__ == "__main__":

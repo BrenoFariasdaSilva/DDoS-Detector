@@ -18657,8 +18657,9 @@ if __name__ == "__main__":
     
     try:  # Protect top-level execution to ensure errors are reported and notified
         cli_args = parse_cli_args()  # Parse command-line arguments into namespace
-        set_runtime_process_name(cli_args.process_name)  # Apply the requested htop identity before configuration and logging initialization.
+        set_runtime_process_name(cli_args.process_name, script_path=__file__)  # Apply immediate CLI or generated htop identity before configuration and logging initialization.
         config = initialize_config(config_path=cli_args.config, cli_args=cli_args)  # Merge configuration from file and CLI
+        set_runtime_process_name(cli_args.process_name, script_path=__file__, config=config)  # Re-apply with merged config so config.yaml can override only when CLI omitted the process name.
         initialize_logger(config=config)  # Initialize logger and redirect stdout/stderr to logger
         try:  # Run main and handle user interrupts separately
             main(config=config)  # Invoke main business logic for stacking pipeline

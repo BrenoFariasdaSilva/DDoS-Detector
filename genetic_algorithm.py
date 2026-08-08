@@ -207,7 +207,7 @@ def parse_cli_args():
         parser.add_argument("--results_filename", type=str, help="Override results filename for GA exports (overrides genetic_algorithm.export.results_filename)")
 
         cli_args = parser.parse_args()  # Parse the genetic-algorithm arguments.
-        set_runtime_process_name(cli_args.process_name)  # Apply the requested htop identity before configuration and logging initialization.
+        set_runtime_process_name(cli_args.process_name, script_path=__file__)  # Apply the generated htop identity before configuration and logging initialization.
         return cli_args  # Return the parsed arguments after runtime naming.
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
@@ -8033,6 +8033,7 @@ def main():
         cli_args = parse_cli_args()  # Parse command-line arguments
 
         CONFIG = initialize_config(config_path=cli_args.config if hasattr(cli_args, "config") else None, cli_args=cli_args)  # Initialize merged configuration
+        set_runtime_process_name(getattr(cli_args, "process_name", None), script_path=__file__, config=CONFIG)  # Re-apply with merged config so config.yaml can override only when CLI omitted the process name.
 
         logger = initialize_logger(CONFIG)  # Initialize logger with configuration
 

@@ -2254,7 +2254,7 @@ if __name__ == "__main__":
         parser = argparse.ArgumentParser(description="Modular DDoS detection evaluation framework")  # Build the minimal main-script CLI.
         parser.add_argument("--process-name", type=str, default=None, help="Process title displayed by htop and similar tools")  # Allow concurrent runs to have distinct operating-system identities.
         runtime_args = parser.parse_args()  # Parse the main script runtime options.
-        set_runtime_process_name(runtime_args.process_name)  # Apply the requested htop identity before pipeline initialization.
+        set_runtime_process_name(runtime_args.process_name, script_path=__file__)  # Apply the generated htop identity before pipeline initialization.
         main()  # Call the main function
     except KeyboardInterrupt:  # User-initiated interrupt
         try:  # Attempt friendly shutdown notification on interrupt

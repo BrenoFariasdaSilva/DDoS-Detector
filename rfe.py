@@ -260,7 +260,7 @@ def parse_cli_args() -> Dict[str, Any]:
         parser.add_argument("--results_dir", type=str, default=None, help="Override results directory for RFE exports (overrides config.rfe.export.results_dir)")  # Results directory override
         parser.add_argument("--results_filename", type=str, default=None, help="Override results filename for RFE exports (overrides config.rfe.export.results_filename)")  # Results filename override
         args = parser.parse_args()  # Parse all arguments from sys.argv
-        set_runtime_process_name(args.process_name)  # Apply the requested htop identity before configuration and logging initialization.
+        set_runtime_process_name(args.process_name, script_path=__file__)  # Apply the generated htop identity before configuration and logging initialization.
         delattr(args, "process_name")  # Keep the runtime-only option out of RFE configuration overrides.
         return vars(args)  # Return parsed arguments as a plain dict
     except Exception as e:
@@ -2661,6 +2661,7 @@ if __name__ == "__main__":
         CLI_ARGS.update(cli)  # Update global CLI_ARGS with parsed values
         cfg, sources = get_config(cli)  # Merge configuration from defaults/file/CLI
         CONFIG.update(cfg)  # Populate global CONFIG with merged config
+        set_runtime_process_name(None, script_path=__file__, config=CONFIG)  # Re-apply with merged config so config.yaml can override when CLI omitted the process name.
 
         logger = Logger(f"./Logs/{Path(__file__).stem}.log", clean=True)  # Initialize file logger for this script
         sys.stdout = logger  # Redirect stdout to logger to capture prints

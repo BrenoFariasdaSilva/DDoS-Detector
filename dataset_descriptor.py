@@ -229,7 +229,7 @@ def parse_cli_args(argv=None) -> dict:
     parser.add_argument("--batch_threshold_gb", dest="batch_threshold_gb", type=float, default=None)  # Threshold in GB above which batched loading is activated
     parser.add_argument("--config", dest="config", default="config.yaml")
     args, _ = parser.parse_known_args(argv)  # Parse known args and discard unknown entries
-    set_runtime_process_name(args.process_name)  # Apply the requested htop identity before configuration and logging initialization.
+    set_runtime_process_name(args.process_name, script_path=__file__)  # Apply the generated htop identity before configuration and logging initialization.
     delattr(args, "process_name")  # Keep the runtime-only option out of descriptor configuration overrides.
     return {k: v for k, v in vars(args).items() if v is not None}  # Return only non-None values as overrides
 
@@ -4057,6 +4057,7 @@ def main():
 
         cli_args_dict = parse_cli_args()  # Parse CLI arguments and load configuration as dict
         config = get_config(file_path=cli_args_dict.get("config", "config.yaml"), cli_args=cli_args_dict)  # Load and merge config with CLI overrides
+        set_runtime_process_name(None, script_path=__file__, config=config)  # Re-apply with merged config so config.yaml can override when CLI omitted the process name.
 
         cli_args_ns = argparse.Namespace(**cli_args_dict)  # Convert dict to Namespace for type safety
 

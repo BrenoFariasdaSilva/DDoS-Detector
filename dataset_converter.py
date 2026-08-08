@@ -314,7 +314,7 @@ def parse_cli_arguments():
         parser.add_argument("--no-low-memory", dest="no_low_memory", action="store_true", help="Disable low memory mode")  # No low memory mode flag
 
         cli_args = parser.parse_args()  # Parse the dataset-converter arguments.
-        set_runtime_process_name(cli_args.process_name)  # Apply the requested htop identity before conversion initialization.
+        set_runtime_process_name(cli_args.process_name, script_path=__file__)  # Apply the generated htop identity before conversion initialization.
         return cli_args  # Return parsed CLI arguments.
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
@@ -2496,6 +2496,7 @@ def main():
         start_time = datetime.datetime.now()  # Get the start time of the program
         
         initialize_defaults()  # Initialize DEFAULTS from get_default_config() and config.yaml
+        set_runtime_process_name(None, script_path=__file__, config=DEFAULTS)  # Apply config.yaml process name when present before CLI parsing can optionally override it.
         
         setup_telegram_bot()  # Setup Telegram bot if configured
         

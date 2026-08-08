@@ -266,7 +266,7 @@ def parse_cli_args() -> dict:
         parser.add_argument("--results_filename", type=str, default=None, help="Override results filename for PCA exports (overrides config.pca.export.results_filename)")  # Results filename override
 
         args = parser.parse_args()  # Parse all CLI arguments
-        set_runtime_process_name(args.process_name)  # Apply the requested htop identity before configuration and logging initialization.
+        set_runtime_process_name(args.process_name, script_path=__file__)  # Apply the generated htop identity before configuration and logging initialization.
         delattr(args, "process_name")  # Keep the runtime-only option out of PCA configuration overrides.
         return vars(args)  # Return parsed arguments as a plain dictionary
     except Exception as e:
@@ -2412,6 +2412,7 @@ def main():
     
     try:
         merged_cfg, sources = get_config()  # Load and merge configuration sources
+        set_runtime_process_name(None, script_path=__file__, config=merged_cfg)  # Re-apply with merged config so config.yaml can override when CLI omitted the process name.
 
         global cfg, app_cfg  # Declare global config variables for module-wide access
         app_cfg = merged_cfg  # Store full merged config in global

@@ -424,7 +424,7 @@ def parse_cli_args() -> argparse.Namespace:
         parser.add_argument("--csv", dest="csv", type=str, default=None, help="Path to a single CSV file to process")  # Single CSV override
 
         cli_args = parser.parse_args()  # Parse the hyperparameter-optimization arguments.
-        set_runtime_process_name(cli_args.process_name)  # Apply the requested htop identity before configuration and logging initialization.
+        set_runtime_process_name(cli_args.process_name, script_path=__file__)  # Apply the generated htop identity before configuration and logging initialization.
         return cli_args  # Return parsed CLI arguments.
     except Exception as e:
         print(str(e))  # Print parser error message
@@ -4146,6 +4146,7 @@ def main():
     merged = deep_merge(defaults, file_cfg)  # Deep-merge file config over defaults
     merged = apply_cli_overrides_to_cfg(merged, args)  # Apply CLI overrides to merged config
     merged = validate_hyperopt_config(merged)  # Validate required configuration fields
+    set_runtime_process_name(getattr(args, "process_name", None), script_path=__file__, config=merged)  # Re-apply with merged config so config.yaml can override only when CLI omitted the process name.
 
     results_path = build_results_path(merged)  # Build configured results CSV path for logging without creating directories
 

@@ -148,7 +148,7 @@ def parse_cli_args() -> argparse.Namespace:
     parser.add_argument("--results-csv-columns", dest="results_csv_columns", type=str, default=None, help="Comma-separated Extra Trees result CSV columns")  # Add configurable header override
     parser.add_argument("--verbose", action="store_true", default=False, help="Enable verbose logging")  # Add verbose override
     cli_args = parser.parse_args()  # Parse the Extra Trees arguments.
-    set_runtime_process_name(cli_args.process_name)  # Apply the requested htop identity before configuration and logging initialization.
+    set_runtime_process_name(cli_args.process_name, script_path=__file__)  # Apply the generated htop identity before configuration and logging initialization.
     return cli_args  # Return parsed CLI arguments.
 
 
@@ -980,6 +980,7 @@ def main() -> None:
     start_time = datetime.datetime.now()  # Record program start time
     cli_args = parse_cli_args()  # Parse CLI arguments
     config = get_config(cli_args)  # Resolve effective configuration
+    set_runtime_process_name(getattr(cli_args, "process_name", None), script_path=__file__, config=config)  # Re-apply with merged config so config.yaml can override only when CLI omitted the process name.
     global logger  # Use module-level logger instance
     logger = initialize_logger(config)  # Initialize file logging after configuration resolution
     print(
