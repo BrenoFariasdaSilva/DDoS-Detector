@@ -448,7 +448,7 @@ def log_training_phase(feature_set: Optional[str], classifier_name: str, phase: 
         return  # Preserve the caller's training, prediction, metric, or persistence semantics.
 
 
-def build_training_progress(feature_set: Optional[str], classifier_name: str, total_units: Optional[int] = None, unit_label: Optional[str] = None, heartbeat: bool = False, config: Optional[dict] = None, hyperparameters_enabled: Optional[bool] = None, augmentation_ratio: Optional[float] = None, eta_callback: Optional[Callable[[str], None]] = None, estimated_total_seconds: Optional[float] = None, local_combination_index: Optional[int] = None, local_combination_total: Optional[int] = None) -> TrainingProgress:  # Build one progress scope from experiment context
+def build_training_progress(feature_set: Optional[str], classifier_name: str, total_units: Optional[int] = None, unit_label: Optional[str] = None, heartbeat: bool = False, config: Optional[dict] = None, hyperparameters_enabled: Optional[bool] = None, augmentation_ratio: Optional[float] = None, eta_callback: Optional[Callable[[str], None]] = None, estimated_total_seconds: Optional[float] = None, local_combination_index: Optional[int] = None, local_combination_total: Optional[int] = None, active_workers_callback: Optional[Callable[[], str]] = None) -> TrainingProgress:  # Build one progress scope from experiment context
     """
     Build one reusable training progress scope from experiment configuration.
 
@@ -469,11 +469,11 @@ def build_training_progress(feature_set: Optional[str], classifier_name: str, to
     configured_minutes = active_config.get("evaluation", {}).get("training_progress_interval_minutes", DEFAULT_TRAINING_PROGRESS_INTERVAL_MINUTES) if isinstance(active_config, dict) else DEFAULT_TRAINING_PROGRESS_INTERVAL_MINUTES  # Read the single minutes-based progress interval with the built-in fallback.
     interval_minutes = validate_training_progress_interval_minutes(configured_minutes)  # Validate direct and merged runtime configurations at the reporter boundary.
     interval_seconds = interval_minutes * 60.0  # Convert minutes to seconds once before entering the seconds-based timing implementation.
-    resource_suffix_callback = lambda: format_training_resource_suffix(read_latest_training_resource_snapshot(active_config), allow_worker_cpu=True)  # Read only already-collected resource data for progress rows.
+    resource_suffix_callback = lambda: f"{active_workers_callback() if active_workers_callback is not None else ''}{format_training_resource_suffix(read_latest_training_resource_snapshot(active_config), allow_worker_cpu=True)}"  # Read active worker count and already-collected resource data for progress rows.
     return TrainingProgress(feature_set, classifier_name, calculate_execution_time, output_stream=sys.stdout, total_units=total_units, unit_label=unit_label, heartbeat=heartbeat, report_interval_seconds=interval_seconds, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio, eta_callback=eta_callback, resource_suffix_callback=resource_suffix_callback, estimated_total_seconds=estimated_total_seconds, local_combination_index=local_combination_index, local_combination_total=local_combination_total)  # Pass required progress and combination context explicitly.
 
 
-def fit_classifier_with_progress(model: Any, X_train: Any, y_train: Any, feature_set: Optional[str], classifier_name: str, config: Optional[dict] = None, fit_kwargs: Optional[dict] = None, hyperparameters_enabled: Optional[bool] = None, augmentation_ratio: Optional[float] = None, eta_callback: Optional[Callable[[str], None]] = None, estimated_total_seconds: Optional[float] = None, cancellation_checker: Optional[Callable[[], bool]] = None, local_combination_index: Optional[int] = None, local_combination_total: Optional[int] = None) -> Any:  # Fit one estimator with safe progress reporting
+def fit_classifier_with_progress(model: Any, X_train: Any, y_train: Any, feature_set: Optional[str], classifier_name: str, config: Optional[dict] = None, fit_kwargs: Optional[dict] = None, hyperparameters_enabled: Optional[bool] = None, augmentation_ratio: Optional[float] = None, eta_callback: Optional[Callable[[str], None]] = None, estimated_total_seconds: Optional[float] = None, cancellation_checker: Optional[Callable[[], bool]] = None, local_combination_index: Optional[int] = None, local_combination_total: Optional[int] = None, active_workers_callback: Optional[Callable[[], str]] = None) -> Any:  # Fit one estimator with safe progress reporting
     """
     Fit one estimator with public training-unit callbacks or heartbeat reporting.
 
@@ -501,7 +501,7 @@ def fit_classifier_with_progress(model: Any, X_train: Any, y_train: Any, feature
 
     if model_type is XGBClassifier:  # Use XGBoost's public boosting callback for exact rounds.
         total_rounds = int(model.get_num_boosting_rounds())  # Read the public configured boosting-round total.
-        progress = build_training_progress(feature_set, classifier_name, total_rounds, "Round", heartbeat=False, config=config, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio, eta_callback=eta_callback, local_combination_index=local_combination_index, local_combination_total=local_combination_total)  # Create contextual genuine XGBoost round reporter.
+        progress = build_training_progress(feature_set, classifier_name, total_rounds, "Round", heartbeat=False, config=config, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio, eta_callback=eta_callback, local_combination_index=local_combination_index, local_combination_total=local_combination_total, active_workers_callback=active_workers_callback)  # Create contextual genuine XGBoost round reporter.
         existing_callbacks = model.get_params(deep=False).get("callbacks")  # Preserve the estimator's existing public callbacks exactly.
         class CancellableXGBoostProgressCallback(XGBoostProgressCallback):
             def after_iteration(self, model, epoch, evals_log):
@@ -518,7 +518,7 @@ def fit_classifier_with_progress(model: Any, X_train: Any, y_train: Any, feature
 
     if model_type is lgb.LGBMClassifier:  # Use LightGBM's public iteration callback for exact iterations.
         total_iterations = int(model.get_params(deep=False).get("n_estimators", 100))  # Read the public configured boosting-iteration total.
-        progress = build_training_progress(feature_set, classifier_name, total_iterations, "Iteration", heartbeat=False, config=config, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio, eta_callback=eta_callback, local_combination_index=local_combination_index, local_combination_total=local_combination_total)  # Create contextual genuine LightGBM iteration reporter.
+        progress = build_training_progress(feature_set, classifier_name, total_iterations, "Iteration", heartbeat=False, config=config, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio, eta_callback=eta_callback, local_combination_index=local_combination_index, local_combination_total=local_combination_total, active_workers_callback=active_workers_callback)  # Create contextual genuine LightGBM iteration reporter.
         existing_callbacks = list(options.get("callbacks") or [])  # Preserve any caller-supplied public LightGBM callbacks.
 
         def report_lightgbm_iteration(environment) -> None:  # Adapt the public LightGBM callback environment
@@ -540,7 +540,7 @@ def fit_classifier_with_progress(model: Any, X_train: Any, y_train: Any, feature
 
     if model_type is GradientBoostingClassifier:  # Use sklearn's public monitor callback for exact completed stages.
         total_stages = int(model.get_params(deep=False).get("n_estimators", 100))  # Read the public configured boosting-stage total.
-        progress = build_training_progress(feature_set, classifier_name, total_stages, "Stage", heartbeat=False, config=config, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio, eta_callback=eta_callback, local_combination_index=local_combination_index, local_combination_total=local_combination_total)  # Create contextual genuine Gradient Boosting stage reporter.
+        progress = build_training_progress(feature_set, classifier_name, total_stages, "Stage", heartbeat=False, config=config, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio, eta_callback=eta_callback, local_combination_index=local_combination_index, local_combination_total=local_combination_total, active_workers_callback=active_workers_callback)  # Create contextual genuine Gradient Boosting stage reporter.
         existing_monitor = options.get("monitor")  # Preserve any caller-supplied public monitor callback.
 
         def report_gradient_stage(stage_index, estimator, local_variables) -> bool:  # Adapt sklearn's public stage monitor
@@ -564,7 +564,7 @@ def fit_classifier_with_progress(model: Any, X_train: Any, y_train: Any, feature
 
     if model_type in (AutoencoderClassifier, FTTransformerClassifier, LSTMClassifier, ResNet18Classifier, TabularResNetClassifier):  # Use neural estimators' internal epoch callback for exact epoch progress.
         total_epochs = int(model.get_params(deep=False).get("epochs", 1))  # Read the configured neural epoch total.
-        progress = build_training_progress(feature_set, classifier_name, total_epochs, "Epoch", heartbeat=True, config=config, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio, eta_callback=eta_callback, local_combination_index=local_combination_index, local_combination_total=local_combination_total)  # Create contextual genuine neural epoch reporter with heartbeat ETA.
+        progress = build_training_progress(feature_set, classifier_name, total_epochs, "Epoch", heartbeat=True, config=config, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio, eta_callback=eta_callback, local_combination_index=local_combination_index, local_combination_total=local_combination_total, active_workers_callback=active_workers_callback)  # Create contextual genuine neural epoch reporter with heartbeat ETA.
         existing_progress_callback = getattr(model, "progress_callback", None)  # Preserve any caller-installed callback.
         def report_neural_epoch(epoch: int) -> None:
             raise_if_cancelled()
@@ -580,7 +580,7 @@ def fit_classifier_with_progress(model: Any, X_train: Any, y_train: Any, feature
             else:  # Restore caller-provided callback when present.
                 model.progress_callback = existing_progress_callback  # Restore original callback object.
 
-    progress = build_training_progress(feature_set, classifier_name, heartbeat=True, config=config, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio, eta_callback=eta_callback, estimated_total_seconds=estimated_total_seconds, local_combination_index=local_combination_index, local_combination_total=local_combination_total)  # Use contextual heartbeat reporting for estimators without safe public training units.
+    progress = build_training_progress(feature_set, classifier_name, heartbeat=True, config=config, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio, eta_callback=eta_callback, estimated_total_seconds=estimated_total_seconds, local_combination_index=local_combination_index, local_combination_total=local_combination_total, active_workers_callback=active_workers_callback)  # Use contextual heartbeat reporting for estimators without safe public training units.
     with progress:  # Ensure the heartbeat stops after success, failure, or interruption.
         return model.fit(X_train, y_train, **options)  # Preserve the estimator's original single blocking fit call.
 
@@ -739,6 +739,14 @@ def format_training_resource_suffix(snapshot: Optional[dict] = None, allow_worke
     system_ram_percent = format_training_resource_percent(system_ram_percent_value)  # Format system RAM percentage.
     system_ram_label = "unavailable" if "unavailable" in (system_ram_used, system_ram_total, system_ram_percent) else f"{system_ram_used}/{system_ram_total} GiB ({system_ram_percent})"  # Format combined system RAM only when complete.
     return f" | Worker CPU: {format_training_resource_percent(worker_cpu_value)} | System CPU: {format_training_resource_percent(system_cpu_value)} | Worker RAM: {format_training_resource_gib(worker_ram_value)} | System RAM: {system_ram_label}"  # Return required suffix fields.
+
+
+def format_active_workers_suffix(active_workers: Optional[Any], runnable_workers: Optional[Any]) -> str:
+    """Format active worker count for training progress records."""
+
+    if active_workers is None or runnable_workers is None:
+        return ""
+    return f" | Active Workers: {int(active_workers)}/{int(runnable_workers)}"
 
 
 def build_memory_phase_metadata(config: Optional[dict] = None, **metadata: Any) -> dict:  # Build compact phase-state metadata
@@ -7563,7 +7571,7 @@ def load_existing_model_if_available(model_name, dataset_file, dataset_name, fea
             artifact_lock.close()  # Closing the descriptor releases flock automatically
 
 
-def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, y_test, dataset_file=None, scaler=None, feature_names=None, feature_set=None, config=None, phase_metadata=None, training_ram_stats=None, fit_model=True, notification_context=None, hyperparameters_enabled: Optional[bool] = None, augmentation_ratio: Optional[float] = None, precomputed_predictions: Optional[np.ndarray] = None, precomputed_prediction_seconds: float = 0.0, training_eta_callback: Optional[Callable[[str], None]] = None, estimated_training_seconds: Optional[float] = None, cancellation_checker: Optional[Callable[[], bool]] = None, local_combination_index: Optional[int] = None, local_combination_total: Optional[int] = None):  # Evaluate one classifier with watcher metadata, RAM statistics, optional bounded predictions, and cooperative cancellation
+def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, y_test, dataset_file=None, scaler=None, feature_names=None, feature_set=None, config=None, phase_metadata=None, training_ram_stats=None, fit_model=True, notification_context=None, hyperparameters_enabled: Optional[bool] = None, augmentation_ratio: Optional[float] = None, precomputed_predictions: Optional[np.ndarray] = None, precomputed_prediction_seconds: float = 0.0, training_eta_callback: Optional[Callable[[str], None]] = None, estimated_training_seconds: Optional[float] = None, cancellation_checker: Optional[Callable[[], bool]] = None, local_combination_index: Optional[int] = None, local_combination_total: Optional[int] = None, active_workers_callback: Optional[Callable[[], str]] = None):  # Evaluate one classifier with watcher metadata, RAM statistics, optional bounded predictions, and cooperative cancellation
     """
     Trains an individual classifier and evaluates its performance on the test set.
 
@@ -7633,7 +7641,7 @@ def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, 
             sys.stdout.flush()  # Flush stdout before model training to ensure logs are visible under nohup
             training_ram_monitor = start_training_ram_monitor(TRAINING_RAM_SAMPLE_INTERVAL_SECONDS)  # Start RAM monitoring immediately before classifier fit.
             try:  # Ensure RAM monitoring stops even when classifier fit fails.
-                fit_classifier_with_progress(model, X_train, y_train, feature_set, model_name, config=config, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio, eta_callback=training_eta_callback, estimated_total_seconds=estimated_training_seconds, cancellation_checker=cancellation_checker, local_combination_index=local_combination_index, local_combination_total=local_combination_total)  # Fit once with contextual public callbacks or heartbeat reporting.
+                fit_classifier_with_progress(model, X_train, y_train, feature_set, model_name, config=config, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio, eta_callback=training_eta_callback, estimated_total_seconds=estimated_training_seconds, cancellation_checker=cancellation_checker, local_combination_index=local_combination_index, local_combination_total=local_combination_total, active_workers_callback=active_workers_callback)  # Fit once with contextual public callbacks or heartbeat reporting.
             finally:  # Stop RAM monitoring immediately after classifier fit exits.
                 classifier_ram_stats = stop_training_ram_monitor(training_ram_monitor)  # Summarize RAM usage across this classifier fit.
                 store_training_ram_stats(training_ram_stats, classifier_ram_stats)  # Associate RAM statistics with this classifier only.
@@ -12668,7 +12676,7 @@ def build_feature_process_training_start_message(task: dict, dynamic_total: int,
     local_position = task.get("feature_local_position")  # Read feature-local plan position when present.
     local_total = task.get("feature_local_total")  # Read feature-local plan total when present.
     local_label = f"{local_position}/{local_total}" if local_position is not None and local_total is not None else "unavailable"  # Format local position without inventing missing data.
-    resource_suffix = format_training_resource_suffix(resource_snapshot, allow_worker_cpu=False)  # Format start-time resource suffix without inventing worker CPU.
+    resource_suffix = f"{format_active_workers_suffix(task.get('active_workers'), task.get('runnable_workers'))}{format_training_resource_suffix(resource_snapshot, allow_worker_cpu=False)}"  # Format start-time worker and resource suffix.
     return f"[TRAINING START] Started {task['classifier_name']} classifier training | {combination_header} | Local combination: {local_label} | Global combination: {int(task['global_id'])}/{int(dynamic_total)} | Initial ETA: {eta_label}{resource_suffix}"  # Return compact start notification.
 
 
@@ -12688,7 +12696,7 @@ def build_feature_process_training_eta_message(task: dict, dynamic_total: int, e
     local_position = task.get("feature_local_position")  # Read feature-local plan position when present.
     local_total = task.get("feature_local_total")  # Read feature-local plan total when present.
     local_label = f"{local_position}/{local_total}" if local_position is not None and local_total is not None else "unavailable"  # Format local position without inventing missing data.
-    resource_suffix = format_training_resource_suffix(resource_snapshot, allow_worker_cpu=True)  # Format ETA resource suffix from already-collected data.
+    resource_suffix = f"{format_active_workers_suffix(task.get('active_workers'), task.get('runnable_workers'))}{format_training_resource_suffix(resource_snapshot, allow_worker_cpu=True)}"  # Format active worker and ETA resource suffix from already-collected data.
     return f"{combination_prefix} [TRAINING ETA] {task['classifier_name']} training ETA is now available | {combination_header} | Local combination: {local_label} | Global combination: {int(task['global_id'])}/{int(dynamic_total)} | ETA: {eta_label}{resource_suffix}" if combination_prefix else f"[TRAINING ETA] {task['classifier_name']} training ETA is now available | {combination_header} | Local combination: {local_label} | Global combination: {int(task['global_id'])}/{int(dynamic_total)} | ETA: {eta_label}{resource_suffix}"  # Return compact ETA notification.
 
 
@@ -12718,8 +12726,9 @@ def send_feature_process_training_start_notification(status: dict, tasks_by_glob
         eta_label = str(status.get("initial_eta") or "unavailable")  # Use only worker-supplied factual ETA text.
         if eta_label == "unavailable":  # Record that this attempt needs one later factual ETA update.
             training_start_unavailable_global_ids.add(global_id)  # Track only combinations whose start notification lacked ETA.
+        message_task = {**task, "active_workers": status.get("active_workers"), "runnable_workers": status.get("runnable_workers")}  # Add live worker count without mutating the plan.
         resource_snapshot = read_latest_training_resource_snapshot(CONFIG)  # Read latest already-collected resource snapshot.
-        telegram_msg = build_feature_process_training_start_message(task, dynamic_total, eta_label, resource_snapshot)  # Build message from authoritative task fields.
+        telegram_msg = build_feature_process_training_start_message(message_task, dynamic_total, eta_label, resource_snapshot)  # Build message from authoritative task fields.
         try:  # Isolate Telegram transport from scientific training.
             send_telegram_message(TELEGRAM_BOT, telegram_msg)  # Send through the established coordinator-owned Telegram path.
         except Exception:  # Preserve existing Telegram failure isolation under patched senders.
@@ -12756,8 +12765,9 @@ def send_feature_process_training_eta_notification(status: dict, tasks_by_global
     if not eta_label or eta_label == "unavailable" or eta_label == "0s":  # Reject unavailable or completion-only ETA labels.
         return True  # Preserve one meaningful follow-up ETA only.
     notified_training_eta_global_ids.add(global_id)  # Reserve the sole ETA delivery attempt before external I/O.
+    message_task = {**task, "active_workers": status.get("active_workers"), "runnable_workers": status.get("runnable_workers")}  # Add live worker count without mutating the plan.
     resource_snapshot = read_latest_training_resource_snapshot(CONFIG)  # Read latest already-collected resource snapshot.
-    telegram_msg = build_feature_process_training_eta_message(task, dynamic_total, eta_label, resource_snapshot)  # Build message from authoritative task fields and factual ETA.
+    telegram_msg = build_feature_process_training_eta_message(message_task, dynamic_total, eta_label, resource_snapshot)  # Build message from authoritative task fields and factual ETA.
     try:  # Isolate Telegram transport from scientific training.
         send_telegram_message(TELEGRAM_BOT, telegram_msg)  # Send through the established coordinator-owned Telegram path.
     except Exception:  # Preserve existing Telegram failure isolation under patched senders.
@@ -16438,11 +16448,12 @@ def evaluate_feature_process_original_task(task: dict, process_payload: dict, re
     dataset_name = build_filename_safe_dataset_identity(resolve_canonical_dataset_identity(str(process_payload["file"]), True)) if process_payload["execution_mode"] == "combined_files" else os.path.basename(os.path.dirname(process_payload["file"]))  # Resolve the established model artifact directory
     phase_metadata = {"dataset_identity": os.path.basename(str(process_payload["file"])), "dataset_source": process_payload["file"], "experiment_run": task["experiment_run"], "execution_mode": process_payload["execution_mode"], "attack_scope": process_payload["attack_types_combined"], "data_source": task["data_source_label"], "experiment_mode": task["experiment_mode"], "augmentation_ratio": task["augmentation_ratio"], "feature_set_name": task["feature_set"], "hyperparameter_mode": "Optimized Hyperparameters" if task["hyperparameters_enabled"] else "Default Hyperparameters", "classifier_name": task["classifier_name"], "train_sample_count": len(model_y_train), "test_sample_count": len(model_y_test), "feature_count": task["expected_n_features"], "n_jobs": get_classifier_n_jobs(active_model), "combination_index": task["global_id"], "total_combinations": task["total_combinations"], "sequence_metadata": sequence_metadata}  # Build compact existing watcher metadata without matrices
     training_ram_stats = {}  # Hold only this classifier's bounded RAM statistics
-    training_eta_callback = lambda eta_label: publish_feature_process_training_eta_event(task, process_payload, status_queue, eta_label)  # Publish the first emitted factual progress ETA through the coordinator.
+    active_workers_callback = lambda: format_active_workers_suffix(**build_feature_process_active_worker_status(status_state, process_payload))  # Read live active-worker count for local progress rows.
+    training_eta_callback = lambda eta_label: publish_feature_process_training_eta_event(task, process_payload, status_queue, eta_label, status_state)  # Publish the first emitted factual progress ETA through the coordinator.
     cancellation_checker = lambda: feature_process_runtime_skip_requested(task, process_payload)  # Check Telegram active-skip flag only at safe boundaries.
     log_feature_process_combination(task, status_state, "Fit started")  # Announce the blocking fit before existing heartbeat or unit progress begins
     estimated_training_seconds = task.get("pending_elapsed_time_estimate_s") or estimate_feature_process_task_elapsed_seconds(task, cache_dict, process_payload)  # Use runtime-sort estimate or compute one from cache without reordering.
-    metrics = evaluate_individual_classifier(active_model, task["classifier_name"], model_X_train, model_y_train, model_X_test, model_y_test, process_payload["file"], resources["scaler"], task["expected_feature_names"], artifact_feature_set, config=process_payload["config"], phase_metadata=phase_metadata, training_ram_stats=training_ram_stats, fit_model=True, notification_context=build_telegram_combination_header(task["feature_set"], task["classifier_name"], None, task["hyperparameters_enabled"], experiment_run=task["experiment_run"]), hyperparameters_enabled=task["hyperparameters_enabled"], augmentation_ratio=task["augmentation_ratio"], training_eta_callback=training_eta_callback, estimated_training_seconds=estimated_training_seconds, cancellation_checker=cancellation_checker, local_combination_index=task.get("feature_local_position"), local_combination_total=task.get("feature_local_total"))  # Reuse unchanged evaluation with serialized authoritative combination metadata.
+    metrics = evaluate_individual_classifier(active_model, task["classifier_name"], model_X_train, model_y_train, model_X_test, model_y_test, process_payload["file"], resources["scaler"], task["expected_feature_names"], artifact_feature_set, config=process_payload["config"], phase_metadata=phase_metadata, training_ram_stats=training_ram_stats, fit_model=True, notification_context=build_telegram_combination_header(task["feature_set"], task["classifier_name"], None, task["hyperparameters_enabled"], experiment_run=task["experiment_run"]), hyperparameters_enabled=task["hyperparameters_enabled"], augmentation_ratio=task["augmentation_ratio"], training_eta_callback=training_eta_callback, estimated_training_seconds=estimated_training_seconds, cancellation_checker=cancellation_checker, local_combination_index=task.get("feature_local_position"), local_combination_total=task.get("feature_local_total"), active_workers_callback=active_workers_callback)  # Reuse unchanged evaluation with serialized authoritative combination metadata.
     if cancellation_checker():
         raise RuntimeSkipRequested(f"Runtime skip requested before persistence for active {task['classifier_name']}")
     log_feature_process_combination(task, status_state, "Prediction and metrics completed")  # Announce completion of existing prediction and metric phases
@@ -16581,7 +16592,15 @@ def build_feature_process_task_status_fields(task: Optional[dict]) -> dict:  # C
     return {"classifier_name": task.get("classifier_name"), "hyperparameters_enabled": task.get("hyperparameters_enabled"), "augmentation_ratio": task.get("augmentation_ratio"), "experiment_run": task.get("experiment_run"), "feature_local_position": task.get("feature_local_position"), "feature_local_total": task.get("feature_local_total"), "canonical_total": task.get("canonical_total"), "total_combinations": task.get("total_combinations")}  # Return only scalar active-combination fields.
 
 
-def publish_feature_process_training_start_event(task: dict, process_payload: dict, status_queue: Any) -> None:
+def build_feature_process_active_worker_status(status_state: dict, process_payload: dict) -> dict:
+    """Build live active-worker count fields for training notifications."""
+
+    snapshot = read_feature_process_status(status_state)
+    runnable_workers = sum(1 for feature_name in process_payload.get("feature_mode_names", []) if snapshot["features"].get(feature_name, {}).get("pending", 0) or snapshot["features"].get(feature_name, {}).get("running", 0))
+    return {"active_workers": snapshot["global"]["running"], "runnable_workers": runnable_workers}
+
+
+def publish_feature_process_training_start_event(task: dict, process_payload: dict, status_queue: Any, status_state: dict) -> None:
     """
     Publish one classifier training-start event before expensive fitting begins.
 
@@ -16591,10 +16610,10 @@ def publish_feature_process_training_start_event(task: dict, process_payload: di
     :return: None.
     """
 
-    status_queue.put({"status": "training_start", "feature_set": process_payload["feature_set"], "global_id": task["global_id"], "event": "training_start", "initial_eta": "unavailable", "pid": os.getpid(), **build_feature_process_task_status_fields(task)})  # Publish factual start metadata after final cache miss and before data loading or fit.
+    status_queue.put({"status": "training_start", "feature_set": process_payload["feature_set"], "global_id": task["global_id"], "event": "training_start", "initial_eta": "unavailable", "pid": os.getpid(), **build_feature_process_task_status_fields(task), **build_feature_process_active_worker_status(status_state, process_payload)})  # Publish factual start metadata after final cache miss and before data loading or fit.
 
 
-def publish_feature_process_training_eta_event(task: dict, process_payload: dict, status_queue: Any, eta_label: str) -> None:  # Publish one classifier training-ETA event
+def publish_feature_process_training_eta_event(task: dict, process_payload: dict, status_queue: Any, eta_label: str, status_state: dict) -> None:  # Publish one classifier training-ETA event
     """
     Publish one classifier training-ETA event after the progress reporter emits ETA.
 
@@ -16605,7 +16624,7 @@ def publish_feature_process_training_eta_event(task: dict, process_payload: dict
     :return: None.
     """
 
-    status_queue.put({"status": "training_eta", "feature_set": process_payload["feature_set"], "global_id": task["global_id"], "event": "training_eta", "eta": eta_label, "pid": os.getpid(), **build_feature_process_task_status_fields(task)})  # Publish factual ETA metadata after local progress logging emits it.
+    status_queue.put({"status": "training_eta", "feature_set": process_payload["feature_set"], "global_id": task["global_id"], "event": "training_eta", "eta": eta_label, "pid": os.getpid(), **build_feature_process_task_status_fields(task), **build_feature_process_active_worker_status(status_state, process_payload)})  # Publish factual ETA metadata after local progress logging emits it.
 
 
 def await_feature_process_notification_acknowledgement(task: dict, process_payload: dict) -> None:
@@ -16794,7 +16813,7 @@ def process_feature_process_task(task: dict, process_payload: dict, model_maps: 
             publish_feature_process_result_event(task, process_payload, cached_result, "cached", status_queue)  # Preserve established cache notification semantics before leaving this combination
             return  # Release the reservation and move directly to the next feature-local task
         if task["augmentation_ratio"] is None:  # Load only original resources required for a pending fit
-            publish_feature_process_training_start_event(task, process_payload, status_queue)  # Publish one non-cached original-data start event before data loading or fit begins.
+            publish_feature_process_training_start_event(task, process_payload, status_queue, status_state)  # Publish one non-cached original-data start event before data loading or fit begins.
             await_feature_process_notification_acknowledgement(task, process_payload)  # Let the coordinator send or isolate failure before expensive fitting starts.
             if feature_process_runtime_skip_requested(task, process_payload):  # Honor active skip accepted after training-start notification but before data loading
                 raise RuntimeSkipRequested(f"Runtime skip requested before fit for active {task['classifier_name']}")
