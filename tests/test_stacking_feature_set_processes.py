@@ -475,6 +475,22 @@ class FeatureSetProcessTests(unittest.TestCase):  # Group persistent feature-set
             evidence = [json.loads((Path(temporary_directory) / f"{key}.json").read_text(encoding="utf-8")) for key in ("ga", "pca", "rfe")]  # Load cache-only child queue evidence
             self.assertTrue(all(not row["tasks"] for row in evidence))  # Require every valid cached combination to bypass fitting
 
+    def test_dynamic_capacity_limit_rechecks_available_ram(self):  # Verify RAM gate can expand after startup
+        """
+        Verify dynamic worker capacity uses current available RAM.
+
+        :param self: FeatureSetProcessTests instance.
+        :return: None.
+        """
+
+        capacity_control = {"reserve_bytes": 10, "pending_worker_count": 3, "largest_worker_bytes": 100}  # Model three feature workers with one conservative worker estimate
+        snapshots = [mock.Mock(available=150), mock.Mock(available=350)]  # First admits one worker, later admits three
+        with mock.patch.object(stacking.psutil, "virtual_memory", side_effect=snapshots):  # Force two current-RAM readings
+            first_limit = stacking.resolve_dynamic_feature_capacity_limit(capacity_control)  # Read startup-like constrained RAM
+            second_limit = stacking.resolve_dynamic_feature_capacity_limit(capacity_control)  # Read later freed RAM
+        self.assertEqual(first_limit["admitted_worker_count"], 1)  # Require constrained admission under low available RAM
+        self.assertEqual(second_limit["admitted_worker_count"], 3)  # Require re-expanded admission after available RAM increases
+
     def test_payload_rejects_full_matrices_and_memmaps_preserve_arrays_and_ownership(self):  # Verify matrix-free tasks and exact disk-backed arrays and cleanup ownership
         """
         Verify full matrices cannot cross the process boundary and memmap subsets are exact.
