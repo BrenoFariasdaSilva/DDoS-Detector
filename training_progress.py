@@ -46,6 +46,20 @@ def format_training_combination_fields(hyperparameters_enabled: Optional[bool], 
     return f" | Hyperparameters: {hyperparameter_label} | Data Augmentation: {augmentation_label}"  # Return fields in required stable order.
 
 
+def format_training_combination_prefix(local_combination_index: Optional[int], local_combination_total: Optional[int]) -> str:  # Format feature-local combination prefix
+    """
+    Format one feature-local combination prefix for progress output.
+
+    :param local_combination_index: Active feature-local combination index.
+    :param local_combination_total: Active feature-local combination total.
+    :return: Bracketed combination prefix or an empty string when unavailable.
+    """
+
+    if local_combination_index is None or local_combination_total is None:  # Omit prefix when either authoritative value is unavailable.
+        return ""  # Preserve unchanged standalone and AutoML progress logs.
+    return f"[{int(local_combination_index)}/{int(local_combination_total)}]"  # Return the stable local-combination prefix.
+
+
 def interactive_terminal_attached(output_stream: Optional[Any] = None) -> bool:  # Resolve whether interactive progress rendering is safe
     """
     Return whether the selected output stream is attached to an interactive terminal.
@@ -70,7 +84,7 @@ def interactive_terminal_attached(output_stream: Optional[Any] = None) -> bool: 
 class TrainingProgress:  # Report genuine public units or heartbeat-only activity
     """Report genuine training units or low-frequency active heartbeats."""
 
-    def __init__(self, feature_set: Optional[str], classifier_name: str, duration_formatter: Callable[[float], str], output_stream: Optional[Any] = None, total_units: Optional[int] = None, unit_label: Optional[str] = None, heartbeat: bool = False, report_interval_seconds: float = DEFAULT_TRAINING_PROGRESS_INTERVAL_SECONDS, hyperparameters_enabled: Optional[bool] = None, augmentation_ratio: Optional[float] = None, eta_callback: Optional[Callable[[str], None]] = None, resource_suffix_callback: Optional[Callable[[], str]] = None, estimated_total_seconds: Optional[float] = None):  # Initialize one training progress scope
+    def __init__(self, feature_set: Optional[str], classifier_name: str, duration_formatter: Callable[[float], str], output_stream: Optional[Any] = None, total_units: Optional[int] = None, unit_label: Optional[str] = None, heartbeat: bool = False, report_interval_seconds: float = DEFAULT_TRAINING_PROGRESS_INTERVAL_SECONDS, hyperparameters_enabled: Optional[bool] = None, augmentation_ratio: Optional[float] = None, eta_callback: Optional[Callable[[str], None]] = None, resource_suffix_callback: Optional[Callable[[], str]] = None, estimated_total_seconds: Optional[float] = None, local_combination_index: Optional[int] = None, local_combination_total: Optional[int] = None):  # Initialize one training progress scope
         """
         Initialize one classifier training progress scope.
 
@@ -97,6 +111,7 @@ class TrainingProgress:  # Report genuine public units or heartbeat-only activit
             resolved_interval = DEFAULT_TRAINING_PROGRESS_INTERVAL_SECONDS  # Use the stable low-frequency progress fallback.
         self.feature_set = format_training_feature_set(feature_set)  # Store the normalized feature-set label.
         self.classifier_name = str(classifier_name)  # Store the classifier identity as log-safe text.
+        self.combination_prefix = format_training_combination_prefix(local_combination_index, local_combination_total)  # Store immutable feature-local combination prefix when available.
         self.combination_fields = format_training_combination_fields(hyperparameters_enabled, augmentation_ratio)  # Store immutable authoritative combination fields.
         self.duration_formatter = duration_formatter  # Store the caller's established duration formatter.
         self.output_stream = output_stream if output_stream is not None else sys.stdout  # Store the caller's active output stream.
@@ -172,7 +187,7 @@ class TrainingProgress:  # Report genuine public units or heartbeat-only activit
             if self.thread is not None:  # Join only when this scope started a heartbeat thread.
                 self.thread.join(timeout=1.0)  # Wait briefly for event-driven heartbeat shutdown.
                 if self.thread.is_alive():  # Report a cleanup anomaly without masking the classifier result.
-                    print(f"[TRAINING] Feature Set: {self.feature_set} | Classifier: {self.classifier_name}{self.combination_fields} | Status: Heartbeat shutdown pending | PID: {os.getpid()}{self.resource_suffix()}", file=self.output_stream)  # Write a durable contextual cleanup warning.
+                    print(f"{self.combination_prefix}[TRAINING] Feature Set: {self.feature_set} | Classifier: {self.classifier_name}{self.combination_fields} | Status: Heartbeat shutdown pending | PID: {os.getpid()}{self.resource_suffix()}", file=self.output_stream)  # Write a durable contextual cleanup warning.
                     self.output_stream.flush()  # Flush the cleanup warning immediately.
         except Exception:  # Ignore cleanup output failures after signaling thread shutdown.
             pass  # Preserve the original fit outcome unchanged.
@@ -215,7 +230,7 @@ class TrainingProgress:  # Report genuine public units or heartbeat-only activit
                     eta_label = self.duration_formatter(self.estimated_total_seconds - elapsed_seconds)  # Report remaining time from historical total duration.
                 else:
                     eta_label = "unavailable"  # Keep unavailable when no factual estimate exists.
-                print(f"[TRAINING] Feature Set: {self.feature_set} | Classifier: {self.classifier_name}{self.combination_fields} | Status: Active | Elapsed: {elapsed_label} | ETA: {eta_label} | PID: {os.getpid()}{self.resource_suffix()}", file=self.output_stream)  # Write contextual heartbeat with factual ETA when units exist.
+                print(f"{self.combination_prefix}[TRAINING] Feature Set: {self.feature_set} | Classifier: {self.classifier_name}{self.combination_fields} | Status: Active | Elapsed: {elapsed_label} | ETA: {eta_label} | PID: {os.getpid()}{self.resource_suffix()}", file=self.output_stream)  # Write contextual heartbeat with factual ETA when units exist.
                 self.output_stream.flush()  # Flush every heartbeat immediately to detached logs.
                 if self.eta_callback is not None and not self.eta_callback_reported and eta_label != "unavailable" and eta_label != "0s":  # Notify once when heartbeat-only ETA becomes available.
                     self.eta_callback_reported = True  # Reserve the one ETA callback before external notification code.
@@ -254,7 +269,7 @@ class TrainingProgress:  # Report genuine public units or heartbeat-only activit
                 remaining_seconds = (elapsed_seconds / completed) * (total - completed)  # Estimate remaining time only from completed real units.
                 elapsed_label = self.duration_formatter(elapsed_seconds)  # Format elapsed time through the caller's established formatter.
                 eta_label = self.duration_formatter(remaining_seconds)  # Format the unit-based ETA through the caller's established formatter.
-                print(f"[TRAINING] Feature Set: {self.feature_set} | Classifier: {self.classifier_name}{self.combination_fields} | Status: Active | Elapsed: {elapsed_label} | ETA: {eta_label} | PID: {os.getpid()}{self.resource_suffix()}", file=self.output_stream)  # Write one active ETA row for normal in-progress output.
+                print(f"{self.combination_prefix}[TRAINING] Feature Set: {self.feature_set} | Classifier: {self.classifier_name}{self.combination_fields} | Status: Active | Elapsed: {elapsed_label} | ETA: {eta_label} | PID: {os.getpid()}{self.resource_suffix()}", file=self.output_stream)  # Write one active ETA row for normal in-progress output.
                 self.output_stream.flush()  # Flush every emitted genuine progress record immediately to detached logs.
                 if self.eta_callback is not None and not self.eta_callback_reported and not is_final and eta_label != "0s":  # Notify only on the first meaningful emitted ETA.
                     self.eta_callback_reported = True  # Reserve the one ETA callback before external notification code.

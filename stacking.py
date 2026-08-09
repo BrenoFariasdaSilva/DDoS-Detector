@@ -153,7 +153,7 @@ from tabular_resnet import TabularResNetClassifier  # Import the standalone skle
 from resnet18 import ResNet18Classifier  # Import the standalone sklearn-compatible one-dimensional ResNet18 classifier
 from autoencoder import AutoencoderClassifier  # Import the standalone sklearn-compatible supervised Autoencoder classifier
 from lstm import LSTMClassifier  # Import the standalone sklearn-compatible supervised LSTM sequence classifier
-from training_progress import DEFAULT_TRAINING_PROGRESS_INTERVAL_MINUTES, TrainingProgress, XGBoostProgressCallback, format_training_combination_fields, format_training_feature_set, interactive_terminal_attached  # Import reusable training progress infrastructure.
+from training_progress import DEFAULT_TRAINING_PROGRESS_INTERVAL_MINUTES, TrainingProgress, XGBoostProgressCallback, format_training_combination_fields, format_training_combination_prefix, format_training_feature_set, interactive_terminal_attached  # Import reusable training progress infrastructure.
 from utils.stacking.shap import aggregate_mean_shap_importance, build_kernel_explainer, build_shap_progress_description, compute_shap_values_with_context, create_shap_progress_wrapper, describe_raw_shap_result, get_shap_prediction_function, normalize_shap_output, resolve_model_class_count, resolve_shap_progress_target, sample_shap_test_data, select_shap_explainer, supports_predict_proba  # Re-export stateless SHAP utilities.
 from utils.stacking.planning import FEATURE_SET_WORKER_KEYS, build_evaluation_plan, build_feature_process_metadata, resolve_feature_set_worker_key, retain_stacking_classifier_plan  # Re-export pure evaluation planning utilities.
 from utils.execution_identity import assign_execution_id, ensure_execution_id  # For one top-level execution identity shared with workers
@@ -448,7 +448,7 @@ def log_training_phase(feature_set: Optional[str], classifier_name: str, phase: 
         return  # Preserve the caller's training, prediction, metric, or persistence semantics.
 
 
-def build_training_progress(feature_set: Optional[str], classifier_name: str, total_units: Optional[int] = None, unit_label: Optional[str] = None, heartbeat: bool = False, config: Optional[dict] = None, hyperparameters_enabled: Optional[bool] = None, augmentation_ratio: Optional[float] = None, eta_callback: Optional[Callable[[str], None]] = None, estimated_total_seconds: Optional[float] = None) -> TrainingProgress:  # Build one progress scope from experiment context
+def build_training_progress(feature_set: Optional[str], classifier_name: str, total_units: Optional[int] = None, unit_label: Optional[str] = None, heartbeat: bool = False, config: Optional[dict] = None, hyperparameters_enabled: Optional[bool] = None, augmentation_ratio: Optional[float] = None, eta_callback: Optional[Callable[[str], None]] = None, estimated_total_seconds: Optional[float] = None, local_combination_index: Optional[int] = None, local_combination_total: Optional[int] = None) -> TrainingProgress:  # Build one progress scope from experiment context
     """
     Build one reusable training progress scope from experiment configuration.
 
@@ -470,10 +470,10 @@ def build_training_progress(feature_set: Optional[str], classifier_name: str, to
     interval_minutes = validate_training_progress_interval_minutes(configured_minutes)  # Validate direct and merged runtime configurations at the reporter boundary.
     interval_seconds = interval_minutes * 60.0  # Convert minutes to seconds once before entering the seconds-based timing implementation.
     resource_suffix_callback = lambda: format_training_resource_suffix(read_latest_training_resource_snapshot(active_config), allow_worker_cpu=True)  # Read only already-collected resource data for progress rows.
-    return TrainingProgress(feature_set, classifier_name, calculate_execution_time, output_stream=sys.stdout, total_units=total_units, unit_label=unit_label, heartbeat=heartbeat, report_interval_seconds=interval_seconds, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio, eta_callback=eta_callback, resource_suffix_callback=resource_suffix_callback, estimated_total_seconds=estimated_total_seconds)  # Pass required progress and combination context explicitly.
+    return TrainingProgress(feature_set, classifier_name, calculate_execution_time, output_stream=sys.stdout, total_units=total_units, unit_label=unit_label, heartbeat=heartbeat, report_interval_seconds=interval_seconds, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio, eta_callback=eta_callback, resource_suffix_callback=resource_suffix_callback, estimated_total_seconds=estimated_total_seconds, local_combination_index=local_combination_index, local_combination_total=local_combination_total)  # Pass required progress and combination context explicitly.
 
 
-def fit_classifier_with_progress(model: Any, X_train: Any, y_train: Any, feature_set: Optional[str], classifier_name: str, config: Optional[dict] = None, fit_kwargs: Optional[dict] = None, hyperparameters_enabled: Optional[bool] = None, augmentation_ratio: Optional[float] = None, eta_callback: Optional[Callable[[str], None]] = None, estimated_total_seconds: Optional[float] = None, cancellation_checker: Optional[Callable[[], bool]] = None) -> Any:  # Fit one estimator with safe progress reporting
+def fit_classifier_with_progress(model: Any, X_train: Any, y_train: Any, feature_set: Optional[str], classifier_name: str, config: Optional[dict] = None, fit_kwargs: Optional[dict] = None, hyperparameters_enabled: Optional[bool] = None, augmentation_ratio: Optional[float] = None, eta_callback: Optional[Callable[[str], None]] = None, estimated_total_seconds: Optional[float] = None, cancellation_checker: Optional[Callable[[], bool]] = None, local_combination_index: Optional[int] = None, local_combination_total: Optional[int] = None) -> Any:  # Fit one estimator with safe progress reporting
     """
     Fit one estimator with public training-unit callbacks or heartbeat reporting.
 
@@ -501,7 +501,7 @@ def fit_classifier_with_progress(model: Any, X_train: Any, y_train: Any, feature
 
     if model_type is XGBClassifier:  # Use XGBoost's public boosting callback for exact rounds.
         total_rounds = int(model.get_num_boosting_rounds())  # Read the public configured boosting-round total.
-        progress = build_training_progress(feature_set, classifier_name, total_rounds, "Round", heartbeat=False, config=config, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio, eta_callback=eta_callback)  # Create contextual genuine XGBoost round reporter.
+        progress = build_training_progress(feature_set, classifier_name, total_rounds, "Round", heartbeat=False, config=config, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio, eta_callback=eta_callback, local_combination_index=local_combination_index, local_combination_total=local_combination_total)  # Create contextual genuine XGBoost round reporter.
         existing_callbacks = model.get_params(deep=False).get("callbacks")  # Preserve the estimator's existing public callbacks exactly.
         class CancellableXGBoostProgressCallback(XGBoostProgressCallback):
             def after_iteration(self, model, epoch, evals_log):
@@ -518,7 +518,7 @@ def fit_classifier_with_progress(model: Any, X_train: Any, y_train: Any, feature
 
     if model_type is lgb.LGBMClassifier:  # Use LightGBM's public iteration callback for exact iterations.
         total_iterations = int(model.get_params(deep=False).get("n_estimators", 100))  # Read the public configured boosting-iteration total.
-        progress = build_training_progress(feature_set, classifier_name, total_iterations, "Iteration", heartbeat=False, config=config, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio, eta_callback=eta_callback)  # Create contextual genuine LightGBM iteration reporter.
+        progress = build_training_progress(feature_set, classifier_name, total_iterations, "Iteration", heartbeat=False, config=config, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio, eta_callback=eta_callback, local_combination_index=local_combination_index, local_combination_total=local_combination_total)  # Create contextual genuine LightGBM iteration reporter.
         existing_callbacks = list(options.get("callbacks") or [])  # Preserve any caller-supplied public LightGBM callbacks.
 
         def report_lightgbm_iteration(environment) -> None:  # Adapt the public LightGBM callback environment
@@ -540,7 +540,7 @@ def fit_classifier_with_progress(model: Any, X_train: Any, y_train: Any, feature
 
     if model_type is GradientBoostingClassifier:  # Use sklearn's public monitor callback for exact completed stages.
         total_stages = int(model.get_params(deep=False).get("n_estimators", 100))  # Read the public configured boosting-stage total.
-        progress = build_training_progress(feature_set, classifier_name, total_stages, "Stage", heartbeat=False, config=config, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio, eta_callback=eta_callback)  # Create contextual genuine Gradient Boosting stage reporter.
+        progress = build_training_progress(feature_set, classifier_name, total_stages, "Stage", heartbeat=False, config=config, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio, eta_callback=eta_callback, local_combination_index=local_combination_index, local_combination_total=local_combination_total)  # Create contextual genuine Gradient Boosting stage reporter.
         existing_monitor = options.get("monitor")  # Preserve any caller-supplied public monitor callback.
 
         def report_gradient_stage(stage_index, estimator, local_variables) -> bool:  # Adapt sklearn's public stage monitor
@@ -564,7 +564,7 @@ def fit_classifier_with_progress(model: Any, X_train: Any, y_train: Any, feature
 
     if model_type in (AutoencoderClassifier, FTTransformerClassifier, LSTMClassifier, ResNet18Classifier, TabularResNetClassifier):  # Use neural estimators' internal epoch callback for exact epoch progress.
         total_epochs = int(model.get_params(deep=False).get("epochs", 1))  # Read the configured neural epoch total.
-        progress = build_training_progress(feature_set, classifier_name, total_epochs, "Epoch", heartbeat=True, config=config, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio, eta_callback=eta_callback)  # Create contextual genuine neural epoch reporter with heartbeat ETA.
+        progress = build_training_progress(feature_set, classifier_name, total_epochs, "Epoch", heartbeat=True, config=config, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio, eta_callback=eta_callback, local_combination_index=local_combination_index, local_combination_total=local_combination_total)  # Create contextual genuine neural epoch reporter with heartbeat ETA.
         existing_progress_callback = getattr(model, "progress_callback", None)  # Preserve any caller-installed callback.
         def report_neural_epoch(epoch: int) -> None:
             raise_if_cancelled()
@@ -580,7 +580,7 @@ def fit_classifier_with_progress(model: Any, X_train: Any, y_train: Any, feature
             else:  # Restore caller-provided callback when present.
                 model.progress_callback = existing_progress_callback  # Restore original callback object.
 
-    progress = build_training_progress(feature_set, classifier_name, heartbeat=True, config=config, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio, eta_callback=eta_callback, estimated_total_seconds=estimated_total_seconds)  # Use contextual heartbeat reporting for estimators without safe public training units.
+    progress = build_training_progress(feature_set, classifier_name, heartbeat=True, config=config, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio, eta_callback=eta_callback, estimated_total_seconds=estimated_total_seconds, local_combination_index=local_combination_index, local_combination_total=local_combination_total)  # Use contextual heartbeat reporting for estimators without safe public training units.
     with progress:  # Ensure the heartbeat stops after success, failure, or interruption.
         return model.fit(X_train, y_train, **options)  # Preserve the estimator's original single blocking fit call.
 
@@ -7563,7 +7563,7 @@ def load_existing_model_if_available(model_name, dataset_file, dataset_name, fea
             artifact_lock.close()  # Closing the descriptor releases flock automatically
 
 
-def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, y_test, dataset_file=None, scaler=None, feature_names=None, feature_set=None, config=None, phase_metadata=None, training_ram_stats=None, fit_model=True, notification_context=None, hyperparameters_enabled: Optional[bool] = None, augmentation_ratio: Optional[float] = None, precomputed_predictions: Optional[np.ndarray] = None, precomputed_prediction_seconds: float = 0.0, training_eta_callback: Optional[Callable[[str], None]] = None, estimated_training_seconds: Optional[float] = None, cancellation_checker: Optional[Callable[[], bool]] = None):  # Evaluate one classifier with watcher metadata, RAM statistics, optional bounded predictions, and cooperative cancellation
+def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, y_test, dataset_file=None, scaler=None, feature_names=None, feature_set=None, config=None, phase_metadata=None, training_ram_stats=None, fit_model=True, notification_context=None, hyperparameters_enabled: Optional[bool] = None, augmentation_ratio: Optional[float] = None, precomputed_predictions: Optional[np.ndarray] = None, precomputed_prediction_seconds: float = 0.0, training_eta_callback: Optional[Callable[[str], None]] = None, estimated_training_seconds: Optional[float] = None, cancellation_checker: Optional[Callable[[], bool]] = None, local_combination_index: Optional[int] = None, local_combination_total: Optional[int] = None):  # Evaluate one classifier with watcher metadata, RAM statistics, optional bounded predictions, and cooperative cancellation
     """
     Trains an individual classifier and evaluates its performance on the test set.
 
@@ -7633,7 +7633,7 @@ def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, 
             sys.stdout.flush()  # Flush stdout before model training to ensure logs are visible under nohup
             training_ram_monitor = start_training_ram_monitor(TRAINING_RAM_SAMPLE_INTERVAL_SECONDS)  # Start RAM monitoring immediately before classifier fit.
             try:  # Ensure RAM monitoring stops even when classifier fit fails.
-                fit_classifier_with_progress(model, X_train, y_train, feature_set, model_name, config=config, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio, eta_callback=training_eta_callback, estimated_total_seconds=estimated_training_seconds, cancellation_checker=cancellation_checker)  # Fit once with contextual public callbacks or heartbeat reporting.
+                fit_classifier_with_progress(model, X_train, y_train, feature_set, model_name, config=config, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio, eta_callback=training_eta_callback, estimated_total_seconds=estimated_training_seconds, cancellation_checker=cancellation_checker, local_combination_index=local_combination_index, local_combination_total=local_combination_total)  # Fit once with contextual public callbacks or heartbeat reporting.
             finally:  # Stop RAM monitoring immediately after classifier fit exits.
                 classifier_ram_stats = stop_training_ram_monitor(training_ram_monitor)  # Summarize RAM usage across this classifier fit.
                 store_training_ram_stats(training_ram_stats, classifier_ram_stats)  # Associate RAM statistics with this classifier only.
@@ -7721,7 +7721,7 @@ def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, 
         raise
 
 
-def evaluate_stacking_classifier(model, X_train, y_train, X_test, y_test, config=None, training_ram_stats=None, fit_model=True, notification_context=None, feature_set=None, hyperparameters_enabled: Optional[bool] = None, augmentation_ratio: Optional[float] = None):  # Evaluate stacking with RAM statistics and notification context
+def evaluate_stacking_classifier(model, X_train, y_train, X_test, y_test, config=None, training_ram_stats=None, fit_model=True, notification_context=None, feature_set=None, hyperparameters_enabled: Optional[bool] = None, augmentation_ratio: Optional[float] = None, local_combination_index: Optional[int] = None, local_combination_total: Optional[int] = None):  # Evaluate stacking with RAM statistics and notification context
     """
     Trains the StackingClassifier model and evaluates its performance on the test set.
 
@@ -7755,7 +7755,7 @@ def evaluate_stacking_classifier(model, X_train, y_train, X_test, y_test, config
             sys.stdout.flush()  # Flush stdout before stacking training to ensure logs are visible under nohup
             training_ram_monitor = start_training_ram_monitor(TRAINING_RAM_SAMPLE_INTERVAL_SECONDS)  # Start RAM monitoring immediately before stacking fit.
             try:  # Ensure RAM monitoring stops even when stacking fit fails.
-                fit_classifier_with_progress(model, X_train, y_train, feature_set, "StackingClassifier", config=config, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio)  # Preserve contextual single public stacking fit reporting.
+                fit_classifier_with_progress(model, X_train, y_train, feature_set, "StackingClassifier", config=config, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio, local_combination_index=local_combination_index, local_combination_total=local_combination_total)  # Preserve contextual single public stacking fit reporting.
             finally:  # Stop RAM monitoring immediately after stacking fit exits.
                 stacking_ram_summary = stop_training_ram_monitor(training_ram_monitor)  # Summarize RAM usage across this stacking fit.
                 store_training_ram_stats(training_ram_stats, stacking_ram_summary)  # Associate RAM statistics with this stacking classifier only.
@@ -12683,12 +12683,13 @@ def build_feature_process_training_eta_message(task: dict, dynamic_total: int, e
     :return: Human-readable Telegram message body.
     """
 
+    combination_prefix = format_training_combination_prefix(task.get("feature_local_position"), task.get("feature_local_total"))  # Reuse the feature-local combination prefix shown in detached training logs.
     combination_header = build_telegram_combination_header(task["feature_set"], task["classifier_name"], task["augmentation_ratio"], task["hyperparameters_enabled"], include_model=False, experiment_run=task["experiment_run"])  # Build configuration identity without trailing classifier.
     local_position = task.get("feature_local_position")  # Read feature-local plan position when present.
     local_total = task.get("feature_local_total")  # Read feature-local plan total when present.
     local_label = f"{local_position}/{local_total}" if local_position is not None and local_total is not None else "unavailable"  # Format local position without inventing missing data.
     resource_suffix = format_training_resource_suffix(resource_snapshot, allow_worker_cpu=True)  # Format ETA resource suffix from already-collected data.
-    return f"[TRAINING ETA] {task['classifier_name']} training ETA is now available | {combination_header} | Local combination: {local_label} | Global combination: {int(task['global_id'])}/{int(dynamic_total)} | ETA: {eta_label}{resource_suffix}"  # Return compact ETA notification.
+    return f"{combination_prefix} [TRAINING ETA] {task['classifier_name']} training ETA is now available | {combination_header} | Local combination: {local_label} | Global combination: {int(task['global_id'])}/{int(dynamic_total)} | ETA: {eta_label}{resource_suffix}" if combination_prefix else f"[TRAINING ETA] {task['classifier_name']} training ETA is now available | {combination_header} | Local combination: {local_label} | Global combination: {int(task['global_id'])}/{int(dynamic_total)} | ETA: {eta_label}{resource_suffix}"  # Return compact ETA notification.
 
 
 def send_feature_process_training_start_notification(status: dict, tasks_by_global_id: dict, dynamic_total: int, notified_training_start_global_ids: set, training_start_unavailable_global_ids: set, notification_acknowledgements: dict) -> bool:  # Send one coordinator-owned classifier training-start notification
@@ -13184,6 +13185,8 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
                 notification_context=combination_header,  # Include the exact active combination in Telegram output
                 hyperparameters_enabled=hyperparameters_enabled,  # Pass authoritative hyperparameter mode into every training record.
                 augmentation_ratio=augmentation_ratio,  # Pass authoritative augmentation mode into every training record.
+                local_combination_index=current_combination,  # Prefix recurring training logs with feature-local combination identity.
+                local_combination_total=total_steps,  # Use the active feature-set combination count as the local denominator.
             )  # Evaluate individual classifier sequentially using HP-isolated model artifact names
             write_memory_phase_event("after_prediction_and_metrics", config=config, **phase_metadata, accuracy=metrics[0], precision=metrics[1], recall=metrics[2], f1_score=metrics[3], event_outcome="metrics_completed")  # Publish prediction and metrics completion
 
@@ -13344,7 +13347,7 @@ def run_stacking_evaluation_for_feature_set(name, stacking_model, X_train_df, y_
         stacking_ram_stats = {}  # Hold RAM statistics for this stacking fit only.
 
         stacking_metrics = evaluate_stacking_classifier(
-            active_stacking_model, X_train_df, y_train, X_test_df, y_test, config=config, training_ram_stats=stacking_ram_stats, notification_context=combination_header, feature_set=name, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio  # Include exact active combination metadata in progress output.
+            active_stacking_model, X_train_df, y_train, X_test_df, y_test, config=config, training_ram_stats=stacking_ram_stats, notification_context=combination_header, feature_set=name, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio, local_combination_index=current_combination, local_combination_total=total_steps  # Include exact active combination metadata in progress output.
         )  # Evaluate stacking model with DataFrames and retrieve metrics tuple
         write_memory_phase_event("after_classifier_fit", config=config, **phase_metadata, event_outcome="fit_and_prediction_completed")  # Publish stacking fit completion
         write_memory_phase_event("after_prediction_and_metrics", config=config, **phase_metadata, accuracy=stacking_metrics[0], precision=stacking_metrics[1], recall=stacking_metrics[2], f1_score=stacking_metrics[3], event_outcome="metrics_completed")  # Publish stacking metrics completion
@@ -13914,10 +13917,10 @@ def evaluate_on_dataset(
                     X_augmented_df = pd.DataFrame(X_augmented_model, columns=subset_feature_names)
                     training_ram_stats = {}
                     if model_name == "StackingClassifier":
-                        metrics = evaluate_stacking_classifier(loaded_model, None, None, X_augmented_df, y_augmented, config=config, training_ram_stats=training_ram_stats, fit_model=False, notification_context=combination_header, feature_set=name, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio)  # Report persisted stacking evaluation with authoritative combination metadata.
+                        metrics = evaluate_stacking_classifier(loaded_model, None, None, X_augmented_df, y_augmented, config=config, training_ram_stats=training_ram_stats, fit_model=False, notification_context=combination_header, feature_set=name, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio, local_combination_index=current_combination, local_combination_total=total_steps)  # Report persisted stacking evaluation with authoritative combination metadata.
                         classifier_type = "Stacking"
                     else:
-                        metrics = evaluate_individual_classifier(loaded_model, model_name, None, None, X_augmented_model, y_augmented, file, artifact_bundle["scaler"], subset_feature_names, artifact_feature_set, config=config, training_ram_stats=training_ram_stats, fit_model=False, notification_context=combination_header, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio)  # Report persisted individual evaluation with authoritative combination metadata.
+                        metrics = evaluate_individual_classifier(loaded_model, model_name, None, None, X_augmented_model, y_augmented, file, artifact_bundle["scaler"], subset_feature_names, artifact_feature_set, config=config, training_ram_stats=training_ram_stats, fit_model=False, notification_context=combination_header, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio, local_combination_index=current_combination, local_combination_total=total_steps)  # Report persisted individual evaluation with authoritative combination metadata.
                         classifier_type = "Individual"
                     result_entry = build_classifier_result_entry(loaded_model.__class__.__name__, file, execution_mode_str, attack_types_combined, name, classifier_type, model_name, data_source_label, experiment_id, experiment_mode, augmentation_ratio, len(subset_feature_names), original_train_count, len(y_augmented), metrics, subset_feature_names, hyperparams_map=hyperparams_map, hyperparameters_enabled=hyperparameters_enabled, effective_hyperparameters=serialize_effective_estimator_parameters(loaded_model), experiment_run=get_current_experiment_run(config))  # Persist the active run on augmented result rows.
                     persist_cache_result_entry(effective_cache_ref, result_entry, cache_dict, config=config)
@@ -16439,7 +16442,7 @@ def evaluate_feature_process_original_task(task: dict, process_payload: dict, re
     cancellation_checker = lambda: feature_process_runtime_skip_requested(task, process_payload)  # Check Telegram active-skip flag only at safe boundaries.
     log_feature_process_combination(task, status_state, "Fit started")  # Announce the blocking fit before existing heartbeat or unit progress begins
     estimated_training_seconds = task.get("pending_elapsed_time_estimate_s") or estimate_feature_process_task_elapsed_seconds(task, cache_dict, process_payload)  # Use runtime-sort estimate or compute one from cache without reordering.
-    metrics = evaluate_individual_classifier(active_model, task["classifier_name"], model_X_train, model_y_train, model_X_test, model_y_test, process_payload["file"], resources["scaler"], task["expected_feature_names"], artifact_feature_set, config=process_payload["config"], phase_metadata=phase_metadata, training_ram_stats=training_ram_stats, fit_model=True, notification_context=build_telegram_combination_header(task["feature_set"], task["classifier_name"], None, task["hyperparameters_enabled"], experiment_run=task["experiment_run"]), hyperparameters_enabled=task["hyperparameters_enabled"], augmentation_ratio=task["augmentation_ratio"], training_eta_callback=training_eta_callback, estimated_training_seconds=estimated_training_seconds, cancellation_checker=cancellation_checker)  # Reuse unchanged evaluation with serialized authoritative combination metadata.
+    metrics = evaluate_individual_classifier(active_model, task["classifier_name"], model_X_train, model_y_train, model_X_test, model_y_test, process_payload["file"], resources["scaler"], task["expected_feature_names"], artifact_feature_set, config=process_payload["config"], phase_metadata=phase_metadata, training_ram_stats=training_ram_stats, fit_model=True, notification_context=build_telegram_combination_header(task["feature_set"], task["classifier_name"], None, task["hyperparameters_enabled"], experiment_run=task["experiment_run"]), hyperparameters_enabled=task["hyperparameters_enabled"], augmentation_ratio=task["augmentation_ratio"], training_eta_callback=training_eta_callback, estimated_training_seconds=estimated_training_seconds, cancellation_checker=cancellation_checker, local_combination_index=task.get("feature_local_position"), local_combination_total=task.get("feature_local_total"))  # Reuse unchanged evaluation with serialized authoritative combination metadata.
     if cancellation_checker():
         raise RuntimeSkipRequested(f"Runtime skip requested before persistence for active {task['classifier_name']}")
     log_feature_process_combination(task, status_state, "Prediction and metrics completed")  # Announce completion of existing prediction and metric phases
@@ -16501,7 +16504,7 @@ def evaluate_feature_process_augmented_task(task: dict, process_payload: dict, r
     training_ram_stats = {}  # Hold the established loaded-model evaluation RAM record shape
     log_feature_process_combination(task, status_state, "Metrics started")  # Announce persisted-model metrics after bounded prediction
     cancellation_checker = lambda: feature_process_runtime_skip_requested(task, process_payload)  # Check Telegram active-skip flag before metrics and persistence.
-    metrics = evaluate_individual_classifier(loaded_model, task["classifier_name"], None, None, None, y_augmented, process_payload["file"], artifact_bundle["scaler"], task["expected_feature_names"], artifact_feature_set, config=process_payload["config"], training_ram_stats=training_ram_stats, fit_model=False, notification_context=build_telegram_combination_header(task["feature_set"], task["classifier_name"], task["augmentation_ratio"], task["hyperparameters_enabled"], experiment_run=task["experiment_run"]), hyperparameters_enabled=task["hyperparameters_enabled"], augmentation_ratio=task["augmentation_ratio"], precomputed_predictions=y_predicted, precomputed_prediction_seconds=prediction_seconds, cancellation_checker=cancellation_checker)  # Reuse unchanged metrics and reporting without reconstructing a complete transformed matrix
+    metrics = evaluate_individual_classifier(loaded_model, task["classifier_name"], None, None, None, y_augmented, process_payload["file"], artifact_bundle["scaler"], task["expected_feature_names"], artifact_feature_set, config=process_payload["config"], training_ram_stats=training_ram_stats, fit_model=False, notification_context=build_telegram_combination_header(task["feature_set"], task["classifier_name"], task["augmentation_ratio"], task["hyperparameters_enabled"], experiment_run=task["experiment_run"]), hyperparameters_enabled=task["hyperparameters_enabled"], augmentation_ratio=task["augmentation_ratio"], precomputed_predictions=y_predicted, precomputed_prediction_seconds=prediction_seconds, cancellation_checker=cancellation_checker, local_combination_index=task.get("feature_local_position"), local_combination_total=task.get("feature_local_total"))  # Reuse unchanged metrics and reporting without reconstructing a complete transformed matrix
     if cancellation_checker():
         raise RuntimeSkipRequested(f"Runtime skip requested before augmented persistence for active {task['classifier_name']}")
     log_feature_process_combination(task, status_state, "Prediction and metrics completed")  # Confirm existing loaded-model phases completed

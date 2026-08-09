@@ -315,6 +315,30 @@ class TrainingProgressTests(unittest.TestCase):  # Group deterministic training 
                 self.assertIn(expected_fields, progress_output.getvalue())  # Require exact callback metadata fields.
         self.assertEqual(training_progress.format_training_combination_fields(None, None), "")  # Keep non-combination AutoML and standalone records unlabeled.
 
+    def test_feature_local_combination_prefix_formats_and_omits_missing_values(self):  # Verify feature-local prefix helper output
+        """Format feature-local progress prefix only when both values exist."""
+
+        self.assertEqual(training_progress.format_training_combination_prefix(3, 5), "[3/5]")  # Require exact bracketed prefix shape.
+        self.assertEqual(training_progress.format_training_combination_prefix(None, 5), "")  # Omit prefix when index is unavailable.
+        self.assertEqual(training_progress.format_training_combination_prefix(3, None), "")  # Omit prefix when total is unavailable.
+
+    def test_progress_rows_include_feature_local_combination_prefix(self):  # Verify recurring detached progress rows use feature-local prefix
+        """Prefix recurring training rows with feature-local combination identity."""
+
+        progress_output = io.StringIO()  # Capture one callback progress record with local-combination metadata.
+        progress = training_progress.TrainingProgress("GA Features", "Gradient Boosting", stacking.calculate_execution_time, output_stream=progress_output, total_units=2, unit_label="Stage", report_interval_seconds=1.0, hyperparameters_enabled=True, local_combination_index=3, local_combination_total=5)  # Build progress reporter with authoritative local combination identity.
+        with mock.patch.object(training_progress.time, "monotonic", side_effect=[0.0, 1.0]):  # Control start and first callback timestamps.
+            with progress:  # Activate current combination progress scope.
+                progress.report_unit(1)  # Emit one active callback record.
+        self.assertIn("[3/5][TRAINING] Feature Set: GA Features | Classifier: Gradient Boosting", progress_output.getvalue())  # Require exact no-space prefix format on detached progress output.
+
+    def test_training_eta_telegram_message_includes_feature_local_combination_prefix(self):  # Verify ETA Telegram prefix format
+        """Prefix ETA Telegram message with feature-local combination identity."""
+
+        task = {"feature_set": "Extra Trees Features", "classifier_name": "Gradient Boosting", "augmentation_ratio": None, "hyperparameters_enabled": True, "experiment_run": 1, "feature_local_position": 3, "feature_local_total": 5, "global_id": 42}  # Build minimal authoritative ETA task context.
+        message = stacking.build_feature_process_training_eta_message(task, 99, "1d 4h 52m 24s")  # Build the production ETA message body.
+        self.assertTrue(message.startswith("[3/5] [TRAINING ETA] Gradient Boosting training ETA is now available"))  # Require exact spaced prefix format on Telegram ETA notifications.
+
     def test_xgboost_public_rounds_preserve_results_callbacks_and_identity(self):  # Verify XGBoost genuine progress
         """
         Verify XGBoost rounds, results, serialization, callback preservation, and identity restoration.
