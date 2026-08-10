@@ -12778,7 +12778,7 @@ def send_feature_process_training_eta_notification(status: dict, tasks_by_global
     if not eta_label or eta_label == "unavailable" or eta_label == "0s":  # Reject unavailable or completion-only ETA labels.
         return True  # Preserve one meaningful follow-up ETA only.
     notified_training_eta_global_ids.add(global_id)  # Reserve the sole ETA delivery attempt before external I/O.
-    message_task = {**task, "active_workers": status.get("active_workers"), "runnable_workers": status.get("runnable_workers")}  # Add live worker count without mutating the plan.
+    message_task = {**task, "active_workers": status.get("active_workers"), "runnable_workers": status.get("runnable_workers"), "estimated_finish_time": status.get("estimated_finish_time")}  # Add live worker count and ETA finish time without mutating the plan.
     resource_snapshot = read_latest_training_resource_snapshot(CONFIG)  # Read latest already-collected resource snapshot.
     telegram_msg = build_feature_process_training_eta_message(message_task, dynamic_total, eta_label, resource_snapshot)  # Build message from authoritative task fields and factual ETA.
     try:  # Isolate Telegram transport from scientific training.
