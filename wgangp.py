@@ -95,10 +95,13 @@ from torch.utils.data import DataLoader, Dataset  # Dataset and DataLoader
 from tqdm import tqdm  # For progress bar visualization
 from typing import Any, Dict, List, Optional, Union, cast  # For Any type hint and cast
 from utils.process_name import set_runtime_process_name  # Apply optional htop-visible process identities.
+from zoneinfo import ZoneInfo  # Format ETA finish timestamps in Sao Paulo local time
 
 psutil = (
     __import__("psutil") if __import__("importlib").util.find_spec("psutil") else None
 )  # Import psutil if available, otherwise set to None
+
+SAO_PAULO_TIMEZONE_NAME = "America/Sao_Paulo"  # Use Sao Paulo timezone for ETA finish timestamps
 
 # Prefer CUDA autocast when available; provide a safe fallback context manager
 try:  # Attempt to import torch.amp.autocast for mixed precision support
@@ -3159,7 +3162,7 @@ def record_training_step_metrics(step: int, args, metrics_history: Dict, loss_D,
     return cached_loss_D, cached_g_loss, cached_gp, cached_d_real, cached_d_fake  # Return cached scalar values
 
 
-def run_batch_training_loop(G, D, opt_G, opt_D, scaler, device: torch.device, args, config: Dict, n_classes: int, pbar, step: int, metrics_history: Dict, total_steps: int, epoch: int, file_progress_prefix: str) -> int:
+def run_batch_training_loop(G, D, opt_G, opt_D, scaler, device: torch.device, args, config: Dict, n_classes: int, pbar, step: int, metrics_history: Dict, total_steps: int, epoch: int, training_start_time: float, file_progress_prefix: str) -> int:
     """
     Execute one full epoch of batch training steps for generator and discriminator.
 
@@ -3177,6 +3180,7 @@ def run_batch_training_loop(G, D, opt_G, opt_D, scaler, device: torch.device, ar
     :param metrics_history: metrics dictionary to append to in-place
     :param total_steps: number of batches per epoch for display
     :param epoch: current epoch index (zero-based)
+    :param training_start_time: wall-clock timestamp marking start of training loop
     :param file_progress_prefix: colored prefix string for progress display
     :return: Updated global step counter
     """
@@ -3198,6 +3202,11 @@ def run_batch_training_loop(G, D, opt_G, opt_D, scaler, device: torch.device, ar
         if step % args.log_interval == 0:  # Extract scalar metrics only at log interval to avoid per-batch CUDA synchronization
             _cached_loss_D, _cached_g_loss, _cached_gp, _cached_d_real, _cached_d_fake = record_training_step_metrics(step, args, metrics_history, loss_D, g_loss, gp, d_real_score, d_fake_score)  # Record metrics and cache scalar values
 
+        completed_global_steps = (epoch * total_steps) + (batch_idx + 1)  # Count completed training batches across all epochs
+        total_global_steps = max(1, int(args.epochs) * int(total_steps))  # Resolve total training batches across all epochs
+        elapsed_seconds = max(0.0, time.time() - float(training_start_time))  # Measure total elapsed wall-clock training time
+        remaining_seconds = ((elapsed_seconds / float(completed_global_steps)) * float(total_global_steps - completed_global_steps)) if completed_global_steps > 0 and total_global_steps > completed_global_steps else 0.0  # Estimate remaining wall-clock time from completed global batch progress
+        finish_suffix = format_estimated_finish_time_suffix(remaining_seconds)  # Format overall estimated finish timestamp once per displayed update
         pbar.set_description(  # Update tqdm description using cached scalars to avoid CUDA synchronization
             (
                 f"{getattr(args, 'file_progress_prefix', '')} "  # File progress prefix (may include colored index)
@@ -3209,7 +3218,7 @@ def run_batch_training_loop(G, D, opt_G, opt_D, scaler, device: torch.device, ar
             + f"{BackgroundColors.GREEN}loss_G: {_cached_g_loss:.4f}{Style.RESET_ALL} | "  # Generator loss from cached value
             + f"gp: {_cached_gp:.4f} | "  # Gradient penalty from cached value
             + f"D(real): {_cached_d_real:.4f} | "  # Average critic score on real from cached value
-            + f"D(fake): {_cached_d_fake:.4f}"  # Average critic score on fake from cached value
+            + f"D(fake): {_cached_d_fake:.4f}{finish_suffix}"  # Average critic score on fake from cached value and finish timestamp
         )
 
         step += 1  # Increment global step counter
@@ -3718,7 +3727,7 @@ def send_epoch_telegram_notifications(args, telegram_enabled: bool, epoch: int, 
                 msg = (
                     f"{prefix} WGAN-GP training progress: {next_notify}% "  # Prepend prefix then short progress message text
                     f"({epoch+1}/{args.epochs} epochs) on {Path(args.csv_path).name if args.csv_path else 'unknown file'}"  # Include filename and epoch info
-                    f" | Elapsed: {elapsed_label} | ETA: {eta_label}"  # Add overall elapsed time and current ETA estimate
+                    f" | Elapsed: {elapsed_label} | ETA: {eta_label}{format_estimated_finish_time_suffix(eta_seconds)}"  # Add overall elapsed time, current ETA estimate, and finish timestamp
                 )  # Compose progress message
                 send_telegram_message(TELEGRAM_BOT, msg)  # Send message via shared function
                 next_notify += progress_pct  # Advance to next threshold to avoid duplicate sends
@@ -3904,7 +3913,7 @@ def train(args, config: Optional[Dict] = None):
             epoch_start_time = time.time()  # Record epoch start timestamp
             pbar, total_steps = create_epoch_progress_bar(dataloader, args, epoch)  # Create progress bar for epoch
             
-            step = run_batch_training_loop(G, D, opt_G, opt_D, scaler, device, args, config, n_classes, pbar, step, metrics_history, total_steps, epoch, file_progress_prefix)  # Execute batch training loop
+            step = run_batch_training_loop(G, D, opt_G, opt_D, scaler, device, args, config, n_classes, pbar, step, metrics_history, total_steps, epoch, training_start_time, file_progress_prefix)  # Execute batch training loop
 
             write_epoch_csv_row(args, config, device, dataset, epoch, epoch_start_time, epoch_milestones, results_csv_writer, results_csv_file, results_cols_cfg, metrics_history, opt_G, opt_D)  # Write epoch CSV row
             save_training_checkpoint(args, config, device, G, D, opt_G, opt_D, scaler, dataset, epoch, metrics_history)  # Save checkpoint if due
@@ -5212,6 +5221,18 @@ def calculate_execution_time(start_time, finish_time=None):
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
         raise
+
+
+def format_estimated_finish_time_suffix(eta_seconds: Optional[float]) -> str:
+    """Format ETA-derived finish timestamp in Sao Paulo time."""
+
+    try:
+        if eta_seconds is None or not math.isfinite(float(eta_seconds)) or float(eta_seconds) < 0:
+            return ""
+        finish_time = datetime.datetime.now(ZoneInfo(SAO_PAULO_TIMEZONE_NAME)) + datetime.timedelta(seconds=float(eta_seconds))
+        return f" | Estimated Finish Time: {finish_time.strftime('%Hh:%Mm-%d/%m/%Y')}"
+    except Exception:
+        return ""
 
 
 def get_hardware_specifications(device_used=None):
