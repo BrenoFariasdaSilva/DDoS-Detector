@@ -3690,7 +3690,7 @@ def save_training_checkpoint(args, config: Dict, device: torch.device, G, D, opt
         save_metrics_history_to_json(checkpoint_dir, checkpoint_prefix, metrics_history)  # Save metrics history JSON to checkpoint directory
 
 
-def send_epoch_telegram_notifications(args, telegram_enabled: bool, epoch: int, next_notify: int, progress_pct: int, file_progress_prefix: Optional[str] = None) -> int:
+def send_epoch_telegram_notifications(args, telegram_enabled: bool, epoch: int, next_notify: int, progress_pct: int, training_start_time: float, file_progress_prefix: Optional[str] = None) -> int:
     """
     Send telegram progress notifications when epoch completion crosses percentage thresholds.
 
@@ -3699,6 +3699,7 @@ def send_epoch_telegram_notifications(args, telegram_enabled: bool, epoch: int, 
     :param epoch: current epoch index (zero-based).
     :param next_notify: next percentage threshold to trigger notification.
     :param progress_pct: percentage increment between notifications.
+    :param training_start_time: wall-clock timestamp marking start of training loop.
     :param file_progress_prefix: Optional colored prefix string like "[3/11]" to prepend to messages.
     :return: Updated next_notify threshold.
     """
@@ -3706,11 +3707,18 @@ def send_epoch_telegram_notifications(args, telegram_enabled: bool, epoch: int, 
     try:  # Guard notification logic to avoid interrupting training
         if telegram_enabled and args.epochs > 0:  # Only notify when enabled and epochs is positive
             percent = int(((epoch + 1) / float(args.epochs)) * 100)  # Compute percent completed after this epoch
+            completed_epochs = max(1, epoch + 1)  # Keep epoch-based elapsed and ETA math valid after first completed epoch
+            elapsed_seconds = max(0.0, time.time() - float(training_start_time))  # Measure total elapsed training time at notification boundary
+            remaining_epochs = max(0, int(args.epochs) - completed_epochs)  # Compute remaining epochs for linear ETA estimate
+            eta_seconds = (elapsed_seconds / float(completed_epochs)) * float(remaining_epochs) if remaining_epochs > 0 else 0.0  # Estimate remaining wall-clock time from completed epochs
+            elapsed_label = calculate_execution_time(elapsed_seconds)  # Reuse existing human-readable duration formatter
+            eta_label = calculate_execution_time(eta_seconds)  # Reuse existing human-readable duration formatter for ETA
             prefix = file_progress_prefix if file_progress_prefix is not None else getattr(args, "file_progress_prefix", f"{BackgroundColors.CYAN}[1/1]{Style.RESET_ALL}")  # Determine prefix from parameter or args fallback
             while percent >= next_notify and next_notify <= 100:  # Send notifications for each crossed threshold
                 msg = (
                     f"{prefix} WGAN-GP training progress: {next_notify}% "  # Prepend prefix then short progress message text
                     f"({epoch+1}/{args.epochs} epochs) on {Path(args.csv_path).name if args.csv_path else 'unknown file'}"  # Include filename and epoch info
+                    f" | Elapsed: {elapsed_label} | ETA: {eta_label}"  # Add overall elapsed time and current ETA estimate
                 )  # Compose progress message
                 send_telegram_message(TELEGRAM_BOT, msg)  # Send message via shared function
                 next_notify += progress_pct  # Advance to next threshold to avoid duplicate sends
@@ -3900,7 +3908,7 @@ def train(args, config: Optional[Dict] = None):
 
             write_epoch_csv_row(args, config, device, dataset, epoch, epoch_start_time, epoch_milestones, results_csv_writer, results_csv_file, results_cols_cfg, metrics_history, opt_G, opt_D)  # Write epoch CSV row
             save_training_checkpoint(args, config, device, G, D, opt_G, opt_D, scaler, dataset, epoch, metrics_history)  # Save checkpoint if due
-            next_notify = send_epoch_telegram_notifications(args, telegram_enabled, epoch, next_notify, progress_pct, file_progress_prefix)  # Send epoch telegram notifications with file progress prefix
+            next_notify = send_epoch_telegram_notifications(args, telegram_enabled, epoch, next_notify, progress_pct, training_start_time, file_progress_prefix)  # Send epoch telegram notifications with file progress prefix and timing
 
         write_final_timing_and_csv_row(args, config, device, dataset, training_start_time, file_start_time, results_csv_writer, results_csv_file, results_cols_cfg, metrics_history, opt_G, opt_D)  # Compute final training timing state
         args._last_metrics_history = metrics_history  # Store metrics history for in-memory generation result rows
