@@ -156,10 +156,10 @@ class AtomicCacheRecoveryTests(unittest.TestCase):  # Group cache transaction an
         backup_before = Path(self.backup_path).read_bytes()  # Snapshot the known-good backup bytes.
         original_reader = stacking.read_validated_cache_file  # Preserve the real validator for non-primary paths.
 
-        def deny_primary(path: str, config: Any = None) -> Any:
+        def deny_primary(path: str, config: Any = None, **kwargs: Any) -> Any:
             if path == self.cache_path:  # Inject deterministic primary unreadability.
                 raise PermissionError("Injected primary read failure")  # Simulate an unreadable primary cache.
-            return original_reader(path, config=config)  # Preserve backup and temporary validation behavior.
+            return original_reader(path, config=config, **kwargs)  # Preserve backup and temporary validation behavior.
 
         with mock.patch.object(stacking, "read_validated_cache_file", side_effect=deny_primary):  # Activate primary read failure during one update.
             stacking.save_cache_result_entry("dataset.csv", make_cache_result(1), config={})  # Merge the new result from the valid backup.
@@ -183,10 +183,10 @@ class AtomicCacheRecoveryTests(unittest.TestCase):  # Group cache transaction an
         backup_before = Path(self.backup_path).read_bytes()  # Snapshot the backup before injected failure.
         original_reader = stacking.read_validated_cache_file  # Preserve validation for existing final paths.
 
-        def reject_temporary(path: str, config: Any = None) -> Any:
+        def reject_temporary(path: str, config: Any = None, **kwargs: Any) -> Any:
             if str(path).endswith(".tmp"):  # Inject failure only after temporary serialization.
                 raise ValueError("Injected temporary validation failure")  # Reject the staged cache deterministically.
-            return original_reader(path, config=config)  # Preserve existing primary and backup validation.
+            return original_reader(path, config=config, **kwargs)  # Preserve existing primary and backup validation.
 
         with mock.patch.object(stacking, "read_validated_cache_file", side_effect=reject_temporary):  # Activate temporary validation failure.
             with self.assertRaises(ValueError):  # Require the original validation error to surface.
@@ -249,6 +249,25 @@ class AtomicCacheRecoveryTests(unittest.TestCase):  # Group cache transaction an
         primary_cache = self.read_cache(self.cache_path)  # Deserialize the recovered authoritative primary.
         self.assertEqual(len(primary_cache), 2)  # Verify both recovered and new entries are present.
         self.assertEqual({entry["model_name"] for entry in primary_cache.values()}, {"Model 0", "Model 1"})  # Verify no logical update was lost.
+
+    def test_backup_only_valid_rows_are_recovered_with_valid_primary(self) -> None:
+        primary_df = stacking.prepare_cache_dataframe(pd.DataFrame([make_cache_result(0)]), config={})  # Build valid primary rows.
+        backup_df = stacking.prepare_cache_dataframe(pd.DataFrame([make_cache_result(0), make_cache_result(1)]), config={})  # Build valid backup rows with one extra identity.
+        primary_df.to_csv(self.cache_path, index=False)  # Publish the valid but older primary fixture.
+        backup_df.to_csv(self.backup_path, index=False)  # Publish the valid newer backup fixture.
+        recovered = stacking.load_cache_results("dataset.csv", config={})  # Load through production primary and backup recovery.
+        self.assertEqual({entry["model_name"] for entry in recovered.values()}, {"Model 0", "Model 1"})  # Verify backup-only identity recovery.
+        stacking.save_cache_result_entry("dataset.csv", make_cache_result(2), config={})  # Merge a new result after recovery.
+        primary_cache = self.read_cache(self.cache_path)  # Read the final authoritative primary.
+        self.assertEqual({entry["model_name"] for entry in primary_cache.values()}, {"Model 0", "Model 1", "Model 2"})  # Verify writer union preservation.
+
+    def test_stale_in_memory_cache_does_not_skip_disk_persistence(self) -> None:
+        stale_entry = make_cache_result(0)  # Build one completed result entry.
+        stale_key = stacking.build_cache_identity_from_row(stale_entry)  # Build the production resume identity.
+        stale_cache = {stale_key: stale_entry}  # Simulate worker memory that believes the row already exists.
+        stacking.persist_cache_result_entry("dataset.csv", stale_entry, stale_cache, config={})  # Persist through the public atomic result path.
+        recovered = stacking.load_cache_results("dataset.csv", config={})  # Reload from disk through production resume.
+        self.assertIn(stale_key, recovered)  # Verify stale memory did not suppress persistence.
 
     @unittest.skipUnless("fork" in mp.get_all_start_methods(), "POSIX fork context is required by the production fcntl backend")  # Limit independent-process coverage to the supported production platform.
     def test_independent_process_updates_preserve_all_entries(self) -> None:
