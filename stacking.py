@@ -9795,6 +9795,31 @@ def read_validated_cache_file(cache_path: str, config: Optional[dict] = None, ex
     return prepared_df, cache_dict  # Return the validated canonical rows and their resume representation.
 
 
+def merge_valid_cache_snapshots(primary_df: Optional[pd.DataFrame], backup_df: Optional[pd.DataFrame], config: Optional[dict] = None, expected_experiment_run: Optional[int] = None, source_path: str = "cache snapshots") -> Tuple[pd.DataFrame, dict]:
+    """
+    Merge validated primary and backup cache snapshots without losing distinct rows.
+
+    :param primary_df: Validated primary cache DataFrame, or None.
+    :param backup_df: Validated backup cache DataFrame, or None.
+    :param config: Configuration dictionary, or None to use the global configuration.
+    :param expected_experiment_run: Run index encoded by the source filename.
+    :param source_path: Source label used in validation errors.
+    :return: Prepared merged DataFrame and production resume dictionary.
+    """
+
+    if config is None:  # Use global configuration when no configuration is provided.
+        config = CONFIG  # Assign the global configuration reference.
+
+    frames = [frame for frame in (backup_df, primary_df) if frame is not None]  # Preserve primary rows over backup rows for duplicate identities.
+    if not frames:  # Reject callers that have no validated cache content.
+        raise ValueError("No valid cache snapshots were supplied")  # Surface invalid recovery state.
+    merged_df = prepare_cache_dataframe(pd.concat(frames, ignore_index=True), config=config, expected_experiment_run=expected_experiment_run, source_path=source_path)  # Normalize and deduplicate the union of valid cache rows.
+    merged_cache = deserialize_cache_dataframe(merged_df)  # Build the same resume mapping used by cache recovery.
+    if not merged_cache:  # Reject a union that cannot recover any experiment identity.
+        raise ValueError("Merged cache snapshots produced no recoverable result entries")  # Surface invalid recovery state.
+    return merged_df, merged_cache  # Return merged rows and resume entries.
+
+
 def migrate_legacy_cache_file_for_run(csv_path: str, config: Optional[dict] = None) -> None:
     """
     Copy valid unsuffixed cache or final rows into the run 1 cache file.
@@ -9841,7 +9866,7 @@ def migrate_legacy_cache_file_for_run(csv_path: str, config: Optional[dict] = No
             return  # Leave existing run 1 cache unchanged.
 
         legacy_df = prepare_cache_dataframe(pd.concat(legacy_frames, ignore_index=True), config=config)  # Dedupe overlapping legacy sources by canonical identity.
-        current_df = primary_df if primary_df is not None else backup_df  # Prefer the newest valid run 1 source.
+        current_df = merge_valid_cache_snapshots(primary_df, backup_df, config=config)[0] if primary_df is not None and backup_df is not None else (primary_df if primary_df is not None else backup_df)  # Preserve distinct valid rows from both run 1 sources.
         combined_df = legacy_df if current_df is None else pd.concat([legacy_df, current_df], ignore_index=True)  # Keep current run 1 rows after legacy rows so they win overlaps.
         combined_df = prepare_cache_dataframe(combined_df, config=config)  # Normalize and dedupe the migration snapshot.
         if current_df is not None and len(combined_df) == len(prepare_cache_dataframe(current_df, config=config)):  # Skip publication when migration adds no identity.
@@ -9881,12 +9906,12 @@ def load_cache_results(csv_path, config=None, notify_discovery: bool = True):  #
             if notify_discovery and primary_exists:  # Emit primary discovery only for operator-facing resume loads.
                 print(f"{BackgroundColors.GREEN}Resume cache file found at: {BackgroundColors.CYAN}{cache_path}{Style.RESET_ALL}")  # Print the exact primary cache location.
 
+            primary_df = None  # Hold validated primary rows for union recovery.
+            backup_df = None  # Hold validated backup rows for union recovery.
             primary_error = None  # Preserve the primary validation failure for accurate recovery reporting.
             if primary_exists:  # Attempt the primary cache before considering its backup.
                 try:  # Read and deserialize the complete primary cache.
-                    _, cache_dict = read_validated_cache_file(cache_path, config=config, expected_experiment_run=run_index)  # Validate the primary through production schema and resume logic.
-                    print(f"{BackgroundColors.GREEN}Loaded cached results from: {BackgroundColors.CYAN}{cache_path}{Style.RESET_ALL}")  # Confirm successful primary recovery.
-                    return cache_dict  # Return all primary cache entries.
+                    primary_df, _ = read_validated_cache_file(cache_path, config=config, expected_experiment_run=run_index)  # Validate the primary through production schema and resume logic.
                 except Exception as exc:  # Preserve corruption, truncation, permission, and schema failures for fallback reporting.
                     primary_error = exc  # Store the exact primary error without discarding it silently.
                     print(f"{BackgroundColors.YELLOW}Warning: Primary cache is unavailable or invalid at {BackgroundColors.CYAN}{cache_path}{BackgroundColors.YELLOW}: {exc}{Style.RESET_ALL}")  # Report why backup recovery is being attempted.
@@ -9897,13 +9922,21 @@ def load_cache_results(csv_path, config=None, notify_discovery: bool = True):  #
             backup_error = None  # Preserve the backup validation failure when recovery is impossible.
             if backup_exists:  # Attempt recovery only when the sibling backup exists.
                 try:  # Read and deserialize the complete backup cache.
-                    _, cache_dict = read_validated_cache_file(backup_path, config=config, expected_experiment_run=run_index)  # Validate the backup through the same production path.
-                    print(f"{BackgroundColors.GREEN}[CACHE RECOVERY] Loaded {BackgroundColors.CYAN}{len(cache_dict)}{BackgroundColors.GREEN} cached result(s) from valid backup: {BackgroundColors.CYAN}{backup_path}{Style.RESET_ALL}")  # Clearly report successful backup recovery.
-                    return cache_dict  # Preserve every valid recovered entry without rewriting the primary during a read.
+                    backup_df, _ = read_validated_cache_file(backup_path, config=config, expected_experiment_run=run_index)  # Validate the backup through the same production path.
                 except Exception as exc:  # Preserve the exact backup failure for accurate cache-miss reporting.
                     backup_error = exc  # Store the exact backup validation failure.
             else:  # Represent an absent backup accurately.
                 backup_error = FileNotFoundError(backup_path)  # Store the missing backup condition.
+
+            if primary_df is not None or backup_df is not None:  # Recover every valid identity before reporting a cache miss.
+                merged_df, cache_dict = merge_valid_cache_snapshots(primary_df, backup_df, config=config, expected_experiment_run=run_index, source_path=cache_path)  # Preserve distinct primary and backup rows.
+                if primary_df is not None and backup_df is not None and len(merged_df) > len(primary_df):  # Report backup-only rows without replacing valid primary rows.
+                    print(f"{BackgroundColors.GREEN}[CACHE RECOVERY] Merged {BackgroundColors.CYAN}{len(merged_df) - len(primary_df)}{BackgroundColors.GREEN} backup-only cached result(s) from: {BackgroundColors.CYAN}{backup_path}{Style.RESET_ALL}")  # Report union recovery.
+                elif primary_df is not None:  # Confirm successful primary recovery.
+                    print(f"{BackgroundColors.GREEN}Loaded cached results from: {BackgroundColors.CYAN}{cache_path}{Style.RESET_ALL}")  # Confirm successful primary recovery.
+                else:  # Confirm backup-only recovery.
+                    print(f"{BackgroundColors.GREEN}[CACHE RECOVERY] Loaded {BackgroundColors.CYAN}{len(cache_dict)}{BackgroundColors.GREEN} cached result(s) from valid backup: {BackgroundColors.CYAN}{backup_path}{Style.RESET_ALL}")  # Clearly report successful backup recovery.
+                return cache_dict  # Return every recovered cache entry.
 
             print(f"{BackgroundColors.YELLOW}Warning: No valid cache data could be recovered. Primary error: {primary_error}. Backup error: {backup_error}.{Style.RESET_ALL}")  # Report that both recovery sources failed.
             return {}  # Follow the established cache-miss behavior without claiming recovery.
@@ -10308,7 +10341,7 @@ def persist_cache_dataframe_atomically(cache_path: str, cache_df: pd.DataFrame, 
 
     try:  # Stage every required file before changing a recoverable destination.
         primary_temporary = write_cache_dataframe_temporary(cache_path, cache_df, config, "primary", expected_experiment_run=run_index)  # Stage and validate the new authoritative snapshot.
-        backup_candidate = primary_df if primary_df is not None else cache_df  # Preserve a valid prior primary, otherwise mirror the authoritative snapshot.
+        backup_candidate = primary_df if primary_df is not None else (backup_df if backup_df is not None else cache_df)  # Preserve the newest valid pre-transaction snapshot, otherwise mirror the first authoritative snapshot.
 
         if backup_candidate is not None:  # Update the backup only from content already proven valid.
             if backup_df is not None:  # Stage the current known-good backup before replacing it.
@@ -10381,9 +10414,6 @@ def persist_cache_result_entry(cache_ref_file: Optional[str], result_entry: dict
     validate_cache_result_payload(result_entry, config=config)  # Validate the complete normalized cache payload before writing.
     resume_key = build_cache_identity_from_row(result_entry)  # Build the same identity used during resume loading.
 
-    if cache_dict is not None and resume_key in cache_dict:  # Avoid duplicate writes when the same identity is already registered in memory.
-        return  # Return without appending a duplicate cache row.
-
     try:  # Persist and verify the row before any in-memory cache registration.
         save_cache_result_entry(cache_ref_file, result_entry, config=config)  # Persist the fully computed atomic result immediately.
         verify_cache_result_persisted(cache_ref_file, resume_key, config=config)  # Verify the real resume loader can recover the exact identity.
@@ -10440,11 +10470,12 @@ def save_cache_result_entry(csv_path: str, result_entry: dict, config=None) -> N
                     except Exception as exc:  # Exclude invalid backup content from authoritative merging and rollback.
                         backup_error = exc  # Preserve the exact backup validation failure.
 
-                if primary_df is not None:  # Prefer the current valid primary as the authoritative merge base.
-                    existing_df = primary_df  # Preserve every validated primary entry before adding the new result.
-                elif backup_df is not None:  # Recover the authoritative merge base from a valid backup.
-                    existing_df = backup_df  # Preserve every recovered entry without trusting the invalid primary.
-                    print(f"{BackgroundColors.GREEN}[CACHE RECOVERY] Merging new result with valid backup after primary failure: {BackgroundColors.CYAN}{backup_path}{Style.RESET_ALL}")  # Report writer-side backup recovery clearly.
+                if primary_df is not None or backup_df is not None:  # Recover every valid existing entry before adding the new result.
+                    existing_df, _ = merge_valid_cache_snapshots(primary_df, backup_df, config=config, expected_experiment_run=run_index, source_path=cache_path)  # Preserve distinct primary and backup rows under the write lock.
+                    if primary_df is None and backup_df is not None:  # Report writer-side backup recovery clearly.
+                        print(f"{BackgroundColors.GREEN}[CACHE RECOVERY] Merging new result with valid backup after primary failure: {BackgroundColors.CYAN}{backup_path}{Style.RESET_ALL}")  # Report writer-side backup recovery clearly.
+                    elif primary_df is not None and backup_df is not None and len(existing_df) > len(primary_df):  # Report backup-only rows merged under the write lock.
+                        print(f"{BackgroundColors.GREEN}[CACHE RECOVERY] Merging new result with {BackgroundColors.CYAN}{len(existing_df) - len(primary_df)}{BackgroundColors.GREEN} backup-only cached result(s): {BackgroundColors.CYAN}{backup_path}{Style.RESET_ALL}")  # Report writer-side union recovery clearly.
                 else:  # Follow cache-miss behavior when neither source is valid.
                     existing_df = pd.DataFrame(columns=get_cache_results_csv_columns(config))  # Start a new canonical cache snapshot.
                     if primary_error is not None or backup_error is not None:  # Report invalid existing artifacts without claiming successful recovery.
