@@ -183,6 +183,8 @@ CONFIG = {}  # Will be initialized by initialize_config() - holds all runtime se
 # Telegram Bot Setup:
 TELEGRAM_BOT = None  # Global Telegram bot instance (initialized in setup_telegram_bot)
 STACKING_FAILURE_TELEGRAM_IDENTITIES: set[str] = set()  # Track failure Telegram identities already emitted in this process
+NEW_BEST_RESULTS_BY_DATASET: dict = {}  # Track best known F1 row per result dataset identity during this process
+NEW_BEST_RESULTS_LOCK = threading.RLock()  # Serialize best-result updates across local notification paths
 OOM_RESTART_SCHEDULED = False  # Track whether this coordinator has already scheduled an OOM restart.
 CURRENT_RUNTIME_PROCESS_NAME = None  # Preserve one exact resolved runtime title for child-process reuse.
 
@@ -12436,6 +12438,228 @@ def build_cached_telegram_result_messages(cached_result, feature_set_name, model
     return cached_msg, telegram_msg  # Return identical console and Telegram representations
 
 
+def resolve_result_metric_float(result_entry: dict, metric_name: str) -> Optional[float]:
+    """
+    Resolve one finite numeric metric from a result entry.
+
+    :param result_entry: Result entry containing persisted metric values.
+    :param metric_name: Metric field name to read.
+    :return: Finite float value or None when unavailable.
+    """
+
+    try:  # Contain malformed legacy scalar values.
+        metric_value = result_entry.get(metric_name, None)  # Read the raw metric field.
+        if metric_value is None or bool(cast(Any, pd.isna(metric_value))):  # Reject null and pandas missing scalars.
+            return None  # Return no comparable value.
+        metric_float = float(metric_value)  # Convert numeric strings and numpy scalars.
+        if not math.isfinite(metric_float):  # Reject NaN and infinite values.
+            return None  # Return no comparable value.
+        return metric_float  # Return the finite comparable value.
+    except Exception:  # Treat malformed values as unavailable.
+        return None  # Return no comparable value.
+
+
+def resolve_result_dataset_identity(result_entry: dict) -> Optional[str]:
+    """
+    Resolve dataset identity from the persisted result row.
+
+    :param result_entry: Result entry containing dataset metadata.
+    :return: Dataset identity string or None when unavailable.
+    """
+
+    dataset_value = result_entry.get("dataset", None)  # Read the code-defined result dataset field.
+    if dataset_value is None or bool(cast(Any, pd.isna(dataset_value))):  # Reject missing dataset values.
+        return None  # Return no comparable dataset identity.
+    dataset_text = str(dataset_value).strip()  # Normalize textual dataset identity without inventing grouping.
+    if not dataset_text:  # Reject empty dataset identities.
+        return None  # Return no comparable dataset identity.
+    return dataset_text  # Return exact result-row dataset identity.
+
+
+def format_result_value(value: Any) -> str:
+    """
+    Format one result value for logs and Telegram messages.
+
+    :param value: Result value to format.
+    :return: Compact string representation.
+    """
+
+    metric_float = resolve_result_metric_float({"value": value}, "value")  # Reuse finite numeric parsing for scalars.
+    if metric_float is not None:  # Format finite numbers consistently.
+        return f"{metric_float:.6g}"  # Return compact numeric text.
+    if value is None or (not isinstance(value, (list, dict, tuple, set)) and bool(cast(Any, pd.isna(value)))):  # Detect missing scalar values.
+        return "N/A"  # Return explicit missing marker.
+    return str(value)  # Return textual fallback for identity fields.
+
+
+def build_result_identity_lines(result_entry: dict) -> List[str]:
+    """
+    Build available experiment identity lines from a result row.
+
+    :param result_entry: Result entry containing experiment identity metadata.
+    :return: Ordered identity lines.
+    """
+
+    identity_fields = [("Experiment ID", "experiment_id"), ("Experiment run", "experiment_run"), ("Dataset", "dataset"), ("Execution mode", "execution_mode"), ("Data source", "data_source"), ("Experiment mode", "experiment_mode"), ("Attack types", "attack_types_combined"), ("Augmentation ratio", "augmentation_ratio"), ("Feature set", "feature_set"), ("Hyperparameter mode", "hyperparameter_mode"), ("Classifier type", "classifier_type"), ("Model name", "model_name"), ("Model", "model"), ("Features", "n_features"), ("Train samples", "n_samples_train"), ("Test samples", "n_samples_test")]  # Preserve actual result-row identity fields.
+    lines = []  # Accumulate available identity text.
+    for label, field_name in identity_fields:  # Iterate stable identity fields.
+        value = result_entry.get(field_name, None)  # Read one identity value.
+        if value is None or (not isinstance(value, (list, dict, tuple, set)) and bool(cast(Any, pd.isna(value)))):  # Skip unavailable identity values.
+            continue  # Move to the next field.
+        lines.append(f"{label}: {format_result_value(value)}")  # Add formatted identity line.
+    return lines  # Return all available identity lines.
+
+
+def metric_improvement_direction(metric_name: str) -> Optional[str]:
+    """
+    Resolve whether a metric improves upward or downward.
+
+    :param metric_name: Metric field name.
+    :return: Direction label or None when metric semantics are unknown.
+    """
+
+    lower_metrics = {"fpr", "fnr", "elapsed_time_s"}  # Define lower-is-better metrics recorded by this framework.
+    higher_metrics = {"accuracy", "precision", "recall", "f1_score"}  # Define higher-is-better metrics recorded by this framework.
+    if metric_name in lower_metrics or metric_name.endswith("_time_s") or metric_name.endswith("time_s"):  # Treat recorded second-based runtime metrics as lower-is-better.
+        return "lower"  # Return downward improvement direction.
+    if metric_name in higher_metrics:  # Match classifier quality metrics calculated in this file.
+        return "higher"  # Return upward improvement direction.
+    return None  # Return unknown semantics for nonmetric metadata.
+
+
+def list_comparable_result_metrics(previous_result: dict, new_result: dict) -> List[str]:
+    """
+    List comparable numeric metrics available in both result rows.
+
+    :param previous_result: Previous best result entry.
+    :param new_result: New result entry.
+    :return: Ordered metric field names.
+    """
+
+    ordered_metrics = ["f1_score", "accuracy", "precision", "recall", "fpr", "fnr", "elapsed_time_s"]  # Start with framework-required metrics.
+    configured_metrics = [field for field in get_stacking_results_csv_columns(CONFIG) if metric_improvement_direction(str(field)) is not None]  # Add configured meaningful metrics with known direction.
+    metric_names = list(dict.fromkeys(ordered_metrics + configured_metrics))  # Preserve order while removing duplicates.
+    return [metric for metric in metric_names if resolve_result_metric_float(previous_result, metric) is not None and resolve_result_metric_float(new_result, metric) is not None]  # Keep metrics comparable in both rows.
+
+
+def build_metric_comparison_lines(previous_result: dict, new_result: dict) -> List[str]:
+    """
+    Build metric comparison lines between previous and new results.
+
+    :param previous_result: Previous best result entry.
+    :param new_result: New result entry.
+    :return: Ordered comparison lines.
+    """
+
+    lines = []  # Accumulate metric comparison text.
+    for metric_name in list_comparable_result_metrics(previous_result, new_result):  # Iterate comparable known metrics.
+        previous_value = cast(float, resolve_result_metric_float(previous_result, metric_name))  # Read previous finite value.
+        new_value = cast(float, resolve_result_metric_float(new_result, metric_name))  # Read new finite value.
+        difference = new_value - previous_value  # Calculate absolute new-minus-previous difference.
+        direction = metric_improvement_direction(metric_name)  # Resolve metric direction.
+        improved = difference > 0.0 if direction == "higher" else difference < 0.0 if direction == "lower" else None  # Interpret change using metric semantics.
+        status = "improvement" if improved is True else "regression" if improved is False and difference != 0.0 else "tie"  # Name semantic outcome.
+        percent_text = "N/A" if previous_value == 0.0 else f"{(difference / abs(previous_value)) * 100.0:+.2f}%"  # Avoid meaningless division by zero.
+        lines.append(f"{metric_name}: previous={previous_value:.6g} | new={new_value:.6g} | diff={difference:+.6g} | change={percent_text} | {status}")  # Add complete metric comparison.
+    return lines  # Return metric comparisons.
+
+
+def build_new_best_result_message(new_result: dict, previous_result: Optional[dict]) -> str:
+    """
+    Build a dataset-specific new-best result notification.
+
+    :param new_result: Newly completed result entry.
+    :param previous_result: Previous dataset-best result entry or None.
+    :return: Notification message body.
+    """
+
+    dataset_identity = resolve_result_dataset_identity(new_result) or "unknown"  # Resolve display dataset identity.
+    f1_value = resolve_result_metric_float(new_result, "f1_score")  # Read new F1 value.
+    lines = [f"[NEW DATASET BEST F1] Dataset: {dataset_identity}", f"New F1-Score: {format_result_value(f1_value)}"]  # Start notification with required headline.
+    lines.extend(["New experiment:", *build_result_identity_lines(new_result)])  # Add complete available new experiment identity.
+    lines.append("New metrics:")  # Add new metric section heading.
+    for metric_name in [metric for metric in get_stacking_results_csv_columns(CONFIG) if resolve_result_metric_float(new_result, str(metric)) is not None]:  # Include all recorded numeric framework metrics.
+        lines.append(f"{metric_name}: {format_result_value(new_result.get(metric_name))}")  # Add one new metric value.
+    if previous_result is None:  # Handle first valid row for this dataset.
+        lines.append("Previous best: none; initial benchmark established.")  # Report initial benchmark explicitly.
+    else:  # Compare against displaced dataset best.
+        lines.extend(["Previous best experiment:", *build_result_identity_lines(previous_result), "Metric comparison:"])  # Add previous identity and comparison heading.
+        lines.extend(build_metric_comparison_lines(previous_result, new_result))  # Add comparable metric deltas.
+    return "\n".join(lines)  # Return complete notification text.
+
+
+def register_known_best_result(result_entry: dict) -> None:
+    """
+    Register one known result without sending notifications.
+
+    :param result_entry: Result entry already known to the execution.
+    :return: None.
+    """
+
+    dataset_identity = resolve_result_dataset_identity(result_entry)  # Resolve exact result-row dataset identity.
+    f1_value = resolve_result_metric_float(result_entry, "f1_score")  # Resolve comparable F1 value.
+    if dataset_identity is None or f1_value is None:  # Ignore rows without comparable dataset and F1.
+        return  # Leave best state unchanged.
+    current_best = NEW_BEST_RESULTS_BY_DATASET.get(dataset_identity)  # Read current dataset best state.
+    current_f1 = resolve_result_metric_float(current_best, "f1_score") if isinstance(current_best, dict) else None  # Resolve current best F1.
+    if current_f1 is None or f1_value > current_f1:  # Use strict F1 improvement for state updates.
+        NEW_BEST_RESULTS_BY_DATASET[dataset_identity] = copy.deepcopy(result_entry)  # Store an isolated copy of the authoritative row.
+
+
+def initialize_new_best_result_state(reference_path: str, cache_dict: Optional[dict], config: Optional[dict] = None) -> None:
+    """
+    Initialize dataset best state from authoritative loaded result sources.
+
+    :param reference_path: Dataset file or directory path used by active result storage.
+    :param cache_dict: Cache mapping loaded by the active execution flow.
+    :param config: Runtime configuration dictionary.
+    :return: None.
+    """
+
+    if config is None:  # Preserve established configuration fallback.
+        config = CONFIG  # Use global configuration.
+    with NEW_BEST_RESULTS_LOCK:  # Serialize initialization with result completion notifications.
+        for known_result in (cache_dict or {}).values():  # Seed from cache rows the active flow loaded.
+            if isinstance(known_result, dict):  # Accept only result mappings.
+                register_known_best_result(known_result)  # Register without notification.
+        for final_path in (get_stacking_results_file_path(reference_path, config=config), Path(get_cache_backup_path(str(get_stacking_results_file_path(reference_path, config=config))))):  # Include active final result and backup when present.
+            if not final_path.is_file():  # Skip absent final sources.
+                continue  # Move to the next source.
+            try:  # Keep legacy final read failures nonfatal.
+                final_df = read_validated_final_results_file(str(final_path), config=config)  # Read through production final-result validation.
+                for final_result in deserialize_cache_dataframe(normalize_cache_dataframe(final_df, config=config)).values():  # Convert final rows into production result entries.
+                    register_known_best_result(final_result)  # Register without notification.
+            except Exception as exc:  # Report unusable final source without blocking experiments.
+                print(f"{BackgroundColors.YELLOW}Warning: New-best initialization skipped final result source {BackgroundColors.CYAN}{final_path}{BackgroundColors.YELLOW}: {exc}{Style.RESET_ALL}")  # Log skipped historical source.
+
+
+def notify_new_best_result_if_applicable(result_entry: dict) -> bool:
+    """
+    Notify when one new result establishes a dataset-specific best F1.
+
+    :param result_entry: Newly completed and persisted result entry.
+    :return: True when a new-best notification was emitted or attempted.
+    """
+
+    dataset_identity = resolve_result_dataset_identity(result_entry)  # Resolve exact result-row dataset identity.
+    f1_value = resolve_result_metric_float(result_entry, "f1_score")  # Resolve comparable F1 value.
+    if dataset_identity is None or f1_value is None:  # Ignore incomplete or malformed rows.
+        return False  # Report no notification.
+    with NEW_BEST_RESULTS_LOCK:  # Make comparison and update atomic within this process.
+        previous_best = NEW_BEST_RESULTS_BY_DATASET.get(dataset_identity)  # Read prior dataset best before current update.
+        previous_f1 = resolve_result_metric_float(previous_best, "f1_score") if isinstance(previous_best, dict) else None  # Resolve prior F1.
+        if previous_f1 is not None and f1_value <= previous_f1:  # Enforce strict F1 improvement only.
+            return False  # Report no notification for lower or tied F1.
+        message = build_new_best_result_message(result_entry, previous_best if isinstance(previous_best, dict) else None)  # Build notification before state mutation.
+        NEW_BEST_RESULTS_BY_DATASET[dataset_identity] = copy.deepcopy(result_entry)  # Update best state exactly once for this completed row.
+    print(f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}{message}{Style.RESET_ALL}")  # Emit clear terminal notification with existing colors.
+    try:  # Isolate Telegram transport from experiment execution.
+        send_telegram_message(TELEGRAM_BOT, message)  # Reuse established Telegram mechanism.
+    except Exception as telegram_error:  # Preserve existing failure-handling style for notification transport.
+        print(f"{BackgroundColors.YELLOW}New-best Telegram notification failed: {telegram_error}{Style.RESET_ALL}")  # Log transport failure without corrupting execution.
+    return True  # Report notification attempt.
+
+
 def build_feature_process_notification_result(result_entry: dict) -> dict:  # Reduce one persisted result to small Telegram fields
     """
     Build a matrix-free notification result from one persisted cache row.
@@ -12444,7 +12668,7 @@ def build_feature_process_notification_result(result_entry: dict) -> dict:  # Re
     :return: Small scalar-only notification result mapping.
     """
 
-    fields = ("feature_set", "experiment_run", "hyperparameter_mode", "model_name", "execution_mode", "experiment_mode", "augmentation_ratio", "accuracy", "precision", "recall", "f1_score", "fpr", "fnr", "elapsed_time_s")  # List only fields required for identity, completion, and cache notifications
+    fields = ("dataset", "feature_set", "experiment_run", "hyperparameter_mode", "model_name", "execution_mode", "experiment_mode", "augmentation_ratio", "accuracy", "precision", "recall", "f1_score", "fpr", "fnr", "elapsed_time_s")  # List only fields required for identity, completion, and cache notifications
     return {field: result_entry.get(field) for field in fields}  # Exclude estimators, matrices, predictions, probabilities, and feature lists
 
 
@@ -12854,6 +13078,8 @@ def send_feature_process_result_notification(task: dict, result_entry: dict, eve
         send_telegram_message(TELEGRAM_BOT, telegram_msg)  # Send through the established host, OS, and script-prefixed utility
     except Exception:  # Preserve the utility's existing silent delivery-failure semantics under patched or alternate senders
         pass  # Keep persisted result, status, and future cache recovery valid
+    if event == "computed":  # Limit new-best detection to newly completed worker results.
+        notify_new_best_result_if_applicable(result_entry)  # Compare and notify from the coordinator after durable persistence.
     return True  # Report that this combination consumed its one notification attempt
 
 
@@ -13258,6 +13484,7 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
             write_memory_phase_event("before_cache_persist", config=config, **phase_metadata, event_outcome="starting")  # Publish cache persistence start
             log_training_phase(name, model_name, "Cache persistence", "Started", hyperparameters_enabled, augmentation_ratio)  # Mark contextual result cache persistence separately from training.
             persist_cache_result_entry(cache_ref_file, result_entry, cache_dict, config=config)  # Persist this atomic classifier result immediately and register its resume identity
+            notify_new_best_result_if_applicable(result_entry)  # Notify only after the new individual result is durably cached.
             log_training_phase(name, model_name, "Cache persistence", "Completed", hyperparameters_enabled, augmentation_ratio)  # Mark contextual durable cache completion before artifact export.
             write_memory_phase_event("after_cache_persist", config=config, **phase_metadata, event_outcome="persisted")  # Publish cache persistence completion
 
@@ -13428,6 +13655,7 @@ def run_stacking_evaluation_for_feature_set(name, stacking_model, X_train_df, y_
         write_memory_phase_event("before_cache_persist", config=config, **phase_metadata, event_outcome="starting")  # Publish stacking cache persistence start
         log_training_phase(name, "StackingClassifier", "Cache persistence", "Started", hyperparameters_enabled, augmentation_ratio)  # Mark contextual stacking cache persistence separately from training.
         persist_cache_result_entry(cache_ref_file, stacking_result_entry, cache_dict, config=config)  # Persist this atomic stacking result immediately and register its resume identity
+        notify_new_best_result_if_applicable(stacking_result_entry)  # Notify only after the new stacking result is durably cached.
         log_training_phase(name, "StackingClassifier", "Cache persistence", "Completed", hyperparameters_enabled, augmentation_ratio)  # Mark contextual durable stacking cache completion before artifact export.
         write_memory_phase_event("after_cache_persist", config=config, **phase_metadata, event_outcome="persisted")  # Publish stacking cache persistence completion
 
@@ -13890,6 +14118,7 @@ def evaluate_on_dataset(
                     print(f"{BackgroundColors.GREEN}Resume: loaded {BackgroundColors.CYAN}{len(cache_dict)}{BackgroundColors.GREEN} cached result(s) from previous run.{Style.RESET_ALL}")
             except Exception:
                 cache_dict = {}
+            initialize_new_best_result_state(effective_cache_ref, cache_dict, config=config)  # Seed dataset-best state from loaded authoritative rows without notification.
 
         if artifact_recovery_target is None and (grid_progress is None or not grid_progress.get("plan_printed", False)):
             feature_metadata_by_name = build_feature_process_metadata(feature_names, ga_selected_features, pca_n_components, rfe_selected_features, extra_trees_selected_features)  # Build small feature descriptors for cache-aware plan reporting
@@ -13978,6 +14207,7 @@ def evaluate_on_dataset(
                         classifier_type = "Individual"
                     result_entry = build_classifier_result_entry(loaded_model.__class__.__name__, file, execution_mode_str, attack_types_combined, name, classifier_type, model_name, data_source_label, experiment_id, experiment_mode, augmentation_ratio, len(subset_feature_names), original_train_count, len(y_augmented), metrics, subset_feature_names, hyperparams_map=hyperparams_map, hyperparameters_enabled=hyperparameters_enabled, effective_hyperparameters=serialize_effective_estimator_parameters(loaded_model), experiment_run=get_current_experiment_run(config))  # Persist the active run on augmented result rows.
                     persist_cache_result_entry(effective_cache_ref, result_entry, cache_dict, config=config)
+                    notify_new_best_result_if_applicable(result_entry)  # Notify only after the new augmented result is durably cached.
                     all_results[(name, model_name)] = result_entry
                     progress_bar.update(1)
                     current_combination += 1
@@ -17544,6 +17774,7 @@ def run_persistent_feature_set_grid(original_df: pd.DataFrame, file: str, source
     label_classes = normalize_metadata_for_json(np.unique(original_df.iloc[:, -1].to_numpy(copy=False)).tolist())  # Preserve exact LabelEncoder class order as small metadata
     tasks = build_feature_process_plan(evaluation_plan, feature_metadata_by_name, original_sample_count, file, execution_mode_str, get_current_experiment_run(config), plan_global_ids, canonical_total)  # Build dynamic task identities without opening augmentation rows
     cache_dict = load_cache_results(file, config=config)  # Recover primary or backup cache before worker startup
+    initialize_new_best_result_state(file, cache_dict, config=config)  # Seed dataset-best state before pending worker results can emit notifications.
     optimized_params = {}  # Accumulate coordinator-validated optimized parameter metadata
     coordinator_model_maps = {}  # Retain small coordinator prototypes only for preflight artifact validation
     for hyperparameters_enabled, models_map, params_map in hp_runs:  # Preserve runnable mode mappings from the authoritative plan source
