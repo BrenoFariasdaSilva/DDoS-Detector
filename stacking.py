@@ -16636,6 +16636,63 @@ def build_feature_process_task_status_fields(task: Optional[dict]) -> dict:  # C
     return {"classifier_name": task.get("classifier_name"), "hyperparameters_enabled": task.get("hyperparameters_enabled"), "augmentation_ratio": task.get("augmentation_ratio"), "experiment_run": task.get("experiment_run"), "feature_local_position": task.get("feature_local_position"), "feature_local_total": task.get("feature_local_total"), "canonical_total": task.get("canonical_total"), "total_combinations": task.get("total_combinations")}  # Return only scalar active-combination fields.
 
 
+def sanitize_process_title_fragment(value: Any) -> str:  # Normalize one process-title suffix fragment.
+    """
+    Normalize one process-title suffix fragment.
+
+    :param value: Raw fragment candidate.
+    :return: Compact process-title-safe fragment.
+    """
+
+    compact_value = re.sub(r"[^A-Za-z0-9._-]+", "_", str(value or "").strip()).strip("_")  # Keep only process-title-safe characters and collapse separators.
+    return compact_value[:48]  # Keep suffix fragments short enough for htop readability.
+
+
+def build_feature_worker_process_name(runtime_process_name: Optional[str], feature_set: Any, worker_index: Any) -> Optional[str]:  # Build one stable idle feature-worker process title.
+    """
+    Build one stable idle feature-worker process title.
+
+    :param runtime_process_name: Top-level runtime process title selected by CLI or config.
+    :param feature_set: Worker-owned feature-set identity.
+    :param worker_index: Worker slot number for the owned feature set.
+    :return: Stable worker process title or None when no runtime title was configured.
+    """
+
+    base_name = str(runtime_process_name or "").strip()  # Reuse the exact parent-selected base runtime identity.
+    if not base_name:  # Skip worker suffix generation when the runtime title is unavailable.
+        return None  # Leave the process title unchanged.
+    suffix_parts = [sanitize_process_title_fragment(feature_set), f"W{int(worker_index)}"]  # Keep only the stable worker identity between combinations.
+    suffix = "-".join(part for part in suffix_parts if part)  # Drop missing fragments without adding empty separators.
+    return f"{base_name}-{suffix}" if suffix else base_name  # Preserve the base name when suffix fragments are unavailable.
+
+
+def build_feature_task_process_name(runtime_process_name: Optional[str], task: Optional[dict]) -> Optional[str]:  # Build one active-combination process title for htop.
+    """
+    Build one active-combination process title for htop.
+
+    :param runtime_process_name: Top-level runtime process title selected by CLI or config.
+    :param task: Small active combination descriptor.
+    :return: Active-combination process title or the base title when task metadata is unavailable.
+    """
+
+    base_name = str(runtime_process_name or "").strip()  # Reuse the exact parent-selected base runtime identity.
+    if not base_name or not isinstance(task, dict):  # Reject missing task metadata or absent base runtime names.
+        return base_name or None  # Fall back to the unchanged base title when available.
+    augmentation_ratio = task.get("augmentation_ratio")  # Resolve original or augmented testing mode for this active combination.
+    ratio_label = "Orig" if augmentation_ratio is None else f"Aug{int(round(float(augmentation_ratio) * 100))}"  # Keep the testing mode compact and sortable in htop.
+    hyperparameter_label = "Opt" if task.get("hyperparameters_enabled") else "Def"  # Distinguish optimized and default training modes.
+    suffix_parts = [
+        f"G{int(task['global_id'])}" if task.get("global_id") is not None else "",
+        sanitize_process_title_fragment(task.get("feature_set")),
+        sanitize_process_title_fragment(task.get("classifier_name")),
+        hyperparameter_label,
+        ratio_label,
+        f"Run{int(task['experiment_run'])}" if task.get("experiment_run") is not None else "",
+    ]  # Keep only scalar combination identity fragments already present in worker metadata.
+    suffix = "-".join(part for part in suffix_parts if part)  # Drop missing fragments without adding empty separators.
+    return f"{base_name}-{suffix}" if suffix else base_name  # Preserve the base name when no suffix fragments survive sanitation.
+
+
 def build_feature_process_active_worker_status(status_state: dict, process_payload: dict) -> dict:
     """Build live active-worker count fields for training notifications."""
 
@@ -16929,13 +16986,14 @@ def run_feature_set_process_worker(process_payload: dict, status_queue: Any, sta
 
     resource_state: dict[str, Any] = {"original_resources": None, "ratio_data": None, "active_ratio": None, "cache_dict": {}}  # Track bounded worker resources and the latest cache snapshot
     active_task: Optional[dict] = None  # Track exact task identity for failure and abrupt-death reporting
+    worker_process_name = build_feature_worker_process_name(process_payload.get("runtime_process_name"), process_payload.get("feature_set"), process_payload.get("worker_index"))  # Keep one stable idle title for this persistent worker.
     capacity_gate: Any = process_payload.get("capacity_gate")  # Resolve the coordinator-owned matrix-capacity admission gate
     augmented_capacity_gate: Any = process_payload.get("augmented_capacity_gate")  # Resolve the coordinator-owned augmented artifact admission gate
     acquired_capacity_gate: Any = None  # Track the exact phase gate owned for exception-safe release
     capacity_acquired = False  # Track admission ownership for exception-safe release
     try:  # Surface every child failure through both status queue and nonzero exit code
-        if process_payload.get("runtime_process_name") is not None:  # Re-apply parent-selected runtime title inside spawned feature workers.
-            set_runtime_process_name(process_payload["runtime_process_name"])  # Prevent spawn import fallback names from leaking into htop.
+        if worker_process_name is not None:  # Re-apply parent-selected runtime title inside spawned feature workers.
+            set_runtime_process_name(worker_process_name)  # Prevent spawn import fallback names from leaking into htop and identify idle feature workers.
         configure_feature_process_parent_death(process_payload["coordinator_pid"])  # Prevent spawned work from surviving a killed detached coordinator
         initialize_feature_process_logger(process_payload["config"])  # Initialize append-only process-safe child logging after spawn
         task_queue = list(process_payload["tasks"])  # Copy only matrix-free descriptors into feature-local sequential order
@@ -16966,9 +17024,14 @@ def run_feature_set_process_worker(process_payload: dict, status_queue: Any, sta
                     capacity_acquired = True  # Record current combination admission ownership.
                 try:
                     active_task = task  # Record current task before lifecycle transition.
+                    active_process_name = build_feature_task_process_name(process_payload.get("runtime_process_name"), task)  # Distinguish the current combination in htop while this worker owns it.
+                    if active_process_name is not None:
+                        set_runtime_process_name(active_process_name)  # Show feature set, classifier, ratio, and run identity instead of only the top-level title.
                     process_feature_process_task(task, process_payload, model_maps, resource_state, status_queue, status_state)  # Process one reserved combination through existing evaluation logic.
                     active_task = None  # Clear successfully completed task identity.
                 finally:
+                    if worker_process_name is not None:
+                        set_runtime_process_name(worker_process_name)  # Restore the persistent worker identity between combinations and before any failure handling.
                     if capacity_acquired:  # Release current combination admission before next task.
                         if isinstance(acquired_capacity_gate, dict):
                             release_dynamic_feature_capacity(acquired_capacity_gate)  # Wake waiters so they recheck current RAM.
