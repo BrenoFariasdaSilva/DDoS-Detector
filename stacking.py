@@ -10395,15 +10395,16 @@ def persist_cache_result_entry(cache_ref_file: Optional[str], result_entry: dict
     """
     Persist one atomic result and register it in the in-memory resume cache.
 
-    :param cache_ref_file: Dataset file path used to derive the cache file location, or None to skip persistence.
+    :param cache_ref_file: Dataset file path used to derive the cache file location.
     :param result_entry: Fully computed classifier result entry.
     :param cache_dict: Mutable in-memory resume cache keyed by resume identity, or None.
     :param config: Configuration dictionary, or None to use the global configuration.
     :return: None.
     """
 
-    if cache_ref_file is None:  # Skip persistence when no cache reference is available.
-        return  # Return without writing.
+    if cache_ref_file is None:  # Reject missing cache destination.
+        message = "Cache reference file is required to persist a completed result"  # Build persistence error text.
+        raise ValueError(message)  # Surface missing cache routing instead of silently omitting the row.
 
     if config is None:  # Use global configuration when no configuration is provided.
         config = CONFIG  # Assign the global configuration reference.
@@ -14109,7 +14110,12 @@ def evaluate_on_dataset(
             "attack_types": normalize_metadata_for_json(attack_types_combined),  # Store combined-mode label scope when available.
         }  # Complete the split and evaluation identity payload.
 
-        effective_cache_ref = None if artifact_recovery_target is not None else (cache_ref_file if cache_ref_file is not None else (file if file != "combined_files_combined" else None))  # Keep internal artifact recovery out of result-cache persistence.
+        if cache_ref_file is not None:  # Prefer explicit cache reference from the caller.
+            effective_cache_ref = cache_ref_file  # Use caller cache reference for every completed result.
+        elif file != "combined_files_combined":  # Use dataset path when it is a concrete cache reference.
+            effective_cache_ref = file  # Use dataset file or directory for cache routing.
+        else:  # Preserve the sentinel as an invalid persistence destination.
+            effective_cache_ref = None  # Force persistence failure if a finalized result has no cache destination.
         cache_dict = {}  # Initialize empty cache dictionary as fallback when no cache file exists
         if effective_cache_ref is not None and artifact_recovery_target is None:
             try:
