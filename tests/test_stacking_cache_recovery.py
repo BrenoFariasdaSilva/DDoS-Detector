@@ -13,6 +13,7 @@ from typing import Any  # Provide explicit annotations for injected interfaces.
 import unittest  # Provide the repository-independent standard test runner.
 from unittest import mock  # Provide deterministic failure injection.
 
+import numpy as np  # Provide compact evaluation-flow fixtures.
 import pandas as pd  # Provide legacy cache fixtures and serialization failure injection.
 
 import stacking  # Exercise the real production cache persistence and recovery paths.
@@ -91,15 +92,17 @@ class AtomicCacheRecoveryTests(unittest.TestCase):  # Group cache transaction an
         self.telegram_patch.start()  # Activate notification isolation.
         self.addCleanup(self.telegram_patch.stop)  # Restore notification behavior after every test.
 
-    def read_cache(self, path: str) -> dict:
+    def read_cache(self, path: str, config: Any = None) -> dict:
         """
         Read one validated cache artifact through production deserialization.
 
         :param path: Primary or backup cache path.
+        :param config: Optional runtime configuration used for run-specific validation.
         :return: Production resume dictionary.
         """
 
-        _, cache_dict = stacking.read_validated_cache_file(path, config={})  # Validate and deserialize the selected cache artifact.
+        runtime_config = {} if config is None else config  # Resolve optional test config.
+        _, cache_dict = stacking.read_validated_cache_file(path, config=runtime_config)
         return cache_dict  # Return recovered cache entries.
 
     def temporary_artifacts(self) -> list:
@@ -116,17 +119,36 @@ class AtomicCacheRecoveryTests(unittest.TestCase):  # Group cache transaction an
         stacking.save_cache_result_entry("dataset.csv", make_cache_result(0), config={})  # Persist the first completed result.
         self.assertTrue(Path(self.cache_path).is_file())  # Verify primary creation.
         self.assertTrue(Path(self.backup_path).is_file())  # Verify first-write backup creation.
-        self.assertEqual(len(self.read_cache(self.cache_path)), 1)  # Verify primary deserialization.
-        self.assertEqual(len(self.read_cache(self.backup_path)), 1)  # Verify backup deserialization.
+        primary_cache = self.read_cache(self.cache_path)  # Deserialize the primary cache.
+        backup_cache = self.read_cache(self.backup_path)  # Deserialize the backup cache.
+        self.assertEqual(len(primary_cache), 1)  # Verify primary deserialization.
+        self.assertEqual(len(backup_cache), 1)  # Verify backup deserialization.
+        self.assertEqual(set(primary_cache), set(backup_cache))  # Verify first-write logical synchronization.
         self.assertEqual(self.temporary_artifacts(), [])  # Verify successful transaction cleanup.
 
-    def test_subsequent_write_preserves_prior_primary_as_backup(self) -> None:
+    def test_subsequent_write_keeps_primary_and_backup_synchronized(self) -> None:
         stacking.save_cache_result_entry("dataset.csv", make_cache_result(0), config={})  # Create the initial primary and backup.
         stacking.save_cache_result_entry("dataset.csv", make_cache_result(1), config={})  # Persist a second distinct result.
-        self.assertEqual(len(self.read_cache(self.cache_path)), 2)  # Verify the authoritative primary includes both results.
-        backup_cache = self.read_cache(self.backup_path)  # Deserialize the rotated backup.
-        self.assertEqual(len(backup_cache), 1)  # Verify the backup contains the prior primary snapshot.
-        self.assertIn("Model 0", {entry["model_name"] for entry in backup_cache.values()})  # Verify known-good prior content.
+        primary_cache = self.read_cache(self.cache_path)  # Deserialize the authoritative primary.
+        backup_cache = self.read_cache(self.backup_path)  # Deserialize the synchronized backup.
+        self.assertEqual(len(primary_cache), 2)  # Verify the authoritative primary includes both results.
+        self.assertEqual(set(primary_cache), set(backup_cache))  # Verify the backup mirrors the committed primary.
+        self.assertEqual({entry["model_name"] for entry in backup_cache.values()}, {"Model 0", "Model 1"})
+
+    def test_primary_updates_incrementally_after_each_completed_result(self) -> None:
+        expected_names = set()  # Track identities expected after each atomic persistence call.
+        for index in range(4):  # Persist several completed results sequentially.
+            stacking.persist_cache_result_entry("dataset.csv", make_cache_result(index), {}, config={})
+            expected_names.add(f"Model {index}")  # Record the newly committed identity.
+            primary_cache = self.read_cache(self.cache_path)
+            backup_cache = self.read_cache(self.backup_path)  # Read the backup immediately after this completed result.
+            self.assertEqual({entry["model_name"] for entry in primary_cache.values()}, expected_names)
+            self.assertEqual(set(primary_cache), set(backup_cache))  # Verify backup synchronization after each result.
+
+    def test_missing_cache_reference_fails_explicitly(self) -> None:
+        with self.assertRaisesRegex(ValueError, "Cache reference file is required"):
+            stacking.persist_cache_result_entry(None, make_cache_result(0), {}, config={})
+        self.assertFalse(Path(self.cache_path).exists())  # Verify no cache file was created.
 
     def test_corrupt_primary_falls_back_to_backup(self) -> None:
         stacking.save_cache_result_entry("dataset.csv", make_cache_result(0), config={})  # Create recoverable primary and backup files.
@@ -134,6 +156,7 @@ class AtomicCacheRecoveryTests(unittest.TestCase):  # Group cache transaction an
         recovered = stacking.load_cache_results("dataset.csv", config={})  # Execute production backup recovery.
         self.assertEqual(len(recovered), 1)  # Verify one known-good entry was recovered.
         self.assertIn("Model 0", {entry["model_name"] for entry in recovered.values()})  # Verify recovered identity preservation.
+        self.assertEqual(set(self.read_cache(self.cache_path)), set(self.read_cache(self.backup_path)))
 
     def test_truncated_primary_falls_back_to_backup(self) -> None:
         stacking.save_cache_result_entry("dataset.csv", make_cache_result(0), config={})  # Create recoverable primary and backup files.
@@ -141,6 +164,79 @@ class AtomicCacheRecoveryTests(unittest.TestCase):  # Group cache transaction an
         Path(self.cache_path).write_bytes(primary_bytes[: max(1, len(primary_bytes) // 3)])  # Truncate the primary deterministically.
         recovered = stacking.load_cache_results("dataset.csv", config={})  # Execute production backup recovery.
         self.assertEqual(len(recovered), 1)  # Verify the valid backup remains recoverable.
+        self.assertEqual(set(self.read_cache(self.cache_path)), set(self.read_cache(self.backup_path)))
+
+    def test_startup_recovery_promotes_newer_valid_backup_to_primary(self) -> None:
+        primary_df = stacking.prepare_cache_dataframe(pd.DataFrame([make_cache_result(0)]), config={})
+        backup_df = stacking.prepare_cache_dataframe(
+            pd.DataFrame([make_cache_result(0), make_cache_result(1)]),
+            config={},
+        )
+        primary_df.to_csv(self.cache_path, index=False)  # Publish the older primary fixture.
+        backup_df.to_csv(self.backup_path, index=False)  # Publish the newer backup fixture.
+        recovered = stacking.load_cache_results("dataset.csv", config={})  # Run the real startup cache loading path.
+        primary_cache = self.read_cache(self.cache_path)  # Read the repaired primary.
+        backup_cache = self.read_cache(self.backup_path)  # Read the synchronized backup.
+        self.assertEqual({entry["model_name"] for entry in recovered.values()}, {"Model 0", "Model 1"})
+        self.assertEqual(set(primary_cache), set(backup_cache))  # Verify recovery synchronized cache artifacts.
+        self.assertEqual({entry["model_name"] for entry in primary_cache.values()}, {"Model 0", "Model 1"})
+        recovered_again = stacking.load_cache_results("dataset.csv", config={})
+        self.assertEqual(set(recovered), set(recovered_again))
+
+    def test_startup_recovery_keeps_more_complete_primary(self) -> None:
+        primary_df = stacking.prepare_cache_dataframe(
+            pd.DataFrame([make_cache_result(0), make_cache_result(1)]),
+            config={},
+        )
+        backup_df = stacking.prepare_cache_dataframe(pd.DataFrame([make_cache_result(0)]), config={})
+        primary_df.to_csv(self.cache_path, index=False)  # Publish the newer primary fixture.
+        backup_df.to_csv(self.backup_path, index=False)  # Publish the older backup fixture.
+        recovered = stacking.load_cache_results("dataset.csv", config={})  # Run the real startup cache loading path.
+        primary_cache = self.read_cache(self.cache_path)  # Read the primary after loading.
+        backup_cache = self.read_cache(self.backup_path)  # Read the backup after loading.
+        self.assertEqual({entry["model_name"] for entry in recovered.values()}, {"Model 0", "Model 1"})
+        self.assertEqual({entry["model_name"] for entry in primary_cache.values()}, {"Model 0", "Model 1"})
+        self.assertEqual({entry["model_name"] for entry in backup_cache.values()}, {"Model 0"})
+
+    def test_startup_recovery_leaves_equivalent_files_stable(self) -> None:
+        cache_df = stacking.prepare_cache_dataframe(
+            pd.DataFrame([make_cache_result(0), make_cache_result(1)]),
+            config={},
+        )
+        cache_df.to_csv(self.cache_path, index=False)  # Publish primary fixture.
+        cache_df.to_csv(self.backup_path, index=False)  # Publish equivalent backup fixture.
+        recovered = stacking.load_cache_results("dataset.csv", config={})  # Run the real startup cache loading path.
+        self.assertEqual({entry["model_name"] for entry in recovered.values()}, {"Model 0", "Model 1"})
+        self.assertEqual(set(self.read_cache(self.cache_path)), set(self.read_cache(self.backup_path)))
+
+    def test_startup_recovery_ignores_invalid_backup(self) -> None:
+        primary_df = stacking.prepare_cache_dataframe(
+            pd.DataFrame([make_cache_result(0), make_cache_result(1)]),
+            config={},
+        )
+        primary_df.to_csv(self.cache_path, index=False)  # Publish the valid primary fixture.
+        Path(self.backup_path).write_text("invalid-backup", encoding="utf-8")  # Publish an invalid backup fixture.
+        recovered = stacking.load_cache_results("dataset.csv", config={})  # Run the real startup cache loading path.
+        primary_cache = self.read_cache(self.cache_path)  # Read the authoritative primary after loading.
+        self.assertEqual({entry["model_name"] for entry in recovered.values()}, {"Model 0", "Model 1"})
+        self.assertEqual({entry["model_name"] for entry in primary_cache.values()}, {"Model 0", "Model 1"})
+
+    def test_startup_recovery_merges_divergent_valid_content(self) -> None:
+        primary_df = stacking.prepare_cache_dataframe(
+            pd.DataFrame([make_cache_result(0), make_cache_result(2)]),
+            config={},
+        )
+        backup_df = stacking.prepare_cache_dataframe(
+            pd.DataFrame([make_cache_result(0), make_cache_result(1)]),
+            config={},
+        )
+        primary_df.to_csv(self.cache_path, index=False)  # Publish divergent primary fixture.
+        backup_df.to_csv(self.backup_path, index=False)  # Publish divergent backup fixture.
+        recovered = stacking.load_cache_results("dataset.csv", config={})  # Run the real startup cache loading path.
+        primary_cache = self.read_cache(self.cache_path)  # Read the merged primary.
+        backup_cache = self.read_cache(self.backup_path)  # Read the merged backup.
+        self.assertEqual({entry["model_name"] for entry in recovered.values()}, {"Model 0", "Model 1", "Model 2"})
+        self.assertEqual(set(primary_cache), set(backup_cache))  # Verify divergent recovery synchronized artifacts.
 
     def test_both_invalid_files_follow_cache_miss_behavior(self) -> None:
         Path(self.cache_path).write_text("invalid-primary", encoding="utf-8")  # Create an invalid primary cache artifact.
@@ -153,7 +249,6 @@ class AtomicCacheRecoveryTests(unittest.TestCase):  # Group cache transaction an
 
     def test_unreadable_primary_does_not_overwrite_valid_backup(self) -> None:
         stacking.save_cache_result_entry("dataset.csv", make_cache_result(0), config={})  # Create recoverable primary and backup files.
-        backup_before = Path(self.backup_path).read_bytes()  # Snapshot the known-good backup bytes.
         original_reader = stacking.read_validated_cache_file  # Preserve the real validator for non-primary paths.
 
         def deny_primary(path: str, config: Any = None, **kwargs: Any) -> Any:
@@ -163,8 +258,10 @@ class AtomicCacheRecoveryTests(unittest.TestCase):  # Group cache transaction an
 
         with mock.patch.object(stacking, "read_validated_cache_file", side_effect=deny_primary):  # Activate primary read failure during one update.
             stacking.save_cache_result_entry("dataset.csv", make_cache_result(1), config={})  # Merge the new result from the valid backup.
-        self.assertEqual(Path(self.backup_path).read_bytes(), backup_before)  # Verify the known-good backup was not overwritten.
-        self.assertEqual(len(self.read_cache(self.cache_path)), 2)  # Verify recovered entries were preserved in the new primary.
+        primary_cache = self.read_cache(self.cache_path)  # Read the recovered primary.
+        backup_cache = self.read_cache(self.backup_path)  # Read the synchronized backup.
+        self.assertEqual(len(primary_cache), 2)  # Verify recovered entries were preserved in the new primary.
+        self.assertEqual(set(primary_cache), set(backup_cache))  # Verify backup synchronization after primary recovery.
 
     def test_failed_temporary_write_preserves_primary_and_backup(self) -> None:
         stacking.save_cache_result_entry("dataset.csv", make_cache_result(0), config={})  # Create the known-good baseline files.
@@ -195,28 +292,27 @@ class AtomicCacheRecoveryTests(unittest.TestCase):  # Group cache transaction an
         self.assertEqual(Path(self.backup_path).read_bytes(), backup_before)  # Verify backup preservation.
         self.assertEqual(self.temporary_artifacts(), [])  # Verify rejected temporary cleanup.
 
-    def test_failed_primary_replacement_rolls_back_backup(self) -> None:
+    def test_failed_primary_replacement_does_not_advance_backup(self) -> None:
         stacking.save_cache_result_entry("dataset.csv", make_cache_result(0), config={})  # Create the known-good baseline files.
         stacking.save_cache_result_entry("dataset.csv", make_cache_result(1), config={})  # Make the primary newer than its known-good backup.
         primary_before = Path(self.cache_path).read_bytes()  # Snapshot the primary before injected failure.
         backup_before = Path(self.backup_path).read_bytes()  # Snapshot the backup before injected failure.
-        original_replace = stacking.replace_cache_file_atomically  # Preserve real atomic replacement for backup rotation and rollback.
+        original_replace = stacking.replace_cache_file_atomically
 
         def fail_primary_replace(source: str, destination: str) -> None:
             if destination == self.cache_path:  # Inject failure only when publishing the new primary.
                 raise OSError("Injected primary replacement failure")  # Simulate an atomic primary replacement failure.
-            original_replace(source, destination)  # Preserve backup publication and rollback behavior.
+            original_replace(source, destination)  # Preserve non-primary publication behavior.
 
         with mock.patch.object(stacking, "replace_cache_file_atomically", side_effect=fail_primary_replace):  # Activate primary replacement failure.
             with self.assertRaises(OSError):  # Require the original replacement error to surface.
                 stacking.save_cache_result_entry("dataset.csv", make_cache_result(2), config={})  # Attempt the failed transaction.
         self.assertEqual(Path(self.cache_path).read_bytes(), primary_before)  # Verify primary preservation.
-        self.assertEqual(Path(self.backup_path).read_bytes(), backup_before)  # Verify known-good backup rollback.
+        self.assertEqual(Path(self.backup_path).read_bytes(), backup_before)
         self.assertEqual(self.temporary_artifacts(), [])  # Verify replacement failure cleanup.
 
     def test_failed_backup_replacement_preserves_recoverable_files(self) -> None:
         stacking.save_cache_result_entry("dataset.csv", make_cache_result(0), config={})  # Create the known-good baseline files.
-        primary_before = Path(self.cache_path).read_bytes()  # Snapshot the primary before injected failure.
         backup_before = Path(self.backup_path).read_bytes()  # Snapshot the backup before injected failure.
         original_replace = stacking.replace_cache_file_atomically  # Preserve real atomic replacement for non-backup destinations.
 
@@ -228,7 +324,10 @@ class AtomicCacheRecoveryTests(unittest.TestCase):  # Group cache transaction an
         with mock.patch.object(stacking, "replace_cache_file_atomically", side_effect=fail_backup_replace):  # Activate backup replacement failure.
             with self.assertRaises(OSError):  # Require the original replacement error to surface.
                 stacking.save_cache_result_entry("dataset.csv", make_cache_result(1), config={})  # Attempt the failed transaction.
-        self.assertEqual(Path(self.cache_path).read_bytes(), primary_before)  # Verify primary preservation.
+        self.assertEqual(
+            {entry["model_name"] for entry in self.read_cache(self.cache_path).values()},
+            {"Model 0", "Model 1"},
+        )
         self.assertEqual(Path(self.backup_path).read_bytes(), backup_before)  # Verify known-good backup preservation.
         self.assertEqual(self.temporary_artifacts(), [])  # Verify backup replacement failure cleanup.
 
@@ -247,8 +346,10 @@ class AtomicCacheRecoveryTests(unittest.TestCase):  # Group cache transaction an
         Path(self.cache_path).write_text("invalid-primary", encoding="utf-8")  # Corrupt only the primary before the next write.
         stacking.save_cache_result_entry("dataset.csv", make_cache_result(1), config={})  # Merge from backup and publish a new primary.
         primary_cache = self.read_cache(self.cache_path)  # Deserialize the recovered authoritative primary.
+        backup_cache = self.read_cache(self.backup_path)  # Deserialize the synchronized backup.
         self.assertEqual(len(primary_cache), 2)  # Verify both recovered and new entries are present.
         self.assertEqual({entry["model_name"] for entry in primary_cache.values()}, {"Model 0", "Model 1"})  # Verify no logical update was lost.
+        self.assertEqual(set(primary_cache), set(backup_cache))  # Verify backup synchronized after recovery write.
 
     def test_backup_only_valid_rows_are_recovered_with_valid_primary(self) -> None:
         primary_df = stacking.prepare_cache_dataframe(pd.DataFrame([make_cache_result(0)]), config={})  # Build valid primary rows.
@@ -259,7 +360,9 @@ class AtomicCacheRecoveryTests(unittest.TestCase):  # Group cache transaction an
         self.assertEqual({entry["model_name"] for entry in recovered.values()}, {"Model 0", "Model 1"})  # Verify backup-only identity recovery.
         stacking.save_cache_result_entry("dataset.csv", make_cache_result(2), config={})  # Merge a new result after recovery.
         primary_cache = self.read_cache(self.cache_path)  # Read the final authoritative primary.
+        backup_cache = self.read_cache(self.backup_path)  # Read the final synchronized backup.
         self.assertEqual({entry["model_name"] for entry in primary_cache.values()}, {"Model 0", "Model 1", "Model 2"})  # Verify writer union preservation.
+        self.assertEqual(set(primary_cache), set(backup_cache))  # Verify backup mirrors the recovered primary.
 
     def test_stale_in_memory_cache_does_not_skip_disk_persistence(self) -> None:
         stale_entry = make_cache_result(0)  # Build one completed result entry.
@@ -268,6 +371,121 @@ class AtomicCacheRecoveryTests(unittest.TestCase):  # Group cache transaction an
         stacking.persist_cache_result_entry("dataset.csv", stale_entry, stale_cache, config={})  # Persist through the public atomic result path.
         recovered = stacking.load_cache_results("dataset.csv", config={})  # Reload from disk through production resume.
         self.assertIn(stale_key, recovered)  # Verify stale memory did not suppress persistence.
+
+    def test_duplicate_completed_result_does_not_create_duplicate_rows(self) -> None:
+        result_entry = make_cache_result(0)  # Build one completed result entry.
+        stacking.persist_cache_result_entry("dataset.csv", result_entry, {}, config={})  # Persist the result once.
+        stacking.persist_cache_result_entry("dataset.csv", dict(result_entry), {}, config={})
+        primary_cache = self.read_cache(self.cache_path)  # Read the primary after duplicate persistence.
+        backup_cache = self.read_cache(self.backup_path)  # Read the backup after duplicate persistence.
+        self.assertEqual(len(primary_cache), 1)  # Verify duplicate identity collapsed to one row.
+        self.assertEqual(set(primary_cache), set(backup_cache))  # Verify synchronized deduplicated cache artifacts.
+
+    def test_run_specific_cache_files_remain_isolated(self) -> None:
+        run_paths = {
+            run_index: str(
+                Path(self.temporary_directory.name) / f"Cache_dataset-Stacking_Classifiers_Results_Run_{run_index}.csv"
+            )
+            for run_index in (1, 2)
+        }
+
+        def run_cache_path(csv_path: str, config: Any = None, experiment_run: Any = None, legacy: bool = False) -> str:
+            run_index = int(experiment_run or stacking.get_current_experiment_run(config))
+            return run_paths[run_index]  # Return the destination for the requested run.
+
+        with mock.patch.object(stacking, "get_cache_file_path", side_effect=run_cache_path):
+            run_one = {"stacking": {"experiment_run": 1}}  # Build run 1 configuration.
+            run_two = {"stacking": {"experiment_run": 2}}  # Build run 2 configuration.
+            run_one_result = make_cache_result(0)  # Build run 1 result data.
+            run_two_result = make_cache_result(1)  # Build run 2 result data.
+            run_one_result["experiment_run"] = 1  # Match the run 1 destination.
+            run_two_result["experiment_run"] = 2  # Match the run 2 destination.
+            stacking.persist_cache_result_entry("dataset.csv", run_one_result, {}, config=run_one)
+            stacking.persist_cache_result_entry("dataset.csv", run_two_result, {}, config=run_two)
+            run_one_cache = self.read_cache(run_paths[1], config=run_one)  # Read run 1 primary.
+            run_two_cache = self.read_cache(run_paths[2], config=run_two)  # Read run 2 primary.
+            self.assertEqual({entry["model_name"] for entry in run_one_cache.values()}, {"Model 0"})
+            self.assertEqual({entry["model_name"] for entry in run_two_cache.values()}, {"Model 1"})
+            self.assertEqual(
+                set(run_one_cache),
+                set(self.read_cache(stacking.get_cache_backup_path(run_paths[1]), config=run_one)),
+            )
+            self.assertEqual(
+                set(run_two_cache),
+                set(self.read_cache(stacking.get_cache_backup_path(run_paths[2]), config=run_two)),
+            )
+
+    def test_artifact_recovery_target_persists_to_primary_and_backup(self) -> None:
+        config = {
+            "stacking": {"methods": {"feature_selection": False, "stacking": False}},
+            "evaluation": {"random_state": 42},
+            "explainability": {"enabled": False},
+        }
+        dataframe = pd.DataFrame(
+            {
+                "feature_a": [0.0, 1.0, 2.0, 3.0],
+                "feature_b": [1.0, 2.0, 3.0, 4.0],
+                "attack_type": ["benign", "attack", "benign", "attack"],
+            }
+        )
+        progress_bar = mock.Mock()  # Provide the minimal progress API used by evaluate_on_dataset.
+        splits = (
+            np.zeros((2, 2)),
+            np.ones((2, 2)),
+            np.array([0, 1]),
+            np.array([0, 1]),
+            mock.Mock(),
+            mock.Mock(classes_=np.array(["attack", "benign"])),
+            None,
+            None,
+        )
+
+        def feature_sets(*args: Any, **kwargs: Any) -> Any:
+            yield ("Feature Set 0", np.zeros((2, 2)), np.ones((2, 2)), ["feature_a", "feature_b"], None)
+
+        def persist_recovered_classifier(*args: Any, **kwargs: Any) -> Any:
+            result_entry = make_cache_result(0)  # Build the recovered completed result.
+            stacking.persist_cache_result_entry(
+                kwargs["cache_ref_file"],
+                result_entry,
+                kwargs["cache_dict"],
+                config=kwargs["config"],
+            )
+            return ({("Feature Set 0", "Model 0"): result_entry}, 2)
+
+        with mock.patch.object(stacking, "sanitize_and_verify_feature_selections", return_value=(None, None, None)):
+            with mock.patch.object(stacking, "prepare_evaluation_data_splits", return_value=splits):
+                with mock.patch.object(stacking, "iterate_feature_sets_sequentially", side_effect=feature_sets):
+                    with mock.patch.object(stacking, "tqdm", return_value=progress_bar):
+                        with mock.patch.object(
+                            stacking,
+                            "run_individual_classifiers_for_feature_set",
+                            side_effect=persist_recovered_classifier,
+                        ):
+                            stacking.evaluate_on_dataset(
+                                "combined_files_combined",
+                                dataframe,
+                                ["feature_a", "feature_b"],
+                                None,
+                                None,
+                                None,
+                                {"Model 0": object()},
+                                data_source_label="Original",
+                                hyperparams_map={},
+                                experiment_id="artifact-recovery",
+                                experiment_mode="original_only",
+                                augmentation_ratio=None,
+                                execution_mode_str="combined_files",
+                                attack_types_combined=["DDoS"],
+                                config=config,
+                                cache_ref_file="dataset.csv",
+                                hyperparameters_enabled=False,
+                                artifact_recovery_target=("Feature Set 0", "Model 0"),
+                            )
+        primary_cache = self.read_cache(self.cache_path)  # Read the authoritative primary after artifact recovery.
+        backup_cache = self.read_cache(self.backup_path)  # Read the synchronized backup after artifact recovery.
+        self.assertEqual({entry["model_name"] for entry in primary_cache.values()}, {"Model 0"})
+        self.assertEqual(set(primary_cache), set(backup_cache))  # Verify recovered result reached backup too.
 
     @unittest.skipUnless("fork" in mp.get_all_start_methods(), "POSIX fork context is required by the production fcntl backend")  # Limit independent-process coverage to the supported production platform.
     def test_independent_process_updates_preserve_all_entries(self) -> None:
@@ -283,7 +501,8 @@ class AtomicCacheRecoveryTests(unittest.TestCase):  # Group cache transaction an
         primary_cache = self.read_cache(self.cache_path)  # Validate and deserialize the final primary.
         backup_cache = self.read_cache(self.backup_path)  # Validate and deserialize the final backup.
         self.assertEqual(len(primary_cache), 6)  # Verify no unrelated concurrent update was lost.
-        self.assertEqual(len(backup_cache), 5)  # Verify the backup is the valid immediately preceding primary snapshot.
+        self.assertEqual(len(backup_cache), 6)  # Verify the backup mirrors the final committed primary snapshot.
+        self.assertEqual(set(primary_cache), set(backup_cache))
         self.assertEqual({entry["model_name"] for entry in primary_cache.values()}, {f"Model {index}" for index in range(6)})  # Verify every concurrent identity survived.
         self.assertEqual(self.temporary_artifacts(), [])  # Verify concurrent transaction cleanup.
 
