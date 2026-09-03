@@ -9894,7 +9894,10 @@ def load_cache_results(csv_path, config=None, notify_discovery: bool = True):  #
         backup_path = get_cache_backup_path(cache_path)  # Resolve the sibling known-good backup path.
         run_index = get_current_experiment_run(config)  # Resolve the active run for cache validation.
 
-        with cache_file_lock(cache_path, exclusive=False):  # Hold a shared process-safe lock across primary and backup validation.
+        with cache_file_lock(  # Hold writer lock because recovery may republish the primary cache.
+            cache_path,  # Use the primary path as the synchronization identity.
+            exclusive=True,  # Permit durable startup recovery writes.
+        ):
             primary_exists = os.path.isfile(cache_path)  # Record whether the primary cache is available.
             backup_exists = os.path.isfile(backup_path)  # Record whether the backup cache is available.
 
@@ -9932,7 +9935,40 @@ def load_cache_results(csv_path, config=None, notify_discovery: bool = True):  #
 
             if primary_df is not None or backup_df is not None:  # Recover every valid identity before reporting a cache miss.
                 merged_df, cache_dict = merge_valid_cache_snapshots(primary_df, backup_df, config=config, expected_experiment_run=run_index, source_path=cache_path)  # Preserve distinct primary and backup rows.
-                if primary_df is not None and backup_df is not None and len(merged_df) > len(primary_df):  # Report backup-only rows without replacing valid primary rows.
+                primary_identity_count = (  # Count trusted primary identities for recovery comparison.
+                    len(deserialize_cache_dataframe(primary_df)) if primary_df is not None else 0  # Use primary rows.
+                )
+                merged_identity_count = len(cache_dict)  # Count merged identities using the production resume mapping.
+                backup_has_recovery_rows = (  # Detect valid backup rows absent from the primary cache.
+                    backup_df is not None  # Require a valid backup recovery source.
+                    and (primary_df is None or merged_identity_count > primary_identity_count)  # Require backup rows.
+                )
+                if backup_has_recovery_rows:  # Promote backup-only identities into the primary.
+                    persist_cache_dataframe_atomically(  # Republish merged cache before resume uses it.
+                        cache_path,  # Use the authoritative primary path.
+                        merged_df,  # Publish the merged valid snapshot.
+                        primary_df,  # Preserve current primary context.
+                        backup_df,  # Preserve current backup context.
+                        config=config,  # Preserve runtime cache configuration.
+                        expected_experiment_run=run_index,  # Preserve run-specific validation.
+                    )
+                    if primary_df is not None:  # Report backup-only rows merged into a valid but older primary.
+                        print(  # Report durable startup recovery.
+                            f"{BackgroundColors.GREEN}[CACHE RECOVERY] Synchronized "
+                            f"{BackgroundColors.CYAN}{merged_identity_count - primary_identity_count}"
+                            f"{BackgroundColors.GREEN} backup-only cached result(s) into primary: "
+                            f"{BackgroundColors.CYAN}{cache_path}{Style.RESET_ALL}"
+                        )
+                    else:  # Report backup recovery for a missing or invalid primary.
+                        print(  # Report durable backup promotion.
+                            f"{BackgroundColors.GREEN}[CACHE RECOVERY] Restored primary cache from valid backup: "
+                            f"{BackgroundColors.CYAN}{backup_path}{Style.RESET_ALL}"
+                        )
+                if (  # Report backup-only rows after durable recovery.
+                    primary_df is not None  # Require a valid original primary.
+                    and backup_df is not None  # Require a valid backup contribution.
+                    and len(merged_df) > len(primary_df)  # Require merged rows beyond the primary.
+                ):
                     print(f"{BackgroundColors.GREEN}[CACHE RECOVERY] Merged {BackgroundColors.CYAN}{len(merged_df) - len(primary_df)}{BackgroundColors.GREEN} backup-only cached result(s) from: {BackgroundColors.CYAN}{backup_path}{Style.RESET_ALL}")  # Report union recovery.
                 elif primary_df is not None:  # Confirm successful primary recovery.
                     print(f"{BackgroundColors.GREEN}Loaded cached results from: {BackgroundColors.CYAN}{cache_path}{Style.RESET_ALL}")  # Confirm successful primary recovery.
@@ -10335,42 +10371,34 @@ def persist_cache_dataframe_atomically(cache_path: str, cache_df: pd.DataFrame, 
 
     run_index = get_current_experiment_run(config) if expected_experiment_run is None else validate_experiment_runs(expected_experiment_run, "filename experiment_run")  # Resolve expected row run.
     backup_path = get_cache_backup_path(cache_path)  # Resolve the sibling known-good backup destination.
-    backup_existed = os.path.isfile(backup_path)  # Record whether rollback must preserve a pre-existing backup inode.
     primary_temporary = None  # Track the staged authoritative primary snapshot.
-    backup_temporary = None  # Track the staged replacement backup snapshot.
-    rollback_temporary = None  # Track the staged original backup used for rollback.
-    backup_published = False  # Record whether this transaction changed the backup destination.
+    backup_temporary = None  # Track the staged backup mirror snapshot.
+    primary_published = False  # Record whether the authoritative primary commit completed.
 
-    try:  # Stage every required file before changing a recoverable destination.
+    try:  # Stage every required file before publishing the authoritative snapshot.
         primary_temporary = write_cache_dataframe_temporary(cache_path, cache_df, config, "primary", expected_experiment_run=run_index)  # Stage and validate the new authoritative snapshot.
-        backup_candidate = primary_df if primary_df is not None else (backup_df if backup_df is not None else cache_df)  # Preserve the newest valid pre-transaction snapshot, otherwise mirror the first authoritative snapshot.
-
-        if backup_candidate is not None:  # Update the backup only from content already proven valid.
-            if backup_df is not None:  # Stage the current known-good backup before replacing it.
-                rollback_temporary = write_cache_dataframe_temporary(cache_path, backup_df, config, "rollback", expected_experiment_run=run_index)  # Preserve the exact recoverable backup state for rollback.
-            backup_temporary = write_cache_dataframe_temporary(cache_path, backup_candidate, config, "backup", expected_experiment_run=run_index)  # Stage and validate the intended backup content.
-            replace_cache_file_atomically(backup_temporary, backup_path)  # Atomically publish the known-good backup before replacing the primary.
-            backup_temporary = None  # Mark the backup staging path as consumed by atomic replacement.
-            backup_published = True  # Record that primary failure now requires backup rollback.
-
+        backup_temporary = write_cache_dataframe_temporary(  # Stage backup from the same validated snapshot.
+            cache_path,  # Use the primary path for same-directory staging.
+            cache_df,  # Mirror the authoritative cache snapshot.
+            config,  # Preserve runtime cache configuration.
+            "backup",  # Label the staging file purpose.
+            expected_experiment_run=run_index,  # Preserve run-specific validation.
+        )
         replace_cache_file_atomically(primary_temporary, cache_path)  # Atomically publish the fully validated authoritative cache snapshot.
         primary_temporary = None  # Mark the primary staging path as consumed by atomic replacement.
-    except Exception:  # Roll back any backup publication and surface the original transaction failure.
-        if backup_published:  # Restore the prior backup state only when this transaction changed it.
-            try:  # Keep rollback failure from masking the original persistence error.
-                if rollback_temporary is not None:  # Restore the previously validated known-good backup atomically.
-                    replace_cache_file_atomically(rollback_temporary, backup_path)  # Publish the saved pre-transaction backup state.
-                    rollback_temporary = None  # Mark the rollback staging path as consumed.
-                elif not backup_existed and os.path.isfile(backup_path):  # Restore first-write absence when primary publication failed.
-                    os.unlink(backup_path)  # Remove the backup created by the failed first-write transaction.
-                    sync_cache_parent_directory(backup_path)  # Synchronize removal metadata where supported.
-            except Exception as rollback_error:  # Preserve the original transaction exception while reporting rollback degradation.
-                print(f"{BackgroundColors.YELLOW}Warning: Cache backup rollback could not restore the pre-transaction state at {BackgroundColors.CYAN}{backup_path}{BackgroundColors.YELLOW}: {rollback_error}{Style.RESET_ALL}")  # Report recoverability degradation explicitly.
+        primary_published = True  # Record that the authoritative primary now owns the newest committed state.
+        replace_cache_file_atomically(backup_temporary, backup_path)  # Publish backup after primary commit.
+        backup_temporary = None  # Mark the backup staging path as consumed by atomic replacement.
+    except Exception as exc:  # Surface publication failures without rolling back a committed primary.
+        if primary_published:  # Report any split state caused by backup synchronization failure.
+            print(  # Report primary remains authoritative after backup failure.
+                f"{BackgroundColors.YELLOW}Warning: Cache backup synchronization failed after primary commit at "
+                f"{BackgroundColors.CYAN}{backup_path}{BackgroundColors.YELLOW}: {exc}{Style.RESET_ALL}"
+            )
         raise  # Surface the original write, synchronization, validation, backup, or replacement error.
     finally:  # Remove every unconsumed transaction file after success or failure.
         remove_cache_temporary_file(primary_temporary)  # Remove an unpublished primary staging file.
         remove_cache_temporary_file(backup_temporary)  # Remove an unpublished backup staging file.
-        remove_cache_temporary_file(rollback_temporary)  # Remove an unused rollback staging file.
 
 
 def verify_cache_result_persisted(cache_ref_file: str, resume_key: tuple, config: Optional[dict] = None) -> None:  # Verify the real resume loader can discover the written identity.
@@ -10386,9 +10414,39 @@ def verify_cache_result_persisted(cache_ref_file: str, resume_key: tuple, config
     if config is None:  # Use global configuration when no configuration is provided.
         config = CONFIG  # Assign the global configuration reference.
 
-    persisted_cache = load_cache_results(cache_ref_file, config=config, notify_discovery=False)  # Reload through the production cache loader used by resume without operator notification.
-    if resume_key not in persisted_cache:  # Reject persistence that cannot be recovered by the real loader.
-        raise RuntimeError(f"Persisted cache result is not recoverable for identity: {resume_key}")  # Raise a persistence-blocking recovery error.
+    cache_path = get_cache_file_path(cache_ref_file, config=config)  # Resolve authoritative primary destination.
+    backup_path = get_cache_backup_path(cache_path)  # Resolve the synchronized backup destination.
+    run_index = get_current_experiment_run(config)  # Resolve the active run for direct artifact validation.
+
+    with cache_file_lock(cache_path, exclusive=False):  # Hold a shared lock while validating committed files.
+        primary_df, primary_cache = read_validated_cache_file(  # Reload the authoritative primary directly.
+            cache_path,  # Validate the primary destination.
+            config=config,  # Preserve runtime cache configuration.
+            expected_experiment_run=run_index,  # Preserve run-specific validation.
+        )
+        backup_df, backup_cache = read_validated_cache_file(  # Reload the synchronized backup directly.
+            backup_path,  # Validate the backup destination.
+            config=config,  # Preserve runtime cache configuration.
+            expected_experiment_run=run_index,  # Preserve run-specific validation.
+        )
+
+    if resume_key not in primary_cache:  # Reject persistence that cannot be recovered from the authoritative primary.
+        raise RuntimeError(  # Raise a persistence-blocking primary recovery error.
+            f"Persisted cache result is not recoverable from primary for identity: {resume_key}"
+        )
+    if resume_key not in backup_cache:  # Reject persistence that cannot be recovered from the synchronized backup.
+        raise RuntimeError(  # Raise a persistence-blocking backup recovery error.
+            f"Persisted cache result is not recoverable from backup for identity: {resume_key}"
+        )
+
+    primary_identities = {  # Build primary logical identities for synchronization validation.
+        build_cache_identity_from_row(row) for _, row in primary_df.iterrows()  # Use the production row identity.
+    }
+    backup_identities = {  # Build backup logical identities for synchronization validation.
+        build_cache_identity_from_row(row) for _, row in backup_df.iterrows()  # Use the production row identity.
+    }
+    if primary_identities != backup_identities:  # Reject a write that leaves primary and backup divergent.
+        raise RuntimeError("Primary and backup cache identities diverged after persistence")  # Raise sync failure.
 
 
 def persist_cache_result_entry(cache_ref_file: Optional[str], result_entry: dict, cache_dict: Optional[dict], config: Optional[dict] = None) -> None:
