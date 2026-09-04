@@ -1209,6 +1209,7 @@ def parse_cli_args():
         pending_sort_group.add_argument("--sort-pending-by-elapsed-time", dest="sort_pending_by_elapsed_time", action="store_true", help="Sort pending classifier combinations by historical elapsed_time_s within comparable groups")  # Enable runtime-based pending queue ordering
         pending_sort_group.add_argument("--no-sort-pending-by-elapsed-time", dest="sort_pending_by_elapsed_time", action="store_false", help="Disable runtime-based pending classifier ordering")  # Disable runtime-based pending queue ordering
         parser.set_defaults(sort_pending_by_elapsed_time=None)  # Leave config.yaml in control when neither pending-sort flag is supplied
+        parser.add_argument("--rerun-cached-experiments", dest="rerun_cached_experiments", action="store_true", default=None, help="Rerun cached experiment definitions into the next cache run ordered by descending cached F1 score")  # Enable read-only cache-driven rerun mode
         parser.add_argument("--experiment-runs", dest="experiment_runs", type=int, default=None, help="Total repeated runs required for every logical stacking experiment")  # Add repeated-run CLI override
         parser.add_argument("--training-progress-interval-minutes", dest="training_progress_interval_minutes", type=float, default=None, help="Recurring classifier training-progress interval in positive finite minutes (default: 15)")  # Add the minutes-based progress interval override
         parser.add_argument("--low-memory", dest="low_memory", action="store_true", default=False, help="Enable low memory mode for pandas operations")  # Add low memory mode CLI argument
@@ -1274,6 +1275,7 @@ def get_default_stacking_config():
             "top_n_features_heatmap": 15,  # Number of top features to show in heatmap
             "combined_files_evaluation": True,  # Default: combined files evaluation enabled; False = separate files evaluation
             "sort_pending_by_elapsed_time": False,  # Keep pending queue ordering unchanged unless runtime sorting is enabled
+            "rerun_cached_experiments": False,  # Keep normal cache resume behavior unless read-only cache-driven rerun mode is requested
             "experiment_runs": 1,  # Require one completed run per logical experiment by default
             "methods": {
                 "augmentation": True,  # Enable data augmentation combination by default
@@ -1789,6 +1791,139 @@ def discover_result_storage_files(legacy_path: str) -> List[Tuple[Path, int, boo
             discovered.append((candidate, run_index, False))  # Record one run-specific result-storage file.
     discovered.sort(key=lambda item: (item[1], item[2], item[0].name))  # Keep deterministic migration order.
     return discovered  # Return every relevant existing primary CSV.
+
+
+def strip_cache_artifact_suffix(filename: str) -> str:
+    """
+    Strip cache artifact suffixes used by primary, backup, and lock files.
+
+    :param filename: Cache artifact filename.
+    :return: Primary CSV filename text.
+    """
+
+    candidate_name = str(filename)  # Normalize the filename input to text.
+    for suffix in (".bak", ".lock"):  # Remove known cache artifact suffixes only.
+        if candidate_name.endswith(suffix):  # Detect one supported artifact suffix.
+            candidate_name = candidate_name[: -len(suffix)]  # Remove the matched suffix.
+    return candidate_name  # Return the primary CSV-style filename.
+
+
+def parse_cache_artifact_run_index(file_path: str, legacy_path: str) -> Optional[int]:
+    """
+    Parse the run index encoded by one cache artifact filename.
+
+    :param file_path: Cache primary, backup, or lock path.
+    :param legacy_path: Unsuffixed legacy cache CSV path for the same dataset.
+    :return: One-based run index, or None for unrelated artifacts.
+    """
+
+    path_name = strip_cache_artifact_suffix(Path(str(file_path)).name)  # Normalize primary, backup, and lock filenames.
+    legacy_name = Path(str(legacy_path)).name  # Read the matching unsuffixed cache filename.
+    if path_name == legacy_name:  # Treat the unsuffixed legacy artifact as run 1.
+        return 1  # Return legacy run index.
+    legacy_file = Path(legacy_name)  # Parse the configured legacy filename once.
+    pattern = rf"{re.escape(legacy_file.stem)}_Run_(\d+){re.escape(legacy_file.suffix)}"  # Build the exact run-specific filename pattern.
+    match = re.fullmatch(pattern, path_name)  # Match only cache artifacts for this dataset identity.
+    if match is None:  # Ignore unrelated files in the cache directory.
+        return None  # Return no run index for unrelated names.
+    return validate_experiment_runs(parse_persisted_experiment_run_value(match.group(1), "filename experiment_run"), "filename experiment_run")  # Return the validated filename run.
+
+
+def discover_cache_artifact_run_numbers(csv_path: str, config: Optional[dict] = None) -> List[int]:
+    """
+    Discover cache run numbers from primary, backup, and lock artifacts.
+
+    :param csv_path: Dataset file or directory identity used for cache placement.
+    :param config: Runtime configuration dictionary.
+    :return: Sorted run numbers discovered from cache artifacts.
+    """
+
+    if config is None:  # Use global configuration when no configuration is supplied.
+        config = CONFIG  # Preserve established global fallback.
+    legacy_path = Path(get_cache_file_path(csv_path, config=config, experiment_run=1, legacy=True))  # Resolve the unsuffixed cache filename for matching.
+    cache_directory = legacy_path.parent  # Resolve the cache artifact directory.
+    run_numbers = set()  # Accumulate unique run numbers from all artifact kinds.
+    if not cache_directory.is_dir():  # Return no runs when the cache directory does not exist.
+        return []  # Return an empty ordered list.
+    for candidate in cache_directory.iterdir():  # Inspect every sibling artifact once.
+        if not candidate.is_file():  # Ignore directories and other nonfile entries.
+            continue  # Move to the next sibling.
+        run_index = parse_cache_artifact_run_index(str(candidate), str(legacy_path))  # Parse this cache artifact if it belongs to the dataset.
+        if run_index is not None:  # Keep only matching cache artifact names.
+            run_numbers.add(run_index)  # Record the discovered run number.
+    return sorted(run_numbers)  # Return deterministic ascending run numbers.
+
+
+def resolve_cached_rerun_runs(csv_path: str, config: Optional[dict] = None) -> Tuple[int, int]:
+    """
+    Resolve source and destination run numbers for cache-driven rerun mode.
+
+    :param csv_path: Dataset file or directory identity used for cache placement.
+    :param config: Runtime configuration dictionary.
+    :return: Tuple of source run and destination run.
+    """
+
+    if config is None:  # Use global configuration when no configuration is supplied.
+        config = CONFIG  # Preserve established global fallback.
+    run_numbers = discover_cache_artifact_run_numbers(csv_path, config=config)  # Discover all existing cache run artifacts.
+    if not run_numbers:  # Require a source cache for cache-driven rerun mode.
+        raise FileNotFoundError(f"No cache run artifacts found for rerun mode: {csv_path}")  # Surface missing source cache explicitly.
+    source_run = max(run_numbers)  # Use the highest existing run as the read-only source run.
+    destination_run = source_run + 1  # Use the next integer run as the distinct destination run.
+    destination_path = get_cache_file_path(csv_path, config=config, experiment_run=destination_run, legacy=False)  # Resolve the destination primary path.
+    destination_conflicts = [destination_path, get_cache_backup_path(destination_path), get_cache_lock_path(destination_path)]  # Include primary, backup, and lock collision targets.
+    existing_conflicts = [path for path in destination_conflicts if os.path.exists(path)]  # Detect any destination artifact collision.
+    if existing_conflicts:  # Prevent overwrite or reuse of an existing destination run.
+        raise FileExistsError(f"Rerun destination cache run {destination_run} already has artifacts: {existing_conflicts}")  # Surface collision before execution.
+    return source_run, destination_run  # Return resolved source and destination runs.
+
+
+def resolve_cached_rerun_f1_score(result_entry: dict) -> float:
+    """
+    Resolve cached F1 score used for cache-driven rerun ordering.
+
+    :param result_entry: Cached result entry loaded through the production cache reader.
+    :return: Finite cached F1 score.
+    """
+
+    raw_f1_value = result_entry.get("f1_score")  # Read the cached F1 score before numeric validation.
+    if not isinstance(raw_f1_value, (str, int, float, np.integer, np.floating)):  # Reject missing and unsupported F1 payloads.
+        raise ValueError(f"Cached result has invalid f1_score for rerun ordering: {result_entry.get('model_name')}")  # Surface bad source-cache metrics.
+    try:  # Parse numeric F1 values from CSV or in-memory rows.
+        f1_value = float(raw_f1_value)  # Normalize the cached F1 score.
+    except (TypeError, ValueError):  # Reject missing or malformed F1 values.
+        raise ValueError(f"Cached result has invalid f1_score for rerun ordering: {result_entry.get('model_name')}")  # Surface bad source-cache metrics.
+    if not math.isfinite(f1_value):  # Reject NaN and infinite F1 values.
+        raise ValueError(f"Cached result has non-finite f1_score for rerun ordering: {result_entry.get('model_name')}")  # Surface bad source-cache metrics.
+    return f1_value  # Return finite F1 score.
+
+
+def build_cached_rerun_evaluation_plan(evaluation_plan: List[Tuple[str, bool, Optional[float], str]], source_cache: dict, tasks: List[dict], attack_types_combined: Any) -> Tuple[List[Tuple[str, bool, Optional[float], str]], dict]:
+    """
+    Build a rerun plan from cached entries ordered by descending cached F1.
+
+    :param evaluation_plan: Current generated runtime combinations.
+    :param source_cache: Read-only source cache loaded through production recovery.
+    :param tasks: Current generated task descriptors.
+    :param attack_types_combined: Combined attack scope, or None.
+    :return: Tuple of rerun evaluation plan and skip-summary metadata.
+    """
+
+    source_order = {build_cache_identity_from_row(result_entry): index for index, result_entry in enumerate(source_cache.values())}  # Preserve source cache row order for equal F1 scores.
+    task_by_combination = {combination: task for combination, task in zip(evaluation_plan, tasks)}  # Map generated combinations to their task descriptors.
+    rerun_records = []  # Accumulate generated combinations that exist in the source cache.
+    for combination in evaluation_plan:  # Inspect combinations in generated deterministic order.
+        task = task_by_combination[combination]  # Resolve the matching generated task descriptor.
+        cached_result = feature_process_cache_result(task, source_cache, attack_types_combined)  # Require production cache identity and shape compatibility.
+        if cached_result is None:  # Skip generated combinations absent from the source cache.
+            continue  # Move to the next generated combination.
+        cache_identity = build_cache_identity_from_row(cached_result)  # Build the existing resume identity for source ordering.
+        rerun_records.append((combination, resolve_cached_rerun_f1_score(cached_result), source_order.get(cache_identity, len(source_order))))  # Store combination, cached F1, and source row order.
+    rerun_records = sorted(rerun_records, key=lambda record: (-record[1], record[2]))  # Stable-sort by cached F1 descending with source row order ties.
+    rerun_plan = [record[0] for record in rerun_records]  # Extract ordered combinations for execution.
+    global_ids = {combination: index for index, combination in enumerate(rerun_plan, start=1)}  # Assign rerun global IDs in actual execution order.
+    skip_summary = {"canonical_total": len(rerun_plan), "skipped": 0, "eligible": len(rerun_plan), "global_ids": global_ids, "rule_match_counts": [], "skipped_combinations": [], "source": "Cached rerun", "rules": ()}  # Build cache-driven plan metadata for existing logging.
+    return rerun_plan, skip_summary  # Return ordered rerun work and logging metadata.
 
 
 def normalize_experiment_run_column(df: pd.DataFrame, expected_experiment_run: int, source_path: str) -> pd.DataFrame:
@@ -2336,6 +2471,9 @@ def merge_configs(defaults, file_config, cli_args):
 
         if hasattr(cli_args, "sort_pending_by_elapsed_time") and cli_args.sort_pending_by_elapsed_time is not None:  # Pending runtime sort CLI override
             config.setdefault("stacking", {})["sort_pending_by_elapsed_time"] = cli_args.sort_pending_by_elapsed_time  # Apply explicit CLI ordering preference over YAML
+
+        if hasattr(cli_args, "rerun_cached_experiments") and cli_args.rerun_cached_experiments is not None:  # Cached rerun CLI override
+            config.setdefault("stacking", {})["rerun_cached_experiments"] = bool(cli_args.rerun_cached_experiments)  # Apply explicit cache-driven rerun mode
 
         if hasattr(cli_args, "experiment_runs") and cli_args.experiment_runs is not None:  # Repeated-run CLI override
             config.setdefault("stacking", {})["experiment_runs"] = validate_experiment_runs(cli_args.experiment_runs, "--experiment-runs")  # Apply the validated CLI-over-YAML run count.
@@ -15383,7 +15521,8 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
         if config is None:  # If no config provided
             config = CONFIG  # Use global CONFIG
 
-        if "experiment_run" not in config.get("stacking", {}):  # Expand logical experiments only at the outer combined-files boundary.
+        rerun_cached_experiments = bool(config.get("stacking", {}).get("rerun_cached_experiments", False))  # Resolve cache-driven rerun mode.
+        if "experiment_run" not in config.get("stacking", {}) and not rerun_cached_experiments:  # Expand logical experiments only at the outer combined-files boundary.
             experiment_runs = validate_experiment_runs(config.get("stacking", {}).get("experiment_runs", 1))  # Resolve total requested runs.
             for experiment_run in range(1, experiment_runs + 1):  # Execute every requested run independently.
                 run_config = build_experiment_run_config(config, experiment_run)  # Build isolated run-specific seeds and paths.
@@ -15399,6 +15538,16 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
         reference_file = original_files_list[0] if original_files_list else "combined_files_combined"  # Get source file for feature metadata.
         combined_dataset_identity = resolve_combined_files_dataset_identity(original_files_list)  # Resolve canonical combined directory identity.
         combined_dataset_reference = combined_dataset_identity.rstrip("/")  # Use directory path text without trailing separator for path APIs.
+        source_rerun_cache = None  # Initialize absent source cache for normal execution.
+        if rerun_cached_experiments:  # Use cache artifacts to select the combined-files rerun workload.
+            source_run, destination_run = resolve_cached_rerun_runs(combined_dataset_reference, config=config)  # Resolve read-only source run and distinct destination run.
+            source_config = build_experiment_run_config(config, source_run)  # Build source-run config for production cache loading.
+            source_rerun_cache = load_cache_results(combined_dataset_reference, config=source_config, notify_discovery=True)  # Load source cache through real recovery mechanisms.
+            if not source_rerun_cache:  # Require recoverable source rows before creating a destination rerun.
+                raise ValueError(f"No recoverable cached results found for combined-files rerun source run {source_run}")  # Fail before any destination writes.
+            config = build_experiment_run_config(config, destination_run)  # Switch execution and persistence to the new destination run.
+            print(f"{BackgroundColors.GREEN}[RERUN CACHE] Combined files source run {BackgroundColors.CYAN}{source_run}{BackgroundColors.GREEN} -> destination run {BackgroundColors.CYAN}{destination_run}{BackgroundColors.GREEN} for {BackgroundColors.CYAN}{dataset_name}{Style.RESET_ALL}")  # Log cache-driven run selection.
+            send_telegram_message(TELEGRAM_BOT, [f"[COMBINED_FILES][RERUN CACHE] Source run {source_run} -> destination run {destination_run} | Dataset: {dataset_name}"])  # Notify Telegram about cache-driven rerun mode.
         
         print(
             f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}"
@@ -15468,6 +15617,13 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
         skip_source = config.get("stacking", {}).get("skip_combinations_source", "Default")  # Read resolved skip-rule source.
         evaluation_plan, skip_summary = apply_skip_combination_rules(canonical_evaluation_plan, skip_rules, skip_source, get_current_experiment_run(config))  # Apply configured runtime skip rules before cache partitioning.
         feature_mode_names = list(dict.fromkeys(item[0] for item in evaluation_plan))  # Keep only feature sets with eligible work.
+        feature_metadata_by_name = build_feature_process_metadata(feature_names, ga_selected_features, pca_n_components, rfe_selected_features, extra_trees_selected_features)  # Build small feature descriptors for cache-aware plan reporting and rerun filtering.
+        if rerun_cached_experiments:  # Replace normal pending work with cache-driven rerun work.
+            source_tasks = build_feature_process_plan(evaluation_plan, feature_metadata_by_name, original_sample_count, combined_dataset_reference, "combined_files", get_current_experiment_run(config), skip_summary["global_ids"], skip_summary["canonical_total"])  # Build generated task identities for source-cache matching.
+            evaluation_plan, skip_summary = build_cached_rerun_evaluation_plan(evaluation_plan, source_rerun_cache or {}, source_tasks, attack_types_list)  # Select and order only source-cached compatible combinations.
+            feature_mode_names = list(dict.fromkeys(item[0] for item in evaluation_plan))  # Rebuild active feature sets from the cache-driven plan.
+            print(f"{BackgroundColors.GREEN}[RERUN CACHE] Selected {BackgroundColors.CYAN}{len(evaluation_plan)}{BackgroundColors.GREEN} cached compatible combined-files combination(s), ordered by descending cached F1.{Style.RESET_ALL}")  # Log rerun workload size and ordering.
+            send_telegram_message(TELEGRAM_BOT, [f"[COMBINED_FILES][RERUN CACHE] Selected {len(evaluation_plan)} cached compatible combination(s), ordered by descending cached F1"])  # Notify Telegram about rerun workload size.
         for skipped_record in skip_summary.get("skipped_combinations", []):  # Log each unique skipped combination once.
             print(skipped_record["line"])  # Emit skipped-combination details after rule evaluation.
         for match_line in format_skip_rule_match_lines(skip_summary):  # Log per-rule aggregate match counts.
@@ -15483,7 +15639,7 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
             skip_rule_count = len(config.get("stacking", {}).get("compiled_skip_combinations", ()))  # Count resolved skip rules for Telegram.
             send_telegram_message(TELEGRAM_BOT, [f"[COMBINED_FILES] All combinations skipped | Rules={skip_rule_count} | Skipped={skip_summary['skipped']} | Eligible=0"])  # Send concise all-skipped summary.
             return  # Avoid cache recovery, matrices, workers, and result writes.
-        if persistent_feature_set_processes_enabled(feature_mode_names, config=config):  # Route the complete cache-first grid through persistent OS processes when explicitly enabled
+        if not rerun_cached_experiments and persistent_feature_set_processes_enabled(feature_mode_names, config=config):  # Route the complete cache-first grid through persistent OS processes when explicitly enabled
             persistent_results, persistent_comparisons = run_persistent_feature_set_grid(combined_files_df_holder.pop(), combined_dataset_reference, original_files_list, attack_types_list, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, hp_runs, augmentation_file_paths, list(augmentation_ratios), evaluation_plan, "combined_files", "Original Combined Files", config, extra_trees_selected_features=extra_trees_selected_features, plan_global_ids=skip_summary["global_ids"], canonical_total=skip_summary["canonical_total"], skip_summary=skip_summary)  # Execute one generic Full, GA, PCA, RFE, and Extra Trees worker path without matrix pickling
             feature_analysis_dir = save_combined_files_results_to_csv(combined_dataset_reference, persistent_results, config=config)  # Save every globally ordered result only after complete child success
             if persistent_comparisons:  # Preserve the existing combined augmentation comparison artifact
@@ -15506,7 +15662,6 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
         all_comparison_results = []  # Accumulate augmentation comparisons across both HP modes
         orchestration_cache = load_cache_results(combined_dataset_reference, config=config, notify_discovery=False)  # Recover cache identities before any sequential augmentation load.
         fully_cached_ratios = {ratio for ratio in augmentation_ratios if all(build_resume_cache_key("combined_files", f"Augmented@{int(ratio * 100)}%_CombinedFiles", "original_training_augmented_testing", ratio, attack_types_list, feature_set, classifier, hyperparameters_enabled) in orchestration_cache for feature_set, hyperparameters_enabled, planned_ratio, classifier in evaluation_plan if planned_ratio == ratio)}  # Identify ratio groups requiring no augmented contents.
-        feature_metadata_by_name = build_feature_process_metadata(feature_names, ga_selected_features, pca_n_components, rfe_selected_features, extra_trees_selected_features)  # Build small feature descriptors for cache-aware plan reporting
         if all(name in feature_metadata_by_name for name in feature_mode_names):  # Use cache-aware grouping only for feature modes with compact descriptors.
             tasks = build_feature_process_plan(evaluation_plan, feature_metadata_by_name, original_sample_count, combined_dataset_reference, "combined_files", get_current_experiment_run(config), skip_summary["global_ids"], skip_summary["canonical_total"])  # Reuse authoritative global IDs and expected original-data shapes for plan reporting
             cached_results, pending_by_feature = partition_evaluation_plan_by_cache(tasks, orchestration_cache, feature_mode_names, attack_types_list)  # Reuse existing cache matching before plan reporting
@@ -18217,7 +18372,8 @@ def orchestrate_all_combinations(input_path, dataset_name=None, config=None):
     if config is None:  # If no config provided
         config = CONFIG  # Use global CONFIG
 
-    if "experiment_run" not in config.get("stacking", {}):  # Expand logical experiments only at the outer separate-files boundary.
+    rerun_cached_experiments = bool(config.get("stacking", {}).get("rerun_cached_experiments", False))  # Resolve cache-driven rerun mode.
+    if "experiment_run" not in config.get("stacking", {}) and not rerun_cached_experiments:  # Expand logical experiments only at the outer separate-files boundary.
         experiment_runs = validate_experiment_runs(config.get("stacking", {}).get("experiment_runs", 1))  # Resolve total requested runs.
         for experiment_run in range(1, experiment_runs + 1):  # Execute every requested run independently.
             run_config = build_experiment_run_config(config, experiment_run)  # Build isolated run-specific seeds and paths.
@@ -18235,14 +18391,26 @@ def orchestrate_all_combinations(input_path, dataset_name=None, config=None):
     augmentation_requested = da_toggle and config.get("execution", {}).get("test_data_augmentation", False)  # Both existing augmentation toggles must permit ratio modes
 
     total_files = len(files_to_process)  # Compute total number of files for progress reporting
+    base_config = config  # Preserve the caller configuration for per-file rerun destination selection.
     for idx, file in enumerate(files_to_process, start=1):  # Evaluate each file independently
         grid_progress = None  # Initialize shared progress state for safe cleanup
         try:  # Protect individual-file orchestration
+            config = base_config  # Reset per-file configuration before optional destination run selection.
             if config.get("stacking", {}).get("automl_only", False):  # Bypass the regular separate-file grid in isolated AutoML mode.
                 df_original, feature_names = load_and_preprocess_dataset(file, None, config=config)  # Prepare the sole AutoML dataset input.
                 if df_original is not None:  # Run only when preprocessing produced a usable dataset.
                     run_automl_pipeline(file, df_original, feature_names, config=config)  # Execute the sole requested pipeline.
                 continue  # Prevent artifact discovery, classifier planning, caches, and regular result exports.
+            source_rerun_cache = None  # Initialize absent source cache for normal execution.
+            if rerun_cached_experiments:  # Use cache artifacts to select the rerun workload.
+                source_run, destination_run = resolve_cached_rerun_runs(file, config=config)  # Resolve read-only source run and distinct destination run.
+                source_config = build_experiment_run_config(config, source_run)  # Build source-run config for production cache loading.
+                source_rerun_cache = load_cache_results(file, config=source_config, notify_discovery=True)  # Load source cache through real recovery mechanisms.
+                if not source_rerun_cache:  # Require recoverable source rows before creating a destination rerun.
+                    raise ValueError(f"No recoverable cached results found for separate-files rerun source run {source_run}")  # Fail before any destination writes.
+                config = build_experiment_run_config(config, destination_run)  # Switch all execution and persistence to the new destination run.
+                print(f"{BackgroundColors.GREEN}[RERUN CACHE] Separate files source run {BackgroundColors.CYAN}{source_run}{BackgroundColors.GREEN} -> destination run {BackgroundColors.CYAN}{destination_run}{BackgroundColors.GREEN} for {BackgroundColors.CYAN}{file}{Style.RESET_ALL}")  # Log cache-driven run selection.
+                send_telegram_message(TELEGRAM_BOT, [f"[SEPARATE_FILES][RERUN CACHE] Source run {source_run} -> destination run {destination_run} | file: {os.path.basename(file)}"])  # Notify Telegram about cache-driven rerun mode.
             artifacts = locate_and_verify_artifacts(file, config=config)  # Locate feature, HP, and augmentation artifacts
             ga_sel = artifacts.get("ga") if fs_toggle else None  # Use GA artifact only when feature selection is enabled
             pca_n = artifacts.get("pca") if fs_toggle else None  # Use PCA artifact only when feature selection is enabled
@@ -18277,6 +18445,13 @@ def orchestrate_all_combinations(input_path, dataset_name=None, config=None):
             skip_source = config.get("stacking", {}).get("skip_combinations_source", "Default")  # Read resolved skip-rule source.
             evaluation_plan, skip_summary = apply_skip_combination_rules(canonical_evaluation_plan, skip_rules, skip_source, get_current_experiment_run(config))  # Apply configured runtime skip rules before cache partitioning.
             feature_mode_names = list(dict.fromkeys(item[0] for item in evaluation_plan))  # Keep only feature sets with eligible work.
+            feature_metadata_by_name = build_feature_process_metadata(feature_names, ga_sel, pca_n, rfe_sel, extra_trees_sel)  # Build small feature descriptors for cache-aware plan reporting and rerun filtering.
+            if rerun_cached_experiments:  # Replace normal pending work with cache-driven rerun work.
+                source_tasks = build_feature_process_plan(evaluation_plan, feature_metadata_by_name, len(df_original), file, "separate_files", get_current_experiment_run(config), skip_summary["global_ids"], skip_summary["canonical_total"])  # Build generated task identities for source-cache matching.
+                evaluation_plan, skip_summary = build_cached_rerun_evaluation_plan(evaluation_plan, source_rerun_cache or {}, source_tasks, None)  # Select and order only source-cached compatible combinations.
+                feature_mode_names = list(dict.fromkeys(item[0] for item in evaluation_plan))  # Rebuild active feature sets from the cache-driven plan.
+                print(f"{BackgroundColors.GREEN}[RERUN CACHE] Selected {BackgroundColors.CYAN}{len(evaluation_plan)}{BackgroundColors.GREEN} cached compatible separate-files combination(s), ordered by descending cached F1.{Style.RESET_ALL}")  # Log rerun workload size and ordering.
+                send_telegram_message(TELEGRAM_BOT, [f"[SEPARATE_FILES][RERUN CACHE] Selected {len(evaluation_plan)} cached compatible combination(s), ordered by descending cached F1"])  # Notify Telegram about rerun workload size.
             for skipped_record in skip_summary.get("skipped_combinations", []):  # Log each unique skipped combination once.
                 print(skipped_record["line"])  # Emit skipped-combination details after rule evaluation.
             for match_line in format_skip_rule_match_lines(skip_summary):  # Log per-rule aggregate match counts.
@@ -18303,7 +18478,6 @@ def orchestrate_all_combinations(input_path, dataset_name=None, config=None):
             all_comparison_results = []  # Accumulate augmentation comparisons across both HP modes
             orchestration_cache = load_cache_results(file, config=config, notify_discovery=False)  # Recover cache identities before any sequential augmentation load.
             fully_cached_ratios = {ratio for ratio in augmentation_ratios if all(build_resume_cache_key("separate_files", f"Augmented@{int(ratio * 100)}%", "original_training_augmented_testing", ratio, None, feature_set, classifier, hyperparameters_enabled) in orchestration_cache for feature_set, hyperparameters_enabled, planned_ratio, classifier in evaluation_plan if planned_ratio == ratio)}  # Identify ratio groups requiring no augmented contents.
-            feature_metadata_by_name = build_feature_process_metadata(feature_names, ga_sel, pca_n, rfe_sel, extra_trees_sel)  # Build small feature descriptors for cache-aware plan reporting
             if all(name in feature_metadata_by_name for name in feature_mode_names):  # Use cache-aware grouping only for feature modes with compact descriptors.
                 tasks = build_feature_process_plan(evaluation_plan, feature_metadata_by_name, len(df_original), file, "separate_files", get_current_experiment_run(config), skip_summary["global_ids"], skip_summary["canonical_total"])  # Reuse authoritative global IDs and expected original-data shapes for plan reporting
                 cached_results, pending_by_feature = partition_evaluation_plan_by_cache(tasks, orchestration_cache, feature_mode_names, None)  # Reuse existing cache matching before plan reporting
@@ -18393,6 +18567,7 @@ def orchestrate_all_combinations(input_path, dataset_name=None, config=None):
         finally:  # Always close the shared grid progress bar
             if grid_progress is not None:  # Verify progress state was created
                 grid_progress["progress_bar"].close()  # Close the one full-grid progress bar
+            config = base_config  # Restore caller configuration before the next file.
 
 
 def execute_both_mode_pipeline(files_to_process, local_dataset_name, config=None):
@@ -18996,6 +19171,7 @@ def build_telegram_pipeline_summary(config: Optional[dict], dataset_path: Option
         only_rules = tuple(stacking_cfg.get("compiled_only_combinations", ()))  # Read compiled allowlist rules for startup notification.
         only_source = stacking_cfg.get("only_combinations_source", "Default")  # Read resolved allowlist source for startup notification.
         auto_restart_on_oom = bool(stacking_cfg.get("auto_restart_on_oom", True))  # Read OOM restart toggle for startup notification.
+        rerun_cached_experiments = bool(stacking_cfg.get("rerun_cached_experiments", False))  # Read cache-driven rerun toggle for startup notification.
         execution_id = ensure_execution_id(config)  # Resolve the stable top-level execution identity for startup visibility.
 
         dataset_display = dataset_path if dataset_path else "config.yaml (default)"  # Resolve the effective dataset source for the consolidated notification
@@ -19006,6 +19182,7 @@ def build_telegram_pipeline_summary(config: Optional[dict], dataset_path: Option
             f"Execution ID: {execution_id}",  # Report copyable top-level execution identity.
             f"Execution mode: {resolved_mode}",  # Report the authoritative classification mode once
             f"Experiment runs: {experiment_runs}",  # Report repeated-run count in the first Telegram summary
+            f"Rerun cached experiments: {'ON' if rerun_cached_experiments else 'OFF'}",  # Report whether cached definitions will be rerun into a new run.
             f"Methods: Feature Selection: {'ON' if feature_selection_enabled else 'OFF'}, Hyperparameters: {'ON' if hyperparameters_enabled else 'OFF'}, Data Augmentation: {'ON' if augmentation_enabled else 'OFF'}, AutoML: {'ON' if automl_enabled else 'OFF'}, Stacking: {'ON' if stacking_enabled else 'OFF'}",  # Report all pipeline method toggles
             f"Enabled classifiers: {', '.join(enabled_classifiers) if enabled_classifiers else 'None'}",  # Report classifiers instantiated by the model factory
             f"Disabled classifiers: {', '.join(disabled_classifiers) if disabled_classifiers else 'None'}",  # Report classifiers excluded from the model factory
