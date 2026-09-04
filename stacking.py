@@ -147,7 +147,7 @@ from sklearn.tree import DecisionTreeClassifier  # For Decision Tree classifier 
 from telegram_bot import TelegramBot, send_exception_via_telegram, send_telegram_message, setup_global_exception_hook  # For sending progress messages to Telegram
 from threadpoolctl import threadpool_limits  # For narrowly limiting BLAS and OpenMP threads during feature extraction
 from tqdm import tqdm  # For progress bars
-from typing import Any, Callable, Optional, List, Tuple, cast  # For optional and collection typing hints
+from typing import Any, Callable, Dict, Optional, List, Tuple, cast  # For optional and collection typing hints
 from xgboost import XGBClassifier  # For XGBoost classifier
 from ft_transformer import FTTransformerClassifier  # Import the standalone sklearn-compatible FT-Transformer classifier
 from tabular_resnet import TabularResNetClassifier  # Import the standalone sklearn-compatible Tabular ResNet classifier
@@ -1209,7 +1209,18 @@ def parse_cli_args():
         pending_sort_group.add_argument("--sort-pending-by-elapsed-time", dest="sort_pending_by_elapsed_time", action="store_true", help="Sort pending classifier combinations by historical elapsed_time_s within comparable groups")  # Enable runtime-based pending queue ordering
         pending_sort_group.add_argument("--no-sort-pending-by-elapsed-time", dest="sort_pending_by_elapsed_time", action="store_false", help="Disable runtime-based pending classifier ordering")  # Disable runtime-based pending queue ordering
         parser.set_defaults(sort_pending_by_elapsed_time=None)  # Leave config.yaml in control when neither pending-sort flag is supplied
-        parser.add_argument("--rerun-cached-experiments", dest="rerun_cached_experiments", action="store_true", default=None, help="Rerun cached experiment definitions into the next cache run ordered by descending cached F1 score")  # Enable read-only cache-driven rerun mode
+        parser.add_argument(  # Add read-only cache-driven rerun count.
+            "--rerun-cached-experiments",  # Define cached rerun CLI flag.
+            dest="rerun_cached_experiments",  # Store rerun count on parsed args.
+            nargs="?",  # Accept optional count after the flag.
+            const=1,  # Default to one rerun when flag has no count.
+            default=None,  # Keep normal behavior when flag is absent.
+            type=validate_cached_rerun_count,  # Validate positive integer input.
+            help=(  # Describe rerun count behavior.
+                "Rerun cached experiment definitions into the next cache run ordered by descending cached F1 score; "  # Explain source order.
+                "optional positive integer repeats complete additional runs"  # Explain count behavior.
+            ),  # Finish cached rerun help text.
+        )  # Register cached rerun CLI argument.
         parser.add_argument("--experiment-runs", dest="experiment_runs", type=int, default=None, help="Total repeated runs required for every logical stacking experiment")  # Add repeated-run CLI override
         parser.add_argument("--training-progress-interval-minutes", dest="training_progress_interval_minutes", type=float, default=None, help="Recurring classifier training-progress interval in positive finite minutes (default: 15)")  # Add the minutes-based progress interval override
         parser.add_argument("--low-memory", dest="low_memory", action="store_true", default=False, help="Enable low memory mode for pandas operations")  # Add low memory mode CLI argument
@@ -1275,7 +1286,7 @@ def get_default_stacking_config():
             "top_n_features_heatmap": 15,  # Number of top features to show in heatmap
             "combined_files_evaluation": True,  # Default: combined files evaluation enabled; False = separate files evaluation
             "sort_pending_by_elapsed_time": False,  # Keep pending queue ordering unchanged unless runtime sorting is enabled
-            "rerun_cached_experiments": False,  # Keep normal cache resume behavior unless read-only cache-driven rerun mode is requested
+            "rerun_cached_experiments": 0,  # Keep normal cache resume behavior unless read-only cache-driven rerun mode is requested
             "experiment_runs": 1,  # Require one completed run per logical experiment by default
             "methods": {
                 "augmentation": True,  # Enable data augmentation combination by default
@@ -1580,6 +1591,42 @@ def validate_experiment_runs(value: Any, source: str = "stacking.experiment_runs
     return value  # Return the validated run count.
 
 
+def validate_cached_rerun_count(value: Any, source: str = "--rerun-cached-experiments") -> int:
+    """
+    Validate the requested cached rerun count.
+
+    :param value: Requested cached rerun count.
+    :param source: User-facing setting name used in validation errors.
+    :return: Validated positive rerun count.
+    """
+
+    try:  # Parse exact integer text supplied by argparse or configuration.
+        count_value = parse_persisted_experiment_run_value(value, source)  # Reuse strict integer parsing without silent coercion.
+    except ValueError as exc:  # Convert validation failures to argparse-compatible errors.
+        raise argparse.ArgumentTypeError(f"{source} must be a positive integer") from exc  # Surface clear CLI validation failure.
+    if count_value < 1:  # Reject zero and negative rerun counts.
+        raise argparse.ArgumentTypeError(f"{source} must be a positive integer")  # Surface clear CLI validation failure.
+    return count_value  # Return validated complete-rerun count.
+
+
+def resolve_cached_rerun_count(config: Optional[dict] = None) -> int:
+    """
+    Resolve the configured cached rerun count.
+
+    :param config: Runtime configuration dictionary.
+    :return: Zero when disabled, otherwise positive rerun count.
+    """
+
+    if config is None:  # Use global configuration when no configuration is supplied.
+        config = CONFIG  # Preserve established global fallback.
+    raw_count = config.get("stacking", {}).get("rerun_cached_experiments", 0)  # Read cached rerun setting from stacking config.
+    if raw_count is None or raw_count is False or raw_count == 0:  # Treat absent and disabled values as normal execution.
+        return 0  # Return disabled rerun count.
+    if raw_count is True:  # Preserve current flag-only semantics from the first implementation.
+        return 1  # Return one complete rerun.
+    return validate_cached_rerun_count(raw_count, "stacking.rerun_cached_experiments")  # Return validated configured count.
+
+
 def parse_persisted_experiment_run_value(value: Any, source: str = "experiment_run") -> int:
     """
     Parse one persisted experiment run value without lossy conversion.
@@ -1865,17 +1912,65 @@ def resolve_cached_rerun_runs(csv_path: str, config: Optional[dict] = None) -> T
 
     if config is None:  # Use global configuration when no configuration is supplied.
         config = CONFIG  # Preserve established global fallback.
-    run_numbers = discover_cache_artifact_run_numbers(csv_path, config=config)  # Discover all existing cache run artifacts.
-    if not run_numbers:  # Require a source cache for cache-driven rerun mode.
+    source_cache, source_runs = load_cached_rerun_source_cache(csv_path, config=config)  # Load all valid historical source rows before allocating a destination.
+    source_run = max(source_runs) if source_runs else 0  # Report the newest valid contributing source run.
+    if not source_cache or source_run < 1:  # Require recoverable source rows for compatibility callers.
+        raise ValueError(f"No recoverable cached results found for rerun mode: {csv_path}")  # Fail before destination writes.
+    destination_run = resolve_cached_rerun_destination_run(csv_path, config=config)  # Allocate after the highest existing artifact number.
+    return source_run, destination_run  # Return resolved source and destination runs.
+
+
+def load_cached_rerun_source_cache(csv_path: str, config: Optional[dict] = None) -> Tuple[dict, List[int]]:
+    """
+    Load latest valid cached rows across all discovered source runs.
+
+    :param csv_path: Dataset file or directory identity used for cache placement.
+    :param config: Runtime configuration dictionary.
+    :return: Tuple of latest cached rows by identity and contributing run numbers.
+    """
+
+    if config is None:  # Use global configuration when no configuration is supplied.
+        config = CONFIG  # Preserve established global fallback.
+    run_numbers = discover_cache_artifact_run_numbers(csv_path, config=config)  # Discover every allocated cache run artifact.
+    if not run_numbers:  # Require at least one historical source artifact.
         raise FileNotFoundError(f"No cache run artifacts found for rerun mode: {csv_path}")  # Surface missing source cache explicitly.
-    source_run = max(run_numbers)  # Use the highest existing run as the read-only source run.
-    destination_run = source_run + 1  # Use the next integer run as the distinct destination run.
-    destination_path = get_cache_file_path(csv_path, config=config, experiment_run=destination_run, legacy=False)  # Resolve the destination primary path.
-    destination_conflicts = [destination_path, get_cache_backup_path(destination_path), get_cache_lock_path(destination_path)]  # Include primary, backup, and lock collision targets.
-    existing_conflicts = [path for path in destination_conflicts if os.path.exists(path)]  # Detect any destination artifact collision.
+    source_cache: Dict[str, dict] = {}  # Accumulate latest valid rows by production cache identity.
+    source_runs: List[int] = []  # Track runs that contributed recoverable rows.
+    for run_number in run_numbers:  # Load historical runs from oldest to newest.
+        run_config = build_experiment_run_config(config, run_number)  # Build run-specific config for production recovery.
+        run_cache = load_cache_results(csv_path, config=run_config, notify_discovery=True)  # Recover primary and backup rows through existing cache logic.
+        if not run_cache:  # Ignore allocated runs with no recoverable rows.
+            continue  # Move to the next discovered run.
+        for cache_key, result_entry in run_cache.items():  # Apply this run's recovered row order.
+            source_cache.pop(cache_key, None)  # Remove older duplicate identity before storing newer metadata.
+            source_cache[cache_key] = result_entry  # Let newer valid rows supply ordering metadata for duplicate identities.
+        source_runs.append(run_number)  # Record one valid contributing source run.
+    if not source_cache:  # Reject rerun mode when artifacts contain no usable experiment rows.
+        raise ValueError(f"No recoverable cached results found for rerun mode: {csv_path}")  # Fail before destination writes.
+    return source_cache, source_runs  # Return latest rows and contributing run numbers.
+
+
+def resolve_cached_rerun_destination_run(csv_path: str, config: Optional[dict] = None) -> int:
+    """
+    Resolve the next destination run number for cache-driven rerun mode.
+
+    :param csv_path: Dataset file or directory identity used for cache placement.
+    :param config: Runtime configuration dictionary.
+    :return: Next available destination run number.
+    """
+
+    if config is None:  # Use global configuration when no configuration is supplied.
+        config = CONFIG  # Preserve established global fallback.
+    run_numbers = discover_cache_artifact_run_numbers(csv_path, config=config)  # Discover every allocated cache artifact.
+    if not run_numbers:  # Require a source cache allocation before rerun mode.
+        raise FileNotFoundError(f"No cache run artifacts found for rerun mode: {csv_path}")  # Surface missing source cache explicitly.
+    destination_run = max(run_numbers) + 1  # Allocate immediately after the highest existing artifact number.
+    destination_path = get_cache_file_path(csv_path, config=config, experiment_run=destination_run, legacy=False)  # Resolve destination primary path.
+    destination_conflicts = [destination_path, get_cache_backup_path(destination_path), get_cache_lock_path(destination_path)]  # Include all destination artifact paths.
+    existing_conflicts = [path for path in destination_conflicts if os.path.exists(path)]  # Detect unexpected destination collisions.
     if existing_conflicts:  # Prevent overwrite or reuse of an existing destination run.
         raise FileExistsError(f"Rerun destination cache run {destination_run} already has artifacts: {existing_conflicts}")  # Surface collision before execution.
-    return source_run, destination_run  # Return resolved source and destination runs.
+    return destination_run  # Return the safe destination run number.
 
 
 def resolve_cached_rerun_f1_score(result_entry: dict) -> float:
@@ -1898,7 +1993,7 @@ def resolve_cached_rerun_f1_score(result_entry: dict) -> float:
     return f1_value  # Return finite F1 score.
 
 
-def build_cached_rerun_evaluation_plan(evaluation_plan: List[Tuple[str, bool, Optional[float], str]], source_cache: dict, tasks: List[dict], attack_types_combined: Any) -> Tuple[List[Tuple[str, bool, Optional[float], str]], dict]:
+def build_cached_rerun_evaluation_plan(evaluation_plan: List[Tuple[str, bool, Optional[float], str]], source_cache: dict, tasks: List[dict], attack_types_combined: Any, require_all: bool = False) -> Tuple[List[Tuple[str, bool, Optional[float], str]], dict]:
     """
     Build a rerun plan from cached entries ordered by descending cached F1.
 
@@ -1906,6 +2001,7 @@ def build_cached_rerun_evaluation_plan(evaluation_plan: List[Tuple[str, bool, Op
     :param source_cache: Read-only source cache loaded through production recovery.
     :param tasks: Current generated task descriptors.
     :param attack_types_combined: Combined attack scope, or None.
+    :param require_all: Whether every generated combination must exist in the source cache.
     :return: Tuple of rerun evaluation plan and skip-summary metadata.
     """
 
@@ -1916,6 +2012,8 @@ def build_cached_rerun_evaluation_plan(evaluation_plan: List[Tuple[str, bool, Op
         task = task_by_combination[combination]  # Resolve the matching generated task descriptor.
         cached_result = feature_process_cache_result(task, source_cache, attack_types_combined)  # Require production cache identity and shape compatibility.
         if cached_result is None:  # Skip generated combinations absent from the source cache.
+            if require_all:  # Preserve fixed rerun workload after the first selected pass.
+                raise ValueError(f"Cached rerun ordering source is missing required experiment: {combination}")  # Surface incomplete previous-run ordering data.
             continue  # Move to the next generated combination.
         cache_identity = build_cache_identity_from_row(cached_result)  # Build the existing resume identity for source ordering.
         rerun_records.append((combination, resolve_cached_rerun_f1_score(cached_result), source_order.get(cache_identity, len(source_order))))  # Store combination, cached F1, and source row order.
@@ -2473,7 +2571,7 @@ def merge_configs(defaults, file_config, cli_args):
             config.setdefault("stacking", {})["sort_pending_by_elapsed_time"] = cli_args.sort_pending_by_elapsed_time  # Apply explicit CLI ordering preference over YAML
 
         if hasattr(cli_args, "rerun_cached_experiments") and cli_args.rerun_cached_experiments is not None:  # Cached rerun CLI override
-            config.setdefault("stacking", {})["rerun_cached_experiments"] = bool(cli_args.rerun_cached_experiments)  # Apply explicit cache-driven rerun mode
+            config.setdefault("stacking", {})["rerun_cached_experiments"] = validate_cached_rerun_count(cli_args.rerun_cached_experiments)  # Apply explicit cache-driven rerun count
 
         if hasattr(cli_args, "experiment_runs") and cli_args.experiment_runs is not None:  # Repeated-run CLI override
             config.setdefault("stacking", {})["experiment_runs"] = validate_experiment_runs(cli_args.experiment_runs, "--experiment-runs")  # Apply the validated CLI-over-YAML run count.
@@ -15521,7 +15619,17 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
         if config is None:  # If no config provided
             config = CONFIG  # Use global CONFIG
 
-        rerun_cached_experiments = bool(config.get("stacking", {}).get("rerun_cached_experiments", False))  # Resolve cache-driven rerun mode.
+        rerun_cached_experiment_count = resolve_cached_rerun_count(config)  # Resolve complete cache-driven rerun count.
+        rerun_cached_experiments = rerun_cached_experiment_count > 0  # Resolve cache-driven rerun mode.
+        if "experiment_run" not in config.get("stacking", {}) and rerun_cached_experiments and "cached_rerun_iteration" not in config.get("stacking", {}):  # Expand cached reruns only at the outer combined-files boundary.
+            for rerun_iteration in range(1, rerun_cached_experiment_count + 1):  # Execute every requested additional rerun independently.
+                rerun_config = copy.deepcopy(config)  # Isolate rerun iteration metadata without mutating caller config.
+                rerun_config.setdefault("stacking", {})["cached_rerun_iteration"] = rerun_iteration  # Store current rerun iteration for logs.
+                rerun_config.setdefault("stacking", {})["cached_rerun_total"] = rerun_cached_experiment_count  # Store requested rerun total for logs.
+                print(f"{BackgroundColors.BOLD}{BackgroundColors.CYAN}[RERUN CACHE {rerun_iteration}/{rerun_cached_experiment_count}] Combined files dataset: {dataset_name}{Style.RESET_ALL}")  # Report rerun iteration progress.
+                process_combined_files_evaluation(original_files_list, combined_files_df, attack_types_list, dataset_name, config=rerun_config)  # Execute one complete destination rerun.
+            return  # Avoid re-entering the same logical grid after cached rerun expansion.
+
         if "experiment_run" not in config.get("stacking", {}) and not rerun_cached_experiments:  # Expand logical experiments only at the outer combined-files boundary.
             experiment_runs = validate_experiment_runs(config.get("stacking", {}).get("experiment_runs", 1))  # Resolve total requested runs.
             for experiment_run in range(1, experiment_runs + 1):  # Execute every requested run independently.
@@ -15540,14 +15648,13 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
         combined_dataset_reference = combined_dataset_identity.rstrip("/")  # Use directory path text without trailing separator for path APIs.
         source_rerun_cache = None  # Initialize absent source cache for normal execution.
         if rerun_cached_experiments:  # Use cache artifacts to select the combined-files rerun workload.
-            source_run, destination_run = resolve_cached_rerun_runs(combined_dataset_reference, config=config)  # Resolve read-only source run and distinct destination run.
-            source_config = build_experiment_run_config(config, source_run)  # Build source-run config for production cache loading.
-            source_rerun_cache = load_cache_results(combined_dataset_reference, config=source_config, notify_discovery=True)  # Load source cache through real recovery mechanisms.
-            if not source_rerun_cache:  # Require recoverable source rows before creating a destination rerun.
-                raise ValueError(f"No recoverable cached results found for combined-files rerun source run {source_run}")  # Fail before any destination writes.
+            source_rerun_cache, source_runs = load_cached_rerun_source_cache(combined_dataset_reference, config=config)  # Load latest rows across all valid historical runs.
+            destination_run = resolve_cached_rerun_destination_run(combined_dataset_reference, config=config)  # Resolve the next destination run after all allocated artifacts.
             config = build_experiment_run_config(config, destination_run)  # Switch execution and persistence to the new destination run.
-            print(f"{BackgroundColors.GREEN}[RERUN CACHE] Combined files source run {BackgroundColors.CYAN}{source_run}{BackgroundColors.GREEN} -> destination run {BackgroundColors.CYAN}{destination_run}{BackgroundColors.GREEN} for {BackgroundColors.CYAN}{dataset_name}{Style.RESET_ALL}")  # Log cache-driven run selection.
-            send_telegram_message(TELEGRAM_BOT, [f"[COMBINED_FILES][RERUN CACHE] Source run {source_run} -> destination run {destination_run} | Dataset: {dataset_name}"])  # Notify Telegram about cache-driven rerun mode.
+            rerun_iteration = config.get("stacking", {}).get("cached_rerun_iteration", 1)  # Read current rerun iteration for logs.
+            rerun_total = config.get("stacking", {}).get("cached_rerun_total", rerun_cached_experiment_count)  # Read requested rerun total for logs.
+            print(f"{BackgroundColors.GREEN}[RERUN CACHE {rerun_iteration}/{rerun_total}] Combined files source runs {BackgroundColors.CYAN}{source_runs}{BackgroundColors.GREEN} -> destination run {BackgroundColors.CYAN}{destination_run}{BackgroundColors.GREEN} for {BackgroundColors.CYAN}{dataset_name}{Style.RESET_ALL}")  # Log cache-driven run selection.
+            send_telegram_message(TELEGRAM_BOT, [f"[COMBINED_FILES][RERUN CACHE {rerun_iteration}/{rerun_total}] Source runs {source_runs} -> destination run {destination_run} | Dataset: {dataset_name}"])  # Notify Telegram about cache-driven rerun mode.
         
         print(
             f"\n{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}"
@@ -15622,8 +15729,8 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
             source_tasks = build_feature_process_plan(evaluation_plan, feature_metadata_by_name, original_sample_count, combined_dataset_reference, "combined_files", get_current_experiment_run(config), skip_summary["global_ids"], skip_summary["canonical_total"])  # Build generated task identities for source-cache matching.
             evaluation_plan, skip_summary = build_cached_rerun_evaluation_plan(evaluation_plan, source_rerun_cache or {}, source_tasks, attack_types_list)  # Select and order only source-cached compatible combinations.
             feature_mode_names = list(dict.fromkeys(item[0] for item in evaluation_plan))  # Rebuild active feature sets from the cache-driven plan.
-            print(f"{BackgroundColors.GREEN}[RERUN CACHE] Selected {BackgroundColors.CYAN}{len(evaluation_plan)}{BackgroundColors.GREEN} cached compatible combined-files combination(s), ordered by descending cached F1.{Style.RESET_ALL}")  # Log rerun workload size and ordering.
-            send_telegram_message(TELEGRAM_BOT, [f"[COMBINED_FILES][RERUN CACHE] Selected {len(evaluation_plan)} cached compatible combination(s), ordered by descending cached F1"])  # Notify Telegram about rerun workload size.
+            print(f"{BackgroundColors.GREEN}[RERUN CACHE {rerun_iteration}/{rerun_total}] Destination run {BackgroundColors.CYAN}{destination_run}{BackgroundColors.GREEN} selected {BackgroundColors.CYAN}{len(evaluation_plan)}{BackgroundColors.GREEN} cached compatible combined-files combination(s), ordered by descending cached F1.{Style.RESET_ALL}")  # Log rerun workload size and ordering.
+            send_telegram_message(TELEGRAM_BOT, [f"[COMBINED_FILES][RERUN CACHE {rerun_iteration}/{rerun_total}] Destination run {destination_run} selected {len(evaluation_plan)} cached compatible combination(s), ordered by descending cached F1"])  # Notify Telegram about rerun workload size.
         for skipped_record in skip_summary.get("skipped_combinations", []):  # Log each unique skipped combination once.
             print(skipped_record["line"])  # Emit skipped-combination details after rule evaluation.
         for match_line in format_skip_rule_match_lines(skip_summary):  # Log per-rule aggregate match counts.
@@ -18372,7 +18479,17 @@ def orchestrate_all_combinations(input_path, dataset_name=None, config=None):
     if config is None:  # If no config provided
         config = CONFIG  # Use global CONFIG
 
-    rerun_cached_experiments = bool(config.get("stacking", {}).get("rerun_cached_experiments", False))  # Resolve cache-driven rerun mode.
+    rerun_cached_experiment_count = resolve_cached_rerun_count(config)  # Resolve complete cache-driven rerun count.
+    rerun_cached_experiments = rerun_cached_experiment_count > 0  # Resolve cache-driven rerun mode.
+    if "experiment_run" not in config.get("stacking", {}) and rerun_cached_experiments and "cached_rerun_iteration" not in config.get("stacking", {}):  # Expand cached reruns only at the outer separate-files boundary.
+        for rerun_iteration in range(1, rerun_cached_experiment_count + 1):  # Execute every requested additional rerun independently.
+            rerun_config = copy.deepcopy(config)  # Isolate rerun iteration metadata without mutating caller config.
+            rerun_config.setdefault("stacking", {})["cached_rerun_iteration"] = rerun_iteration  # Store current rerun iteration for logs.
+            rerun_config.setdefault("stacking", {})["cached_rerun_total"] = rerun_cached_experiment_count  # Store requested rerun total for logs.
+            print(f"{BackgroundColors.BOLD}{BackgroundColors.CYAN}[RERUN CACHE {rerun_iteration}/{rerun_cached_experiment_count}] Separate files input: {input_path}{Style.RESET_ALL}")  # Report rerun iteration progress.
+            orchestrate_all_combinations(input_path, dataset_name=dataset_name, config=rerun_config)  # Execute one complete destination rerun.
+        return  # Avoid re-entering the same logical grid after cached rerun expansion.
+
     if "experiment_run" not in config.get("stacking", {}) and not rerun_cached_experiments:  # Expand logical experiments only at the outer separate-files boundary.
         experiment_runs = validate_experiment_runs(config.get("stacking", {}).get("experiment_runs", 1))  # Resolve total requested runs.
         for experiment_run in range(1, experiment_runs + 1):  # Execute every requested run independently.
@@ -18403,14 +18520,13 @@ def orchestrate_all_combinations(input_path, dataset_name=None, config=None):
                 continue  # Prevent artifact discovery, classifier planning, caches, and regular result exports.
             source_rerun_cache = None  # Initialize absent source cache for normal execution.
             if rerun_cached_experiments:  # Use cache artifacts to select the rerun workload.
-                source_run, destination_run = resolve_cached_rerun_runs(file, config=config)  # Resolve read-only source run and distinct destination run.
-                source_config = build_experiment_run_config(config, source_run)  # Build source-run config for production cache loading.
-                source_rerun_cache = load_cache_results(file, config=source_config, notify_discovery=True)  # Load source cache through real recovery mechanisms.
-                if not source_rerun_cache:  # Require recoverable source rows before creating a destination rerun.
-                    raise ValueError(f"No recoverable cached results found for separate-files rerun source run {source_run}")  # Fail before any destination writes.
+                source_rerun_cache, source_runs = load_cached_rerun_source_cache(file, config=config)  # Load latest rows across all valid historical runs.
+                destination_run = resolve_cached_rerun_destination_run(file, config=config)  # Resolve the next destination run after all allocated artifacts.
                 config = build_experiment_run_config(config, destination_run)  # Switch all execution and persistence to the new destination run.
-                print(f"{BackgroundColors.GREEN}[RERUN CACHE] Separate files source run {BackgroundColors.CYAN}{source_run}{BackgroundColors.GREEN} -> destination run {BackgroundColors.CYAN}{destination_run}{BackgroundColors.GREEN} for {BackgroundColors.CYAN}{file}{Style.RESET_ALL}")  # Log cache-driven run selection.
-                send_telegram_message(TELEGRAM_BOT, [f"[SEPARATE_FILES][RERUN CACHE] Source run {source_run} -> destination run {destination_run} | file: {os.path.basename(file)}"])  # Notify Telegram about cache-driven rerun mode.
+                rerun_iteration = config.get("stacking", {}).get("cached_rerun_iteration", 1)  # Read current rerun iteration for logs.
+                rerun_total = config.get("stacking", {}).get("cached_rerun_total", rerun_cached_experiment_count)  # Read requested rerun total for logs.
+                print(f"{BackgroundColors.GREEN}[RERUN CACHE {rerun_iteration}/{rerun_total}] Separate files source runs {BackgroundColors.CYAN}{source_runs}{BackgroundColors.GREEN} -> destination run {BackgroundColors.CYAN}{destination_run}{BackgroundColors.GREEN} for {BackgroundColors.CYAN}{file}{Style.RESET_ALL}")  # Log cache-driven run selection.
+                send_telegram_message(TELEGRAM_BOT, [f"[SEPARATE_FILES][RERUN CACHE {rerun_iteration}/{rerun_total}] Source runs {source_runs} -> destination run {destination_run} | file: {os.path.basename(file)}"])  # Notify Telegram about cache-driven rerun mode.
             artifacts = locate_and_verify_artifacts(file, config=config)  # Locate feature, HP, and augmentation artifacts
             ga_sel = artifacts.get("ga") if fs_toggle else None  # Use GA artifact only when feature selection is enabled
             pca_n = artifacts.get("pca") if fs_toggle else None  # Use PCA artifact only when feature selection is enabled
@@ -18450,8 +18566,8 @@ def orchestrate_all_combinations(input_path, dataset_name=None, config=None):
                 source_tasks = build_feature_process_plan(evaluation_plan, feature_metadata_by_name, len(df_original), file, "separate_files", get_current_experiment_run(config), skip_summary["global_ids"], skip_summary["canonical_total"])  # Build generated task identities for source-cache matching.
                 evaluation_plan, skip_summary = build_cached_rerun_evaluation_plan(evaluation_plan, source_rerun_cache or {}, source_tasks, None)  # Select and order only source-cached compatible combinations.
                 feature_mode_names = list(dict.fromkeys(item[0] for item in evaluation_plan))  # Rebuild active feature sets from the cache-driven plan.
-                print(f"{BackgroundColors.GREEN}[RERUN CACHE] Selected {BackgroundColors.CYAN}{len(evaluation_plan)}{BackgroundColors.GREEN} cached compatible separate-files combination(s), ordered by descending cached F1.{Style.RESET_ALL}")  # Log rerun workload size and ordering.
-                send_telegram_message(TELEGRAM_BOT, [f"[SEPARATE_FILES][RERUN CACHE] Selected {len(evaluation_plan)} cached compatible combination(s), ordered by descending cached F1"])  # Notify Telegram about rerun workload size.
+                print(f"{BackgroundColors.GREEN}[RERUN CACHE {rerun_iteration}/{rerun_total}] Destination run {BackgroundColors.CYAN}{destination_run}{BackgroundColors.GREEN} selected {BackgroundColors.CYAN}{len(evaluation_plan)}{BackgroundColors.GREEN} cached compatible separate-files combination(s), ordered by descending cached F1.{Style.RESET_ALL}")  # Log rerun workload size and ordering.
+                send_telegram_message(TELEGRAM_BOT, [f"[SEPARATE_FILES][RERUN CACHE {rerun_iteration}/{rerun_total}] Destination run {destination_run} selected {len(evaluation_plan)} cached compatible combination(s), ordered by descending cached F1"])  # Notify Telegram about rerun workload size.
             for skipped_record in skip_summary.get("skipped_combinations", []):  # Log each unique skipped combination once.
                 print(skipped_record["line"])  # Emit skipped-combination details after rule evaluation.
             for match_line in format_skip_rule_match_lines(skip_summary):  # Log per-rule aggregate match counts.
@@ -19171,7 +19287,7 @@ def build_telegram_pipeline_summary(config: Optional[dict], dataset_path: Option
         only_rules = tuple(stacking_cfg.get("compiled_only_combinations", ()))  # Read compiled allowlist rules for startup notification.
         only_source = stacking_cfg.get("only_combinations_source", "Default")  # Read resolved allowlist source for startup notification.
         auto_restart_on_oom = bool(stacking_cfg.get("auto_restart_on_oom", True))  # Read OOM restart toggle for startup notification.
-        rerun_cached_experiments = bool(stacking_cfg.get("rerun_cached_experiments", False))  # Read cache-driven rerun toggle for startup notification.
+        rerun_cached_experiment_count = resolve_cached_rerun_count(config)  # Read cache-driven rerun count for startup notification.
         execution_id = ensure_execution_id(config)  # Resolve the stable top-level execution identity for startup visibility.
 
         dataset_display = dataset_path if dataset_path else "config.yaml (default)"  # Resolve the effective dataset source for the consolidated notification
@@ -19182,7 +19298,7 @@ def build_telegram_pipeline_summary(config: Optional[dict], dataset_path: Option
             f"Execution ID: {execution_id}",  # Report copyable top-level execution identity.
             f"Execution mode: {resolved_mode}",  # Report the authoritative classification mode once
             f"Experiment runs: {experiment_runs}",  # Report repeated-run count in the first Telegram summary
-            f"Rerun cached experiments: {'ON' if rerun_cached_experiments else 'OFF'}",  # Report whether cached definitions will be rerun into a new run.
+            f"Rerun cached experiments: {rerun_cached_experiment_count if rerun_cached_experiment_count else 'OFF'}",  # Report requested complete cached reruns.
             f"Methods: Feature Selection: {'ON' if feature_selection_enabled else 'OFF'}, Hyperparameters: {'ON' if hyperparameters_enabled else 'OFF'}, Data Augmentation: {'ON' if augmentation_enabled else 'OFF'}, AutoML: {'ON' if automl_enabled else 'OFF'}, Stacking: {'ON' if stacking_enabled else 'OFF'}",  # Report all pipeline method toggles
             f"Enabled classifiers: {', '.join(enabled_classifiers) if enabled_classifiers else 'None'}",  # Report classifiers instantiated by the model factory
             f"Disabled classifiers: {', '.join(disabled_classifiers) if disabled_classifiers else 'None'}",  # Report classifiers excluded from the model factory
