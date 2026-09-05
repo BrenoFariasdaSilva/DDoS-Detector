@@ -60,6 +60,7 @@ if __name__ in {"__main__", "__mp_main__"}:
 
 import atexit  # For playing a sound when the program finishes
 import asyncio  # For asynchronous operations
+import fcntl  # Provide process-safe Telegram queue serialization
 import hashlib  # For non-secret local Telegram lock and bus names
 import json  # For process-local inbound message fan-out
 import os  # For environment variables and file operations
@@ -72,10 +73,11 @@ import tempfile  # For per-machine Telegram polling lock and message bus paths
 import threading  # For non-blocking inbound Telegram polling
 import time  # For bounded local polling-lock takeover retries
 import traceback  # For formatting and printing exception tracebacks
+from typing import Any  # For narrow queue item annotations
 from colorama import Style  # For coloring the terminal
 from dotenv import load_dotenv  # For loading .env file
 from telegram import Bot  # For Telegram bot operations
-from telegram.error import BadRequest  # For handling Telegram errors
+from telegram.error import BadRequest, RetryAfter  # For handling Telegram errors
 
 
 # Telegram Configuration:
@@ -83,6 +85,10 @@ TELEGRAM_DEVICE_INFO = ""  # Device info for Telegram messages, set by calling s
 RUNNING_CODE = ""  # Name of the running script, set by calling script
 EXECUTION_ID = ""  # Stable top-level execution ID, set by calling script when available
 TELEGRAM_BOT = None  # Optional module-level TelegramBot instance usable by the global handler
+TELEGRAM_QUEUE_RETRY_BASE_SECONDS = 5.0  # Base delay for retryable Telegram delivery failures
+TELEGRAM_QUEUE_RETRY_MAX_SECONDS = 300.0  # Maximum retry delay for retryable Telegram delivery failures
+TELEGRAM_QUEUE_RATE_LIMIT_MAX_SLEEP_SECONDS = 60.0  # Maximum in-lock sleep for Telegram RetryAfter handling
+TELEGRAM_QUEUE_RATE_LIMIT_ATTEMPTS = 3  # Immediate RetryAfter retries before returning work to the queue
 
 # Macros:
 class BackgroundColors:  # Colors for the terminal
@@ -240,6 +246,7 @@ class TelegramBot:
                         await self.bot.send_message(chat_id=chat_id, text=part, parse_mode="MarkdownV2")  # Send the message part with MarkdownV2 parse mode
                     except BadRequest as e:  # Handle BadRequest error
                         print(f"{BackgroundColors.RED}Failed to send message part: {str(e)}{Style.RESET_ALL}")
+                        raise  # Preserve queued work until Telegram confirms delivery
         else:  # If the bot is not initialized
             print(f"{BackgroundColors.RED}Bot not initialized.{Style.RESET_ALL}")
 
@@ -726,6 +733,257 @@ def escape_markdown_v2(text: str) -> str:
         return text  # Return the original text
 
 
+def resolve_telegram_queue_paths(bot: TelegramBot) -> tuple[str, str]:
+    """
+    Resolve durable outbound Telegram queue and lock paths.
+
+    :param bot: TelegramBot instance.
+    :return: Queue path and lock path tuple.
+    """
+
+    identity = f"{bot.TELEGRAM_BOT_TOKEN}:{bot.CHAT_ID}".encode("utf-8", errors="ignore")  # Build per-bot identity without writing token text
+    digest = hashlib.sha256(identity).hexdigest()[:24]  # Build non-secret stable filename key
+    base_dir = tempfile.gettempdir()  # Use per-machine temp storage shared by independent framework processes
+    queue_path = os.path.join(base_dir, f"ddos_detector_telegram_outbound_{digest}.jsonl")  # Store pending outbound messages durably
+    lock_path = os.path.join(base_dir, f"ddos_detector_telegram_outbound_{digest}.lock")  # Serialize producers and consumers across OS processes
+    return queue_path, lock_path  # Return both queue coordination paths
+
+
+def acquire_telegram_queue_lock(lock_path: str) -> Any:
+    """
+    Acquire one outbound Telegram queue lock.
+
+    :param lock_path: Lock file path.
+    :return: Open lock file object.
+    """
+
+    lock_file = open(lock_path, "a+", encoding="utf-8")  # Open shared advisory-lock file
+    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)  # Hold exclusive ownership for one queue mutation or drain
+    return lock_file  # Return lock owner handle
+
+
+def release_telegram_queue_lock(lock_file: Any) -> None:
+    """
+    Release one outbound Telegram queue lock.
+
+    :param lock_file: Open lock file object.
+    :return: None.
+    """
+
+    try:  # Release advisory lock without affecting experiment flow
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)  # Release exclusive queue ownership
+    except Exception:  # Preserve Telegram failure isolation
+        pass  # Ignore lock-release failure during cleanup
+    try:  # Close lock file descriptor after unlock
+        lock_file.close()  # Close queue lock handle
+    except Exception:  # Preserve Telegram failure isolation
+        pass  # Ignore close failure during cleanup
+
+
+def read_telegram_queue(queue_path: str) -> list[dict[str, Any]]:
+    """
+    Read pending outbound Telegram queue items.
+
+    :param queue_path: Queue file path.
+    :return: Pending queue items.
+    """
+
+    items: list[dict[str, Any]] = []  # Accumulate valid queue entries in file order
+    try:  # Read queue file when it already exists
+        with open(queue_path, "r", encoding="utf-8") as queue_file:  # Open queue for complete locked read
+            for line in queue_file:  # Iterate durable records in append order
+                text = line.strip()  # Normalize record text
+                if not text:  # Skip empty records
+                    continue  # Continue with next queue record
+                try:  # Decode one queued message record
+                    item = json.loads(text)  # Parse JSON queue item
+                except json.JSONDecodeError as error:  # Detect a corrupted partial record
+                    error_text = f"Telegram outbound queue record ignored: {error}"  # Build queue corruption message
+                    print(f"{BackgroundColors.YELLOW}{error_text}{Style.RESET_ALL}")  # Report bad queue record
+                    continue  # Avoid blocking all later valid messages
+                if isinstance(item, dict):  # Accept only object records
+                    items.append(item)  # Preserve valid queue item
+    except FileNotFoundError:  # Missing queue means no pending outbound work
+        return items  # Return empty queue
+    return items  # Return pending records
+
+
+def write_telegram_queue(queue_path: str, items: list[dict[str, Any]]) -> None:
+    """
+    Atomically replace pending outbound Telegram queue items.
+
+    :param queue_path: Queue file path.
+    :param items: Pending queue items.
+    :return: None.
+    """
+
+    temp_path = f"{queue_path}.{os.getpid()}.tmp"  # Build process-specific replacement path
+    with open(temp_path, "w", encoding="utf-8") as queue_file:  # Write replacement queue before atomic swap
+        for item in items:  # Preserve current queue order
+            queue_file.write(json.dumps(item, ensure_ascii=True, default=str) + "\n")  # Write one durable queue record
+        queue_file.flush()  # Flush Python buffer before atomic replacement
+        os.fsync(queue_file.fileno())  # Flush queue contents to disk before replacement
+    os.replace(temp_path, queue_path)  # Atomically publish new queue state
+
+
+def append_telegram_queue_item(queue_path: str, item: dict[str, Any]) -> None:
+    """
+    Append one outbound Telegram queue item.
+
+    :param queue_path: Queue file path.
+    :param item: Queue item to append.
+    :return: None.
+    """
+
+    with open(queue_path, "a", encoding="utf-8") as queue_file:  # Open queue append-only under lock
+        queue_file.write(json.dumps(item, ensure_ascii=True, default=str) + "\n")  # Write one pending record
+        queue_file.flush()  # Flush Python buffer before releasing queue lock
+        os.fsync(queue_file.fileno())  # Flush appended message before any sender can claim it
+
+
+def enqueue_telegram_messages(bot: TelegramBot, messages: list[str], chat_id: Any = None) -> None:
+    """
+    Append outbound Telegram messages for serialized delivery.
+
+    :param bot: TelegramBot instance.
+    :param messages: Escaped Telegram message strings.
+    :param chat_id: Optional chat identifier.
+    :return: None.
+    """
+
+    queue_path, lock_path = resolve_telegram_queue_paths(bot)  # Resolve per-bot queue files
+    lock_file = acquire_telegram_queue_lock(lock_path)  # Serialize enqueue with every producer and sender
+    try:  # Keep enqueue atomic across independent OS processes
+        item = {  # Build pending payload
+            "created_at": time.time(),  # Store enqueue timestamp
+            "pid": os.getpid(),  # Store producer process identity
+            "chat_id": chat_id,  # Preserve optional target chat
+            "messages": messages,  # Preserve escaped Telegram payload
+            "attempts": 0,  # Start retryable attempt count
+            "next_attempt_at": 0.0,  # Make new item immediately due
+        }
+        append_telegram_queue_item(queue_path, item)  # Store payload without overwriting siblings
+    finally:  # Release queue ownership after durable append
+        release_telegram_queue_lock(lock_file)  # Let another process enqueue or drain
+
+
+def resolve_telegram_retry_delay(error: Exception, attempts: int) -> float:
+    """
+    Resolve retry delay for one Telegram delivery failure.
+
+    :param error: Delivery exception.
+    :param attempts: Queue delivery attempt count.
+    :return: Delay seconds before next attempt.
+    """
+
+    retry_after = getattr(error, "retry_after", None)  # Read python-telegram-bot rate-limit delay when exposed
+    if retry_after is not None and hasattr(retry_after, "total_seconds"):  # Accept datetime.timedelta retry values
+        return min(float(retry_after.total_seconds()), TELEGRAM_QUEUE_RETRY_MAX_SECONDS)  # Bound rate-limit retry delay
+    if retry_after is not None:  # Accept numeric retry values
+        return min(float(retry_after), TELEGRAM_QUEUE_RETRY_MAX_SECONDS)  # Bound numeric rate-limit retry delay
+    delay = TELEGRAM_QUEUE_RETRY_BASE_SECONDS * (2 ** max(0, attempts - 1))  # Compute exponential backoff
+    return min(delay, TELEGRAM_QUEUE_RETRY_MAX_SECONDS)  # Bound retryable failure delay
+
+
+def send_telegram_payload(bot: TelegramBot, messages: list[str], chat_id: Any = None) -> None:
+    """
+    Send one queued Telegram payload using existing bot delivery.
+
+    :param bot: TelegramBot instance.
+    :param messages: Escaped Telegram message strings.
+    :param chat_id: Optional chat identifier.
+    :return: None.
+    """
+
+    attempts = 0  # Count immediate rate-limit retries while this process owns delivery
+    if getattr(bot, "bot", None) is None:  # Require initialized Telegram transport before acknowledging delivery
+        raise RuntimeError("Bot not initialized.")  # Keep queued message pending when transport is unavailable
+    while True:  # Retry bounded RetryAfter responses before requeueing
+        try:  # Attempt actual Telegram API delivery
+            asyncio.run(bot.send_messages(messages, chat_id))  # Reuse existing async sender and long-message splitting
+            return  # Acknowledge only after existing sender returns successfully
+        except RetryAfter as error:  # Respect Telegram API rate-limit feedback
+            attempts += 1  # Count one immediate rate-limit retry
+            if attempts >= TELEGRAM_QUEUE_RATE_LIMIT_ATTEMPTS:  # Bound in-lock rate-limit retries
+                raise  # Return payload to queue for later recovery
+            retry_after = resolve_telegram_retry_delay(error, attempts)  # Resolve bounded Telegram retry delay
+            time.sleep(min(retry_after, TELEGRAM_QUEUE_RATE_LIMIT_MAX_SLEEP_SECONDS))  # Preserve API serialization
+
+
+def defer_telegram_queue_item(item: dict[str, Any], error: Exception) -> bool:
+    """
+    Defer one failed outbound Telegram queue item.
+
+    :param item: Queue item that failed delivery.
+    :param error: Delivery exception.
+    :return: True when item should remain queued.
+    """
+
+    if isinstance(error, BadRequest):  # Treat Telegram payload rejection as permanent for this exact message
+        error_text = f"Telegram outbound message rejected permanently: {error}"  # Build permanent failure message
+        print(f"{BackgroundColors.RED}{error_text}{Style.RESET_ALL}")  # Report permanent delivery failure
+        return False  # Drop only permanent Telegram rejection so later messages continue
+    attempts = int(item.get("attempts", 0) or 0) + 1  # Increase retryable attempt count
+    delay = resolve_telegram_retry_delay(error, attempts)  # Compute recoverable delivery delay
+    item["attempts"] = attempts  # Persist attempt count for bounded backoff
+    item["last_error"] = str(error)  # Store concise latest failure evidence
+    item["next_attempt_at"] = time.time() + delay  # Delay this item without blocking later due messages forever
+    error_text = f"Telegram outbound delivery deferred for {delay:.1f}s: {error}"  # Build retryable failure message
+    print(f"{BackgroundColors.YELLOW}{error_text}{Style.RESET_ALL}")  # Report retryable delivery failure
+    return True  # Keep message recoverable in durable queue
+
+
+def find_due_telegram_queue_index(items: list[dict[str, Any]], now: float) -> Any:
+    """
+    Find earliest due outbound Telegram queue index.
+
+    :param items: Pending queue items.
+    :param now: Current timestamp.
+    :return: Queue index or None.
+    """
+
+    for index, item in enumerate(items):  # Scan queue in FIFO order
+        next_attempt_at = float(item.get("next_attempt_at", 0.0) or 0.0)  # Read due timestamp
+        if next_attempt_at <= now:  # Select first currently due item
+            return index  # Return due queue index
+    return None  # Report no due item
+
+
+def drain_telegram_queue(bot: TelegramBot) -> None:
+    """
+    Deliver queued Telegram messages under one process-safe owner.
+
+    :param bot: TelegramBot instance.
+    :return: None.
+    """
+
+    queue_path, lock_path = resolve_telegram_queue_paths(bot)  # Resolve per-bot queue files
+    lock_file = acquire_telegram_queue_lock(lock_path)  # Claim sole queue consumer ownership across OS processes
+    try:  # Drain while preventing duplicate consumers
+        while True:  # Continue until no due message remains
+            items = read_telegram_queue(queue_path)  # Load current durable queue state
+            now = time.time()  # Read one timestamp for due-message selection
+            due_index = find_due_telegram_queue_index(items, now)  # Select earliest due queued item
+            if due_index is None:  # No currently sendable messages
+                return  # Leave delayed messages durable for later send lifecycles
+            item = items[due_index]  # Claim one due item under the process lock
+            try:  # Send before acknowledging queue removal
+                messages = list(item.get("messages", []))  # Read queued Telegram payload
+                send_telegram_payload(bot, messages, item.get("chat_id"))  # Deliver through existing API path
+            except Exception as error:  # Preserve training when Telegram delivery fails
+                items.pop(due_index)  # Remove failed item from its current FIFO position
+                if defer_telegram_queue_item(item, error):  # Decide whether message remains recoverable
+                    items.append(item)  # Move retryable failure behind other pending work
+                write_telegram_queue(queue_path, items)  # Persist failure state before releasing ownership
+                if isinstance(error, RetryAfter):  # Stop after rate limit so next lifecycle respects Telegram cooldown
+                    return  # Leave queue durable for later drain attempt
+                continue  # Continue with later due messages after non-rate-limit failure
+            items.pop(due_index)  # Acknowledge only after Telegram sender returned successfully
+            write_telegram_queue(queue_path, items)  # Persist successful removal exactly once under lock
+    finally:  # Release queue owner after drain attempt
+        release_telegram_queue_lock(lock_file)  # Allow other producers or consumers to proceed
+
+
 def send_telegram_message(bot, messages, condition=True):
     """
     Sends a message via Telegram bot if configured and condition is met.
@@ -742,8 +1000,8 @@ def send_telegram_message(bot, messages, condition=True):
         try:  # Try to send message
             if isinstance(messages, str):  # If a single string is provided
                 messages = [messages]  # Convert it to a list
-            
-            execution_suffix = f" - Execution ID: {str(EXECUTION_ID)}" if EXECUTION_ID else ""  # Preserve old prefix when no execution ID is set
+
+            execution_suffix = f" - Execution ID: {str(EXECUTION_ID)}" if EXECUTION_ID else ""  # Preserve old prefix
             prefixed_messages = [  # Prefix each message with device info and running code
                 escape_markdown_v2(
                     strip_ansi(
@@ -752,9 +1010,11 @@ def send_telegram_message(bot, messages, condition=True):
                 )
                 for msg in messages
             ]
-            asyncio.run(bot.send_messages(prefixed_messages))  # Run the async method synchronously
-        except Exception:  # Silently ignore Telegram errors
-            pass  # Do nothing
+            enqueue_telegram_messages(bot, prefixed_messages)  # Persist outbound message before any delivery attempt
+            drain_telegram_queue(bot)  # Serialize actual Telegram delivery across independent framework processes
+        except Exception as e:  # Preserve experiment flow after Telegram queue or delivery failure
+            error_text = f"Telegram outbound send lifecycle failed: {e}"  # Build concise failure message
+            print(f"{BackgroundColors.YELLOW}{error_text}{Style.RESET_ALL}")  # Report failure
 
 
 def send_exception_via_telegram(exc_type, exc_value, exc_tb):  # Custom exception handler exposed for global use
