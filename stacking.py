@@ -8196,7 +8196,6 @@ def evaluate_stacking_classifier(model, X_train, y_train, X_test, y_test, config
 
 
 
-
 def save_shap_summary_and_bar_plots(shap_values_summary, X_test_sampled, feature_names, output_dir, dataset_name, model_name, max_display, feature_set=None, explainer_name=None, shape_metadata=None, model_class_count=None, config=None):
     """
     Saves SHAP summary and bar plots to the output directory.
@@ -8269,7 +8268,6 @@ def save_shap_summary_and_bar_plots(shap_values_summary, X_test_sampled, feature
         print(str(e))  # Print the exception string for diagnostics
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send exception details via Telegram if configured
         raise  # Re-raise the exception to preserve original behavior
-
 
 
 
@@ -15928,7 +15926,11 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
             skip_rule_count = len(config.get("stacking", {}).get("compiled_skip_combinations", ()))  # Count resolved skip rules for Telegram.
             send_telegram_message(TELEGRAM_BOT, [f"[COMBINED_FILES] All combinations skipped | Rules={skip_rule_count} | Skipped={skip_summary['skipped']} | Eligible=0"])  # Send concise all-skipped summary.
             return  # Avoid cache recovery, matrices, workers, and result writes.
-        if not rerun_cached_experiments and persistent_feature_set_processes_enabled(feature_mode_names, config=config):  # Route the complete cache-first grid through persistent OS processes when explicitly enabled
+        persistent_workers_enabled = persistent_feature_set_processes_enabled(  # Resolve path.
+            feature_mode_names,  # Pass active features.
+            config=config  # Pass runtime config.
+        )  # Finish worker-path resolution.
+        if persistent_workers_enabled:  # Use persistent workers when enabled.
             persistent_results, persistent_comparisons = run_persistent_feature_set_grid(combined_files_df_holder.pop(), combined_dataset_reference, original_files_list, attack_types_list, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, hp_runs, augmentation_file_paths, list(augmentation_ratios), evaluation_plan, "combined_files", "Original Combined Files", config, extra_trees_selected_features=extra_trees_selected_features, plan_global_ids=skip_summary["global_ids"], canonical_total=skip_summary["canonical_total"], skip_summary=skip_summary)  # Execute one generic Full, GA, PCA, RFE, and Extra Trees worker path without matrix pickling
             feature_analysis_dir = save_combined_files_results_to_csv(combined_dataset_reference, persistent_results, config=config)  # Save every globally ordered result only after complete child success
             if persistent_comparisons:  # Preserve the existing combined augmentation comparison artifact
@@ -16288,7 +16290,6 @@ def list_grid_feature_modes(ga_selected_features: Optional[List[Any]], pca_n_com
 
 
 
-
 def persistent_feature_set_processes_enabled(feature_mode_names: List[str], config: Optional[dict] = None) -> bool:  # Resolve whether the complete grid uses persistent feature-set processes
     """
     Resolve whether persistent feature-set processes are enabled for a complete grid.
@@ -16310,7 +16311,6 @@ def persistent_feature_set_processes_enabled(feature_mode_names: List[str], conf
     if inactive_positive_keys:  # Reject process creation for feature sets absent from the plan
         raise ValueError(f"Configured feature-set workers have no active evaluation plan: {inactive_positive_keys}")  # Prevent misleading idle workers outside the requested plan
     return True  # Enable one persistent process per active feature set
-
 
 
 
