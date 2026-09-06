@@ -1221,6 +1221,13 @@ def parse_cli_args():
                 "optional positive integer repeats complete additional runs"  # Explain count behavior.
             ),  # Finish cached rerun help text.
         )  # Register cached rerun CLI argument.
+        parser.add_argument(  # Add cached-run maximum for rerun mode.
+            "--max-cached-experiments",  # Define cached-run maximum CLI flag.
+            dest="max_cached_experiments",  # Store maximum on parsed args.
+            type=validate_max_cached_experiments,  # Validate positive maximum input.
+            default=None,  # Keep unlimited cached runs when absent.
+            help="Maximum total logical cached result runs allowed in cached rerun mode",  # Explain scope.
+        )  # Register cached-run maximum CLI argument.
         parser.add_argument("--experiment-runs", dest="experiment_runs", type=int, default=None, help="Total repeated runs required for every logical stacking experiment")  # Add repeated-run CLI override
         parser.add_argument("--training-progress-interval-minutes", dest="training_progress_interval_minutes", type=float, default=None, help="Recurring classifier training-progress interval in positive finite minutes (default: 15)")  # Add the minutes-based progress interval override
         parser.add_argument("--low-memory", dest="low_memory", action="store_true", default=False, help="Enable low memory mode for pandas operations")  # Add low memory mode CLI argument
@@ -1234,7 +1241,12 @@ def parse_cli_args():
         parser.add_argument("--memory-watch-threshold-percent", type=float, default=None, dest="memory_watch_threshold_percent", help="System memory pressure threshold percent")  # Override watcher system threshold
         parser.add_argument("--enable-memory-tracemalloc", dest="enable_memory_tracemalloc", action="store_true", default=False, help="Enable optional tracemalloc reports at selected phase boundaries")  # Enable optional Python allocation reports
         
-        return parser.parse_args()  # Return parsed arguments
+        parsed_args = parser.parse_args()  # Parse CLI arguments before cross-option validation.
+        max_without_rerun = parsed_args.max_cached_experiments is not None  # Track cached-run maximum usage.
+        max_without_rerun = max_without_rerun and parsed_args.rerun_cached_experiments is None  # Require rerun mode.
+        if max_without_rerun:  # Reject cached-run maximum without rerun mode.
+            parser.error("--max-cached-experiments requires --rerun-cached-experiments")  # Reject invalid CLI usage.
+        return parsed_args  # Return parsed arguments
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
@@ -1287,6 +1299,7 @@ def get_default_stacking_config():
             "combined_files_evaluation": True,  # Default: combined files evaluation enabled; False = separate files evaluation
             "sort_pending_by_elapsed_time": False,  # Keep pending queue ordering unchanged unless runtime sorting is enabled
             "rerun_cached_experiments": 0,  # Keep normal cache resume behavior unless read-only cache-driven rerun mode is requested
+            "max_cached_experiments": None,  # Leave cached-run creation unlimited unless rerun mode sets a cap.
             "experiment_runs": 1,  # Require one completed run per logical experiment by default
             "methods": {
                 "augmentation": True,  # Enable data augmentation combination by default
@@ -1609,6 +1622,17 @@ def validate_cached_rerun_count(value: Any, source: str = "--rerun-cached-experi
     return count_value  # Return validated complete-rerun count.
 
 
+def validate_max_cached_experiments(value: Any) -> int:
+    """
+    Validate the maximum cached experiment run count.
+
+    :param value: Requested maximum cached run count.
+    :return: Validated positive cached run maximum.
+    """
+
+    return validate_cached_rerun_count(value, "--max-cached-experiments")  # Return validated cached-run cap.
+
+
 def resolve_cached_rerun_count(config: Optional[dict] = None) -> int:
     """
     Resolve the configured cached rerun count.
@@ -1625,6 +1649,22 @@ def resolve_cached_rerun_count(config: Optional[dict] = None) -> int:
     if raw_count is True:  # Preserve current flag-only semantics from the first implementation.
         return 1  # Return one complete rerun.
     return validate_cached_rerun_count(raw_count, "stacking.rerun_cached_experiments")  # Return validated configured count.
+
+
+def resolve_max_cached_experiments(config: Optional[dict] = None) -> Optional[int]:
+    """
+    Resolve the configured maximum cached run count.
+
+    :param config: Runtime configuration dictionary.
+    :return: Maximum logical cached run count, or None when unlimited.
+    """
+
+    if config is None:  # Use global configuration when no configuration is supplied.
+        config = CONFIG  # Preserve established global fallback.
+    raw_count = config.get("stacking", {}).get("max_cached_experiments", None)  # Read cached-run cap setting.
+    if raw_count is None or raw_count is False:  # Treat absent setting as unlimited.
+        return None  # Return unlimited cached-run count.
+    return validate_cached_rerun_count(raw_count, "stacking.max_cached_experiments")  # Return validated cap.
 
 
 def parse_persisted_experiment_run_value(value: Any, source: str = "experiment_run") -> int:
@@ -1904,7 +1944,8 @@ def discover_cache_artifact_run_numbers(csv_path: str, config: Optional[dict] = 
 def resolve_cached_rerun_target_runs(
     csv_paths: List[str],  # Receive cache family references.
     requested_count: int,  # Receive requested rerun generations.
-    config: Optional[dict] = None  # Receive runtime configuration.
+    config: Optional[dict] = None,  # Receive runtime configuration.
+    max_cached_experiments: Optional[int] = None  # Receive optional logical run cap.
 ) -> List[int]:  # Return ordered run sequence.
     """
     Resolve cache runs that must share the canonical cached experiment union.
@@ -1912,17 +1953,39 @@ def resolve_cached_rerun_target_runs(
     :param csv_paths: Dataset file or directory identities used for cache placement.
     :param requested_count: Requested count of complete additional rerun generations.
     :param config: Runtime configuration dictionary.
+    :param max_cached_experiments: Optional maximum logical cached run count.
     :return: Sorted run numbers to reconcile or generate.
     """
 
     if config is None:  # Use global configuration when no configuration is supplied.
         config = CONFIG  # Preserve established global fallback.
     requested_last_run = validate_cached_rerun_count(requested_count) + 1  # Resolve final requested run.
-    run_numbers = set(range(1, requested_last_run + 1))  # Add required source and rerun targets.
+    run_numbers = set()  # Accumulate discovered and requested logical runs.
     for csv_path in csv_paths:  # Discover existing cache family allocations.
         for run_number in discover_cache_artifact_run_numbers(csv_path, config=config):  # Read logical runs.
             run_numbers.add(run_number)  # Include existing historical run for reconciliation.
+    candidate_run = 1  # Start requested allocation at the source run.
+    while candidate_run <= requested_last_run:  # Add requested sequence until count or maximum stops creation.
+        cap_reached = max_cached_experiments is not None and len(run_numbers) >= max_cached_experiments  # Detect cap.
+        if cap_reached:  # Stop before creating over cap.
+            break  # Preserve existing logical runs without adding another run.
+        run_numbers.add(candidate_run)  # Add requested logical run when absent.
+        candidate_run += 1  # Move to the next requested logical run.
     return sorted(run_numbers)  # Return deterministic reconciliation order.
+
+
+def emit_cached_rerun_limit_message(current_count: int, max_count: int) -> None:
+    """
+    Emit the cached-rerun maximum completion message.
+
+    :param current_count: Current logical cached run count.
+    :param max_count: Configured maximum logical cached run count.
+    :return: None.
+    """
+
+    message = f"Maximum cached experiment runs reached: {current_count}/{max_count}. No additional cached reruns will be created."  # Build operator-facing completion text.
+    print(f"{BackgroundColors.GREEN}[RERUN CACHE] {message}{Style.RESET_ALL}")  # Emit console completion message.
+    send_telegram_message(TELEGRAM_BOT, [f"[RERUN CACHE] {message}"])  # Reuse existing Telegram notification path.
 
 
 def resolve_cached_rerun_runs(csv_path: str, config: Optional[dict] = None) -> Tuple[int, int]:
@@ -2633,6 +2696,12 @@ def merge_configs(defaults, file_config, cli_args):
 
         if hasattr(cli_args, "rerun_cached_experiments") and cli_args.rerun_cached_experiments is not None:  # Cached rerun CLI override
             config.setdefault("stacking", {})["rerun_cached_experiments"] = validate_cached_rerun_count(cli_args.rerun_cached_experiments)  # Apply explicit cache-driven rerun count
+
+        has_max_cli = hasattr(cli_args, "max_cached_experiments")  # Detect cached-run cap CLI attribute.
+        has_max_cli = has_max_cli and cli_args.max_cached_experiments is not None  # Detect explicit cap value.
+        if has_max_cli:  # Cached-run cap CLI override.
+            max_cached_count = validate_cached_rerun_count(cli_args.max_cached_experiments, "--max-cached-experiments")  # Validate cached-run cap.
+            config.setdefault("stacking", {})["max_cached_experiments"] = max_cached_count  # Apply explicit cap.
 
         if hasattr(cli_args, "experiment_runs") and cli_args.experiment_runs is not None:  # Repeated-run CLI override
             config.setdefault("stacking", {})["experiment_runs"] = validate_experiment_runs(cli_args.experiment_runs, "--experiment-runs")  # Apply the validated CLI-over-YAML run count.
@@ -15683,12 +15752,14 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
         rerun_cached_experiment_count = resolve_cached_rerun_count(config)  # Resolve complete cache-driven rerun count.
         rerun_cached_experiments = rerun_cached_experiment_count > 0  # Resolve cache-driven rerun mode.
         if "experiment_run" not in config.get("stacking", {}) and rerun_cached_experiments and "cached_rerun_iteration" not in config.get("stacking", {}):  # Expand cached reruns only at the outer combined-files boundary.
+            max_cached_experiments = resolve_max_cached_experiments(config)  # Resolve optional logical cached-run cap.
             combined_dataset_identity = resolve_combined_files_dataset_identity(original_files_list)  # Resolve cache family.
             combined_dataset_reference = combined_dataset_identity.rstrip("/")  # Use cache path identity.
             target_runs = resolve_cached_rerun_target_runs(  # Resolve existing and requested cache runs.
                 [combined_dataset_reference],  # Reconcile this combined cache family.
                 rerun_cached_experiment_count,  # Include requested rerun generations.
-                config=config  # Preserve runtime cache configuration.
+                config=config,  # Preserve runtime cache configuration.
+                max_cached_experiments=max_cached_experiments  # Apply optional logical run cap.
             )  # Finish cache run sequence resolution.
             for rerun_iteration, target_run in enumerate(target_runs, start=1):  # Reconcile every relevant run in order.
                 rerun_config = copy.deepcopy(config)  # Isolate rerun iteration metadata without mutating caller config.
@@ -15701,6 +15772,10 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
                     f"| Destination run: {target_run}{Style.RESET_ALL}"
                 )  # Finish rerun progress log.
                 process_combined_files_evaluation(original_files_list, combined_files_df, attack_types_list, dataset_name, config=rerun_config)  # Execute one complete destination rerun.
+            if max_cached_experiments is not None:  # Evaluate configured cached-run cap.
+                cap_reached = len(target_runs) >= max_cached_experiments  # Detect cap.
+                if cap_reached:  # Report cap after safe reconciliation.
+                    emit_cached_rerun_limit_message(len(target_runs), max_cached_experiments)  # Emit completion notice.
             return  # Avoid re-entering the same logical grid after cached rerun expansion.
 
         if "experiment_run" not in config.get("stacking", {}) and not rerun_cached_experiments:  # Expand logical experiments only at the outer combined-files boundary.
@@ -18589,6 +18664,7 @@ def orchestrate_all_combinations(input_path, dataset_name=None, config=None):
     rerun_cached_experiment_count = resolve_cached_rerun_count(config)  # Resolve complete cache-driven rerun count.
     rerun_cached_experiments = rerun_cached_experiment_count > 0  # Resolve cache-driven rerun mode.
     if "experiment_run" not in config.get("stacking", {}) and rerun_cached_experiments and "cached_rerun_iteration" not in config.get("stacking", {}):  # Expand cached reruns only at the outer separate-files boundary.
+        max_cached_experiments = resolve_max_cached_experiments(config)  # Resolve optional logical cached-run cap.
         files_to_process = determine_files_to_process(  # Resolve files.
             config.get("execution", {}).get("csv_file", None),  # Pass optional configured CSV path.
             input_path,  # Pass requested input path.
@@ -18597,7 +18673,8 @@ def orchestrate_all_combinations(input_path, dataset_name=None, config=None):
         target_runs = resolve_cached_rerun_target_runs(  # Resolve existing and requested cache runs.
             files_to_process,  # Reconcile every separate-file cache family.
             rerun_cached_experiment_count,  # Include requested rerun generations.
-            config=config  # Preserve runtime cache configuration.
+            config=config,  # Preserve runtime cache configuration.
+            max_cached_experiments=max_cached_experiments  # Apply optional logical run cap.
         )  # Finish cache run sequence resolution.
         for rerun_iteration, target_run in enumerate(target_runs, start=1):  # Reconcile every relevant run in order.
             rerun_config = copy.deepcopy(config)  # Isolate rerun iteration metadata without mutating caller config.
@@ -18610,6 +18687,10 @@ def orchestrate_all_combinations(input_path, dataset_name=None, config=None):
                 f"| Destination run: {target_run}{Style.RESET_ALL}"
             )  # Finish rerun progress log.
             orchestrate_all_combinations(input_path, dataset_name=dataset_name, config=rerun_config)  # Execute one complete destination rerun.
+        if max_cached_experiments is not None:  # Evaluate configured cached-run cap.
+            cap_reached = len(target_runs) >= max_cached_experiments  # Detect cap.
+            if cap_reached:  # Report cap after safe reconciliation.
+                emit_cached_rerun_limit_message(len(target_runs), max_cached_experiments)  # Emit completion notice.
         return  # Avoid re-entering the same logical grid after cached rerun expansion.
 
     if "experiment_run" not in config.get("stacking", {}) and not rerun_cached_experiments:  # Expand logical experiments only at the outer separate-files boundary.
