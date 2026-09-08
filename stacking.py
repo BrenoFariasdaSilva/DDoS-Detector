@@ -1293,7 +1293,7 @@ def get_default_stacking_config():
                 "feature_set", "classifier_type", "model_name", "model",
                 "n_features", "n_samples_train", "n_samples_test",
                 "accuracy", "precision", "recall", "f1_score", "fpr", "fnr", "elapsed_time_s",
-                "cv_method", "rfe_ranking", "hyperparameters", "features_list",
+                "cv_method", "rfe_ranking", "hyperparameters", "features_list", "Hardware",
             ],  # Column names for temporary cache CSV export
             "top_n_features_heatmap": 15,  # Number of top features to show in heatmap
             "combined_files_evaluation": True,  # Default: combined files evaluation enabled; False = separate files evaluation
@@ -9535,6 +9535,21 @@ def get_cache_results_csv_columns(config: Optional[dict] = None) -> List[str]:
     return list(get_default_stacking_config()["cache_results_csv_columns"])  # Return the default temporary cache order.
 
 
+def cache_file_hardware_column_is_last(cache_path: str) -> bool:  # Inspect cache header ordering.
+    """
+    Return whether one cache CSV header already ends with Hardware.
+
+    :param cache_path: Cache CSV path to inspect.
+    :return: True when the CSV header ends with Hardware.
+    """
+
+    try:  # Read only the header row to avoid touching cached result values.
+        columns = pd.read_csv(cache_path, nrows=0).columns.str.strip().tolist()  # Read normalized header names.
+        return bool(columns and columns[-1] == "Hardware" and columns.count("Hardware") == 1)  # Return canonical header state.
+    except Exception:  # Treat unreadable files as not schema-ready so normal validation handles content errors.
+        return False  # Return false for missing or unreadable headers.
+
+
 def resolve_boolean_value(value: Any, default: bool = False) -> bool:
     """
     Normalize scalar boolean-like values to a Python bool.
@@ -10283,8 +10298,11 @@ def load_cache_results(csv_path, config=None, notify_discovery: bool = True):  #
             primary_df = None  # Hold validated primary rows for union recovery.
             backup_df = None  # Hold validated backup rows for union recovery.
             primary_error = None  # Preserve the primary validation failure for accurate recovery reporting.
+            primary_needs_hardware_migration = False  # Track old primary cache schema before validation.
+            backup_needs_hardware_migration = False  # Track old backup cache schema before validation.
             if primary_exists:  # Attempt the primary cache before considering its backup.
                 try:  # Read and deserialize the complete primary cache.
+                    primary_needs_hardware_migration = not cache_file_hardware_column_is_last(cache_path)  # Detect old primary cache schema.
                     primary_df, _ = read_validated_cache_file(cache_path, config=config, expected_experiment_run=run_index)  # Validate the primary through production schema and resume logic.
                 except Exception as exc:  # Preserve corruption, truncation, permission, and schema failures for fallback reporting.
                     primary_error = exc  # Store the exact primary error without discarding it silently.
@@ -10296,6 +10314,7 @@ def load_cache_results(csv_path, config=None, notify_discovery: bool = True):  #
             backup_error = None  # Preserve the backup validation failure when recovery is impossible.
             if backup_exists:  # Attempt recovery only when the sibling backup exists.
                 try:  # Read and deserialize the complete backup cache.
+                    backup_needs_hardware_migration = not cache_file_hardware_column_is_last(backup_path)  # Detect old backup cache schema.
                     backup_df, _ = read_validated_cache_file(backup_path, config=config, expected_experiment_run=run_index)  # Validate the backup through the same production path.
                 except Exception as exc:  # Preserve the exact backup failure for accurate cache-miss reporting.
                     backup_error = exc  # Store the exact backup validation failure.
@@ -10312,7 +10331,8 @@ def load_cache_results(csv_path, config=None, notify_discovery: bool = True):  #
                     backup_df is not None  # Require a valid backup recovery source.
                     and (primary_df is None or merged_identity_count > primary_identity_count)  # Require backup rows.
                 )
-                if backup_has_recovery_rows:  # Promote backup-only identities into the primary.
+                cache_needs_hardware_migration = primary_needs_hardware_migration or backup_needs_hardware_migration  # Detect validated old cache schema.
+                if backup_has_recovery_rows or cache_needs_hardware_migration:  # Promote backup-only identities or persist upgraded schema.
                     persist_cache_dataframe_atomically(  # Republish merged cache before resume uses it.
                         cache_path,  # Use the authoritative primary path.
                         merged_df,  # Publish the merged valid snapshot.
@@ -10321,7 +10341,9 @@ def load_cache_results(csv_path, config=None, notify_discovery: bool = True):  #
                         config=config,  # Preserve runtime cache configuration.
                         expected_experiment_run=run_index,  # Preserve run-specific validation.
                     )
-                    if primary_df is not None:  # Report backup-only rows merged into a valid but older primary.
+                    if cache_needs_hardware_migration and not backup_has_recovery_rows:  # Report schema-only cache migration.
+                        print(f"{BackgroundColors.GREEN}[CACHE MIGRATION] Added Hardware column to cache schema: {BackgroundColors.CYAN}{cache_path}{Style.RESET_ALL}")  # Report durable schema migration.
+                    elif primary_df is not None:  # Report backup-only rows merged into a valid but older primary.
                         print(  # Report durable startup recovery.
                             f"{BackgroundColors.GREEN}[CACHE RECOVERY] Synchronized "
                             f"{BackgroundColors.CYAN}{merged_identity_count - primary_identity_count}"
@@ -10467,6 +10489,7 @@ def normalize_cache_dataframe(df: pd.DataFrame, config: Optional[dict] = None, e
 
     normalized_df = df.copy()  # Work on a copy to avoid mutating caller-owned DataFrames.
     normalized_df.columns = normalized_df.columns.str.strip()  # Normalize column names before schema migration.
+    normalized_df = normalized_df.loc[:, ~normalized_df.columns.duplicated()]  # Preserve first duplicate column before canonical ordering.
     cache_columns = get_cache_results_csv_columns(config)  # Resolve canonical cache column order.
     methods_cfg = config.get("stacking", {}).get("methods", {})  # Read active stacking method toggles.
     feature_selection_default = bool(methods_cfg.get("feature_selection", True))  # Resolve default FS flag for current execution context.
@@ -10494,6 +10517,9 @@ def normalize_cache_dataframe(df: pd.DataFrame, config: Optional[dict] = None, e
 
     if "data_augmentation_enabled" not in normalized_df.columns:  # Add DA flag when absent.
         normalized_df["data_augmentation_enabled"] = False  # Initialize DA flag before row-level resolution.
+
+    if "Hardware" not in normalized_df.columns and "Hardware" in cache_columns:  # Add cache hardware metadata using final-result semantics.
+        normalized_df = add_hardware_column(normalized_df, cache_columns)  # Populate current hardware metadata for legacy cache rows.
 
     run_index = get_current_experiment_run(config) if expected_experiment_run is None else validate_experiment_runs(expected_experiment_run, "filename experiment_run")  # Resolve filename-aware run metadata.
     normalized_df = normalize_experiment_run_column(normalized_df, run_index, source_path)  # Add or validate persisted run metadata without lossy conversion.

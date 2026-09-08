@@ -513,6 +513,7 @@ stacking: # Stacking experiment settings
     - "rfe_ranking" # RFE feature rankings (comma-separated or JSON)
     - "hyperparameters" # Effective estimator hyperparameters used for the evaluated row (JSON string)
     - "features_list" # Canonical complete feature list (JSON string)
+    - "Hardware" # Hardware specification (CPU/GPU model)
 
   use_suffix_filenames: false # When true, write separate CSVs per combo with suffix
 
