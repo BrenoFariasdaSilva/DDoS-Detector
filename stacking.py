@@ -2089,7 +2089,8 @@ def build_cached_rerun_evaluation_plan(
     tasks: List[dict],  # Receive generated task descriptors.
     attack_types_combined: Any,  # Receive combined attack scope.
     require_all: bool = False,  # Require full ordering coverage when true.
-    ordering_cache: Optional[dict] = None  # Receive optional F1 ordering cache.
+    ordering_cache: Optional[dict] = None,  # Receive optional F1 ordering cache.
+    destination_cache: Optional[dict] = None  # Receive destination rows already completed.
 ) -> Tuple[List[Tuple[str, bool, Optional[float], str]], dict]:  # Return ordered plan and skip metadata.
     """
     Build a rerun plan from cached entries ordered by descending cached F1.
@@ -2100,6 +2101,7 @@ def build_cached_rerun_evaluation_plan(
     :param attack_types_combined: Combined attack scope, or None.
     :param require_all: Whether every generated combination must exist in the source cache.
     :param ordering_cache: Optional complete prior-run cache used only for F1 scheduling.
+    :param destination_cache: Optional destination-run cache used only for completed-identity suppression.
     :return: Tuple of rerun evaluation plan and skip-summary metadata.
     """
 
@@ -2122,7 +2124,9 @@ def build_cached_rerun_evaluation_plan(
         )  # Finish source cache identity lookup.
         if cached_result is None:  # Skip generated combinations absent from the source cache.
             continue  # Move to the next generated combination.
-        ordering_result = cached_result  # Default F1 metadata to the canonical source row.
+        if feature_process_cache_result(task, destination_cache, attack_types_combined) is not None:  # Omit destination rows already complete by configuration identity.
+            continue  # Move to the next generated combination.
+        ordering_result: Optional[dict] = cached_result  # Default F1 metadata to the canonical source row.
         if ordering_cache is not None:  # Prefer complete prior-run F1 metadata when available.
             ordering_result = feature_process_cache_result(  # Resolve prior row.
                 task,  # Pass generated task identity.
@@ -15794,6 +15798,7 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
         combined_dataset_reference = combined_dataset_identity.rstrip("/")  # Use directory path text without trailing separator for path APIs.
         source_rerun_cache = None  # Initialize absent source cache for normal execution.
         ordering_rerun_cache = None  # Initialize absent ordering cache for normal execution.
+        destination_rerun_cache = None  # Initialize absent destination cache for normal execution.
         if rerun_cached_experiments:  # Use cache artifacts to select the combined-files rerun workload.
             destination_run = resolve_cached_rerun_destination_run(combined_dataset_reference, config=config)  # Resolve run.
             source_rerun_cache, source_runs = load_cached_rerun_source_cache(combined_dataset_reference, config=config)  # Load canonical union.
@@ -15811,6 +15816,7 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
                 )  # Finish ordering cache load.
                 ordering_rerun_cache = prior_rerun_cache or None  # Use union ordering when prior run is absent.
             config = build_experiment_run_config(config, destination_run)  # Switch execution and persistence to the new destination run.
+            destination_rerun_cache = load_cache_results(combined_dataset_reference, config=config, notify_discovery=True)  # Load destination rows for membership suppression.
             rerun_iteration = config.get("stacking", {}).get("cached_rerun_iteration", 1)  # Read current rerun iteration for logs.
             rerun_total = config.get("stacking", {}).get("cached_rerun_total", rerun_cached_experiment_count)  # Read requested rerun total for logs.
             telegram_message = (  # Build cache-driven rerun mode notification.
@@ -15906,7 +15912,8 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
                 source_tasks,  # Pass current task identities.
                 attack_types_list,  # Pass combined attack scope.
                 require_all=ordering_rerun_cache is not None,  # Require complete previous run for later ordering.
-                ordering_cache=ordering_rerun_cache  # Pass previous-run ordering rows.
+                ordering_cache=ordering_rerun_cache,  # Pass previous-run ordering rows.
+                destination_cache=destination_rerun_cache  # Pass destination rows already complete.
             )  # Finish cache-driven rerun plan.
             feature_mode_names = list(dict.fromkeys(item[0] for item in evaluation_plan))  # Rebuild active feature sets from the cache-driven plan.
             print(f"{BackgroundColors.GREEN}[RERUN CACHE {rerun_iteration}/{rerun_total}] Destination run {BackgroundColors.CYAN}{destination_run}{BackgroundColors.GREEN} selected {BackgroundColors.CYAN}{len(evaluation_plan)}{BackgroundColors.GREEN} cached compatible combined-files combination(s), ordered by descending cached F1.{Style.RESET_ALL}")  # Log rerun workload size and ordering.
@@ -18723,6 +18730,7 @@ def orchestrate_all_combinations(input_path, dataset_name=None, config=None):
                 continue  # Prevent artifact discovery, classifier planning, caches, and regular result exports.
             source_rerun_cache = None  # Initialize absent source cache for normal execution.
             ordering_rerun_cache = None  # Initialize absent ordering cache for normal execution.
+            destination_rerun_cache = None  # Initialize absent destination cache for normal execution.
             if rerun_cached_experiments:  # Use cache artifacts to select the rerun workload.
                 destination_run = resolve_cached_rerun_destination_run(file, config=config)  # Resolve target run.
                 source_rerun_cache, source_runs = load_cached_rerun_source_cache(file, config=config)  # Load canonical union.
@@ -18740,6 +18748,7 @@ def orchestrate_all_combinations(input_path, dataset_name=None, config=None):
                     )  # Finish ordering cache load.
                     ordering_rerun_cache = prior_rerun_cache or None  # Use union ordering when prior run is absent.
                 config = build_experiment_run_config(config, destination_run)  # Switch all execution and persistence to the new destination run.
+                destination_rerun_cache = load_cache_results(file, config=config, notify_discovery=True)  # Load destination rows for membership suppression.
                 rerun_iteration = config.get("stacking", {}).get("cached_rerun_iteration", 1)  # Read current rerun iteration for logs.
                 rerun_total = config.get("stacking", {}).get("cached_rerun_total", rerun_cached_experiment_count)  # Read requested rerun total for logs.
                 telegram_message = (  # Build cache-driven rerun mode notification.
@@ -18799,7 +18808,8 @@ def orchestrate_all_combinations(input_path, dataset_name=None, config=None):
                     source_tasks,  # Pass current task identities.
                     None,  # Pass separate-files attack scope.
                     require_all=ordering_rerun_cache is not None,  # Require complete previous run for later ordering.
-                    ordering_cache=ordering_rerun_cache  # Pass previous-run ordering rows.
+                    ordering_cache=ordering_rerun_cache,  # Pass previous-run ordering rows.
+                    destination_cache=destination_rerun_cache  # Pass destination rows already complete.
                 )  # Finish cache-driven rerun plan.
                 feature_mode_names = list(dict.fromkeys(item[0] for item in evaluation_plan))  # Rebuild active feature sets from the cache-driven plan.
                 print(f"{BackgroundColors.GREEN}[RERUN CACHE {rerun_iteration}/{rerun_total}] Destination run {BackgroundColors.CYAN}{destination_run}{BackgroundColors.GREEN} selected {BackgroundColors.CYAN}{len(evaluation_plan)}{BackgroundColors.GREEN} cached compatible separate-files combination(s), ordered by descending cached F1.{Style.RESET_ALL}")  # Log rerun workload size and ordering.
