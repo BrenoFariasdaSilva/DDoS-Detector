@@ -475,6 +475,11 @@ stacking: # Stacking experiment settings
     - "fpr" # False Positive Rate (0.0-1.0)
     - "fnr" # False Negative Rate (0.0-1.0)
     - "elapsed_time_s" # Elapsed time in seconds for evaluation
+    - "preprocessing_time_s" # Preprocessing time in seconds
+    - "feature_selection_time_s" # Feature-selection time in seconds
+    - "hyperparameter_optimization_time_s" # Hyperparameter optimization time in seconds
+    - "training_time_s" # Model training time in seconds
+    - "inference_time_s" # Model inference time in seconds
     - "cv_method" # Cross-validation method (e.g., "StratifiedKFold")
     - "top_features" # Legacy final-export feature payload, rebuilt from features_list for cache recovery
     - "rfe_ranking" # RFE feature rankings (comma-separated or JSON)
@@ -509,6 +514,11 @@ stacking: # Stacking experiment settings
     - "fpr" # False Positive Rate (0.0-1.0)
     - "fnr" # False Negative Rate (0.0-1.0)
     - "elapsed_time_s" # Elapsed time in seconds for evaluation
+    - "preprocessing_time_s" # Preprocessing time in seconds
+    - "feature_selection_time_s" # Feature-selection time in seconds
+    - "hyperparameter_optimization_time_s" # Hyperparameter optimization time in seconds
+    - "training_time_s" # Model training time in seconds
+    - "inference_time_s" # Model inference time in seconds
     - "cv_method" # Cross-validation method (e.g., "StratifiedKFold")
     - "rfe_ranking" # RFE feature rankings (comma-separated or JSON)
     - "hyperparameters" # Effective estimator hyperparameters used for the evaluated row (JSON string)
