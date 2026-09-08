@@ -147,7 +147,7 @@ from sklearn.tree import DecisionTreeClassifier  # For Decision Tree classifier 
 from telegram_bot import TelegramBot, send_exception_via_telegram, send_telegram_message, setup_global_exception_hook  # For sending progress messages to Telegram
 from threadpoolctl import threadpool_limits  # For narrowly limiting BLAS and OpenMP threads during feature extraction
 from tqdm import tqdm  # For progress bars
-from typing import Any, Callable, Dict, Optional, List, Tuple, cast  # For optional and collection typing hints
+from typing import Any, Callable, Dict, Optional, List, Set, Tuple, cast  # For optional and collection typing hints
 from xgboost import XGBClassifier  # For XGBoost classifier
 from ft_transformer import FTTransformerClassifier  # Import the standalone sklearn-compatible FT-Transformer classifier
 from tabular_resnet import TabularResNetClassifier  # Import the standalone sklearn-compatible Tabular ResNet classifier
@@ -7956,7 +7956,7 @@ def load_existing_model_if_available(model_name, dataset_file, dataset_name, fea
             artifact_lock.close()  # Closing the descriptor releases flock automatically
 
 
-def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, y_test, dataset_file=None, scaler=None, feature_names=None, feature_set=None, config=None, phase_metadata=None, training_ram_stats=None, fit_model=True, notification_context=None, hyperparameters_enabled: Optional[bool] = None, augmentation_ratio: Optional[float] = None, precomputed_predictions: Optional[np.ndarray] = None, precomputed_prediction_seconds: float = 0.0, training_eta_callback: Optional[Callable[[str], None]] = None, estimated_training_seconds: Optional[float] = None, cancellation_checker: Optional[Callable[[], bool]] = None, local_combination_index: Optional[int] = None, local_combination_total: Optional[int] = None, active_workers_callback: Optional[Callable[[], str]] = None):  # Evaluate one classifier with watcher metadata, RAM statistics, optional bounded predictions, and cooperative cancellation
+def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, y_test, dataset_file=None, scaler=None, feature_names=None, feature_set=None, config=None, phase_metadata=None, training_ram_stats=None, fit_model=True, notification_context=None, hyperparameters_enabled: Optional[bool] = None, augmentation_ratio: Optional[float] = None, precomputed_predictions: Optional[np.ndarray] = None, precomputed_prediction_seconds: float = 0.0, training_eta_callback: Optional[Callable[[str, Optional[float]], None]] = None, estimated_training_seconds: Optional[float] = None, cancellation_checker: Optional[Callable[[], bool]] = None, local_combination_index: Optional[int] = None, local_combination_total: Optional[int] = None, active_workers_callback: Optional[Callable[[], str]] = None):  # Evaluate one classifier with watcher metadata, RAM statistics, optional bounded predictions, and cooperative cancellation
     """
     Trains an individual classifier and evaluates its performance on the test set.
 
@@ -8114,7 +8114,7 @@ def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, 
         raise
 
 
-def evaluate_stacking_classifier(model, X_train, y_train, X_test, y_test, config=None, training_ram_stats=None, fit_model=True, notification_context=None, feature_set=None, hyperparameters_enabled: Optional[bool] = None, augmentation_ratio: Optional[float] = None, local_combination_index: Optional[int] = None, local_combination_total: Optional[int] = None):  # Evaluate stacking with RAM statistics and notification context
+def evaluate_stacking_classifier(model, X_train, y_train, X_test, y_test, config=None, training_ram_stats=None, fit_model=True, notification_context=None, feature_set=None, hyperparameters_enabled: Optional[bool] = None, augmentation_ratio: Optional[float] = None, training_eta_callback: Optional[Callable[[str, Optional[float]], None]] = None, local_combination_index: Optional[int] = None, local_combination_total: Optional[int] = None):  # Evaluate stacking with RAM statistics and notification context
     """
     Trains the StackingClassifier model and evaluates its performance on the test set.
 
@@ -8130,6 +8130,7 @@ def evaluate_stacking_classifier(model, X_train, y_train, X_test, y_test, config
     :param feature_set: Feature-set name used for training progress output.
     :param hyperparameters_enabled: Whether optimized hyperparameters are active, or None outside an evaluation combination.
     :param augmentation_ratio: Authoritative augmentation ratio, or None for original data.
+    :param training_eta_callback: Optional callback receiving the first emitted nonfinal training ETA.
     :return: Metrics tuple (acc, prec, rec, f1, fpr, fnr, elapsed_time)
     """
     
@@ -8148,7 +8149,7 @@ def evaluate_stacking_classifier(model, X_train, y_train, X_test, y_test, config
             sys.stdout.flush()  # Flush stdout before stacking training to ensure logs are visible under nohup
             training_ram_monitor = start_training_ram_monitor(TRAINING_RAM_SAMPLE_INTERVAL_SECONDS)  # Start RAM monitoring immediately before stacking fit.
             try:  # Ensure RAM monitoring stops even when stacking fit fails.
-                fit_classifier_with_progress(model, X_train, y_train, feature_set, "StackingClassifier", config=config, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio, local_combination_index=local_combination_index, local_combination_total=local_combination_total)  # Preserve contextual single public stacking fit reporting.
+                fit_classifier_with_progress(model, X_train, y_train, feature_set, "StackingClassifier", config=config, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio, eta_callback=training_eta_callback, local_combination_index=local_combination_index, local_combination_total=local_combination_total)  # Preserve contextual single public stacking fit reporting.
             finally:  # Stop RAM monitoring immediately after stacking fit exits.
                 stacking_ram_summary = stop_training_ram_monitor(training_ram_monitor)  # Summarize RAM usage across this stacking fit.
                 store_training_ram_stats(training_ram_stats, stacking_ram_summary)  # Associate RAM statistics with this stacking classifier only.
@@ -13840,6 +13841,11 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
         results_dict = {}  # Accumulate result entries for this feature set
         X_train_values = X_train_df.to_numpy(copy=False) if hasattr(X_train_df, "to_numpy") else np.asarray(X_train_df)  # Reuse one no-copy train array view for all classifiers in this feature set
         X_test_values = X_test_df.to_numpy(copy=False) if hasattr(X_test_df, "to_numpy") else np.asarray(X_test_df)  # Reuse one no-copy test array view for all classifiers in this feature set
+        rerun_training_notifications = resolve_cached_rerun_count(config) > 0 and experiment_mode == "original_only"  # Enable real training notifications only during cached-rerun sequential fits.
+        rerun_training_tasks_by_global_id = cast(Dict[int, dict], {})  # Store normal notification task records for this sequential feature loop.
+        rerun_training_start_ids = cast(Set[int], set())  # Store delivered start global IDs for this sequential feature loop.
+        rerun_training_eta_ids = cast(Set[int], set())  # Store delivered ETA global IDs for this sequential feature loop.
+        rerun_training_unavailable_ids = cast(Set[int], set())  # Store starts that began with unavailable ETA for this sequential feature loop.
 
         for model_name, model in individual_models.items():  # Iterate over each individual model sequentially to prevent loky deadlock
             cache_train_count = None if is_lstm_classifier_name(model_name) else len(y_train)  # LSTM cache rows use sequence counts unavailable until windowing.
@@ -13864,6 +13870,16 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
             combination_header = build_telegram_combination_header(name, model_name, augmentation_ratio, hyperparameters_enabled, experiment_run=get_current_experiment_run(config))  # Build full progress label for this classifier
             progress_bar.set_description(combination_header)  # Update progress bar with the complete active configuration
             sys.stdout.flush()  # Flush stdout before each classifier to ensure logs are visible under nohup
+            training_eta_callback = cast(Optional[Callable[[str, Optional[float]], None]], None)  # Keep ordinary sequential execution unchanged outside cached reruns.
+            if rerun_training_notifications:  # Reuse the coordinator-owned training notification lifecycle for real rerun fits.
+                rerun_training_task = {"feature_set": name, "classifier_name": model_name, "augmentation_ratio": augmentation_ratio, "hyperparameters_enabled": hyperparameters_enabled, "experiment_run": get_current_experiment_run(config), "global_id": current_combination, "feature_local_position": current_combination, "feature_local_total": total_steps, "total_combinations": total_steps}  # Build the existing notification task shape from sequential context.
+                rerun_training_tasks_by_global_id[current_combination] = rerun_training_task  # Register the task for normal sender lookup.
+                send_feature_process_training_start_notification({"feature_set": name, "global_id": current_combination, "initial_eta": "unavailable"}, rerun_training_tasks_by_global_id, total_steps, rerun_training_start_ids, rerun_training_unavailable_ids, {})  # Send through the existing training-start sender.
+
+                def send_rerun_training_eta(eta_label: str, eta_seconds: Optional[float], task_global_id: int = current_combination) -> None:  # Route factual ETA through the existing training-ETA sender.
+                    send_feature_process_training_eta_notification({"feature_set": name, "global_id": task_global_id, "eta": eta_label, "estimated_finish_time": format_estimated_finish_time_suffix(eta_seconds)}, rerun_training_tasks_by_global_id, total_steps, rerun_training_eta_ids, rerun_training_unavailable_ids)  # Send through the existing training-ETA sender.
+
+                training_eta_callback = send_rerun_training_eta  # Provide the callback object to the existing evaluator.
             phase_params_digest = get_classifier_params_digest(active_model)  # Build compact classifier parameter digest
             phase_cache_key = build_resume_cache_key(execution_mode_str, data_source_label, experiment_mode, augmentation_ratio, attack_types_combined, name, model_name, hyperparameters_enabled)  # Build cache identity source for diagnostics
             phase_cache_digest = hashlib.sha256(json.dumps(phase_cache_key, sort_keys=True, default=str).encode("utf-8")).hexdigest()  # Build stable cache identity digest
@@ -13892,6 +13908,7 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
                 notification_context=combination_header,  # Include the exact active combination in Telegram output
                 hyperparameters_enabled=hyperparameters_enabled,  # Pass authoritative hyperparameter mode into every training record.
                 augmentation_ratio=augmentation_ratio,  # Pass authoritative augmentation mode into every training record.
+                training_eta_callback=training_eta_callback,  # Provide cached-rerun sequential ETA routing only when start was sent.
                 local_combination_index=current_combination,  # Prefix recurring training logs with feature-local combination identity.
                 local_combination_total=total_steps,  # Use the active feature-set combination count as the local denominator.
             )  # Evaluate individual classifier sequentially using HP-isolated model artifact names
@@ -14053,9 +14070,22 @@ def run_stacking_evaluation_for_feature_set(name, stacking_model, X_train_df, y_
         log_training_phase(name, "StackingClassifier", "Model preparation", "Completed", hyperparameters_enabled, augmentation_ratio)  # Mark contextual preparation completion before blocking stacking fit.
         write_memory_phase_event("before_classifier_fit", config=config, **phase_metadata, event_outcome="starting")  # Publish stacking fit start
         stacking_ram_stats = {}  # Hold RAM statistics for this stacking fit only.
+        training_eta_callback = cast(Optional[Callable[[str, Optional[float]], None]], None)  # Keep ordinary sequential stacking unchanged outside cached reruns.
+        if resolve_cached_rerun_count(config) > 0 and experiment_mode == "original_only":  # Reuse the coordinator-owned training notification lifecycle for real rerun stacking fits.
+            rerun_training_task = {"feature_set": name, "classifier_name": "StackingClassifier", "augmentation_ratio": augmentation_ratio, "hyperparameters_enabled": hyperparameters_enabled, "experiment_run": get_current_experiment_run(config), "global_id": current_combination, "feature_local_position": current_combination, "feature_local_total": total_steps, "total_combinations": total_steps}  # Build the existing notification task shape from sequential context.
+            rerun_training_tasks_by_global_id = cast(Dict[int, dict], {current_combination: rerun_training_task})  # Register the task for normal sender lookup.
+            rerun_training_start_ids = cast(Set[int], set())  # Store delivered start global IDs for this stacking fit.
+            rerun_training_eta_ids = cast(Set[int], set())  # Store delivered ETA global IDs for this stacking fit.
+            rerun_training_unavailable_ids = cast(Set[int], set())  # Store starts that began with unavailable ETA for this stacking fit.
+            send_feature_process_training_start_notification({"feature_set": name, "global_id": current_combination, "initial_eta": "unavailable"}, rerun_training_tasks_by_global_id, total_steps, rerun_training_start_ids, rerun_training_unavailable_ids, {})  # Send through the existing training-start sender.
+
+            def send_rerun_stacking_training_eta(eta_label: str, eta_seconds: Optional[float], task_global_id: int = current_combination) -> None:  # Route factual ETA through the existing training-ETA sender.
+                send_feature_process_training_eta_notification({"feature_set": name, "global_id": task_global_id, "eta": eta_label, "estimated_finish_time": format_estimated_finish_time_suffix(eta_seconds)}, rerun_training_tasks_by_global_id, total_steps, rerun_training_eta_ids, rerun_training_unavailable_ids)  # Send through the existing training-ETA sender.
+
+            training_eta_callback = send_rerun_stacking_training_eta  # Provide the callback object to the existing evaluator.
 
         stacking_metrics = evaluate_stacking_classifier(
-            active_stacking_model, X_train_df, y_train, X_test_df, y_test, config=config, training_ram_stats=stacking_ram_stats, notification_context=combination_header, feature_set=name, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio, local_combination_index=current_combination, local_combination_total=total_steps  # Include exact active combination metadata in progress output.
+            active_stacking_model, X_train_df, y_train, X_test_df, y_test, config=config, training_ram_stats=stacking_ram_stats, notification_context=combination_header, feature_set=name, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio, training_eta_callback=training_eta_callback, local_combination_index=current_combination, local_combination_total=total_steps  # Include exact active combination metadata in progress output.
         )  # Evaluate stacking model with DataFrames and retrieve metrics tuple
         write_memory_phase_event("after_classifier_fit", config=config, **phase_metadata, event_outcome="fit_and_prediction_completed")  # Publish stacking fit completion
         write_memory_phase_event("after_prediction_and_metrics", config=config, **phase_metadata, accuracy=stacking_metrics[0], precision=stacking_metrics[1], recall=stacking_metrics[2], f1_score=stacking_metrics[3], event_outcome="metrics_completed")  # Publish stacking metrics completion
