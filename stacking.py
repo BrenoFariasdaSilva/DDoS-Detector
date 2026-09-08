@@ -207,7 +207,7 @@ CACHE_THREAD_LOCKS_GUARD = threading.Lock()  # Serializes process-local cache lo
 LSTM_SOURCE_FILE_COLUMN = "__stacking_lstm_source_file"  # Reserved nonnumeric source identity for verified LSTM windows.
 LSTM_ROW_ORDER_COLUMN = "__stacking_lstm_row_order"  # Reserved nonnumeric row chronology for verified LSTM windows.
 COOPERATIVE_CANCEL_CLASSIFIERS = {"XGBoost", "LightGBM", "Gradient Boosting", "FT-Transformer", "Tabular ResNet", "ResNet18", "AutoEncoder", "LSTM"}  # Classifiers with public training boundaries used for active Telegram skip.
-
+PHASE_RUNTIME_COLUMNS = ["preprocessing_time_s", "feature_selection_time_s", "hyperparameter_optimization_time_s", "training_time_s", "inference_time_s"]  # Define phase runtime result columns in seconds.
 
 class RuntimeSkipRequested(Exception):
     """Raised inside a worker when a Telegram skip wins before persistence."""
@@ -1284,6 +1284,7 @@ def get_default_stacking_config():
                 "feature_set", "classifier_type", "model_name", "model",
                 "n_features", "n_samples_train", "n_samples_test",
                 "accuracy", "precision", "recall", "f1_score", "fpr", "fnr", "elapsed_time_s",
+                "preprocessing_time_s", "feature_selection_time_s", "hyperparameter_optimization_time_s", "training_time_s", "inference_time_s",
                 "cv_method", "top_features", "rfe_ranking", "hyperparameters", "features_list", "Hardware",
             ],  # Column names for results CSV export
             "cache_results_csv_columns": [
@@ -1293,6 +1294,7 @@ def get_default_stacking_config():
                 "feature_set", "classifier_type", "model_name", "model",
                 "n_features", "n_samples_train", "n_samples_test",
                 "accuracy", "precision", "recall", "f1_score", "fpr", "fnr", "elapsed_time_s",
+                "preprocessing_time_s", "feature_selection_time_s", "hyperparameter_optimization_time_s", "training_time_s", "inference_time_s",
                 "cv_method", "rfe_ranking", "hyperparameters", "features_list", "Hardware",
             ],  # Column names for temporary cache CSV export
             "top_n_features_heatmap": 15,  # Number of top features to show in heatmap
@@ -5242,7 +5244,6 @@ def extract_genetic_algorithm_features(file_path, config=None):
         if config is None:  # If no config provided
             config = CONFIG  # Use global CONFIG
 
-        file_dir = os.path.dirname(file_path)  # Determine the directory of the input file
         verbose_output(
             f"{BackgroundColors.GREEN}Extracting GA features for file: {BackgroundColors.CYAN}{file_path}{Style.RESET_ALL}",
             config=config
@@ -5306,6 +5307,12 @@ def extract_genetic_algorithm_features(file_path, config=None):
                     f"{BackgroundColors.RED}Error: 'best' run_index not found in GA results file at {BackgroundColors.CYAN}{ga_results_path}{BackgroundColors.RED}, and no fallback row with non-empty 'best_features' was found.{Style.RESET_ALL}"
                 )  # Report final selection failure with explicit fallback outcome
                 return None  # Return None when no usable GA feature row is available
+
+            ga_runtime_seconds = selected_row_runtime_seconds(selected_row, ["elapsed_run_time", "feature_extraction_time_s"])  # Resolve GA runtime from the exact selected artifact row.
+            if ga_runtime_seconds is None:  # Warn when selected GA row has no trusted timing field.
+                print(f"{BackgroundColors.YELLOW}Warning: GA feature-selection time unavailable in {BackgroundColors.CYAN}{ga_results_path}{BackgroundColors.YELLOW}; leaving stacking timing empty.{Style.RESET_ALL}")  # Report unavailable GA timing without fabricating a value.
+            else:  # Persist exact selected-row GA timing for result construction.
+                record_feature_selection_runtime(config, "GA Features", ga_runtime_seconds)  # Store GA timing for this dataset context.
 
             best_features_raw = selected_row["best_features"]  # Read serialized best_features payload from the selected row
             parsed_features = best_features_raw  # Initialize parsed payload with raw value before decoding
@@ -5386,7 +5393,6 @@ def extract_principal_component_analysis_features(file_path, config=None):
         if config is None:  # If no config provided
             config = CONFIG  # Use global CONFIG
 
-        file_dir = os.path.dirname(file_path)  # Determine the directory of the input file
         verbose_output(
             f"{BackgroundColors.GREEN}Extracting PCA features for file: {BackgroundColors.CYAN}{file_path}{Style.RESET_ALL}",
             config=config
@@ -5432,16 +5438,23 @@ def extract_principal_component_analysis_features(file_path, config=None):
                     ascending=[False, True, True, False, True],
                     kind="mergesort",
                 )  # Rank candidates with stable sorting and explicit tie-breakers
-                best_n_components = sorted_df.iloc[0]["n_components"]  # Select the best row after ranking
+                selected_row = sorted_df.iloc[0]  # Select the best row after ranking.
+                best_n_components = selected_row["n_components"]  # Select n_components from the best row.
             else:  # Fallback to CV F1 when the full metric set is unavailable
                 best_row_index = df["cv_f1_score"].idxmax()  # Find the highest CV F1-Score row
-                best_n_components = df.loc[best_row_index, "n_components"]  # Select n_components from the best CV F1 row
+                selected_row = df.loc[best_row_index]  # Select the same CV-ranked PCA row.
+                best_n_components = selected_row["n_components"]  # Select n_components from the best CV F1 row
 
             verbose_output(
                 f"{BackgroundColors.GREEN}Successfully extracted best PCA configuration. Optimal components: {BackgroundColors.CYAN}{best_n_components}{Style.RESET_ALL}"
             )  # Output the verbose message
 
             best_n_components_int = int(cast(Any, pd.to_numeric(best_n_components, errors="raise")))  # Ensure it's an integer
+            pca_runtime_seconds = selected_row_runtime_seconds(selected_row, ["feature_extraction_time_s"])  # Resolve PCA timing from the exact selected component row.
+            if pca_runtime_seconds is None:  # Warn when selected PCA row has no trusted timing field.
+                print(f"{BackgroundColors.YELLOW}Warning: PCA feature-selection time unavailable for {BackgroundColors.CYAN}{best_n_components_int}{BackgroundColors.YELLOW} components in {BackgroundColors.CYAN}{pca_results_path}{BackgroundColors.YELLOW}; leaving stacking timing empty.{Style.RESET_ALL}")  # Report unavailable PCA timing without fabricating a value.
+            else:  # Persist exact selected-row PCA timing for result construction.
+                record_feature_selection_runtime(config, "PCA Components", pca_runtime_seconds)  # Store PCA timing for this dataset context.
             print(f"{BackgroundColors.GREEN}[INFO] PCA optimal component count selected from PCA_Results.csv: {BackgroundColors.CYAN}{best_n_components_int}{Style.RESET_ALL}")  # Report the selected component count separately from transformer loading.
 
             return best_n_components_int  # Return the optimal number of components
@@ -5477,7 +5490,6 @@ def extract_recursive_feature_elimination_features(file_path, config=None):
         if config is None:  # If no config provided
             config = CONFIG  # Use global CONFIG
 
-        file_dir = os.path.dirname(file_path)  # Determine the directory of the input file
         verbose_output(
             f"{BackgroundColors.GREEN}Extracting RFE features for file: {BackgroundColors.CYAN}{file_path}{Style.RESET_ALL}",
             config=config
@@ -5494,11 +5506,17 @@ def extract_recursive_feature_elimination_features(file_path, config=None):
 
         try:  # Try to load the RFE runs results
             low_memory = config.get("execution", {}).get("low_memory", False)  # Read low memory flag from config
-            df = pd.read_csv(rfe_runs_path, usecols=cast(Any, ["top_features"]), low_memory=low_memory)  # Load only the "top_features" column
+            df = pd.read_csv(rfe_runs_path, low_memory=low_memory)  # Load full RFE schema so selected-row timing can be preserved when present.
             df.columns = df.columns.str.strip()  # Remove leading/trailing whitespace from column names
 
             if not df.empty:  # Verify if the DataFrame is not empty
-                top_features_raw = df.loc[0, "top_features"]  # Get the "top_features" from the first row
+                selected_row = df.loc[0]  # Preserve current first-row RFE feature selection behavior.
+                rfe_runtime_seconds = selected_row_runtime_seconds(selected_row, ["feature_extraction_time_s"])  # Resolve RFE selector timing only from trusted selector field.
+                if rfe_runtime_seconds is None:  # Warn when selected RFE row has no trusted feature-selection timing field.
+                    print(f"{BackgroundColors.YELLOW}Warning: RFE feature-selection time unavailable in {BackgroundColors.CYAN}{rfe_runs_path}{BackgroundColors.YELLOW}; leaving stacking timing empty.{Style.RESET_ALL}")  # Report unavailable RFE timing without fabricating a value.
+                else:  # Persist exact selected-row RFE timing for result construction.
+                    record_feature_selection_runtime(config, "RFE Features", rfe_runtime_seconds)  # Store RFE timing for this dataset context.
+                top_features_raw = selected_row["top_features"]  # Get the "top_features" from the selected row
 
                 rfe_features = top_features_raw  # Keep raw value and normalize below to avoid string/char splitting
                 if isinstance(rfe_features, str):  # If serialized, decode safely and support double-encoded payloads
@@ -5646,6 +5664,11 @@ def extract_extra_trees_features(file_path: str, config: Optional[dict] = None) 
             raise ValueError("Extra Trees configured_selected_feature_count does not match configuration")  # Raise configured-count mismatch
 
         selected_features = selected_rows["feature_name"].tolist()  # Convert selected names to ordered list
+        extra_trees_runtime_seconds = selected_row_runtime_seconds(selected_rows.iloc[0], ["elapsed_run_time", "feature_extraction_time_s"])  # Resolve timing from one selected row without summing duplicated ranked rows.
+        if extra_trees_runtime_seconds is None:  # Warn when selected Extra Trees rows have no trusted timing field.
+            print(f"{BackgroundColors.YELLOW}Warning: Extra Trees feature-selection time unavailable in {BackgroundColors.CYAN}{extra_trees_results_path}{BackgroundColors.YELLOW}; leaving stacking timing empty.{Style.RESET_ALL}")  # Report unavailable Extra Trees timing without fabricating a value.
+        else:  # Persist exact selected-row Extra Trees timing for result construction.
+            record_feature_selection_runtime(config, "Extra Trees Features", extra_trees_runtime_seconds)  # Store Extra Trees timing for this dataset context.
         if len(selected_features) != len(set(selected_features)):  # Reject duplicate selected features
             raise ValueError("Extra Trees selected features contain duplicates")  # Raise duplicate-feature error
         excluded_names = {"unnamed 0", "unnamed_0", "flow id", "flow_id", "source ip", "source_ip", "destination ip", "destination_ip", "timestamp"}  # Define leakage-prone selected-name identities
@@ -5675,6 +5698,7 @@ def load_feature_selection_results(file_path, config=None):
     try:
         if config is None:  # If no config provided
             config = CONFIG  # Use global CONFIG
+        config.setdefault("stacking", {})["feature_selection_runtime_s_by_feature_set"] = {"full": 0.0}  # Reset selected artifact timings for this dataset context.
 
         ga_selected_features = extract_genetic_algorithm_features(file_path, config=config)  # Extract GA features
         if ga_selected_features:  # If GA features were successfully extracted
@@ -6449,6 +6473,7 @@ def extract_hyperparameter_optimization_results(csv_path, config=None):
     try:
         if config is None:  # If no config provided
             config = CONFIG  # Use global CONFIG
+        config.setdefault("stacking", {})["hyperparameter_optimization_runtime_s_by_model"] = {}  # Reset HP timings for this dataset context.
 
         verbose_output(
             f"{BackgroundColors.GREEN}Looking for hyperparameter optimization results for: {BackgroundColors.CYAN}{csv_path}{Style.RESET_ALL}",
@@ -6532,7 +6557,13 @@ def extract_hyperparameter_optimization_results(csv_path, config=None):
                         except Exception:  # If both parsing attempts fail
                             best_params = None  # Leave as None if parsing fails
 
-                results[str(model)] = {"best_params": best_params}  # Store parsed parameters only
+                optimization_runtime_seconds = selected_row_runtime_seconds(row, ["elapsed_time_s"])  # Resolve HP optimization timing from the same matched row.
+                if optimization_runtime_seconds is None:  # Warn when the matched HP row has no trusted timing field.
+                    print(f"{BackgroundColors.YELLOW}Warning: Hyperparameter optimization time unavailable for {BackgroundColors.CYAN}{model}{BackgroundColors.YELLOW} in {BackgroundColors.CYAN}{hyperparams_path}{BackgroundColors.YELLOW}; leaving stacking timing empty.{Style.RESET_ALL}")  # Report unavailable HP timing without fabricating a value.
+                else:  # Persist exact matched-row HP timing for result construction.
+                    store_runtime_phase_value(config, "hyperparameter_optimization_runtime_s_by_model", str(model), optimization_runtime_seconds)  # Store HP timing under artifact model name.
+
+                results[str(model)] = {"best_params": best_params, "elapsed_time_s": optimization_runtime_seconds}  # Store parsed parameters and matched optimization timing
             except Exception:  # Catch any unexpected errors during row parsing
                 continue  # Skip problematic rows silently
 
@@ -8020,14 +8051,18 @@ def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, 
         )
 
         start_time = time.time()  # Record the start time
+        training_time_seconds = 0.0  # Track fit-only runtime for phase-separated results.
+        inference_time_seconds = float(precomputed_prediction_seconds)  # Track prediction-only runtime, including bounded augmented batches.
 
         if fit_model:  # Fit only during the original-data training lifecycle.
             log_training_phase(feature_set, model_name, "Training", "Started", hyperparameters_enabled, augmentation_ratio)  # Mark contextual training separately from later combination phases.
             sys.stdout.flush()  # Flush stdout before model training to ensure logs are visible under nohup
             training_ram_monitor = start_training_ram_monitor(TRAINING_RAM_SAMPLE_INTERVAL_SECONDS)  # Start RAM monitoring immediately before classifier fit.
+            training_started_at = time.perf_counter()  # Start fit-only phase timer.
             try:  # Ensure RAM monitoring stops even when classifier fit fails.
                 fit_classifier_with_progress(model, X_train, y_train, feature_set, model_name, config=config, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio, eta_callback=training_eta_callback, estimated_total_seconds=estimated_training_seconds, cancellation_checker=cancellation_checker, local_combination_index=local_combination_index, local_combination_total=local_combination_total, active_workers_callback=active_workers_callback)  # Fit once with contextual public callbacks or heartbeat reporting.
             finally:  # Stop RAM monitoring immediately after classifier fit exits.
+                training_time_seconds = time.perf_counter() - training_started_at  # Stop fit-only phase timer.
                 classifier_ram_stats = stop_training_ram_monitor(training_ram_monitor)  # Summarize RAM usage across this classifier fit.
                 store_training_ram_stats(training_ram_stats, classifier_ram_stats)  # Associate RAM statistics with this classifier only.
                 training_ram_monitor = None  # Clear monitor state after stop processing.
@@ -8045,12 +8080,18 @@ def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, 
         if callable(cancellation_checker) and cancellation_checker():
             raise RuntimeSkipRequested(f"Runtime skip requested before prediction for active {model_name}")
         log_training_phase(feature_set, model_name, "Prediction", "Started", hyperparameters_enabled, augmentation_ratio)  # Mark contextual prediction as distinct from model training.
+        prediction_started_at = time.perf_counter()  # Start prediction-only phase timer.
         y_pred = model.predict(X_test) if precomputed_predictions is None else np.asarray(precomputed_predictions)  # Predict normally or reuse bounded augmented-data predictions
+        if precomputed_predictions is None:  # Use local timer only when prediction was executed here.
+            inference_time_seconds = time.perf_counter() - prediction_started_at  # Stop local prediction-only phase timer.
         log_training_phase(feature_set, model_name, "Prediction", "Completed", hyperparameters_enabled, augmentation_ratio)  # Mark contextual prediction completion before metric computation.
         if callable(cancellation_checker) and cancellation_checker():
             raise RuntimeSkipRequested(f"Runtime skip requested after prediction for active {model_name}")
 
         elapsed_time = time.time() - start_time + float(precomputed_prediction_seconds)  # Include bounded prediction time already completed by the augmented caller
+        if training_ram_stats is not None:  # Persist phase timers through the existing per-classifier metadata holder.
+            training_ram_stats["training_time_s"] = training_time_seconds  # Store fit-only runtime for result rows.
+            training_ram_stats["inference_time_s"] = inference_time_seconds  # Store prediction-only runtime for result rows.
 
         log_training_phase(feature_set, model_name, "Metrics", "Started", hyperparameters_enabled, augmentation_ratio)  # Mark contextual metric computation as separate phase.
         acc = accuracy_score(y_test, y_pred)  # Calculate Accuracy
@@ -8143,14 +8184,18 @@ def evaluate_stacking_classifier(model, X_train, y_train, X_test, y_test, config
         )  # Output the verbose message
 
         start_time = time.time()  # Record the start time for timing training and prediction
+        training_time_seconds = 0.0  # Track fit-only runtime for phase-separated results.
+        inference_time_seconds = 0.0  # Track prediction-only runtime for phase-separated results.
 
         if fit_model:  # Fit only during the original-data training lifecycle.
             log_training_phase(feature_set, "StackingClassifier", "Training", "Started", hyperparameters_enabled, augmentation_ratio)  # Mark contextual stacking training separately from later phases.
             sys.stdout.flush()  # Flush stdout before stacking training to ensure logs are visible under nohup
             training_ram_monitor = start_training_ram_monitor(TRAINING_RAM_SAMPLE_INTERVAL_SECONDS)  # Start RAM monitoring immediately before stacking fit.
+            training_started_at = time.perf_counter()  # Start fit-only phase timer.
             try:  # Ensure RAM monitoring stops even when stacking fit fails.
                 fit_classifier_with_progress(model, X_train, y_train, feature_set, "StackingClassifier", config=config, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio, eta_callback=training_eta_callback, local_combination_index=local_combination_index, local_combination_total=local_combination_total)  # Preserve contextual single public stacking fit reporting.
             finally:  # Stop RAM monitoring immediately after stacking fit exits.
+                training_time_seconds = time.perf_counter() - training_started_at  # Stop fit-only phase timer.
                 stacking_ram_summary = stop_training_ram_monitor(training_ram_monitor)  # Summarize RAM usage across this stacking fit.
                 store_training_ram_stats(training_ram_stats, stacking_ram_summary)  # Associate RAM statistics with this stacking classifier only.
                 training_ram_monitor = None  # Clear monitor state after stop processing.
@@ -8162,10 +8207,15 @@ def evaluate_stacking_classifier(model, X_train, y_train, X_test, y_test, config
             log_training_phase(feature_set, "StackingClassifier", "Training", "Skipped (persisted model)", hyperparameters_enabled, augmentation_ratio)  # Record contextual loaded stacking evaluation without fit.
 
         log_training_phase(feature_set, "StackingClassifier", "Prediction", "Started", hyperparameters_enabled, augmentation_ratio)  # Mark contextual stacking prediction as distinct from training.
+        prediction_started_at = time.perf_counter()  # Start prediction-only phase timer.
         y_pred = model.predict(X_test)  # Predict the labels for the test set
+        inference_time_seconds = time.perf_counter() - prediction_started_at  # Stop prediction-only phase timer.
         log_training_phase(feature_set, "StackingClassifier", "Prediction", "Completed", hyperparameters_enabled, augmentation_ratio)  # Mark contextual prediction completion before metric computation.
 
         elapsed_time = time.time() - start_time  # Calculate the total time elapsed
+        if training_ram_stats is not None:  # Persist phase timers through the existing per-classifier metadata holder.
+            training_ram_stats["training_time_s"] = training_time_seconds  # Store fit-only runtime for result rows.
+            training_ram_stats["inference_time_s"] = inference_time_seconds  # Store prediction-only runtime for result rows.
 
         log_training_phase(feature_set, "StackingClassifier", "Metrics", "Started", hyperparameters_enabled, augmentation_ratio)  # Mark contextual stacking metric computation as separate phase.
         acc = accuracy_score(y_test, y_pred)  # Calculate Accuracy
@@ -9457,6 +9507,189 @@ def add_hardware_column(df, columns_order, column_name="Hardware"):
         raise
 
 
+def coerce_runtime_seconds(value: Any) -> Optional[float]:
+    """
+    Convert a runtime scalar to finite seconds.
+
+    :param value: Runtime scalar loaded from code or CSV.
+    :return: Finite runtime seconds, or None when unavailable.
+    """
+
+    try:  # Normalize runtime values without inventing absent measurements.
+        if value is None or bool(cast(Any, pd.isna(value))):  # Treat missing scalars as unavailable.
+            return None  # Return no runtime value.
+        runtime_seconds = float(value)  # Convert numeric strings and numpy scalars.
+        if not math.isfinite(runtime_seconds):  # Reject NaN and infinite runtimes.
+            return None  # Return no runtime value.
+        return runtime_seconds  # Return finite runtime seconds.
+    except Exception:  # Treat malformed runtime values as unavailable.
+        return None  # Return no runtime value.
+
+
+def store_runtime_phase_value(config: Optional[dict], section_name: str, key: str, value: Any) -> None:
+    """
+    Store one runtime phase value in the active stacking configuration.
+
+    :param config: Runtime configuration dictionary.
+    :param section_name: Stacking runtime section name.
+    :param key: Runtime lookup key.
+    :param value: Runtime value in seconds.
+    :return: None.
+    """
+
+    if config is None:  # Use global configuration when no configuration is supplied.
+        config = CONFIG  # Preserve established configuration fallback.
+    runtime_seconds = coerce_runtime_seconds(value)  # Normalize value through the shared runtime parser.
+    if runtime_seconds is None:  # Leave prior values untouched when source timing is unavailable.
+        return  # Return without recording unavailable timing.
+    config.setdefault("stacking", {}).setdefault(section_name, {})[str(key)] = runtime_seconds  # Store current context timing under the caller key.
+
+
+def read_runtime_phase_value(config: Optional[dict], section_name: str, key: str) -> Optional[float]:
+    """
+    Read one runtime phase value from the active stacking configuration.
+
+    :param config: Runtime configuration dictionary.
+    :param section_name: Stacking runtime section name.
+    :param key: Runtime lookup key.
+    :return: Runtime seconds, or None when unavailable.
+    """
+
+    if config is None:  # Use global configuration when no configuration is supplied.
+        config = CONFIG  # Preserve established configuration fallback.
+    value = config.get("stacking", {}).get(section_name, {}).get(str(key), None)  # Read stored runtime value for this key.
+    return coerce_runtime_seconds(value)  # Return normalized runtime seconds.
+
+
+def feature_set_runtime_key(feature_set_name: str) -> str:
+    """
+    Resolve the normalized feature-set runtime key.
+
+    :param feature_set_name: Human-readable feature-set name.
+    :return: Stable runtime key.
+    """
+
+    normalized_name = str(feature_set_name).strip().lower()  # Normalize feature-set label for matching.
+    if normalized_name == "full features":  # Full feature set performs no feature-selection operation.
+        return "full"  # Return canonical full-feature key.
+    if normalized_name == "ga features":  # Genetic Algorithm feature set.
+        return "ga"  # Return canonical GA key.
+    if normalized_name == "pca components":  # PCA feature set.
+        return "pca"  # Return canonical PCA key.
+    if normalized_name == "rfe features":  # RFE feature set.
+        return "rfe"  # Return canonical RFE key.
+    if normalized_name == "extra trees features":  # Extra Trees feature set.
+        return "extra_trees"  # Return canonical Extra Trees key.
+    return normalized_name  # Return normalized custom feature-set key.
+
+
+def selected_row_runtime_seconds(row: Any, ordered_columns: List[str]) -> Optional[float]:
+    """
+    Resolve runtime seconds from one selected artifact row.
+
+    :param row: Selected pandas row.
+    :param ordered_columns: Timing columns in trusted priority order.
+    :return: Runtime seconds, or None when unavailable.
+    """
+
+    for column in ordered_columns:  # Try only columns with code-backed phase meaning.
+        if column in row.index:  # Use the first available trusted timing column.
+            runtime_seconds = coerce_runtime_seconds(row.get(column, None))  # Normalize selected-row timing value.
+            if runtime_seconds is not None:  # Return the first finite runtime value.
+                return runtime_seconds  # Return selected timing.
+    return None  # Return unavailable when no trusted timing column exists.
+
+
+def record_feature_selection_runtime(config: Optional[dict], feature_set_name: str, value: Any) -> None:
+    """
+    Record feature-selection runtime for one selected feature-set artifact.
+
+    :param config: Runtime configuration dictionary.
+    :param feature_set_name: Human-readable feature-set name.
+    :param value: Runtime value in seconds.
+    :return: None.
+    """
+
+    store_runtime_phase_value(config, "feature_selection_runtime_s_by_feature_set", feature_set_runtime_key(feature_set_name), value)  # Store feature-selection timing for current dataset context.
+
+
+def read_feature_selection_runtime(config: Optional[dict], feature_set_name: str) -> Optional[float]:
+    """
+    Read feature-selection runtime for one feature set.
+
+    :param config: Runtime configuration dictionary.
+    :param feature_set_name: Human-readable feature-set name.
+    :return: Runtime seconds, zero for Full Features, or None when unavailable.
+    """
+
+    if feature_set_runtime_key(feature_set_name) == "full":  # Full features require no feature-selection artifact.
+        return 0.0  # Return exact zero for full-feature mode.
+    return read_runtime_phase_value(config, "feature_selection_runtime_s_by_feature_set", feature_set_runtime_key(feature_set_name))  # Read selected artifact timing.
+
+
+def read_hyperparameter_runtime(config: Optional[dict], model_name: str, hyperparameters_enabled: bool) -> Optional[float]:
+    """
+    Read hyperparameter optimization runtime for one classifier.
+
+    :param config: Runtime configuration dictionary.
+    :param model_name: Classifier model name.
+    :param hyperparameters_enabled: Whether optimized hyperparameters are active.
+    :return: Runtime seconds, zero for default mode, or None when unavailable.
+    """
+
+    if not hyperparameters_enabled:  # Default hyperparameters do not apply optimization artifacts.
+        return 0.0  # Return exact zero for default hyperparameter mode.
+    if config is None:  # Use global configuration when no configuration is supplied.
+        config = CONFIG  # Preserve established configuration fallback.
+    runtime_map = config.get("stacking", {}).get("hyperparameter_optimization_runtime_s_by_model", {})  # Read timing values captured from matched HP rows.
+    runtime_seconds = coerce_runtime_seconds(runtime_map.get(model_name, None))  # Prefer exact configured classifier name.
+    if runtime_seconds is not None:  # Return exact-name timing when present.
+        return runtime_seconds  # Return matched HP timing.
+    lower_matches = [key for key in runtime_map.keys() if str(key).lower() == str(model_name).lower()]  # Reuse existing case-insensitive model matching.
+    if lower_matches:  # Use first case-insensitive timing match.
+        return coerce_runtime_seconds(runtime_map.get(lower_matches[0], None))  # Return case-insensitive HP timing.
+    normalized_model_name = normalize(model_name)  # Reuse existing normalized classifier matching.
+    normalized_matches = [key for key in runtime_map.keys() if normalize(key) == normalized_model_name]  # Reuse existing alphanumeric model matching.
+    if normalized_matches:  # Use first normalized timing match.
+        return coerce_runtime_seconds(runtime_map.get(normalized_matches[0], None))  # Return normalized HP timing.
+    return None  # Return unavailable timing when no matched HP row supplied it.
+
+
+def read_preprocessing_runtime(config: Optional[dict], preprocessing_time_s: Optional[float]) -> Optional[float]:
+    """
+    Resolve preprocessing runtime for one result row.
+
+    :param config: Runtime configuration dictionary.
+    :param preprocessing_time_s: Measured preprocessing seconds for this evaluation context.
+    :return: Runtime seconds, or None when unavailable.
+    """
+
+    return coerce_runtime_seconds(preprocessing_time_s)  # Return only the measured current preprocessing boundary.
+
+
+def build_runtime_phase_fields(config: Optional[dict], feature_set_name: str, model_name: str, hyperparameters_enabled: bool, preprocessing_time_s: Optional[float], training_ram_stats: Optional[dict]) -> dict:
+    """
+    Build phase-separated runtime fields for one result row.
+
+    :param config: Runtime configuration dictionary.
+    :param feature_set_name: Human-readable feature-set name.
+    :param model_name: Classifier model name.
+    :param hyperparameters_enabled: Whether optimized hyperparameters are active.
+    :param preprocessing_time_s: Measured preprocessing seconds for this evaluation context.
+    :param training_ram_stats: Per-classifier mutable statistics carrying fit and inference timers.
+    :return: Runtime phase field mapping.
+    """
+
+    runtime_stats = training_ram_stats or {}  # Use empty runtime stats when caller has no mutable timing holder.
+    return {  # Build all phase fields in canonical result names.
+        "preprocessing_time_s": read_preprocessing_runtime(config, preprocessing_time_s),  # Use current preprocessing timing only.
+        "feature_selection_time_s": read_feature_selection_runtime(config, feature_set_name),  # Use exact selected feature artifact timing when known.
+        "hyperparameter_optimization_time_s": read_hyperparameter_runtime(config, model_name, hyperparameters_enabled),  # Use exact matched HP artifact timing when known.
+        "training_time_s": coerce_runtime_seconds(runtime_stats.get("training_time_s", None)),  # Use direct fit timing from evaluator.
+        "inference_time_s": coerce_runtime_seconds(runtime_stats.get("inference_time_s", None)),  # Use direct prediction timing from evaluator.
+    }  # Return phase runtime mapping.
+
+
 def export_feature_artifacts(df, file_path_obj, stacking_dir, config=None):
     """
     Aggregates feature usage statistics, exports the top-features CSV, and generates the heatmap PNG.
@@ -9535,17 +9768,21 @@ def get_cache_results_csv_columns(config: Optional[dict] = None) -> List[str]:
     return list(get_default_stacking_config()["cache_results_csv_columns"])  # Return the default temporary cache order.
 
 
-def cache_file_hardware_column_is_last(cache_path: str) -> bool:  # Inspect cache header ordering.
+def cache_file_schema_is_current(cache_path: str, config: Optional[dict] = None) -> bool:
     """
-    Return whether one cache CSV header already ends with Hardware.
+    Return whether one cache CSV header matches the configured cache schema.
 
     :param cache_path: Cache CSV path to inspect.
-    :return: True when the CSV header ends with Hardware.
+    :param config: Configuration dictionary, or None to use the global configuration.
+    :return: True when the CSV header matches the configured cache schema.
     """
+
+    if config is None:  # Use global configuration when no configuration is provided.
+        config = CONFIG  # Assign the global configuration reference.
 
     try:  # Read only the header row to avoid touching cached result values.
         columns = pd.read_csv(cache_path, nrows=0).columns.str.strip().tolist()  # Read normalized header names.
-        return bool(columns and columns[-1] == "Hardware" and columns.count("Hardware") == 1)  # Return canonical header state.
+        return columns == get_cache_results_csv_columns(config)  # Return exact canonical schema status.
     except Exception:  # Treat unreadable files as not schema-ready so normal validation handles content errors.
         return False  # Return false for missing or unreadable headers.
 
@@ -10298,11 +10535,11 @@ def load_cache_results(csv_path, config=None, notify_discovery: bool = True):  #
             primary_df = None  # Hold validated primary rows for union recovery.
             backup_df = None  # Hold validated backup rows for union recovery.
             primary_error = None  # Preserve the primary validation failure for accurate recovery reporting.
-            primary_needs_hardware_migration = False  # Track old primary cache schema before validation.
-            backup_needs_hardware_migration = False  # Track old backup cache schema before validation.
+            primary_needs_schema_migration = False  # Track old primary cache schema before validation.
+            backup_needs_schema_migration = False  # Track old backup cache schema before validation.
             if primary_exists:  # Attempt the primary cache before considering its backup.
                 try:  # Read and deserialize the complete primary cache.
-                    primary_needs_hardware_migration = not cache_file_hardware_column_is_last(cache_path)  # Detect old primary cache schema.
+                    primary_needs_schema_migration = not cache_file_schema_is_current(cache_path, config=config)  # Detect old primary cache schema.
                     primary_df, _ = read_validated_cache_file(cache_path, config=config, expected_experiment_run=run_index)  # Validate the primary through production schema and resume logic.
                 except Exception as exc:  # Preserve corruption, truncation, permission, and schema failures for fallback reporting.
                     primary_error = exc  # Store the exact primary error without discarding it silently.
@@ -10314,7 +10551,7 @@ def load_cache_results(csv_path, config=None, notify_discovery: bool = True):  #
             backup_error = None  # Preserve the backup validation failure when recovery is impossible.
             if backup_exists:  # Attempt recovery only when the sibling backup exists.
                 try:  # Read and deserialize the complete backup cache.
-                    backup_needs_hardware_migration = not cache_file_hardware_column_is_last(backup_path)  # Detect old backup cache schema.
+                    backup_needs_schema_migration = not cache_file_schema_is_current(backup_path, config=config)  # Detect old backup cache schema.
                     backup_df, _ = read_validated_cache_file(backup_path, config=config, expected_experiment_run=run_index)  # Validate the backup through the same production path.
                 except Exception as exc:  # Preserve the exact backup failure for accurate cache-miss reporting.
                     backup_error = exc  # Store the exact backup validation failure.
@@ -10331,8 +10568,8 @@ def load_cache_results(csv_path, config=None, notify_discovery: bool = True):  #
                     backup_df is not None  # Require a valid backup recovery source.
                     and (primary_df is None or merged_identity_count > primary_identity_count)  # Require backup rows.
                 )
-                cache_needs_hardware_migration = primary_needs_hardware_migration or backup_needs_hardware_migration  # Detect validated old cache schema.
-                if backup_has_recovery_rows or cache_needs_hardware_migration:  # Promote backup-only identities or persist upgraded schema.
+                cache_needs_schema_migration = primary_needs_schema_migration or backup_needs_schema_migration  # Detect validated old cache schema.
+                if backup_has_recovery_rows or cache_needs_schema_migration:  # Promote backup-only identities or persist upgraded schema.
                     persist_cache_dataframe_atomically(  # Republish merged cache before resume uses it.
                         cache_path,  # Use the authoritative primary path.
                         merged_df,  # Publish the merged valid snapshot.
@@ -10341,8 +10578,8 @@ def load_cache_results(csv_path, config=None, notify_discovery: bool = True):  #
                         config=config,  # Preserve runtime cache configuration.
                         expected_experiment_run=run_index,  # Preserve run-specific validation.
                     )
-                    if cache_needs_hardware_migration and not backup_has_recovery_rows:  # Report schema-only cache migration.
-                        print(f"{BackgroundColors.GREEN}[CACHE MIGRATION] Added Hardware column to cache schema: {BackgroundColors.CYAN}{cache_path}{Style.RESET_ALL}")  # Report durable schema migration.
+                    if cache_needs_schema_migration and not backup_has_recovery_rows:  # Report schema-only cache migration.
+                        print(f"{BackgroundColors.GREEN}[CACHE MIGRATION] Upgraded cache schema: {BackgroundColors.CYAN}{cache_path}{Style.RESET_ALL}")  # Report durable schema migration.
                     elif primary_df is not None:  # Report backup-only rows merged into a valid but older primary.
                         print(  # Report durable startup recovery.
                             f"{BackgroundColors.GREEN}[CACHE RECOVERY] Synchronized "
@@ -12769,7 +13006,7 @@ def iterate_feature_sets_sequentially(feature_source_arrays: dict, feature_names
             gc.collect()  # Reclaim released RFE arrays before generator completion.
 
 
-def build_classifier_result_entry(model_class, file, execution_mode_str, attack_types_combined, feature_set_name, classifier_type, model_name, data_source_label, experiment_id, experiment_mode, augmentation_ratio, n_features, n_samples_train, n_samples_test, metrics_tuple, subset_feature_names, hyperparams_map=None, hyperparameters_enabled=False, effective_hyperparameters=None, experiment_run=1):  # Build a standardized classifier result entry.
+def build_classifier_result_entry(model_class, file, execution_mode_str, attack_types_combined, feature_set_name, classifier_type, model_name, data_source_label, experiment_id, experiment_mode, augmentation_ratio, n_features, n_samples_train, n_samples_test, metrics_tuple, subset_feature_names, hyperparams_map=None, hyperparameters_enabled=False, effective_hyperparameters=None, experiment_run=1, phase_runtime_fields: Optional[dict] = None):  # Build a standardized classifier result entry.
     """
     Build a standardized result entry dictionary for classifier evaluation results.
 
@@ -12792,6 +13029,7 @@ def build_classifier_result_entry(model_class, file, execution_mode_str, attack_
     :param hyperparams_map: Dictionary mapping model names to hyperparameters
     :param effective_hyperparameters: Effective parameters read from the estimator evaluated for this row
     :param experiment_run: One-based repeated experiment run index
+    :param phase_runtime_fields: Phase-separated runtime fields in seconds
     :return: Dictionary containing the result entry
     """
 
@@ -12801,6 +13039,8 @@ def build_classifier_result_entry(model_class, file, execution_mode_str, attack_
         dataset_identity = resolve_canonical_dataset_identity(file, True) if execution_mode_str == "combined_files" else os.path.relpath(file)  # Resolve result-row dataset identity by execution mode.
         persisted_augmentation_ratio = resolve_persisted_augmentation_ratio(experiment_mode, augmentation_ratio)  # Resolve explicit baseline or augmented ratio metadata.
         serialized_hyperparameters = serialize_result_hyperparameters(model_name, hyperparams_map=hyperparams_map, effective_hyperparameters=effective_hyperparameters)  # Resolve effective estimator parameters for CSV persistence.
+        runtime_fields = {column: None for column in PHASE_RUNTIME_COLUMNS}  # Initialize all phase runtime fields for legacy-safe row creation.
+        runtime_fields.update(phase_runtime_fields or {})  # Overlay measured and artifact-backed runtimes when supplied.
         return {
             "model": model_class,  # Model class name for identification
             "dataset": dataset_identity,  # Store the resolved dataset identity for CSV exports
@@ -12825,7 +13065,12 @@ def build_classifier_result_entry(model_class, file, execution_mode_str, attack_
             "fpr": fpr,  # False positive rate as raw float
             "fnr": fnr,  # False negative rate as raw float
             "elapsed_time_s": int(round(elapsed)),  # Rounded elapsed time in seconds
-            "cv_method": f"StratifiedKFold(n_splits=10)",  # Cross-validation method description
+            "preprocessing_time_s": runtime_fields.get("preprocessing_time_s"),  # Preprocessing runtime in seconds.
+            "feature_selection_time_s": runtime_fields.get("feature_selection_time_s"),  # Feature-selection runtime in seconds.
+            "hyperparameter_optimization_time_s": runtime_fields.get("hyperparameter_optimization_time_s"),  # Hyperparameter optimization runtime in seconds.
+            "training_time_s": runtime_fields.get("training_time_s"),  # Model fit runtime in seconds.
+            "inference_time_s": runtime_fields.get("inference_time_s"),  # Model prediction runtime in seconds.
+            "cv_method": "StratifiedKFold(n_splits=10)",  # Cross-validation method description
             "top_features": json.dumps(subset_feature_names),  # JSON-serialized subset feature names
             "rfe_ranking": None,  # RFE ranking placeholder (not computed here)
             "hyperparameters": serialized_hyperparameters,  # JSON-serialized effective estimator hyperparameters
@@ -13820,7 +14065,7 @@ def schedule_cached_classifier_explainability(model_prototype, model_name, X_tes
     )  # Reuse the ordinary scheduler; unavailable training RAM selects the safe synchronous path.
 
 
-def run_individual_classifiers_for_feature_set(name, individual_models, X_train_df, y_train, X_test_df, y_test, X_test_subset, X_train_n_cols, file, execution_mode_str, attack_types_combined, data_source_label, experiment_id, experiment_mode, augmentation_ratio, hyperparams_map, scaler, label_encoder, transformer, input_feature_names, target_column, source_files, subset_feature_names, total_steps, current_combination, progress_bar, config=None, cache_dict=None, cache_ref_file=None, hyperparameters_enabled=False, train_row_metadata: Optional[pd.DataFrame] = None, test_row_metadata: Optional[pd.DataFrame] = None):
+def run_individual_classifiers_for_feature_set(name, individual_models, X_train_df, y_train, X_test_df, y_test, X_test_subset, X_train_n_cols, file, execution_mode_str, attack_types_combined, data_source_label, experiment_id, experiment_mode, augmentation_ratio, hyperparams_map, scaler, label_encoder, transformer, input_feature_names, target_column, source_files, subset_feature_names, total_steps, current_combination, progress_bar, config=None, cache_dict=None, cache_ref_file=None, hyperparameters_enabled=False, train_row_metadata: Optional[pd.DataFrame] = None, test_row_metadata: Optional[pd.DataFrame] = None, preprocessing_time_s: Optional[float] = None):
     """
     Evaluates all individual classifiers for a feature set sequentially, collects results, and runs explainability.
 
@@ -13853,6 +14098,7 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
     :param config: Configuration dictionary (uses global CONFIG if None)
     :param cache_dict: Dictionary of previously cached results keyed by resume cache key for skip-if-cached logic.
     :param cache_ref_file: File path used when deriving the cache file location for atomic cache writes.
+    :param preprocessing_time_s: Measured preprocessing seconds for this evaluation context.
     :return: Tuple (results_dict, next_current_combination) where results_dict maps (name, model_name) to result entries
     """
 
@@ -13942,6 +14188,7 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
 
             model_class = active_model.__class__.__name__  # Retrieve model class name for result entry
             effective_hyperparameters = serialize_effective_estimator_parameters(active_model)  # Serialize effective estimator parameters after fitting.
+            phase_runtime_fields = build_runtime_phase_fields(config, name, model_name, hyperparameters_enabled, preprocessing_time_s, training_ram_stats)  # Build phase runtime fields before immediate cache persistence.
             result_entry = build_classifier_result_entry(
                 model_class, file, execution_mode_str, attack_types_combined, name, "Individual",
                 model_name, data_source_label, experiment_id, experiment_mode, augmentation_ratio,
@@ -13950,6 +14197,7 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
                 hyperparameters_enabled=hyperparameters_enabled,
                 effective_hyperparameters=effective_hyperparameters,
                 experiment_run=get_current_experiment_run(config),  # Persist the active run on individual result rows.
+                phase_runtime_fields=phase_runtime_fields,  # Persist phase-separated runtime fields in the same atomic row.
             )  # Build standardized result entry for this individual classifier
             write_memory_phase_event("before_cache_persist", config=config, **phase_metadata, event_outcome="starting")  # Publish cache persistence start
             log_training_phase(name, model_name, "Cache persistence", "Started", hyperparameters_enabled, augmentation_ratio)  # Mark contextual result cache persistence separately from training.
@@ -14011,7 +14259,7 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
         raise
 
 
-def run_stacking_evaluation_for_feature_set(name, stacking_model, X_train_df, y_train, X_test_df, y_test, X_test_subset, X_train_n_cols, file, execution_mode_str, attack_types_combined, data_source_label, experiment_id, experiment_mode, augmentation_ratio, scaler, label_encoder, transformer, input_feature_names, target_column, source_files, subset_feature_names, total_steps, current_combination, progress_bar, config=None, cache_dict=None, cache_ref_file=None, hyperparameters_enabled=False):
+def run_stacking_evaluation_for_feature_set(name, stacking_model, X_train_df, y_train, X_test_df, y_test, X_test_subset, X_train_n_cols, file, execution_mode_str, attack_types_combined, data_source_label, experiment_id, experiment_mode, augmentation_ratio, scaler, label_encoder, transformer, input_feature_names, target_column, source_files, subset_feature_names, total_steps, current_combination, progress_bar, config=None, cache_dict=None, cache_ref_file=None, hyperparameters_enabled=False, preprocessing_time_s: Optional[float] = None):
     """
     Evaluates the stacking classifier for one feature set, exports the model, generates metric plots, and returns the result entry.
 
@@ -14043,6 +14291,7 @@ def run_stacking_evaluation_for_feature_set(name, stacking_model, X_train_df, y_
     :param config: Configuration dictionary (uses global CONFIG if None)
     :param cache_dict: Dictionary of previously cached results keyed by resume cache key for skip-if-cached logic.
     :param cache_ref_file: File path used when deriving the cache file location for atomic cache writes.
+    :param preprocessing_time_s: Measured preprocessing seconds for this evaluation context.
     :return: Tuple (stacking_result_entry, next_current_combination) where stacking_result_entry is the standardized result dict
     """
 
@@ -14126,6 +14375,7 @@ def run_stacking_evaluation_for_feature_set(name, stacking_model, X_train_df, y_
         except Exception:  # If metric plot generation fails
             pass  # Continue without plotting
 
+        phase_runtime_fields = build_runtime_phase_fields(config, name, "StackingClassifier", hyperparameters_enabled, preprocessing_time_s, stacking_ram_stats)  # Build phase runtime fields before immediate cache persistence.
         stacking_result_entry = build_classifier_result_entry(
             active_stacking_model.__class__.__name__, file, execution_mode_str, attack_types_combined, name, "Stacking",
             "StackingClassifier", data_source_label, experiment_id, experiment_mode, augmentation_ratio,
@@ -14133,6 +14383,7 @@ def run_stacking_evaluation_for_feature_set(name, stacking_model, X_train_df, y_
             hyperparameters_enabled=hyperparameters_enabled,
             effective_hyperparameters=serialize_effective_estimator_parameters(active_stacking_model),
             experiment_run=get_current_experiment_run(config),  # Persist the active run on stacking result rows.
+            phase_runtime_fields=phase_runtime_fields,  # Persist phase-separated runtime fields in the same atomic row.
         )  # Build standardized result entry for the stacking classifier
 
         write_memory_phase_event("before_cache_persist", config=config, **phase_metadata, event_outcome="starting")  # Publish stacking cache persistence start
@@ -14409,6 +14660,7 @@ def evaluate_single_feature_set(
     hyperparameters_enabled=False,
     train_row_metadata: Optional[pd.DataFrame] = None,
     test_row_metadata: Optional[pd.DataFrame] = None,
+    preprocessing_time_s: Optional[float] = None,
 ):
     """
     Evaluate all individual classifiers and the stacking model on one non-empty feature subset.
@@ -14442,6 +14694,7 @@ def evaluate_single_feature_set(
     :param config: Optional configuration dictionary; falls back to global CONFIG when None.
     :param cache_dict: Dictionary of previously cached results keyed by resume cache key for skip-if-cached logic.
     :param cache_ref_file: File path used when deriving the cache file location for atomic cache writes.
+    :param preprocessing_time_s: Measured preprocessing seconds for this evaluation context.
     :return: Tuple of (individual_results, stacking_result_entry, current_combination) containing per-model result dicts and updated combination counter.
     """
 
@@ -14458,7 +14711,7 @@ def evaluate_single_feature_set(
         X_test_subset, X_train_subset.shape[1], file, execution_mode_str, attack_types_combined,
         data_source_label, experiment_id, experiment_mode, augmentation_ratio,
         hyperparams_map, scaler, label_encoder, transformer, input_feature_names, target_column, source_files, subset_feature_names, total_steps, current_combination, progress_bar, config=config,
-        cache_dict=cache_dict, cache_ref_file=cache_ref_file, hyperparameters_enabled=hyperparameters_enabled, train_row_metadata=train_row_metadata, test_row_metadata=test_row_metadata,
+        cache_dict=cache_dict, cache_ref_file=cache_ref_file, hyperparameters_enabled=hyperparameters_enabled, train_row_metadata=train_row_metadata, test_row_metadata=test_row_metadata, preprocessing_time_s=preprocessing_time_s,
     )  # Evaluate all individual classifiers and collect their result entries with resume support
 
     stacking_result_entry = None
@@ -14468,7 +14721,7 @@ def evaluate_single_feature_set(
             X_test_subset, X_train_subset.shape[1], file, execution_mode_str, attack_types_combined,
             data_source_label, experiment_id, experiment_mode, augmentation_ratio,
             scaler, label_encoder, transformer, input_feature_names, target_column, source_files, subset_feature_names, total_steps, current_combination, progress_bar, config=config,
-            cache_dict=cache_dict, cache_ref_file=cache_ref_file, hyperparameters_enabled=hyperparameters_enabled,
+            cache_dict=cache_dict, cache_ref_file=cache_ref_file, hyperparameters_enabled=hyperparameters_enabled, preprocessing_time_s=preprocessing_time_s,
         )  # Evaluate stacking classifier, export model artifacts, generate metric plots, and collect result entry with resume support
 
     return individual_results, stacking_result_entry, current_combination  # Return per-model results and updated combination counter to the caller
@@ -14678,6 +14931,7 @@ def evaluate_on_dataset(
                         if artifact_bundle is None:
                             raise RuntimeError(f"Original-only artifact recovery failed for {name} - {model_name}: {rejection_reason}")
                     loaded_model = artifact_bundle["model"]
+                    preprocessing_started_at = time.perf_counter()  # Start augmented preprocessing timer for scaling and optional PCA transformation.
                     X_augmented_scaled = np.asarray(artifact_bundle["scaler"].transform(X_augmented_original_schema))
                     if artifact_bundle["transformer"] is not None:
                         X_augmented_model = np.asarray(artifact_bundle["transformer"].transform(X_augmented_scaled))
@@ -14686,6 +14940,7 @@ def evaluate_on_dataset(
                         X_augmented_model = X_augmented_scaled[:, model_feature_indices]
                     y_augmented = np.asarray(artifact_bundle["label_encoder"].transform(y_augmented_raw), dtype=np.int64)
                     X_augmented_df = pd.DataFrame(X_augmented_model, columns=subset_feature_names)
+                    preprocessing_time_s = time.perf_counter() - preprocessing_started_at  # Stop augmented preprocessing timer before model prediction.
                     training_ram_stats = {}
                     if model_name == "StackingClassifier":
                         metrics = evaluate_stacking_classifier(loaded_model, None, None, X_augmented_df, y_augmented, config=config, training_ram_stats=training_ram_stats, fit_model=False, notification_context=combination_header, feature_set=name, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio, local_combination_index=current_combination, local_combination_total=total_steps)  # Report persisted stacking evaluation with authoritative combination metadata.
@@ -14693,7 +14948,8 @@ def evaluate_on_dataset(
                     else:
                         metrics = evaluate_individual_classifier(loaded_model, model_name, None, None, X_augmented_model, y_augmented, file, artifact_bundle["scaler"], subset_feature_names, artifact_feature_set, config=config, training_ram_stats=training_ram_stats, fit_model=False, notification_context=combination_header, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio, local_combination_index=current_combination, local_combination_total=total_steps)  # Report persisted individual evaluation with authoritative combination metadata.
                         classifier_type = "Individual"
-                    result_entry = build_classifier_result_entry(loaded_model.__class__.__name__, file, execution_mode_str, attack_types_combined, name, classifier_type, model_name, data_source_label, experiment_id, experiment_mode, augmentation_ratio, len(subset_feature_names), original_train_count, len(y_augmented), metrics, subset_feature_names, hyperparams_map=hyperparams_map, hyperparameters_enabled=hyperparameters_enabled, effective_hyperparameters=serialize_effective_estimator_parameters(loaded_model), experiment_run=get_current_experiment_run(config))  # Persist the active run on augmented result rows.
+                    phase_runtime_fields = build_runtime_phase_fields(config, name, model_name, bool(hyperparameters_enabled), preprocessing_time_s, training_ram_stats)  # Build phase runtime fields before immediate cache persistence.
+                    result_entry = build_classifier_result_entry(loaded_model.__class__.__name__, file, execution_mode_str, attack_types_combined, name, classifier_type, model_name, data_source_label, experiment_id, experiment_mode, augmentation_ratio, len(subset_feature_names), original_train_count, len(y_augmented), metrics, subset_feature_names, hyperparams_map=hyperparams_map, hyperparameters_enabled=hyperparameters_enabled, effective_hyperparameters=serialize_effective_estimator_parameters(loaded_model), experiment_run=get_current_experiment_run(config), phase_runtime_fields=phase_runtime_fields)  # Persist the active run on augmented result rows.
                     persist_cache_result_entry(effective_cache_ref, result_entry, cache_dict, config=config)
                     notify_new_best_result_if_applicable(result_entry)  # Notify only after the new augmented result is durably cached.
                     all_results[(name, model_name)] = result_entry
@@ -14709,7 +14965,9 @@ def evaluate_on_dataset(
             gc.collect()
             return all_results
 
+        preprocessing_started_at = time.perf_counter()  # Start preprocessing timer for split, encoding, and scaling.
         data_splits = prepare_evaluation_data_splits(df, config=config, include_lstm_metadata=True, lstm_source_file=file)  # Prepare original-only training and testing data splits with LSTM provenance.
+        preprocessing_time_s = time.perf_counter() - preprocessing_started_at  # Stop preprocessing timer before feature-selection matrices are materialized.
 
         if data_splits is None:  # If data preparation failed (single-class target)
             return {}  # Return empty dictionary
@@ -14748,6 +15006,7 @@ def evaluate_on_dataset(
                 data_source_label, experiment_id, experiment_mode, augmentation_ratio,
                 hyperparams_map, scaler, label_encoder, transformer, pca_input_feature_names, target_column_name, pca_source_files, total_steps, current_combination, progress_bar, stacking_enabled=stacking_enabled, config=config,
                 cache_dict=cache_dict, cache_ref_file=effective_cache_ref, hyperparameters_enabled=hyperparameters_enabled, train_row_metadata=train_row_metadata, test_row_metadata=test_row_metadata,
+                preprocessing_time_s=preprocessing_time_s,
             )  # Evaluate all individual classifiers and stacking model on this non-empty feature subset with resume support
             write_memory_phase_event("after_feature_set_evaluation", config=config, **feature_phase_metadata, event_outcome="completed")  # Publish feature-set evaluation completion
 
@@ -16840,7 +17099,9 @@ def create_feature_process_shared_resources(original_df: pd.DataFrame, file: str
     :return: Small shared-resource descriptor mapping.
     """
 
+    preprocessing_started_at = time.perf_counter()  # Start preprocessing timer for split, encoding, and scaling.
     data_splits = prepare_evaluation_data_splits(original_df, config=config, include_lstm_metadata=True, lstm_source_file=file)  # Reuse the unchanged scaling, split, labels, seeds, and LSTM row provenance
+    preprocessing_time_s = time.perf_counter() - preprocessing_started_at  # Stop preprocessing timer before feature-process matrix persistence.
     if data_splits is None:  # Reject an unusable single-class dataset before child startup
         raise ValueError("Persistent feature-set evaluation requires at least two target classes")  # Surface the unchanged classification requirement
     X_train_scaled, X_test_scaled, y_train, y_test, scaler, label_encoder, train_row_metadata, test_row_metadata = data_splits  # Unpack the unchanged original-only preprocessing outputs
@@ -16854,6 +17115,7 @@ def create_feature_process_shared_resources(original_df: pd.DataFrame, file: str
         preprocessing_path = os.path.join(temp_dir, "preprocessing.joblib")  # Resolve the small fitted preprocessing bundle path
         write_stacking_pca_artifact_atomically({"scaler": scaler, "label_encoder": label_encoder}, preprocessing_path, "joblib")  # Persist fitted preprocessing without any full matrices
         descriptors["preprocessing_path"] = preprocessing_path  # Add only the small bundle path to the cross-process payload
+        descriptors["preprocessing_time_s"] = preprocessing_time_s  # Store measured preprocessing seconds for worker result rows.
         descriptors["temp_dir"] = temp_dir  # Record coordinator ownership for post-join cleanup
     except Exception:  # Remove only the partial coordinator-owned resources before propagating
         cleanup_feature_process_directory(temp_dir)  # Delete incomplete shared backing files
@@ -17302,7 +17564,8 @@ def evaluate_feature_process_original_task(task: dict, process_payload: dict, re
     if cancellation_checker():
         raise RuntimeSkipRequested(f"Runtime skip requested before persistence for active {task['classifier_name']}")
     log_feature_process_combination(task, status_state, "Prediction and metrics completed")  # Announce completion of existing prediction and metric phases
-    result_entry = build_classifier_result_entry(active_model.__class__.__name__, process_payload["file"], process_payload["execution_mode"], process_payload["attack_types_combined"], task["feature_set"], "Individual", task["classifier_name"], task["data_source_label"], task["experiment_id"], task["experiment_mode"], None, task["expected_n_features"], len(model_y_train), len(model_y_test), metrics, task["expected_feature_names"], hyperparams_map=process_payload["optimized_params"] if task["hyperparameters_enabled"] else {}, hyperparameters_enabled=task["hyperparameters_enabled"], effective_hyperparameters=serialize_effective_estimator_parameters(active_model), experiment_run=task["experiment_run"])  # Build the run-scoped cache and export result payload
+    phase_runtime_fields = build_runtime_phase_fields(process_payload["config"], task["feature_set"], task["classifier_name"], task["hyperparameters_enabled"], process_payload.get("preprocessing_time_s"), training_ram_stats)  # Build phase runtime fields before immediate cache persistence.
+    result_entry = build_classifier_result_entry(active_model.__class__.__name__, process_payload["file"], process_payload["execution_mode"], process_payload["attack_types_combined"], task["feature_set"], "Individual", task["classifier_name"], task["data_source_label"], task["experiment_id"], task["experiment_mode"], None, task["expected_n_features"], len(model_y_train), len(model_y_test), metrics, task["expected_feature_names"], hyperparams_map=process_payload["optimized_params"] if task["hyperparameters_enabled"] else {}, hyperparameters_enabled=task["hyperparameters_enabled"], effective_hyperparameters=serialize_effective_estimator_parameters(active_model), experiment_run=task["experiment_run"], phase_runtime_fields=phase_runtime_fields)  # Build the run-scoped cache and export result payload
     log_feature_process_combination(task, status_state, "Persistence started")  # Announce the atomic result transaction
     persist_cache_result_entry(process_payload["cache_ref_file"], result_entry, cache_dict, config=process_payload["config"])  # Persist and verify this completed result immediately through the process-safe cache transaction
     export_model_and_scaler(active_model, resources["scaler"], dataset_name, task["classifier_name"], feature_set=artifact_feature_set, dataset_csv_path=process_payload["file"], config=process_payload["config"], artifact_context=artifact_context, label_encoder=resources["label_encoder"], transformer=resources["transformer"])  # Persist the fitted model and preprocessing through the existing process-safe model transaction
@@ -17339,11 +17602,13 @@ def evaluate_feature_process_augmented_task(task: dict, process_payload: dict, r
     y_predicted = np.empty(len(y_augmented), dtype=np.int64)  # Retain only compact predictions while feature matrices stay batch-bounded
     model_feature_indices = None if task["feature_set"] in {"Full Features", "PCA Components"} else [artifact_bundle["input_feature_names"].index(feature) for feature in artifact_bundle["model_feature_names"]]  # Resolve selected columns once outside the bounded loop
     log_feature_process_combination(task, status_state, f"Bounded transformation and prediction started (Batch Rows={prediction_rows})")  # Announce the memory-bounded inference phase
-    prediction_started_at = time.time()  # Measure the complete bounded transform and prediction phase
+    preprocessing_seconds = 0.0  # Track bounded augmented scaling and feature transformation time.
+    prediction_seconds = 0.0  # Track bounded augmented model prediction time.
     for start in range(0, len(y_augmented), prediction_rows):  # Transform and predict one bounded row batch at a time
         if feature_process_runtime_skip_requested(task, process_payload):
             raise RuntimeSkipRequested(f"Runtime skip requested during augmented prediction for active {task['classifier_name']}")
         end = min(start + prediction_rows, len(y_augmented))  # Resolve the current bounded batch end
+        preprocessing_started_at = time.perf_counter()  # Start bounded augmented preprocessing timer for this batch.
         scaled_batch = np.asarray(artifact_bundle["scaler"].transform(ratio_data["X_raw"][start:end]))  # Scale only the current raw memmap slice
         if artifact_bundle["transformer"] is not None:  # Apply the persisted PCA transformer to the current batch
             model_batch = np.asarray(artifact_bundle["transformer"].transform(scaled_batch))  # Preserve exact PCA inference semantics without a complete dense matrix
@@ -17351,11 +17616,13 @@ def evaluate_feature_process_augmented_task(task: dict, process_payload: dict, r
             model_batch = scaled_batch  # Avoid an identical all-column batch copy
         else:  # Select the persisted feature order within the current batch
             model_batch = scaled_batch[:, model_feature_indices]  # Materialize only selected columns for the current bounded batch
+        preprocessing_seconds += time.perf_counter() - preprocessing_started_at  # Accumulate bounded augmented preprocessing time.
+        prediction_started_at = time.perf_counter()  # Start bounded augmented prediction timer for this batch.
         y_predicted[start:end] = np.asarray(loaded_model.predict(model_batch), dtype=np.int64)  # Persist compact predictions and release batch features immediately
+        prediction_seconds += time.perf_counter() - prediction_started_at  # Accumulate bounded augmented prediction time.
         del scaled_batch, model_batch  # Release current batch matrices before the next transformation
     if feature_process_runtime_skip_requested(task, process_payload):
         raise RuntimeSkipRequested(f"Runtime skip requested before augmented persistence for active {task['classifier_name']}")
-    prediction_seconds = time.time() - prediction_started_at  # Preserve inference duration for the established execution-time metric
     log_feature_process_combination(task, status_state, "Bounded transformation and prediction completed")  # Confirm complete bounded inference before metrics
     training_ram_stats = {}  # Hold the established loaded-model evaluation RAM record shape
     log_feature_process_combination(task, status_state, "Metrics started")  # Announce persisted-model metrics after bounded prediction
@@ -17364,7 +17631,8 @@ def evaluate_feature_process_augmented_task(task: dict, process_payload: dict, r
     if cancellation_checker():
         raise RuntimeSkipRequested(f"Runtime skip requested before augmented persistence for active {task['classifier_name']}")
     log_feature_process_combination(task, status_state, "Prediction and metrics completed")  # Confirm existing loaded-model phases completed
-    result_entry = build_classifier_result_entry(loaded_model.__class__.__name__, process_payload["file"], process_payload["execution_mode"], process_payload["attack_types_combined"], task["feature_set"], "Individual", task["classifier_name"], task["data_source_label"], task["experiment_id"], task["experiment_mode"], task["augmentation_ratio"], task["expected_n_features"], task["expected_n_samples_train"], len(y_augmented), metrics, task["expected_feature_names"], hyperparams_map=process_payload["optimized_params"] if task["hyperparameters_enabled"] else {}, hyperparameters_enabled=task["hyperparameters_enabled"], effective_hyperparameters=serialize_effective_estimator_parameters(loaded_model), experiment_run=task["experiment_run"])  # Build the run-scoped augmented-testing result payload
+    phase_runtime_fields = build_runtime_phase_fields(process_payload["config"], task["feature_set"], task["classifier_name"], task["hyperparameters_enabled"], preprocessing_seconds, training_ram_stats)  # Build phase runtime fields before immediate cache persistence.
+    result_entry = build_classifier_result_entry(loaded_model.__class__.__name__, process_payload["file"], process_payload["execution_mode"], process_payload["attack_types_combined"], task["feature_set"], "Individual", task["classifier_name"], task["data_source_label"], task["experiment_id"], task["experiment_mode"], task["augmentation_ratio"], task["expected_n_features"], task["expected_n_samples_train"], len(y_augmented), metrics, task["expected_feature_names"], hyperparams_map=process_payload["optimized_params"] if task["hyperparameters_enabled"] else {}, hyperparameters_enabled=task["hyperparameters_enabled"], effective_hyperparameters=serialize_effective_estimator_parameters(loaded_model), experiment_run=task["experiment_run"], phase_runtime_fields=phase_runtime_fields)  # Build the run-scoped augmented-testing result payload
     log_feature_process_combination(task, status_state, "Persistence started")  # Announce the atomic augmented result transaction
     persist_cache_result_entry(process_payload["cache_ref_file"], result_entry, cache_dict, config=process_payload["config"])  # Persist and verify this completed result immediately
     log_feature_process_combination(task, status_state, "Persistence completed")  # Confirm augmented result durability
@@ -18368,6 +18636,7 @@ def run_persistent_feature_set_grid(original_df: pd.DataFrame, file: str, source
         if pending_augmented_exists:  # Allocate shared ratio backing only when at least one uncached augmented task requires it
             augmentation_shared_directory = create_feature_process_temp_directory(file, config=config)  # Create one coordinator-owned directory for lazily published ratio pairs
         process_payload["shared_resources"] = shared_resources  # Pass only paths, shapes, dtypes, and preprocessing path to children
+        process_payload["preprocessing_time_s"] = shared_resources.get("preprocessing_time_s") if isinstance(shared_resources, dict) else None  # Pass measured preprocessing seconds to worker result rows.
         process_payload["augmentation_shared_directory"] = augmentation_shared_directory  # Pass only the coordinator-owned lazy ratio directory path to children
         process_payload["pca_cache_context"] = pca_cache_context  # Pass only small PCA provenance metadata
         del original_df  # Release the coordinator's complete original DataFrame before spawned workers begin
