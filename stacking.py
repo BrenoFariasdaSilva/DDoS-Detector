@@ -157,6 +157,9 @@ from lstm import LSTMClassifier  # Import the standalone sklearn-compatible supe
 from training_progress import DEFAULT_TRAINING_PROGRESS_INTERVAL_MINUTES, TrainingProgress, XGBoostProgressCallback, format_training_combination_fields, format_training_combination_prefix, format_training_feature_set, interactive_terminal_attached  # Import reusable training progress infrastructure.
 from utils.stacking.shap import aggregate_mean_shap_importance, build_kernel_explainer, build_shap_progress_description, compute_shap_values_with_context, create_shap_progress_wrapper, describe_raw_shap_result, get_shap_prediction_function, normalize_shap_output, resolve_model_class_count, resolve_shap_progress_target, sample_shap_test_data, select_shap_explainer, supports_predict_proba  # Re-export stateless SHAP utilities.
 from utils.stacking.planning import FEATURE_SET_WORKER_KEYS, build_evaluation_plan, build_feature_process_metadata, resolve_feature_set_worker_key, retain_stacking_classifier_plan  # Re-export pure evaluation planning utilities.
+from utils.stacking.run_metrics import (  # Generate derived cross-run cache statistics outside stacking.py.
+    write_run_metrics_summary,  # Import the utility-owned summary writer.
+)
 from utils.execution_identity import assign_execution_id, ensure_execution_id  # For one top-level execution identity shared with workers
 from utils.lstm_sequences import LSTMSequenceMetadataError, build_lstm_sequence_windows  # Build verified partition-local LSTM windows.
 from utils.oom_restart import AUTO_RESTART_ATTEMPT_ENV, build_exact_oom_skip_rule, capture_oom_baseline, oom_kill_delta, recover_launch_command, schedule_detached_restart, transform_command_with_skip_rule  # Import focused OOM restart planning utilities.
@@ -10633,6 +10636,15 @@ def remove_cache_file(csv_path, config=None):
                 print(f"{BackgroundColors.GREEN}Run-specific cache preserved: {BackgroundColors.CYAN}{cache_path}{Style.RESET_ALL}")  # Report that result storage remains available.
             else:  # Preserve the established verbose cache-miss behavior.
                 verbose_output(f"{BackgroundColors.YELLOW}No cache file to preserve at: {BackgroundColors.CYAN}{cache_path}{Style.RESET_ALL}", config=config)  # Report that no primary or backup existed.
+        run_metrics_result = write_run_metrics_summary(  # Rebuild derived cross-run summary from authoritative cache artifacts.
+            cache_path,  # Pass the active run-specific cache path.
+            config,  # Pass the active runtime configuration.
+            build_cache_identity_from_row,  # Reuse production cache identity semantics.
+            read_validated_cache_file,  # Reuse production cache validation.
+            merge_valid_cache_snapshots,  # Reuse production in-memory cache merge semantics.
+            cache_file_lock,  # Reuse production cache synchronization.
+        )
+        print(f"{BackgroundColors.GREEN}Run metrics summary refreshed: {BackgroundColors.CYAN}{run_metrics_result['path']}{Style.RESET_ALL}")  # Report derived summary path.
     except Exception as e:
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
