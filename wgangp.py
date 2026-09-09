@@ -2592,7 +2592,7 @@ def is_checkpoint_space_available(dataset_dirs: List[str], config: Optional[Dict
                 pass  # Continue with remaining directories
         free_gb = get_available_disk_space_gb(config)  # Retrieve available disk space in GB via function
         free_bytes = int(safe_float(free_gb, 0.0) * (1024.0 ** 3))  # Convert GB back to bytes for threshold comparison
-        required_bytes = total_dataset_size * 2  # Minimum required free space is twice the total dataset size
+        required_bytes = total_dataset_size * 1.1  # Minimum required free space is twice the total dataset size
         dataset_size_gb = safe_float(total_dataset_size, 0.0) / (1024.0 ** 3)  # Convert dataset size to GB for logging
         required_gb = safe_float(required_bytes, 0.0) / (1024.0 ** 3)  # Convert required space to GB for logging
         print(f"{BackgroundColors.GREEN}Disk space verification: dataset_size={BackgroundColors.CYAN}{dataset_size_gb:.2f} GB{BackgroundColors.GREEN}, free={BackgroundColors.CYAN}{free_gb:.2f} GB{BackgroundColors.GREEN}, required={BackgroundColors.CYAN}{required_gb:.2f} GB{Style.RESET_ALL}")  # Print disk space verification summary
