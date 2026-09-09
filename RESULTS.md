@@ -1,256 +1,231 @@
-# Results
+<div align="center">
 
-This section presents the comprehensive outputs and achievements of each module in the DDoS detection framework. All results are automatically exported to structured CSV files with hardware metadata for reproducibility. The results shown below are from experiments conducted on the CICDDoS2019 dataset (DrDoS_DNS subset with 4.9M samples and 76 features).
+# [DDoS-Detector - Results.](https://github.com/BrenoFariasdaSilva/DDoS-Detector)
 
-## Data Preparation and Exploration
+</div>
 
-**Dataset Converter** (`dataset_converter.py`)
-- Successfully converts datasets between ARFF, CSV, Parquet, and TXT formats
-- Maintains directory structure hierarchy during batch conversions
-- Performs automatic structural cleaning (whitespace normalization, domain-list corrections)
-- Outputs saved to mirrored `./Output/` directory structure preserving relative paths
-- Supports multiple datasets simultaneously with progress tracking
+This document records verified empirical results for the current repository documentation update. Major evaluation results use only the CICDDoS2019 `01-12` combined-files multi-class Run 1 stacking cache. Single-file, binary, and one-vs-rest attack-class results are not used as headline results.
 
-**Dataset Descriptor** (`dataset_descriptor.py`)
-- Generates comprehensive metadata reports saved as `Dataset_Description/Dataset_Descriptor.csv` per dataset
-- **CICDDoS2019 Dataset Analysis Results:**
-  - **DrDoS_DNS**: 4,912,019 samples, 76 features (45 float64, 25 int64, 6 metadata), 99.93% DrDoS_DNS attacks, 0.07% benign traffic
-  - **DrDoS_LDAP**: 2,142,892 samples, 74 features, 99.93% DrDoS_LDAP attacks, 0.07% benign traffic
-  - **DrDoS_MSSQL**: 4,398,032 samples, 76 features, 99.95% DrDoS_MSSQL attacks, 0.05% benign traffic
-  - **DrDoS_NTP**: 1,209,961 samples, 76 features, 98.82% DrDoS_NTP attacks, 1.18% benign traffic
-- Provides detailed statistics: sample counts, feature counts, feature types (numeric/categorical), missing value analysis
-- Detects and reports label column with complete class distribution breakdowns
-- Produces 2D t-SNE visualizations for data separability analysis saved in `Data_Separability/` directories
-- Implements class-aware downsampling (default 2000 samples, minimum 50 per class) for efficient visualization
-- **Cross-dataset compatibility analysis** (`Cross_Dataset_Descriptor.csv`):
-  - CICDDoS2019 vs CIC-IDS-2017: **64 common features** enabling cross-dataset model transfer
-  - CICDDoS2019 has 19 unique features (e.g., `act_data_pkt_fwd`, `inbound`, `init_win_bytes_forward`)
-  - CIC-IDS-2017 has 9 unique features (e.g., `avg packet size`, `fwd act data packets`)
-  - High feature overlap (77% compatibility) allows GA-selected features to generalize across datasets
+## Evaluation Context
 
-## Feature Extraction Results
+Authoritative stacking result source for this update:
 
-**Genetic Algorithm** (`genetic_algorithm.py`)
-- Executes configurable population sweeps across multiple runs for statistical robustness
-- **Current Results (DrDoS_DNS, Single Run):**
-  - Population size: 20, Generations: 100, Training samples: 77,611 (80/20 split)
-  - **Performance:** F1-score: 1.0000, Accuracy: 1.0000, Precision: 1.0000, Recall: 1.0000
-  - **Feature Selection:** 36 features selected from 76 original (52.6% retention, 47.4% reduction)
-  - **Selected Features Include:** Source/Destination Port, Flow Duration, Packet Length Statistics, IAT metrics, Flag Counts, Header Lengths
-  - **False Positive Rate:** 0.0000, **False Negative Rate:** 0.0000
-  - **Execution Time:** 30.63 seconds
-- Produces `Feature_Analysis/Genetic_Algorithm_Results.csv` with consolidated metrics per run
-- Multi-objective fitness evaluation: accuracy, precision, recall, F1-score, FPR, FNR
-- Feature rankings indicate elimination order (JSON format for reproducibility)
-- Generates feature importance boxplots showing selection frequency across runs
-- **Note:** Multiple runs planned for statistical validation; currently one run completed demonstrating perfect classification
+```text
+Cache-Datasets_CICDDoS2019_01_12-Stacking_Classifiers_Results_Run_1.csv
+```
 
-**Recursive Feature Elimination** (`rfe.py`)
-- **Deterministic method** producing consistent results across executions with fixed random seeds (no multiple runs needed)
-- **Current Results (DrDoS_DNS):**
-  - **Performance:** F1-score: 1.0000, Accuracy: 1.0000, Precision: 1.0000, Recall: 1.0000
-  - **Feature Selection:** 10 features selected from 76 original (13.2% retention, 86.8% reduction)
-  - **Top 10 Features:** Source Port, Destination Port, Protocol, Total Backward Packets, Flow Bytes/s, Bwd Header Length, Bwd Packets/s, Subflow Bwd Packets, Init_Win_bytes_forward, Inbound
-  - **False Positive Rate:** 0.0045, **False Negative Rate:** 0.0000
-  - **Execution Time:** 46.49 seconds
-- Produces `Feature_Analysis/RFE_Run_Results.csv` with per-run evaluations
-- Reports optimal feature subsets selected via RandomForest-based RFE
-- Includes complete feature rankings (61-level ranking from 1 to 61) indicating elimination order
-- Achieves **most aggressive dimensionality reduction** (86.8%) while maintaining perfect recall and near-perfect precision
-- Execution time tracking with hardware specifications for reproducibility
+Verified Run 1 schema:
 
-**Principal Component Analysis** (`pca.py`)
-- **Deterministic method** producing consistent results with fixed transformations (no multiple runs needed)
-- **Current Results (DrDoS_DNS, Random Forest 100 trees, 10-Fold Stratified CV):**
-  - **8 components:** 63.3% variance explained, F1: 1.0000 (CV & test), Training: 721.91s
-  - **16 components:** 81.8% variance explained, F1: 1.0000 (CV & test), Training: 1620.83s
-  - **24 components:** 92.8% variance explained, F1: 1.0000 (CV & test), Training: 1789.75s
-  - **32 components:** 98.6% variance explained, F1: 1.0000 (CV & test), Training: 2124.98s
-  - **48 components:** 99.9% variance explained, F1: 1.0000 (CV & test), Training: 2849.85s
-- Generates `Feature_Analysis/PCA_Results.csv` with component sweep results
-- Tests multiple component counts with systematic variance capture analysis
-- Performs 10-fold Stratified Cross-Validation on training data plus final test set evaluation
-- Reports for each configuration:
-  - Training and test metrics: accuracy, precision, recall, F1-score, test FPR, test FNR
-  - Explained variance ratio (cumulative variance captured by selected components)
-  - Cross-validation scores (mean across folds, consistent 1.0000 for all configurations)
-- Saves PCA objects to disk for reproducible transformations
-- **Key Finding:** Even 8 components (capturing only 63% variance) achieve perfect F1-score, demonstrating high linear separability of DrDoS attacks
-- Best configuration: 32 components balance variance capture (98.6%) with computational efficiency (2124.98s)
+```text
+experiment_id, experiment_run, experiment_mode, execution_mode, data_source,
+dataset, attack_types_combined, augmentation_ratio, feature_selection_enabled,
+hyperparameters_enabled, data_augmentation_enabled, hyperparameter_mode,
+feature_set, classifier_type, model_name, model, n_features, n_samples_train,
+n_samples_test, accuracy, precision, recall, f1_score, fpr, fnr,
+elapsed_time_s, cv_method, rfe_ranking, hyperparameters, features_list
+```
 
-**Feature Selection Method Comparison (DrDoS_DNS Dataset):**
+Run 1 scope:
 
-| Method                | Features Selected | Retention % | F1-Score | Test FPR | Test FNR | Execution Time | Characteristics                               |
-| --------------------- | ----------------- | ----------- | -------- | -------- | -------- | -------------- | --------------------------------------------- |
-| **Genetic Algorithm** | 36 of 76          | 47.4%       | 1.0000   | 0.0000   | 0.0000   | 30.63s         | Multi-objective optimization, best balance    |
-| **RFE**               | 10 of 76          | 13.2%       | 1.0000   | 0.0045   | 0.0000   | 46.49s         | Most aggressive reduction, deterministic      |
-| **PCA (8 comp)**      | 8 components      | 10.5%       | 1.0000   | 0.0149   | 0.0000   | 721.91s        | Linear transformation, deterministic          |
-| **PCA (32 comp)**     | 32 components     | 42.1%       | 1.0000   | 0.0089   | 0.0000   | 2124.98s       | High variance capture, perfect classification |
+| Field | Value |
+| --- | --- |
+| Rows | 99 |
+| Dataset identity | `Datasets/CICDDoS2019/01-12/` |
+| Execution mode | `combined_files` |
+| Experiment mode | `original_only` |
+| Data source | `Original Combined Files` |
+| Augmentation ratio | `0.0` |
+| Class labels | BENIGN, DrDoS_DNS, DrDoS_LDAP, DrDoS_MSSQL, DrDoS_NTP, DrDoS_NetBIOS, DrDoS_SNMP, DrDoS_SSDP, DrDoS_UDP, Syn, TFTP, UDP-lag, WebDDoS |
+| Train samples | 38,959,900 for most rows; 38,959,823 for LSTM rows |
+| Test samples | 9,739,976 for most rows; 9,739,899 for LSTM rows |
+| Stacking meta-classifier rows in this CSV | None; all rows have `classifier_type = Individual` |
 
-- **All methods achieve perfect recall (FNR = 0.0000)**, ensuring no attacks are missed
-- **GA achieves perfect precision (FPR = 0.0000)** with 36 features, eliminating false alarms
-- **RFE achieves most compact representation** (10 features) with minimal FPR (0.0045)
-- **PCA demonstrates strong linear separability** with only 8 components sufficient for perfect F1-score
+## Feature-Selection Results
 
-## Model Optimization Results
+Feature-analysis files used:
 
-**Hyperparameter Optimization** (`hyperparameters_optimization.py`)
-- Produces `Classifiers_Hyperparameters/<dataset>_Hyperparameter_Optimization_Results.csv`
-- Comprehensive results for nine classifiers:
-  - **Random Forest**: Optimizes n_estimators (50-200), max_depth (None, 10-30), min_samples_split (2-10), min_samples_leaf (1-4), max_features
-  - **SVM/ThunderSVM**: Optimizes C (0.1-100), kernel (linear/rbf/poly), gamma (scale/auto/0.001-1). Auto-detects GPU availability
-  - **XGBoost**: Optimizes n_estimators (50-200), max_depth (3-10), learning_rate (0.01-0.3), subsample (0.6-1.0), colsample_bytree (0.6-1.0)
-  - **Logistic Regression**: Optimizes C (0.001-100), penalty (l1/l2/elasticnet/None), solver (lbfgs/liblinear/saga), l1_ratio
-  - **KNN**: Optimizes n_neighbors (3-11), weights (uniform/distance), metric (euclidean/manhattan/minkowski), p (1-2)
-  - **Nearest Centroid**: Optimizes metric (euclidean/manhattan), shrink_threshold (None, 0.1-2.0)
-  - **Gradient Boosting**: Optimizes n_estimators (50-200), learning_rate (0.01-0.3), max_depth (3-7), min_samples_split, min_samples_leaf, subsample
-  - **LightGBM**: Optimizes n_estimators (50-200), max_depth (3-10/-1), learning_rate (0.01-0.3), num_leaves (15-63), min_child_samples (10-30), subsample
-  - **MLP Neural Network**: Optimizes hidden_layer_sizes (50-100 neurons), activation (relu/tanh/logistic), solver (adam/sgd), alpha (0.0001-0.01), learning_rate (constant/adaptive)
-- Comprehensive metrics per model (all formatted to 4 decimal places):
-  - F1-score (weighted average), accuracy, precision, recall
-  - Matthews Correlation Coefficient (MCC), Cohen's Kappa
-  - Confusion-based rates: FPR, FNR, TPR, TNR (averaged across classes)
-  - ROC-AUC score (when predict_proba available)
-  - Execution time per combination (2 decimal places for seconds)
-- Progress caching system saves intermediate results to `Cache/Hyperparameter_Optimization/`
-  - Enables resumable searches after interruption
-  - Skips previously evaluated combinations automatically
-  - Hardware specifications stored per cached result
-  - All cached metrics formatted consistently (4 decimals for scores, 2 for time)
-- Memory-safe parallel evaluation:
-  - Automatic worker count calculation based on available RAM and dataset size
-  - ThreadPoolExecutor for shared-memory efficiency
-  - Configurable N_JOBS (-1 all cores, -2 all but one, or specific number)
-  - Worker count capped at 8 for stability
-- Expected results on CICDDoS2019 (based on similar datasets):
-  - Random Forest: F1 0.9850-0.9950, best with 100-200 trees, max_depth=20-30
-  - XGBoost: F1 0.9800-0.9920, best with 100-150 estimators, learning_rate=0.1, max_depth=5-7
-  - LightGBM: F1 0.9820-0.9940, best with 150-200 estimators, num_leaves=31-63
-  - SVM: F1 0.9750-0.9880 (GPU-accelerated with ThunderSVM when available)
-  - Neural Network (MLP): F1 0.9700-0.9850, best with (100,100) hidden layers, adam solver
-- Total combination counts: 3,000-10,000+ depending on enabled models and grid sizes
-- Parallel execution reduces optimization time from days to hours
-- Results include best hyperparameters (JSON), best F1 score, feature count, elapsed time, hardware specs
+```text
+Feature_Analysis/Genetic_Algorithm/Genetic_Algorithm_Results.csv
+Feature_Analysis/RFE/RFE_Run_Results.csv
+Feature_Analysis/PCA/PCA_Results.csv
+Feature_Analysis/Extra_Trees/Extra_Trees_Results.csv
+```
 
-**Stacking Ensemble** (`stacking.py`)
-- Generates `Feature_Analysis/Stacking_Classifier_Results.csv` per dataset
-- Evaluates classifiers across three feature sets: Genetic Algorithm, RFE, and PCA
-- Tests individual models and stacking meta-classifier combining predictions
-- Results per feature set and classifier:
-  - All standard metrics: accuracy, precision, recall, F1-score
-  - Confusion-based rates: FPR, FNR (computed from confusion matrices)
-  - Feature list used (JSON format), feature count, feature selection method
-  - Execution time, hardware metadata (CPU model, cores, RAM, OS)
-- Stacking meta-classifier (typically LogisticRegression or RandomForest) combines:
-  - Random Forest, SVM, XGBoost, LightGBM, Gradient Boosting predictions
-  - Uses cross-validated predictions as meta-features
-- Expected results pattern:
-  - Individual models: F1 0.9700-0.9950 depending on feature set and algorithm
-  - Stacking ensemble: F1 0.9800-0.9980, typically 0.5-2% improvement over best individual
-  - GA features often match or exceed RFE/PCA due to multi-objective optimization
-  - RFE provides most compact representation (10 features) with excellent performance
-  - PCA achieves comparable results with varying component counts
-- Comparative analysis pattern:
-  - Feature set impact: GA ≈ RFE ≈ PCA (all achieve F1 ≥ 0.9900 on well-separated datasets)
-  - Best individual algorithms: Random Forest, XGBoost, LightGBM
-  - Ensemble provides marginal improvements when individual models already achieve near-perfect scores
+### Feature-Selection Summary
 
-## Data Augmentation Results
+| Method | Result Identity | Selected Representation | Test F1-Score | Test Accuracy | Test Precision | Test Recall | Test FPR | Test FNR | Runtime Fields |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| Full | No reduction in `stacking.py` | 68-70 features in Run 1 rows | Reported in stacking table | Reported in stacking table | Reported in stacking table | Reported in stacking table | Reported in stacking table | Reported in stacking table | Per classifier in Run 1 |
+| PCA | Best available sweep rows tie on rounded F1 | 8, 16, 24, 32, 48, 64 components | 0.9999 | 0.9999 | 0.9999 | 0.9999 | 0.0104 to 0.0253 | 0.0000 | Feature extraction 3.38-4.14s; training 767.85-3340.42s; testing 78.69-81.34s |
+| RFE | Single exported RFE result | 10 selected features | 0.9999 | 0.9999 | 0.9999 | 0.9999 | 0.0014 | 0.0000 | Training 360s; testing 6s |
+| Genetic Algorithm | Single exported best row | 20 selected features; 67-feature union across runs | 0.999997963 | 0.999997964 | 0.999997964 | 0.999997964 | 0.000000 | 0.002980626 | Feature extraction 1.54s; training 224.93s; testing 1.28s |
+| Extra Trees | Ranked Extra-Trees-20 result | 20 selected features | 0.999997963 | 0.999997964 | 0.999997964 | 0.999997964 | 0.002978590 | 0.000002036 | Feature extraction 160s; training 160s; testing 3s; elapsed 3764s |
 
-**WGAN-GP Synthetic Data Generation** (`wgangp.py`)
-- Generates synthetic network flow samples using Wasserstein GAN with Gradient Penalty
-- Supports conditional generation for multi-class attack scenarios
-- Training outputs:
-  - Generator and Discriminator checkpoints saved per epoch: `outputs/generator_epoch*.pt`, `outputs/discriminator_epoch*.pt`
-  - Checkpoints include model weights, metadata (feature count, label encoder mappings, scaler parameters)
-  - Training logs track Wasserstein distance, gradient penalty, and discriminator/generator losses
-- Generation mode produces `generated.csv` with specified number of synthetic samples
-- Synthetic samples match original feature distributions and class characteristics
-- Typical training: 60-100 epochs, batch size 64-128, learning rate 0.0001-0.0002
-- Generated data can be used for:
-  - Balancing imbalanced datasets (minority attack classes like BENIGN at 0.07% in DrDoS_DNS)
-  - Data augmentation to improve model generalization
-  - Testing classifier robustness on synthetic variations
-- Quality metrics can be computed offline: statistical distance (Kolmogorov-Smirnov), mode coverage, feature correlation preservation
+Feature-analysis metrics above are selector/evaluator artifacts for `DrDoS_DNS.csv`; they are not used as multi-class headline classifier results.
 
-## System Performance and Efficiency
+### Genetic Algorithm
 
-**Parallel Execution**
-- ThreadPoolExecutor-based parallelism significantly reduces runtime:
-  - Hyperparameter optimization: 10-100x speedup depending on worker count and grid size
-  - Genetic algorithm: 5-20x speedup with parallel fitness evaluation
-- Memory-safe worker allocation prevents OOM crashes on large datasets
-- Progress bars provide real-time feedback with ETA estimates
+Source row: `tool = Genetic Algorithm`, `run_index = best`, `model = RandomForestClassifier`, `cv_method = StratifiedKFold(n_splits=10)`, `train_test_split = 80%/20%`, `scaling = StandardScaler`.
 
-**Progress Persistence**
-- Checkpoint systems enable resumable experiments:
-  - Hyperparameter optimization caching: resume after interruption without recomputation
-  - WGAN-GP epoch checkpoints: continue training from any saved epoch
-  - GA population state saving: restart mid-generation (planned feature)
-- JSON-based cache formats for cross-platform compatibility
+Selected features:
 
-**Hardware Reporting**
-- All result CSVs include hardware specifications:
-  - CPU model (Windows via WMIC, Linux via /proc/cpuinfo, macOS via sysctl)
-  - Physical core count (psutil-based)
-  - Total RAM in GB
-  - Operating system name and version
-  - GPU detection for ThunderSVM (nvidia-smi when available)
-- Enables reproducibility analysis and performance comparisons across systems
+```text
+source port, destination port, total backward packets,
+total length of bwd packets, fwd packet length mean,
+bwd packet length max, bwd packet length min, flow iat min,
+fwd iat total, bwd iat total, bwd iat mean, bwd iat std,
+bwd packets/s, rst flag count, ack flag count, subflow bwd bytes,
+init_win_bytes_backward, idle mean, idle max, inbound
+```
 
-**Notification System**
-- Optional Telegram bot integration for long-running experiments
-- Sound notifications on completion (platform-dependent: afplay/aplay/start)
-- Useful for overnight runs and batch processing
+### RFE
 
-## Reproducibility and Portability
+Source row: `tool = RFE`, `model = Random Forest`, `cv_method = StratifiedKFold(n_splits=10)`, `train_test_split = test_size=0.2`, `scaling = standard`.
 
-- **Deterministic Results**: Fixed random seeds, consistent train/test splits, stable cross-validation folds
-  - RFE and PCA are inherently deterministic methods producing identical results across runs
-  - GA uses randomized search but results are reproducible with fixed random seeds
-- **Cross-Platform**: Tested on Windows, Linux (Ubuntu), and macOS with unified codebase
-- **Logging**: Dual-channel logs (colored terminal + clean file) for debugging and archival
-- **Version Control**: All dependencies tracked in `requirements.txt`
-- **Documentation**: Comprehensive docstrings, inline comments, and README guidance
-- **Numeric Precision**: All metrics formatted consistently (4 decimal places for scores/rates, 2 for execution time)
+Selected features:
 
-## Benchmark Performance Summary (CICDDoS2019 DrDoS_DNS Dataset)
+```text
+Source Port, Destination Port, Protocol, Total Backward Packets,
+Flow Bytes/s, Bwd Header Length, Bwd Packets/s, Subflow Bwd Packets,
+Init_Win_bytes_forward, Inbound
+```
 
-| Module            | Metric             | Actual Value | Notes                            |
-| ----------------- | ------------------ | ------------ | -------------------------------- |
-| Dataset           | Samples            | 4,912,019    | 99.93% attacks, 0.07% benign     |
-| Dataset           | Features           | 76           | 45 float64, 25 int64, 6 metadata |
-| Genetic Algorithm | Features Selected  | 36 (47.4%)   | Multi-objective optimization     |
-| Genetic Algorithm | F1-Score           | 1.0000       | Perfect classification, 1 run    |
-| Genetic Algorithm | Execution Time     | 30.63s       | Population=20, Generations=100   |
-| RFE               | Features Selected  | 10 (13.2%)   | Most aggressive reduction        |
-| RFE               | F1-Score           | 1.0000       | Deterministic method             |
-| RFE               | Test FPR           | 0.0045       | Near-perfect precision           |
-| RFE               | Execution Time     | 46.49s       | RandomForest-based               |
-| PCA (8 comp)      | Variance Explained | 63.3%        | Minimal components               |
-| PCA (8 comp)      | F1-Score           | 1.0000       | Perfect with 8 components        |
-| PCA (8 comp)      | Training Time      | 721.91s      | 10-fold CV + Random Forest       |
-| PCA (32 comp)     | Variance Explained | 98.6%        | High variance capture            |
-| PCA (32 comp)     | F1-Score           | 1.0000       | Deterministic method             |
-| PCA (32 comp)     | Training Time      | 2124.98s     | More components, longer training |
-| Cross-Dataset     | Common Features    | 64 of 76     | 84% overlap with CIC-IDS-2017    |
+The RFE CSV also stores a 70-entry ranking list. Top ranking entries include Source Port, Destination Port, Flow Bytes/s, Bwd Packets/s, Subflow Bwd Packets, Init_Win_bytes_forward, Inbound, Protocol, and Bwd Header Length.
 
-**Key Achievements on DrDoS_DNS:**
-- **Perfect Classification**: All three feature selection methods achieve F1-score of 1.0000, demonstrating strong attack signatures
-- **Efficient Dimensionality Reduction**: RFE achieves 86.8% reduction (76→10 features) without sacrificing performance
-- **Fast Optimization**: GA completes in 30.63s with population=20, RFE in 46.49s
-- **Strong Linear Separability**: PCA achieves perfect F1 with only 8 components (63.3% variance)
-- **Cross-Dataset Compatibility**: 84% feature overlap enables model transfer between CICDDoS2019 and CIC-IDS-2017
-- **Zero False Negatives**: All methods achieve 0.0000 FNR, ensuring no attacks are missed
-- **Scalable**: Successfully handles 4.9M samples with 76 features
-- **Production-Ready**: Includes caching, logging, error handling, and hardware adaptation
-- **Reproducible**: Deterministic methods (RFE, PCA) ensure consistent results; GA uses fixed seeds
+### PCA
 
-**Methodological Notes:**
-- **RFE and PCA** are deterministic algorithms; single runs shown represent stable, reproducible results
-- **Genetic Algorithm** is stochastic; multiple runs planned for statistical validation (currently 1 run completed)
-- All results use 80/20 train-test split with stratified sampling
-- PCA results use 10-fold Stratified Cross-Validation with Random Forest (100 trees)
-- Perfect scores indicate high separability of DrDoS attacks in feature space; additional datasets recommended for generalization assessment
+Source rows: `tool = PCA`, `model = Random Forest`, `cv_method = StratifiedKFold(n_splits=10)`, `train_test_split = 80/20 split`, `scaling = StandardScaler`.
 
-All results demonstrate the framework's capability to build robust DDoS detection systems with state-of-the-art performance while maintaining computational efficiency and reproducibility.
+| Components | Explained Variance | CV F1-Score | Test F1-Score | Test FPR | Test FNR | Training Time (s) |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 8 | 0.6227 | 0.9999 | 0.9999 | 0.0253 | 0.0000 | 767.85 |
+| 16 | 0.8159 | 0.9999 | 0.9999 | 0.0163 | 0.0000 | 1501.27 |
+| 24 | 0.9266 | 0.9999 | 0.9999 | 0.0149 | 0.0000 | 1638.52 |
+| 32 | 0.9854 | 0.9999 | 0.9999 | 0.0119 | 0.0000 | 2039.12 |
+| 48 | 0.9999 | 0.9999 | 0.9999 | 0.0104 | 0.0000 | 2688.14 |
+| 64 | 0.9999 | 0.9999 | 0.9999 | 0.0134 | 0.0000 | 3340.42 |
+
+`stacking.py` selects the best PCA component count from `PCA_Results.csv` and applies a PCA transformer for the `PCA Components` feature set.
+
+### Extra Trees
+
+Source row: `tool = Extra Trees`, `run_index = ranked`, `model = ExtraTreesClassifier`, `cv_method = StratifiedKFold(n_splits=10)`, `train_test_split = 80%/20%`, `scaling = none`, `n_estimators = 200`, `random_state = 42`, `n_jobs = 1`.
+
+The file contains 70 ranked eligible features; 20 are selected.
+
+| Rank | Feature | Importance |
+| ---: | --- | ---: |
+| 1 | Inbound | 0.206429 |
+| 2 | Source Port | 0.137152 |
+| 3 | Protocol | 0.078087 |
+| 4 | URG Flag Count | 0.076847 |
+| 5 | min_seg_size_forward | 0.041661 |
+| 6 | Destination Port | 0.035838 |
+| 7 | Down/Up Ratio | 0.033814 |
+| 8 | Fwd Packet Length Min | 0.026007 |
+| 9 | Min Packet Length | 0.020519 |
+| 10 | Init_Win_bytes_forward | 0.019823 |
+
+All selected Extra Trees features:
+
+```text
+Inbound, Source Port, Protocol, URG Flag Count, min_seg_size_forward,
+Destination Port, Down/Up Ratio, Fwd Packet Length Min, Min Packet Length,
+Init_Win_bytes_forward, CWE Flag Count, Bwd Packet Length Min,
+ACK Flag Count, Fwd PSH Flags, Subflow Bwd Packets,
+Avg Bwd Segment Size, Fwd Packet Length Mean, RST Flag Count,
+Avg Fwd Segment Size, Bwd Packet Length Max
+```
+
+## Multi-Class Stacking Run 1 Results
+
+These are the major evaluation results for the documentation. They use only the Run 1 combined-files multi-class cache listed in [Evaluation Context](#evaluation-context).
+
+### Top Multi-Class Results By F1-Score
+
+| Rank | Feature Set | Classifier | Hyperparameters | F1-Score | Accuracy | Precision | Recall | FPR | FNR | Features | Runtime (s) |
+| ---: | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | RFE Features | LSTM | Default | 0.894754 | 0.907271 | 0.909585 | 0.907271 | 0.007285 | 0.092729 | 10 | 9,909 |
+| 2 | GA Features | LSTM | Default | 0.890487 | 0.899561 | 0.902714 | 0.899561 | 0.007567 | 0.100439 | 20 | 584 |
+| 3 | Extra Trees Features | LSTM | Default | 0.882844 | 0.891874 | 0.895705 | 0.891874 | 0.008303 | 0.108126 | 20 | 14,407 |
+| 4 | Full Features | Random Forest | Default | 0.876252 | 0.881026 | 0.876501 | 0.881026 | 0.009991 | 0.118974 | 70 | 8,879 |
+| 5 | Full Features | Random Forest | Optimized | 0.875035 | 0.888302 | 0.888312 | 0.888302 | 0.009790 | 0.111698 | 70 | 2,890 |
+| 6 | Full Features | XGBoost | Optimized | 0.873542 | 0.887141 | 0.887363 | 0.887141 | 0.010012 | 0.112859 | 68 | 10,404 |
+| 7 | Full Features | XGBoost | Default | 0.872178 | 0.886155 | 0.886552 | 0.886155 | 0.009932 | 0.113845 | 68 | 3,441 |
+| 8 | Full Features | LightGBM | Optimized | 0.867977 | 0.885235 | 0.887015 | 0.885235 | 0.010588 | 0.114765 | 68 | 3,479 |
+| 9 | Full Features | Gradient Boosting | Default | 0.865378 | 0.883520 | 0.884832 | 0.883520 | 0.010129 | 0.116480 | 68 | 159,738 |
+| 10 | PCA Components | Random Forest | Default | 0.864719 | 0.870194 | 0.863950 | 0.870194 | 0.011300 | 0.129806 | 48 | 147,773 |
+
+Best F1-Score and best Accuracy are the same configuration in this Run 1 file: **RFE Features + LSTM + Default Hyperparameters**, with **0.894754 F1-Score** and **0.907271 Accuracy**.
+
+### Best Result By Feature Set And Hyperparameter Mode
+
+| Feature Set | Hyperparameters | Best Classifier | F1-Score | Accuracy | Precision | Recall | FPR | FNR | Runtime (s) |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| RFE Features | Default | LSTM | 0.894754 | 0.907271 | 0.909585 | 0.907271 | 0.007285 | 0.092729 | 9,909 |
+| GA Features | Default | LSTM | 0.890487 | 0.899561 | 0.902714 | 0.899561 | 0.007567 | 0.100439 | 584 |
+| Extra Trees Features | Default | LSTM | 0.882844 | 0.891874 | 0.895705 | 0.891874 | 0.008303 | 0.108126 | 14,407 |
+| Full Features | Default | Random Forest | 0.876252 | 0.881026 | 0.876501 | 0.881026 | 0.009991 | 0.118974 | 8,879 |
+| Full Features | Optimized | Random Forest | 0.875035 | 0.888302 | 0.888312 | 0.888302 | 0.009790 | 0.111698 | 2,890 |
+| PCA Components | Default | Random Forest | 0.864719 | 0.870194 | 0.863950 | 0.870194 | 0.011300 | 0.129806 | 147,773 |
+| PCA Components | Optimized | KNN | 0.858397 | 0.863974 | 0.857849 | 0.863974 | 0.013518 | 0.136026 | 36,082 |
+| GA Features | Optimized | Random Forest | 0.852454 | 0.874489 | 0.877655 | 0.874489 | 0.011248 | 0.125511 | 2,884 |
+| RFE Features | Optimized | Random Forest | 0.837992 | 0.863923 | 0.868017 | 0.863923 | 0.012668 | 0.136077 | 3,416 |
+| Extra Trees Features | Optimized | LightGBM | 0.819714 | 0.841687 | 0.855692 | 0.841687 | 0.015079 | 0.158313 | 1,632 |
+
+### Best Result By Classifier
+
+| Classifier | Best Feature Set | Hyperparameters | F1-Score | Accuracy | Precision | Recall | FPR | FNR |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| LSTM | RFE Features | Default | 0.894754 | 0.907271 | 0.909585 | 0.907271 | 0.007285 | 0.092729 |
+| Random Forest | Full Features | Default | 0.876252 | 0.881026 | 0.876501 | 0.881026 | 0.009991 | 0.118974 |
+| XGBoost | Full Features | Optimized | 0.873542 | 0.887141 | 0.887363 | 0.887141 | 0.010012 | 0.112859 |
+| LightGBM | Full Features | Optimized | 0.867977 | 0.885235 | 0.887015 | 0.885235 | 0.010588 | 0.114765 |
+| Gradient Boosting | Full Features | Default | 0.865378 | 0.883520 | 0.884832 | 0.883520 | 0.010129 | 0.116480 |
+| KNN | Full Features | Optimized | 0.858397 | 0.863974 | 0.857850 | 0.863974 | 0.013518 | 0.136026 |
+| MLP (Neural Net) | Full Features | Default | 0.852958 | 0.867243 | 0.866822 | 0.867243 | 0.012304 | 0.132757 |
+| Tabular ResNet | PCA Components | Default | 0.845181 | 0.872793 | 0.874795 | 0.872793 | 0.011865 | 0.127207 |
+| FT-Transformer | PCA Components | Default | 0.840449 | 0.869851 | 0.870506 | 0.869851 | 0.012027 | 0.130149 |
+| AutoEncoder | PCA Components | Default | 0.836106 | 0.865107 | 0.863043 | 0.865107 | 0.013417 | 0.134893 |
+| Logistic Regression | PCA Components | Default | 0.714344 | 0.747789 | 0.716747 | 0.747789 | 0.064463 | 0.252211 |
+| ResNet18 | PCA Components | Default | 0.654014 | 0.651344 | 0.784294 | 0.651344 | 0.034740 | 0.348656 |
+| Nearest Centroid | Full Features | Optimized | 0.606335 | 0.576145 | 0.731149 | 0.576145 | 0.036436 | 0.423855 |
+
+## Hyperparameter Optimization Artifact
+
+The external hyperparameter-optimization artifact inspected for current optimized/default behavior was:
+
+```text
+Classifiers_Hyperparameters/Hyperparameter_Optimization_Results.csv
+```
+
+It contains 8 rows for GA-selected features (`n_features = 29`) and these optimized model identities: Random Forest, XGBoost, KNN, Gradient Boosting, LightGBM, MLP (Neural Net), Logistic Regression, and Nearest Centroid. SVM is supported by the code/config but was not present in this inspected result file.
+
+| Model | Best CV F1-Score | Accuracy | Precision | Recall | False Positive Rate | False Negative Rate | Runtime (s) |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Random Forest | 1.0000 | 1.0000 | 1.0000 | 1.0000 | 0.0000 | 0.0000 | 25.52 |
+| XGBoost | 1.0000 | 1.0000 | 1.0000 | 1.0000 | 0.0006 | 0.0006 | 10.16 |
+| KNN | 1.0000 | 1.0000 | 1.0000 | 1.0000 | 0.0000 | 0.0000 | 9720.66 |
+| Gradient Boosting | 1.0000 | 1.0000 | 1.0000 | 1.0000 | 0.0000 | 0.0000 | 961.16 |
+| LightGBM | 1.0000 | 1.0000 | 1.0000 | 1.0000 | 0.0000 | 0.0000 | 5.33 |
+| MLP (Neural Net) | 0.9999 | 0.9999 | 0.9999 | 0.9999 | 0.0347 | 0.0347 | 194.18 |
+| Logistic Regression | 0.9997 | 0.9998 | 0.9997 | 0.9998 | 0.1169 | 0.1169 | 14.09 |
+| Nearest Centroid | 0.9997 | 0.9997 | 0.9997 | 0.9997 | 0.0722 | 0.0722 | 3.28 |
+
+These hyperparameter results are not used as headline multi-class stacking results because the requested major evaluation source is the Run 1 combined-files stacking cache.
+
+## Current Code-Backed Interpretation
+
+- `stacking.py` supports both separate-file binary-style evaluation and combined-files multi-class evaluation. The Run 1 file used here is combined-files multi-class only.
+- `stacking.py` can evaluate `StackingClassifier`, but the authoritative Run 1 cache inspected here contains only individual classifier rows.
+- `stacking.py` supports Full, PCA, RFE, GA, Extra Trees, and explicit feature sets. Feature modes are included only when enabled and backed by usable artifacts, except Full and explicit features.
+- `hyperparameters_enabled = False` means default estimator parameters from `config.yaml`/source defaults. `hyperparameters_enabled = True` means optimized parameters loaded from hyperparameter artifacts where matching rows exist.
+- `stacking.py` AutoML is Optuna-based model and stacking configuration search with bounded search spaces; it is not documented here as a full general-purpose AutoML platform.
+- Explainability and data augmentation are implemented, but the Run 1 source used for major results has `augmentation_ratio = 0.0` and no augmented-data headline result.
+
+## Reproducibility Notes
+
+- Major metrics in README.md and this file use the same Run 1 combined-files multi-class CSV and the same 6-decimal precision policy.
+- Feature-selection metrics use the actual CSV files under `Feature_Analysis/`.
+- No binary/single-class or one-vs-rest result is used as a major result.
+- No personal absolute filesystem path is required to reproduce the documented repository workflow; place result artifacts under the corresponding dataset output directories when rerunning experiments.
