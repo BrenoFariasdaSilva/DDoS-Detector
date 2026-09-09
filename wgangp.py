@@ -366,12 +366,13 @@ class Generator(nn.Module):
         :return: Generated feature tensor of shape (batch_size, feature_dim)
         """
 
-        y_e = self.embed(y)  # Convert class ID to embedding
-        x = torch.cat([z, y_e], dim=1)  # Concatenate noise and embedding
-        x = self.pre(x)  # Process through MLP
-        for b in self.resblocks:  # Loop through residual blocks
-            x = b(x)  # Apply block
-        out = self.out(x)  # Produce final feature vector
+        with autocast(z.device.type, enabled=torch.is_autocast_enabled()):  # Select BF16 inside each DataParallel worker thread
+            y_e = self.embed(y)  # Convert class ID to embedding
+            x = torch.cat([z, y_e], dim=1)  # Concatenate noise and embedding
+            x = self.pre(x)  # Process through MLP
+            for b in self.resblocks:  # Loop through residual blocks
+                x = b(x)  # Apply block
+            out = self.out(x)  # Produce final feature vector
         return out  # Return generated sample
 
 
@@ -2007,19 +2008,19 @@ def plot_training_metrics(metrics_history, out_dir, filename=None, config: Optio
 
 def autocast(device_type: str, enabled: bool = True):
     """
-    Return an autocast context manager when enabled on CUDA, else a nullcontext.
+    Return a CUDA BF16 autocast context with explicit precision boundaries.
 
     This avoids referencing `torch.amp.autocast` directly (Pylance warning) and
     supports environments without CUDA.
 
     :param device_type: The device type ("cuda" or "cpu") to create autocast context for
     :param enabled: Whether to enable autocast context (default: True)
-    :return: Autocast context manager if enabled on CUDA, otherwise nullcontext
+    :return: Explicit CUDA autocast context or a CPU nullcontext
     """
 
     try:
-        if enabled and device_type == "cuda" and _torch_autocast is not None:  # If enabled and CUDA available and autocast exists
-            return _torch_autocast(device_type)  # Return CUDA autocast context
+        if device_type == "cuda" and _torch_autocast is not None:  # Preserve disabled regions inside an outer autocast context
+            return _torch_autocast(device_type, enabled=enabled, dtype=torch.bfloat16)  # Use BF16 exponent range without FP16 loss scaling
         return nullcontext()  # Return null context for CPU or when disabled
     except Exception as e:
         print(str(e))
@@ -2675,6 +2676,13 @@ def normalize_args_and_setup_hardware(args: Any, config: Dict) -> tuple:
     scaled_batch = configured_batch_size * batch_multiplier  # Compute scaled batch size once
     args.batch_size = int(scaled_batch)  # Apply scaled batch size to args
     args.use_amp = bool(args.use_amp and gpu_count > 0 and _torch_autocast is not None)  # Honor explicit AMP configuration only when CUDA autocast is available
+    if args.use_amp:  # Resolve BF16 support across every DataParallel device
+        for device_index in range(gpu_count):  # Inspect each participating CUDA device
+            with torch.cuda.device(device_index):  # Query support on the selected device
+                if not hasattr(torch.cuda, "is_bf16_supported") or not torch.cuda.is_bf16_supported():  # Require supported BF16 arithmetic
+                    args.use_amp = False  # Select FP32 when BF16 is unavailable
+                    print(f"{BackgroundColors.YELLOW}BF16 AMP unavailable on CUDA device {device_index}; using FP32 training{Style.RESET_ALL}")  # Report precision fallback explicitly
+                    break  # Stop after discovering an unsupported device
     suggested_workers = min(max(1, (os.cpu_count() or 1) // 2), 32)  # Suggest a conservative default for num_workers
     file_progress_prefix = getattr(args, "file_progress_prefix", f"{BackgroundColors.CYAN}[1/1]{Style.RESET_ALL}")  # Build colored prefix (default single-file)
     
@@ -2688,7 +2696,7 @@ def normalize_args_and_setup_hardware(args: Any, config: Dict) -> tuple:
 
     print(f"{BackgroundColors.GREEN}Device: {BackgroundColors.CYAN}{device.type.upper()}{Style.RESET_ALL}")  # Print device type
     if args.use_amp and device.type == "cuda":  # If AMP enabled and using CUDA
-        print(f"{BackgroundColors.GREEN}Using AMP for generator training; WGAN-GP critic remains FP32{Style.RESET_ALL}")  # Print resolved precision boundary
+        print(f"{BackgroundColors.GREEN}Using BF16 AMP for generator training without loss scaling; WGAN-GP critic remains FP32{Style.RESET_ALL}")  # Print resolved precision boundary
     if args.compile:  # If torch.compile requested
         print(f"{BackgroundColors.GREEN}torch.compile() requested for optimized execution{Style.RESET_ALL}")  # Print compile request detail
 
@@ -2816,10 +2824,7 @@ def create_models_and_optimizers(args, config: Dict, device: torch.device, featu
     elif args.compile:  # If compile requested with DataParallel
         print(f"{BackgroundColors.YELLOW}torch.compile() skipped because DataParallel wraps the models{Style.RESET_ALL}")  # Report existing DataParallel compile limitation
 
-    if args.use_amp and device.type == "cuda":  # Initialize gradient scaler only for CUDA AMP
-        scaler = torch.amp.GradScaler("cuda", init_scale=1.0) if hasattr(torch, "amp") and hasattr(torch.amp, "GradScaler") else torch.cuda.amp.GradScaler(init_scale=1.0)  # Prefer modern AMP API with stable initial scale
-    else:  # Disable scaler outside CUDA AMP
-        scaler = None  # Keep standard precision path unchanged
+    scaler = None  # BF16 and FP32 training do not require dynamic loss scaling
 
     opt_D = torch.optim.Adam(
         cast(Any, D).parameters(), lr=args.lr, betas=(args.beta1, args.beta2)
@@ -2877,6 +2882,8 @@ def load_and_restore_generator_state(g_checkpoint_path: Path, device: torch.devi
         if not math.isfinite(scaler.get_scale()) or scaler.get_scale() <= 0.0:  # Verify restored AMP scale is finite and positive
             raise ValueError(f"Invalid AMP scaler state in {g_checkpoint_path}")  # Stop before using an invalid restored scale
         print(f"{BackgroundColors.GREEN}✓ Restored AMP scaler state{Style.RESET_ALL}")  # Confirm scaler restoration
+    elif "scaler_state" in g_checkpoint:  # Preserve model and optimizer restore when migrating from scaled FP16
+        print(f"{BackgroundColors.GREEN}Legacy FP16 loss scale not restored: current training uses unscaled BF16 or FP32{Style.RESET_ALL}")  # Report precision migration without reviving scale growth
     return g_checkpoint, start_epoch  # Return loaded checkpoint dict and starting epoch
 
 
@@ -3095,7 +3102,7 @@ def execute_discriminator_training_steps(G, D, opt_D, scaler, real_x, labels, de
         require_finite_tensor(labels, "labels", args, epoch + 1, step + 1, component)  # Reject invalid conditioning labels before critic evaluation
         require_finite_model_state(D, "parameters", args, epoch + 1, step + 1, component)  # Reject invalid critic parameters before backward execution
         require_finite_optimizer_state(opt_D, f"discriminator_optimizer[{critic_step + 1}]", args, epoch + 1, step + 1)  # Reject invalid critic optimizer state before backward execution
-        with autocast(device.type, enabled=(scaler is not None)):  # Enable AMP if available
+        with autocast(device.type, enabled=bool(getattr(args, "use_amp", False))):  # Enable resolved BF16 AMP for sample generation
             z = torch.randn(args.batch_size, args.latent_dim, device=device)  # Sample noise for discriminator step
             fake_x = G(z, labels).detach()  # Generate fake samples and detach for discriminator
         require_finite_tensor(fake_x, "generated_samples", args, epoch + 1, step + 1, component)  # Reject invalid generated samples before critic reuse
@@ -3136,12 +3143,13 @@ def execute_generator_training_step(G, D, opt_G, scaler, device: torch.device, a
 
     require_finite_model_state(G, "parameters", args, epoch + 1, step + 1, "generator")  # Reject invalid generator parameters before backward execution
     require_finite_optimizer_state(opt_G, "generator_optimizer", args, epoch + 1, step + 1)  # Reject invalid generator optimizer state before backward execution
-    with autocast(device.type, enabled=(scaler is not None)):  # Enable AMP if available
+    with autocast(device.type, enabled=bool(getattr(args, "use_amp", False))):  # Enable resolved BF16 AMP for generator training
         z = torch.randn(args.batch_size, args.latent_dim, device=device)  # Sample noise for generator step
         gen_labels = torch.randint(0, n_classes, (args.batch_size,), device=device)  # Sample labels for generator
         fake_x = G(z, gen_labels)  # Generate fake samples with generator
-        fake_scores = D(fake_x, gen_labels)  # Score generated samples with discriminator
     require_finite_tensor(fake_x, "generated_samples", args, epoch + 1, step + 1, "generator")  # Reject invalid generated samples before loss calculation
+    with autocast(device.type, enabled=False):  # Keep critic scoring in FP32 during generator training
+        fake_scores = D(fake_x.float(), gen_labels)  # Preserve differentiability through the precision conversion
     require_finite_tensor(fake_scores, "fake_scores", args, epoch + 1, step + 1, "generator")  # Reject invalid fake critic scores
     g_loss = -fake_scores.float().mean()  # Calculate generator loss with full-precision reduction
     require_finite_tensor(g_loss, "loss", args, epoch + 1, step + 1, "generator")  # Reject invalid generator loss before backward execution
