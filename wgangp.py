@@ -1795,7 +1795,7 @@ def distribute_generated_counts_by_ratio(class_distribution: Dict, total_preproc
     return base_counts  # Return exact per-class synthetic row allocation
 
 
-def gradient_penalty(critic, real_samples, fake_samples, labels, device, config: Optional[Dict] = None):
+def gradient_penalty(critic, real_samples, fake_samples, labels, device, config: Optional[Dict] = None, args: Optional[Any] = None, epoch: int = 0, step: int = 0, component: str = "gradient_penalty"):
     """
     Compute the WGAN-GP gradient penalty.
 
@@ -1805,6 +1805,10 @@ def gradient_penalty(critic, real_samples, fake_samples, labels, device, config:
     :param labels: tensor of integer labels (B,)
     :param device: torch device to run computations on
     :param config: Optional configuration dictionary containing gradient penalty epsilon
+    :param args: Optional runtime arguments for finite-state diagnostics
+    :param epoch: One-based epoch number for finite-state diagnostics
+    :param step: One-based training step for finite-state diagnostics
+    :param component: Training component name for finite-state diagnostics
     :return: scalar gradient penalty term
     """
 
@@ -1812,14 +1816,18 @@ def gradient_penalty(critic, real_samples, fake_samples, labels, device, config:
         if config is None:  # If no config provided
             config = CONFIG or get_default_config()  # Use global or default config
         
-        epsilon = safe_float(config.get("gradient_penalty", {}).get("epsilon", 1e-12), 1e-12)  # Get epsilon safely from config
+        epsilon = max(0.0, safe_float(config.get("gradient_penalty", {}).get("epsilon", 1e-12), 1e-12))  # Resolve non-negative gradient penalty epsilon
         
         batch_size = real_samples.size(0)  # Get batch size from real samples
         alpha = torch.rand(batch_size, 1, device=device)  # Sample random interpolation factors
         alpha = alpha.expand_as(real_samples)  # Expand alpha to match feature shape
         interpolates = alpha * real_samples + ((1 - alpha) * fake_samples)  # Create interpolated samples
         interpolates.requires_grad_(True)  # Enable gradients for interpolated samples
+        if args is not None:  # Emit context-rich failure at interpolation boundary
+            require_finite_tensor(interpolates, "interpolated_samples", args, epoch, step, component)  # Reject invalid interpolation before critic evaluation
         d_interpolates = critic(interpolates, labels)  # Get critic scores for interpolated samples
+        if args is not None:  # Emit context-rich failure at critic-score boundary
+            require_finite_tensor(d_interpolates, "interpolated_scores", args, epoch, step, component)  # Reject invalid interpolation critic scores
         grad_outputs = torch.ones_like(d_interpolates, device=device)  # Create gradient outputs tensor
 
         grads = autograd.grad(  # Compute gradients of critic outputs with respect to interpolates
@@ -1833,8 +1841,14 @@ def gradient_penalty(critic, real_samples, fake_samples, labels, device, config:
             0
         ]  # Get gradients tensor
         grads = grads.view(batch_size, -1)  # Flatten gradients per sample
-        grad_norm = torch.sqrt(torch.sum(grads**2, dim=1) + epsilon)  # Compute L2 norm of gradients with epsilon
+        if args is not None:  # Emit context-rich failure at autograd boundary
+            require_finite_tensor(grads, "interpolated_gradients", args, epoch, step, component)  # Reject invalid interpolation gradients
+        grad_norm = torch.hypot(torch.linalg.vector_norm(grads, ord=2, dim=1), torch.full((batch_size,), math.sqrt(epsilon), device=device, dtype=grads.dtype))  # Compute stable L2 norm with existing epsilon semantics
+        if args is not None:  # Emit context-rich failure at norm boundary
+            require_finite_tensor(grad_norm, "interpolated_gradient_norms", args, epoch, step, component)  # Reject invalid interpolation gradient norms
         gp = ((grad_norm - 1) ** 2).mean()  # Calculate gradient penalty term
+        if args is not None:  # Emit context-rich failure at penalty boundary
+            require_finite_tensor(gp, "gradient_penalty", args, epoch, step, component)  # Reject invalid gradient penalty scalar
         return gp  # Return scalar gradient penalty
     except Exception as e:
         print(str(e))
@@ -2035,8 +2049,13 @@ def require_finite_tensor(tensor: torch.Tensor, tensor_name: str, args: Any, epo
     nan_count = int(torch.isnan(detached_tensor).sum().item())  # Count NaN values
     positive_infinity_count = int(torch.isposinf(detached_tensor).sum().item())  # Count positive infinity values
     negative_infinity_count = int(torch.isneginf(detached_tensor).sum().item())  # Count negative infinity values
+    finite_values = detached_tensor[finite_mask]  # Select finite values for bounded range diagnostics
+    if finite_values.numel() > 0:  # Include nearby finite magnitude when available
+        finite_stats = f", finite_min={finite_values.min().item()}, finite_max={finite_values.max().item()}, finite_mean={finite_values.float().mean().item()}"  # Summarize finite values without materializing tensors
+    else:  # Handle tensors containing no finite values
+        finite_stats = ", finite_values=0"  # Record absence of finite values
     dataset_name = Path(getattr(args, "csv_path", "unknown")).name  # Resolve current dataset filename
-    message = f"Non-finite tensor detected: dataset={dataset_name}, epoch={epoch}, step={step}, component={component}, value={tensor_name}, first_invalid={first_invalid}, nan={nan_count}, posinf={positive_infinity_count}, neginf={negative_infinity_count}, shape={tuple(detached_tensor.shape)}, dtype={detached_tensor.dtype}, device={detached_tensor.device}"  # Build precise failure diagnostic
+    message = f"Non-finite tensor detected: dataset={dataset_name}, epoch={epoch}, step={step}, component={component}, value={tensor_name}, first_invalid={first_invalid}, nan={nan_count}, posinf={positive_infinity_count}, neginf={negative_infinity_count}, shape={tuple(detached_tensor.shape)}, dtype={detached_tensor.dtype}, device={detached_tensor.device}{finite_stats}"  # Build precise failure diagnostic
     safe_critical(message)  # Persist diagnostic through existing logging
     raise FloatingPointError(message)  # Stop before invalid state propagates
 
@@ -2669,7 +2688,7 @@ def normalize_args_and_setup_hardware(args: Any, config: Dict) -> tuple:
 
     print(f"{BackgroundColors.GREEN}Device: {BackgroundColors.CYAN}{device.type.upper()}{Style.RESET_ALL}")  # Print device type
     if args.use_amp and device.type == "cuda":  # If AMP enabled and using CUDA
-        print(f"{BackgroundColors.GREEN}Using Automatic Mixed Precision (AMP) for faster training{Style.RESET_ALL}")  # Print AMP detail
+        print(f"{BackgroundColors.GREEN}Using AMP for generator training; WGAN-GP critic remains FP32{Style.RESET_ALL}")  # Print resolved precision boundary
     if args.compile:  # If torch.compile requested
         print(f"{BackgroundColors.GREEN}torch.compile() requested for optimized execution{Style.RESET_ALL}")  # Print compile request detail
 
@@ -3071,31 +3090,29 @@ def execute_discriminator_training_steps(G, D, opt_D, scaler, real_x, labels, de
     d_real_score = torch.tensor(0.0, device=device)  # Initialize real score tracker
     d_fake_score = torch.tensor(0.0, device=device)  # Initialize fake score tracker
     for critic_step in range(args.critic_steps):  # Train discriminator multiple steps
+        component = f"discriminator[{critic_step + 1}]"  # Name current critic update for diagnostics
+        require_finite_tensor(real_x, "real_samples", args, epoch + 1, step + 1, component)  # Reject invalid real samples before critic evaluation
+        require_finite_tensor(labels, "labels", args, epoch + 1, step + 1, component)  # Reject invalid conditioning labels before critic evaluation
+        require_finite_model_state(D, "parameters", args, epoch + 1, step + 1, component)  # Reject invalid critic parameters before backward execution
+        require_finite_optimizer_state(opt_D, f"discriminator_optimizer[{critic_step + 1}]", args, epoch + 1, step + 1)  # Reject invalid critic optimizer state before backward execution
         with autocast(device.type, enabled=(scaler is not None)):  # Enable AMP if available
             z = torch.randn(args.batch_size, args.latent_dim, device=device)  # Sample noise for discriminator step
             fake_x = G(z, labels).detach()  # Generate fake samples and detach for discriminator
-            d_real = D(real_x, labels)  # Get discriminator score for real samples
-            d_fake = D(fake_x, labels)  # Get discriminator score for fake samples
-        require_finite_tensor(fake_x, "generated_samples", args, epoch + 1, step + 1, f"discriminator[{critic_step + 1}]")  # Reject invalid generated samples before critic reuse
-        require_finite_tensor(d_real, "real_scores", args, epoch + 1, step + 1, f"discriminator[{critic_step + 1}]")  # Reject invalid real critic scores
-        require_finite_tensor(d_fake, "fake_scores", args, epoch + 1, step + 1, f"discriminator[{critic_step + 1}]")  # Reject invalid fake critic scores
-        with autocast(device.type, enabled=False):  # Keep gradient penalty and loss reduction in full precision
-            gp = gradient_penalty(D, real_x.float(), fake_x.float(), labels, device, config)  # Compute gradient penalty safely outside mixed precision
+        require_finite_tensor(fake_x, "generated_samples", args, epoch + 1, step + 1, component)  # Reject invalid generated samples before critic reuse
+        with autocast(device.type, enabled=False):  # Keep complete critic objective and backward graph in full precision
+            d_real = D(real_x.float(), labels)  # Compute real critic scores in full precision
+            d_fake = D(fake_x.float(), labels)  # Compute fake critic scores in full precision
+            require_finite_tensor(d_real, "real_scores", args, epoch + 1, step + 1, component)  # Reject invalid real critic scores
+            require_finite_tensor(d_fake, "fake_scores", args, epoch + 1, step + 1, component)  # Reject invalid fake critic scores
+            gp = gradient_penalty(D, real_x.float(), fake_x.float(), labels, device, config, args, epoch + 1, step + 1, component)  # Compute complete gradient penalty in full precision
             loss_D = d_fake.float().mean() - d_real.float().mean() + args.lambda_gp * gp  # Calculate full-precision WGAN-GP discriminator loss
-        require_finite_tensor(gp, "gradient_penalty", args, epoch + 1, step + 1, f"discriminator[{critic_step + 1}]")  # Reject invalid gradient penalty
-        require_finite_tensor(loss_D, "loss", args, epoch + 1, step + 1, f"discriminator[{critic_step + 1}]")  # Reject invalid discriminator loss before backward execution
+        require_finite_tensor(loss_D, "loss", args, epoch + 1, step + 1, component)  # Reject invalid discriminator loss before backward execution
         opt_D.zero_grad(set_to_none=True)  # Reset discriminator gradients to None for reduced memory overhead
-        if scaler is not None:  # If using mixed precision
-            scaler.scale(loss_D).backward()  # Scale loss and backpropagate
-            scaler.unscale_(opt_D)  # Unscale discriminator gradients before finite validation
-            require_finite_model_state(D, "gradients", args, epoch + 1, step + 1, f"discriminator[{critic_step + 1}]", gradients=True)  # Reject invalid discriminator gradients before optimizer execution
-            scaler.step(opt_D)  # Update discriminator parameters with scaled gradients
-            scaler.update()  # Update scaler for next iteration
-        else:  # Standard precision
-            loss_D.backward()  # Backpropagate discriminator loss
-            require_finite_model_state(D, "gradients", args, epoch + 1, step + 1, f"discriminator[{critic_step + 1}]", gradients=True)  # Reject invalid discriminator gradients before optimizer execution
-            opt_D.step()  # Update discriminator parameters
-        require_finite_model_state(D, "parameters", args, epoch + 1, step + 1, f"discriminator[{critic_step + 1}]")  # Reject invalid discriminator parameters immediately after update
+        loss_D.backward()  # Backpropagate complete full-precision critic objective
+        require_finite_model_state(D, "gradients", args, epoch + 1, step + 1, component, gradients=True)  # Reject invalid discriminator gradients before optimizer execution
+        opt_D.step()  # Update discriminator parameters with unscaled full-precision gradients
+        require_finite_model_state(D, "parameters", args, epoch + 1, step + 1, component)  # Reject invalid discriminator parameters immediately after update
+        require_finite_optimizer_state(opt_D, f"discriminator_optimizer[{critic_step + 1}]", args, epoch + 1, step + 1)  # Reject invalid critic optimizer state immediately after update
         d_real_score = d_real.mean()  # Store average real score
         d_fake_score = d_fake.mean()  # Store average fake score
     return loss_D, gp, d_real_score, d_fake_score  # Return discriminator training results
@@ -3117,6 +3134,8 @@ def execute_generator_training_step(G, D, opt_G, scaler, device: torch.device, a
     :return: Generator loss tensor.
     """
 
+    require_finite_model_state(G, "parameters", args, epoch + 1, step + 1, "generator")  # Reject invalid generator parameters before backward execution
+    require_finite_optimizer_state(opt_G, "generator_optimizer", args, epoch + 1, step + 1)  # Reject invalid generator optimizer state before backward execution
     with autocast(device.type, enabled=(scaler is not None)):  # Enable AMP if available
         z = torch.randn(args.batch_size, args.latent_dim, device=device)  # Sample noise for generator step
         gen_labels = torch.randint(0, n_classes, (args.batch_size,), device=device)  # Sample labels for generator
@@ -3138,6 +3157,7 @@ def execute_generator_training_step(G, D, opt_G, scaler, device: torch.device, a
         require_finite_model_state(G, "gradients", args, epoch + 1, step + 1, "generator", gradients=True)  # Reject invalid generator gradients before optimizer execution
         opt_G.step()  # Update generator parameters
     require_finite_model_state(G, "parameters", args, epoch + 1, step + 1, "generator")  # Reject invalid generator parameters immediately after update
+    require_finite_optimizer_state(opt_G, "generator_optimizer", args, epoch + 1, step + 1)  # Reject invalid generator optimizer state immediately after update
     return g_loss  # Return generator loss tensor
 
 
