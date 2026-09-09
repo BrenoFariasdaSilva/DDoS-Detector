@@ -1322,6 +1322,7 @@ def apply_training_and_model_cli_overrides(args, overrides: Dict) -> None:
         overrides.setdefault("training", {})["epochs"] = args.epochs  # Set epochs
     if args.batch_size is not None:  # If batch_size specified
         overrides.setdefault("training", {})["batch_size"] = args.batch_size  # Set batch_size
+        overrides.setdefault("training", {})["batch_size_cli_override"] = True  # Preserve explicit CLI precedence
     if args.critic_steps is not None:  # If critic_steps specified
         overrides.setdefault("training", {})["critic_steps"] = args.critic_steps  # Set critic_steps
     if args.lr is not None:  # If lr specified
@@ -1393,6 +1394,7 @@ def apply_generation_and_data_cli_overrides(args, overrides: Dict) -> None:
 
     if args.num_workers is not None:  # If num_workers specified
         overrides.setdefault("dataloader", {})["num_workers"] = args.num_workers  # Set num_workers
+        overrides.setdefault("dataloader", {})["num_workers_cli_override"] = True  # Preserve explicit CLI precedence
 
     if args.remove_zero_variance:  # If remove_zero_variance flag set
         overrides.setdefault("dataset", {})["remove_zero_variance"] = True  # Enable remove_zero_variance
@@ -2649,7 +2651,8 @@ def normalize_args_and_setup_hardware(args: Any, config: Dict) -> tuple:
     if gpu_count > 0:  # If at least one GPU is available
         torch.backends.cudnn.benchmark = True  # Enable cuDNN autotuner for potential speedups
         
-    batch_multiplier = min(8, max(1, 2 * gpu_count)) if gpu_count > 0 else 1  # Scale by 2x per GPU but cap to 8x to avoid OOM
+    batch_size_cli_override = bool(config.get("training", {}).get("batch_size_cli_override", False))  # Detect explicit CLI batch-size precedence
+    batch_multiplier = 1 if batch_size_cli_override else (min(8, max(1, 2 * gpu_count)) if gpu_count > 0 else 1)  # Scale configured batch size only when CLI did not override it
     scaled_batch = configured_batch_size * batch_multiplier  # Compute scaled batch size once
     args.batch_size = int(scaled_batch)  # Apply scaled batch size to args
     args.use_amp = bool(args.use_amp and gpu_count > 0 and _torch_autocast is not None)  # Honor explicit AMP configuration only when CUDA autocast is available
@@ -2659,7 +2662,7 @@ def normalize_args_and_setup_hardware(args: Any, config: Dict) -> tuple:
     print(f"{BackgroundColors.GREEN}Detected {gpu_count} GPUs.{Style.RESET_ALL}")  # Print GPU count
     print(f"{BackgroundColors.GREEN}Using DataParallel: {use_dataparallel}{Style.RESET_ALL}")  # Print whether DataParallel will be used
     print(f"{BackgroundColors.GREEN}Batch size: {BackgroundColors.CYAN}{args.batch_size}{Style.RESET_ALL}")  # Print effective batch size after scaling
-    print(f"{BackgroundColors.GREEN}Suggested num_workers: {BackgroundColors.CYAN}{suggested_workers}{Style.RESET_ALL}")  # Print suggested workers value
+    print(f"{BackgroundColors.GREEN}Hardware suggested num_workers: {BackgroundColors.CYAN}{suggested_workers}{Style.RESET_ALL}")  # Print hardware-derived worker suggestion
     print(f"{BackgroundColors.GREEN}AMP enabled: {BackgroundColors.CYAN}{args.use_amp}{Style.RESET_ALL}")  # Print AMP usage
     print(f"{BackgroundColors.GREEN}cuDNN benchmark: {BackgroundColors.CYAN}{torch.backends.cudnn.benchmark}{Style.RESET_ALL}")  # Print cuDNN benchmark status
     send_telegram_message(TELEGRAM_BOT, compose_training_start_message(args, file_progress_prefix))  # Telegram start with colored prefix and file statistics
@@ -2668,7 +2671,7 @@ def normalize_args_and_setup_hardware(args: Any, config: Dict) -> tuple:
     if args.use_amp and device.type == "cuda":  # If AMP enabled and using CUDA
         print(f"{BackgroundColors.GREEN}Using Automatic Mixed Precision (AMP) for faster training{Style.RESET_ALL}")  # Print AMP detail
     if args.compile:  # If torch.compile requested
-        print(f"{BackgroundColors.GREEN}Using torch.compile() for optimized execution{Style.RESET_ALL}")  # Print compile detail
+        print(f"{BackgroundColors.GREEN}torch.compile() requested for optimized execution{Style.RESET_ALL}")  # Print compile request detail
 
     return device, training_start_time, file_start_time, epoch_milestones, file_progress_prefix  # Return hardware setup results
 
@@ -2688,7 +2691,11 @@ def create_dataset_and_dataloader(args, config: Dict, device: torch.device) -> t
     )  # Load dataset from CSV
 
     num_workers = int(config.get("dataloader", {}).get("num_workers", 8))  # Get base num_workers from config and cast to int
-    num_workers = adjust_num_workers_for_file(args.csv_path, num_workers, config)  # Adjust num_workers based on file size and system RAM
+    num_workers_cli_override = bool(config.get("dataloader", {}).get("num_workers_cli_override", False))  # Detect explicit CLI worker precedence
+    if not num_workers_cli_override:  # Auto-adjust workers only when CLI did not override them
+        num_workers = adjust_num_workers_for_file(args.csv_path, num_workers, config)  # Adjust num_workers based on file size and system RAM
+    else:  # Keep explicit CLI worker value unchanged
+        print(f"{BackgroundColors.GREEN}Using explicit num_workers: {BackgroundColors.CYAN}{num_workers}{Style.RESET_ALL}")  # Print deterministic CLI worker value
     
     if device.type == "cuda" and num_workers == 0:  # If CUDA available but adjusted workers is 0
         try:  # Attempt to fetch total RAM to decide whether to raise workers for CUDA
@@ -2787,8 +2794,13 @@ def create_models_and_optimizers(args, config: Dict, device: torch.device, featu
             print(f"{BackgroundColors.GREEN}Models compiled successfully{Style.RESET_ALL}")  # Notify successful compilation
         except Exception as e:  # Catch any exception during compilation
             print(f"{BackgroundColors.YELLOW}torch.compile() not available or failed: {e}{Style.RESET_ALL}")  # Warn but continue
+    elif args.compile:  # If compile requested with DataParallel
+        print(f"{BackgroundColors.YELLOW}torch.compile() skipped because DataParallel wraps the models{Style.RESET_ALL}")  # Report existing DataParallel compile limitation
 
-    scaler = torch.cuda.amp.GradScaler() if args.use_amp and device.type == "cuda" else None  # Initialize gradient scaler for AMP if enabled and on CUDA
+    if args.use_amp and device.type == "cuda":  # Initialize gradient scaler only for CUDA AMP
+        scaler = torch.amp.GradScaler("cuda", init_scale=1.0) if hasattr(torch, "amp") and hasattr(torch.amp, "GradScaler") else torch.cuda.amp.GradScaler(init_scale=1.0)  # Prefer modern AMP API with stable initial scale
+    else:  # Disable scaler outside CUDA AMP
+        scaler = None  # Keep standard precision path unchanged
 
     opt_D = torch.optim.Adam(
         cast(Any, D).parameters(), lr=args.lr, betas=(args.beta1, args.beta2)
@@ -5435,6 +5447,8 @@ def build_config_overrides_from_kwargs(kwargs: Dict) -> Dict:
                 cli_style_overrides.setdefault("paths", {})[key] = value
             elif key in ["epochs", "batch_size", "critic_steps", "lr", "beta1", "beta2", "lambda_gp", "save_every", "log_interval", "sample_batch", "use_amp", "compile"]:  # Training params
                 cli_style_overrides.setdefault("training", {})[key] = value
+                if key == "batch_size":  # If direct call sets batch size
+                    cli_style_overrides.setdefault("training", {})["batch_size_cli_override"] = True  # Preserve direct-call batch-size precedence
             elif key in ["latent_dim", "n_resblocks", "leaky_relu_alpha"]:  # Generator params
                 cli_style_overrides.setdefault("generator", {})[key] = value
                 if key == "leaky_relu_alpha":  # Also set discriminator alpha
@@ -5451,6 +5465,7 @@ def build_config_overrides_from_kwargs(kwargs: Dict) -> Dict:
                 cli_style_overrides.setdefault("generation", {})[key] = value
             elif key in ["num_workers"]:  # DataLoader params
                 cli_style_overrides.setdefault("dataloader", {})[key] = value
+                cli_style_overrides.setdefault("dataloader", {})["num_workers_cli_override"] = True  # Preserve direct-call worker precedence
             elif key in ["remove_zero_variance"]:  # Dataset params
                 cli_style_overrides.setdefault("dataset", {})[key] = value
             elif key in ["verbose"]:  # Execution params
