@@ -16769,10 +16769,11 @@ def build_previous_run_duration_labels(csv_path: str, tasks: List[dict], config:
     active_config = config if config is not None else CONFIG  # Resolve runtime configuration.
     current_run = get_current_experiment_run(active_config)  # Resolve current logical run.
     duration_labels = {task["global_id"]: "unavailable" for task in tasks}  # Initialize every task with required unavailable marker.
+    longest_duration_seconds: Dict[Any, float] = {}  # Store longest valid historical duration per planned task.
     prior_runs = [run_number for run_number in discover_cache_artifact_run_numbers(csv_path, config=active_config) if int(run_number) < current_run]  # Keep only genuinely earlier logical runs.
     if not prior_runs:  # Return defaults when no earlier cache artifact exists.
         return duration_labels  # Preserve first-execution semantics.
-    for run_number in prior_runs:  # Visit earlier runs from oldest to newest so newer matches replace older labels.
+    for run_number in prior_runs:  # Visit every earlier run so longest matching duration wins.
         run_config = build_experiment_run_config(active_config, int(run_number))  # Build run-specific cache configuration.
         run_cache = load_cache_results(csv_path, config=run_config, notify_discovery=False)  # Load authoritative recovered rows for this logical run.
         if not run_cache:  # Ignore empty or unrecoverable earlier runs.
@@ -16781,7 +16782,14 @@ def build_previous_run_duration_labels(csv_path: str, tasks: List[dict], config:
             previous_result = feature_process_cache_result(task, run_cache, attack_types_combined)  # Reuse production cache identity and compatibility rules.
             if previous_result is None:  # Leave prior label unchanged when this run lacks the task.
                 continue  # Move to next task.
-            duration_labels[task["global_id"]] = format_previous_run_duration_label(resolve_previous_run_duration_seconds(previous_result))  # Store newest earlier matching duration or unavailable.
+            duration_seconds = resolve_previous_run_duration_seconds(previous_result)  # Resolve trustworthy total duration seconds.
+            if duration_seconds is None:  # Ignore missing or invalid historical timings.
+                continue  # Move to next task.
+            global_id = task["global_id"]  # Reuse existing task identity for label storage.
+            if global_id not in longest_duration_seconds or duration_seconds > longest_duration_seconds[global_id]:  # Keep longest valid historical duration.
+                longest_duration_seconds[global_id] = duration_seconds  # Store conservative historical duration reference.
+    for global_id, duration_seconds in longest_duration_seconds.items():  # Format only tasks with valid historical durations.
+        duration_labels[global_id] = format_previous_run_duration_label(duration_seconds)  # Store final display label.
     return duration_labels  # Return resolved labels without retaining cache rows.
 
 
