@@ -23,13 +23,13 @@ FEATURE_NAMES = ["Full Features", "GA Features", "PCA Components", "RFE Features
 def make_notification_task(feature_set, global_id, dynamic_total, augmentation_ratio=None):  # Build one authoritative matrix-free notification task
     """Build one small feature-process task for deterministic notification tests."""
 
-    return {"feature_set": feature_set, "global_id": global_id, "total_combinations": dynamic_total, "feature_local_position": 1, "feature_local_total": 1, "hyperparameters_enabled": False, "augmentation_ratio": augmentation_ratio, "classifier_name": "Random Forest", "experiment_mode": "original_only" if augmentation_ratio is None else "original_training_augmented_testing", "execution_mode": "combined_files"}  # Preserve every identity used by production message construction
+    return {"feature_set": feature_set, "global_id": global_id, "total_combinations": dynamic_total, "feature_local_position": 1, "feature_local_total": 1, "hyperparameters_enabled": False, "augmentation_ratio": augmentation_ratio, "classifier_name": "Random Forest", "experiment_mode": "original_only" if augmentation_ratio is None else "original_training_augmented_testing", "execution_mode": "combined_files", "experiment_run": 1, "dataset": "dataset.csv"}  # Preserve every identity used by production message construction
 
 
 def make_notification_result(task, f1_score=0.75, elapsed_time_s=63):  # Build one small persisted-result notification mapping
     """Build scalar persisted result fields matching one task."""
 
-    return {"feature_set": task["feature_set"], "hyperparameter_mode": "Default Hyperparameters", "model_name": task["classifier_name"], "execution_mode": task["execution_mode"], "experiment_mode": task["experiment_mode"], "augmentation_ratio": 0.0 if task["augmentation_ratio"] is None else task["augmentation_ratio"], "accuracy": 0.8, "precision": 0.77, "recall": 0.76, "f1_score": f1_score, "fpr": 0.1, "fnr": 0.2, "elapsed_time_s": elapsed_time_s}  # Mirror persisted cache fields without matrices or estimators
+    return {"feature_set": task["feature_set"], "hyperparameter_mode": "Default Hyperparameters", "model_name": task["classifier_name"], "execution_mode": task["execution_mode"], "experiment_mode": task["experiment_mode"], "augmentation_ratio": 0.0 if task["augmentation_ratio"] is None else task["augmentation_ratio"], "experiment_run": task["experiment_run"], "dataset": task["dataset"], "accuracy": 0.8, "precision": 0.77, "recall": 0.76, "f1_score": f1_score, "fpr": 0.1, "fnr": 0.2, "elapsed_time_s": elapsed_time_s}  # Mirror persisted cache fields without matrices or estimators
 
 
 def make_notification_payload(process_context, feature_names, duplicate=False):  # Build one matrix-free coordinator payload for spawned notification tests
@@ -107,7 +107,7 @@ class FeatureProcessTelegramTests(unittest.TestCase):  # Verify persistent per-r
         pending = {feature_name: [task for task in tasks if task["feature_set"] == feature_name] for feature_name in FEATURE_NAMES}  # Partition exact feature-local queues
         payload = make_notification_payload(process_context, FEATURE_NAMES)  # Build four-worker matrix-free coordinator metadata
         baseline_children = {child.pid for child in mp.active_children()}  # Snapshot unrelated live children
-        with mock.patch.object(stacking, "send_telegram_message") as telegram_send, mock.patch.object(stacking, "log_feature_process_tree", return_value={"feature_workers": [], "auxiliary_processes": []}):  # Isolate external delivery and process-tree probing
+        with mock.patch.object(stacking, "send_telegram_message") as telegram_send, mock.patch.object(stacking, "notify_new_best_result_if_applicable"), mock.patch.object(stacking, "log_feature_process_tree", return_value={"feature_workers": [], "auxiliary_processes": []}):  # Isolate external delivery and process-tree probing
             final_status = stacking.execute_feature_set_processes(pending, payload, tasks, {}, process_context=process_context, process_target=run_notification_process_probe)  # Run four real spawned persistent workers
         messages = [call.args[1] for call in telegram_send.call_args_list]  # Read coordinator-owned Telegram bodies
         self.assertEqual(telegram_send.call_count, 4)  # Send exactly one completion for every supported feature worker
@@ -116,7 +116,7 @@ class FeatureProcessTelegramTests(unittest.TestCase):  # Verify persistent per-r
         self.assertTrue(any("GA Features" in message for message in messages))  # Notify one GA result
         self.assertTrue(any("PCA - Default Hyperparameters" in message for message in messages))  # Notify one PCA result with established label
         self.assertTrue(any("RFE Features" in message for message in messages))  # Notify one RFE result
-        self.assertEqual(final_status["global"], {"total": 4, "cached": 0, "pending": 0, "running": 0, "computed": 4, "failed": 0, "completed": 4})  # Preserve exact scientific completion status
+        self.assertEqual(final_status["global"], {"total": 4, "cached": 0, "pending": 0, "running": 0, "computed": 4, "failed": 0, "skipped": 0, "completed": 4})  # Preserve exact scientific completion status
         self.assertEqual(payload["notification_computations"].value, 4)  # Compute each combination exactly once
         self.assertEqual({child.pid for child in mp.active_children()} - baseline_children, set())  # Reap every feature worker after acknowledged delivery
 
@@ -124,7 +124,7 @@ class FeatureProcessTelegramTests(unittest.TestCase):  # Verify persistent per-r
         process_context = mp.get_context("spawn")  # Use a real spawned worker and coordinator
         task = make_notification_task("Full Features", 1, 1)  # Build one Full completion identity
         payload = make_notification_payload(process_context, ["Full Features"], duplicate=True)  # Request one duplicate completion event
-        with mock.patch.object(stacking, "send_telegram_message", side_effect=RuntimeError("Telegram unavailable")) as telegram_send, mock.patch.object(stacking, "log_feature_process_tree", return_value={"feature_workers": [], "auxiliary_processes": []}):  # Inject external delivery failure only
+        with mock.patch.object(stacking, "send_telegram_message", side_effect=RuntimeError("Telegram unavailable")) as telegram_send, mock.patch.object(stacking, "notify_new_best_result_if_applicable"), mock.patch.object(stacking, "log_feature_process_tree", return_value={"feature_workers": [], "auxiliary_processes": []}):  # Inject external delivery failure only
             final_status = stacking.execute_feature_set_processes({"Full Features": [task]}, payload, [task], {}, process_context=process_context, process_target=run_notification_process_probe)  # Complete scientific work despite Telegram failure
         self.assertEqual(telegram_send.call_count, 1)  # Consume only one delivery attempt despite duplicate event
         self.assertEqual(payload["notification_computations"].value, 1)  # Never recompute classifier work after delivery failure
@@ -135,23 +135,24 @@ class FeatureProcessTelegramTests(unittest.TestCase):  # Verify persistent per-r
         task = make_notification_task("GA Features", 4, 240)  # Build a nonlocal global identity in a dynamic 240-task plan
         result_entry = make_notification_result(task, f1_score=0.769859173861937, elapsed_time_s=1563)  # Preserve authoritative persisted result values
         notified = set()  # Create one coordinator-local de-duplication set
-        with mock.patch.object(stacking, "send_telegram_message") as telegram_send:  # Capture message before established host and script prefixing
+        with mock.patch.object(stacking, "send_telegram_message") as telegram_send, mock.patch.object(stacking, "notify_new_best_result_if_applicable"):  # Capture message before established host and script prefixing
             sent = stacking.send_feature_process_result_notification(task, result_entry, "computed", 240, notified)  # Send one restored completion body
         self.assertTrue(sent)  # Consume the one delivery attempt
-        self.assertEqual(telegram_send.call_args.args[1], "Finished combination 4/240: GA Features - Default Hyperparameters - Original Test Data - Random Forest with F1: 0.769859173861937 in 26m 3s")  # Preserve old wording with dynamic plan and persisted values
+        self.assertEqual(telegram_send.call_args.args[1], "Finished combination 4/240: Random Forest - Run 1 - GA Features - Default Hyperparameters - Original Test Data with F1: 0.769859173861937 in 26m 3s")  # Preserve current wording with dynamic plan and persisted values
         self.assertEqual(notified, {4})  # Reserve exact original global identity
 
     def test_training_start_message_uses_dynamic_plan_and_unavailable_eta(self):  # Verify start message identity and truthful ETA fallback
         task = make_notification_task("PCA Components", 13, 320)  # Build one dynamic PCA task identity
         task.update({"feature_local_position": 13, "feature_local_total": 100})  # Supply the feature-local runtime position
         notified = set()  # Track start notification identities
+        unavailable = set()  # Track starts that reported unavailable ETA.
         with mock.patch.object(stacking, "send_telegram_message") as telegram_send:  # Capture coordinator-owned start notification
-            handled = stacking.send_feature_process_training_start_notification({"status": "training_start", "feature_set": "PCA Components", "global_id": 13, "initial_eta": "unavailable"}, {13: task}, 320, notified, {})  # Exercise direct coordinator start handling
-            duplicate = stacking.send_feature_process_training_start_notification({"status": "training_start", "feature_set": "PCA Components", "global_id": 13, "initial_eta": "unavailable"}, {13: task}, 320, notified, {})  # Exercise duplicate start suppression
+            handled = stacking.send_feature_process_training_start_notification({"status": "training_start", "feature_set": "PCA Components", "global_id": 13, "initial_eta": "unavailable"}, {13: task}, 320, notified, unavailable, {})  # Exercise direct coordinator start handling
+            duplicate = stacking.send_feature_process_training_start_notification({"status": "training_start", "feature_set": "PCA Components", "global_id": 13, "initial_eta": "unavailable"}, {13: task}, 320, notified, unavailable, {})  # Exercise duplicate start suppression
         self.assertTrue(handled)  # Treat the first start event as handled
         self.assertTrue(duplicate)  # Treat duplicate start event as handled without sending
         self.assertEqual(telegram_send.call_count, 1)  # Send exactly one start notification
-        self.assertEqual(telegram_send.call_args.args[1], "[TRAINING START] Started classifier training | PCA - Default Hyperparameters - Original Test Data - Random Forest | Local combination: 13/100 | Global combination: 13/320 | Initial ETA: unavailable | Previous Run Duration: unavailable")  # Preserve exact start message format
+        self.assertIn("[TRAINING START] Started Random Forest classifier training | Run 1 - PCA - Default Hyperparameters - Original Test Data | Local combination: 13/100 | Global combination: 13/320 | Initial ETA: unavailable | Previous Run Duration: unavailable | ETA Pending Run Experiments: unavailable | Worker CPU:", telegram_send.call_args.args[1])  # Preserve current start message fields
         self.assertEqual(notified, {13})  # Reserve the exact start identity
 
     def test_cached_notifications_match_sequential_semantics(self):  # Verify cache hits remain CACHE notifications without fresh completion wording
@@ -250,7 +251,7 @@ class FeatureProcessTelegramTests(unittest.TestCase):  # Verify persistent per-r
         result_entry = make_notification_result(task)  # Build persisted scalar fields
         result_entry.update({"matrix": np.ones((3, 3)), "estimator": object(), "predictions": np.array([0, 1]), "probabilities": np.ones((2, 2)), "features_list": ["PC1"]})  # Add forbidden scientific objects outside notification fields
         notification_result = stacking.build_feature_process_notification_result(result_entry)  # Reduce result through production event builder
-        self.assertEqual(set(notification_result), {"feature_set", "hyperparameter_mode", "model_name", "execution_mode", "experiment_mode", "augmentation_ratio", "accuracy", "precision", "recall", "f1_score", "fpr", "fnr", "elapsed_time_s"})  # Carry only required scalar fields
+        self.assertEqual(set(notification_result), {"feature_set", "hyperparameter_mode", "model_name", "execution_mode", "experiment_mode", "augmentation_ratio", "experiment_run", "dataset", "accuracy", "precision", "recall", "f1_score", "fpr", "fnr", "elapsed_time_s"})  # Carry only required scalar fields
         self.assertFalse(any(isinstance(value, np.ndarray) for value in notification_result.values()))  # Exclude matrices, predictions, and probabilities
 
     def test_failure_shutdown_drains_already_queued_completion(self):  # Verify pending completion survives coordinator failure shutdown
@@ -261,11 +262,12 @@ class FeatureProcessTelegramTests(unittest.TestCase):  # Verify persistent per-r
         payload = make_notification_payload(process_context, feature_names)  # Build production-compatible coordinator payload
         payload["notification_barrier"] = process_context.Event()  # Coordinate failure only after completion publication
         baseline_children = {child.pid for child in mp.active_children()}  # Snapshot unrelated live children
-        with mock.patch.object(stacking, "send_telegram_message") as telegram_send, mock.patch.object(stacking, "log_feature_process_tree", return_value={"feature_workers": [], "auxiliary_processes": []}):  # Capture coordinator send and isolate process inspection
+        with mock.patch.object(stacking, "send_telegram_message") as telegram_send, mock.patch.object(stacking, "notify_new_best_result_if_applicable"), mock.patch.object(stacking, "log_feature_process_tree", return_value={"feature_workers": [], "auxiliary_processes": []}):  # Capture coordinator send and isolate process inspection
             with self.assertRaisesRegex(RuntimeError, "Injected notification shutdown failure"):  # Require existing worker failure propagation
                 stacking.execute_feature_set_processes(pending, payload, tasks, {}, process_context=process_context, process_target=run_notification_shutdown_probe)  # Exercise bounded failure drain and deterministic reaping
-        self.assertEqual(telegram_send.call_count, 1)  # Deliver already-persisted Full completion exactly once
-        self.assertIn("Finished combination 1/2", telegram_send.call_args.args[1])  # Preserve original global identity and dynamic total during failure
+        completion_messages = [call.args[1] for call in telegram_send.call_args_list if "Finished combination 1/2" in call.args[1]]  # Isolate completion notification from failure reports.
+        self.assertEqual(len(completion_messages), 1)  # Deliver already-persisted Full completion exactly once
+        self.assertIn("Finished combination 1/2", completion_messages[0])  # Preserve original global identity and dynamic total during failure
         self.assertEqual({child.pid for child in mp.active_children()} - baseline_children, set())  # Reap both success and failure workers
 
 
