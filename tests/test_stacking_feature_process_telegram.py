@@ -151,7 +151,7 @@ class FeatureProcessTelegramTests(unittest.TestCase):  # Verify persistent per-r
         self.assertTrue(handled)  # Treat the first start event as handled
         self.assertTrue(duplicate)  # Treat duplicate start event as handled without sending
         self.assertEqual(telegram_send.call_count, 1)  # Send exactly one start notification
-        self.assertEqual(telegram_send.call_args.args[1], "[TRAINING START] Started classifier training | PCA - Default Hyperparameters - Original Test Data - Random Forest | Local combination: 13/100 | Global combination: 13/320 | Initial ETA: unavailable")  # Preserve exact start message format
+        self.assertEqual(telegram_send.call_args.args[1], "[TRAINING START] Started classifier training | PCA - Default Hyperparameters - Original Test Data - Random Forest | Local combination: 13/100 | Global combination: 13/320 | Initial ETA: unavailable | Previous Run Duration: unavailable")  # Preserve exact start message format
         self.assertEqual(notified, {13})  # Reserve the exact start identity
 
     def test_cached_notifications_match_sequential_semantics(self):  # Verify cache hits remain CACHE notifications without fresh completion wording
