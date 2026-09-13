@@ -8022,7 +8022,7 @@ def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, 
     :param cancellation_checker: Optional callable returning True when this active evaluation should abort before persistence.
     :param previous_run_duration_label: Persisted earlier run duration label.
     :param eta_pending_run_experiments_label: Historical duration sum for pending run experiments.
-    :return: Metrics tuple (acc, prec, rec, f1, fpr, fnr, elapsed_time)
+    :return: Metrics tuple (acc, prec, rec, f1, fpr, fnr, elapsed_time, y_pred)
     """
     
     try:
@@ -8132,7 +8132,7 @@ def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, 
         telegram_msg = f"{notification_origin} | {notification_label}\n{msg}"  # Combine provenance, evaluation identity, and metrics
         send_telegram_message(TELEGRAM_BOT, telegram_msg)  # Send the provenance-aware individual-classifier result
 
-        return (acc, prec, rec, f1, fpr, fnr, int(round(elapsed_time)))  # Return the metrics tuple
+        return (acc, prec, rec, f1, fpr, fnr, int(round(elapsed_time)), y_pred)  # Return metrics and exact predictions.
     except RuntimeSkipRequested:
         try:
             model = None
@@ -8183,7 +8183,7 @@ def evaluate_stacking_classifier(model, X_train, y_train, X_test, y_test, config
     :param training_eta_callback: Optional callback receiving the first emitted nonfinal training ETA.
     :param previous_run_duration_label: Persisted earlier run duration label.
     :param eta_pending_run_experiments_label: Historical duration sum for pending run experiments.
-    :return: Metrics tuple (acc, prec, rec, f1, fpr, fnr, elapsed_time)
+    :return: Metrics tuple (acc, prec, rec, f1, fpr, fnr, elapsed_time, y_pred)
     """
     
     try:
@@ -13307,6 +13307,143 @@ def build_new_best_result_message(new_result: dict, previous_result: Optional[di
     return "\n".join(lines)  # Return complete notification text.
 
 
+def sanitize_best_artifact_component(value: Any) -> str:  # Build one filesystem-safe artifact directory component.
+    """
+    Sanitize one best-result artifact directory component.
+
+    :param value: Runtime value used in the directory name.
+    :return: Filesystem-safe component preserving safe characters.
+    """
+
+    component = re.sub(r'[\x00-\x1f<>:"/\\|?*]', "_", str(value).strip())  # Replace control and cross-platform path-unsafe characters only.
+    component = component.rstrip(". ")  # Remove Windows-unsafe trailing dots and spaces.
+    if component in {"", ".", ".."}:  # Reject empty and traversal components after sanitization.
+        raise ValueError(f"Invalid best-result artifact component: {value!r}")  # Surface unsafe runtime identity instead of inventing a name.
+    return component  # Return deterministic sanitized text.
+
+
+def build_best_artifact_directory_name(result_entry: dict) -> str:  # Build the deterministic scientific artifact directory name.
+    """
+    Build a deterministic directory name from one new-best result.
+
+    :param result_entry: Persisted result row containing experiment identity.
+    :return: Deterministic artifact directory name.
+    """
+
+    f1_value = resolve_result_metric_float(result_entry, "f1_score")  # Resolve the authoritative finite weighted F1 value.
+    if f1_value is None:  # Reject rows that cannot participate in existing best-result semantics.
+        raise ValueError("New-best artifact result has no finite F1 score")  # Prevent ambiguous artifact naming.
+    execution_mode = result_entry.get("execution_mode")  # Read structured execution mode from authoritative persisted row.
+    if execution_mode not in {"combined_files", "separate_files"}:  # Reject unsupported modes instead of mislabeling scientific evidence.
+        raise ValueError(f"Unsupported best-result execution mode: {execution_mode}")  # Surface missing or ambiguous evaluation semantics.
+    evaluation_mode = "Multiclass" if execution_mode == "combined_files" else "Binary"  # Map established combined and separate modes to scientific labels.
+    hyperparameter_mode = "OptimizedHyperparameters" if result_entry.get("hyperparameter_mode") == "Optimized Hyperparameters" else "DefaultHyperparameters"  # Map persisted mode to required deterministic token.
+    augmentation_mode = "DataAugment" if bool(result_entry.get("data_augmentation_enabled", False)) else "NoDataAugment"  # Derive augmentation state from normalized persisted metadata.
+    run_number = parse_persisted_experiment_run_value(result_entry.get("experiment_run", 1), "artifact experiment_run")  # Resolve run identity to prevent rounded-F1 directory collisions across runs.
+    components = [f"{f1_value:.6f}".replace(".", ","), evaluation_mode, result_entry.get("model_name"), result_entry.get("feature_set"), hyperparameter_mode, augmentation_mode, f"Run{run_number}"]  # Preserve required runtime identity in stable order.
+    return "-".join(sanitize_best_artifact_component(component) for component in components)  # Join sanitized components without altering safe characters.
+
+
+def persist_best_result_artifacts(result_entry: dict, y_true: Any, y_pred: Any, label_classes: Any, cache_ref_file: str, config: dict) -> str:  # Atomically persist one new-best scientific artifact bundle.
+    """
+    Persist scientific evaluation artifacts for one new-best result.
+
+    :param result_entry: Persisted result row containing metrics and identity.
+    :param y_true: Exact true labels used by metric calculation.
+    :param y_pred: Exact predictions used by metric calculation.
+    :param label_classes: Original class names in fitted encoder order.
+    :param cache_ref_file: Dataset reference used by existing cache placement.
+    :param config: Active runtime configuration dictionary.
+    :return: Final artifact directory path.
+    """
+
+    y_true_array = np.asarray(y_true)  # Normalize exact evaluated true labels without changing values.
+    y_pred_array = np.asarray(y_pred)  # Normalize exact evaluated predictions without recomputation.
+    class_names = [str(value) for value in np.asarray(label_classes).tolist()]  # Preserve fitted label-encoder ordering as readable names.
+    encoded_labels = list(range(len(class_names)))  # Match LabelEncoder integer order used by evaluation.
+    if y_true_array.ndim != 1 or y_pred_array.ndim != 1 or len(y_true_array) != len(y_pred_array):  # Validate aligned one-dimensional evaluation vectors.
+        raise ValueError("New-best artifact labels and predictions must be aligned one-dimensional arrays")  # Reject scientifically invalid artifact inputs.
+    if not class_names:  # Reject missing class ordering.
+        raise ValueError("New-best artifact class ordering is empty")  # Prevent uninterpretable matrices and reports.
+    observed_labels = set(np.unique(np.concatenate((y_true_array, y_pred_array))).tolist())  # Resolve all encoded values present in exact evaluation data.
+    if not observed_labels.issubset(set(encoded_labels)):  # Require every observed encoded value to map to a fitted class.
+        raise ValueError(f"New-best artifact labels lack mappings for encoded values: {sorted(observed_labels - set(encoded_labels))}")  # Surface incompatible label metadata.
+
+    raw_matrix = confusion_matrix(y_true_array, y_pred_array, labels=encoded_labels)  # Build raw matrix from exact evaluation vectors and fixed class order.
+    normalized_matrix = confusion_matrix(y_true_array, y_pred_array, labels=encoded_labels, normalize="true")  # Normalize each true-class row using sklearn convention.
+    report = classification_report(y_true_array, y_pred_array, labels=encoded_labels, target_names=class_names, output_dict=True, zero_division=cast(Any, 0))  # Build complete report from exact evaluation vectors.
+    cache_directory = Path(get_cache_file_path(cache_ref_file, config=config)).parent  # Reuse experiment run's existing Cache_Results directory.
+    directory_name = build_best_artifact_directory_name(result_entry)  # Resolve deterministic required directory identity.
+    final_directory = cache_directory / directory_name  # Place bundle beside its authoritative run cache.
+    validate_output_path(str(cache_directory), str(final_directory.resolve()))  # Prevent runtime identity from escaping Cache_Results.
+    temporary_directory = Path(tempfile.mkdtemp(prefix=f".{directory_name}.", dir=str(cache_directory)))  # Stage complete bundle in same parent for atomic publication.
+    artifact_identity = normalize_metadata_for_json({"directory_name": directory_name, "result": result_entry})  # Preserve full persisted result identity for collision validation.
+
+    try:  # Publish only a complete and internally consistent bundle.
+        raw_frame = pd.DataFrame(raw_matrix, index=class_names, columns=class_names)  # Label both raw matrix axes with fitted class order.
+        normalized_frame = pd.DataFrame(normalized_matrix, index=class_names, columns=class_names)  # Label both normalized matrix axes with fitted class order.
+        raw_frame.to_csv(temporary_directory / "confusion_matrix_raw.csv", index_label="true_label")  # Persist machine-readable raw counts.
+        normalized_frame.to_csv(temporary_directory / "confusion_matrix_normalized_true.csv", index_label="true_label", float_format="%.12g")  # Persist true-class row-normalized values.
+        report_frame = pd.DataFrame(cast(dict, report)).transpose()  # Convert sklearn report mapping into tabular machine-readable form.
+        report_frame.to_csv(temporary_directory / "classification_report.csv", index_label="label")  # Persist per-class and aggregate report rows.
+        with open(temporary_directory / "classification_report.json", "w", encoding="utf-8") as report_file:  # Open staged JSON report destination.
+            json.dump(normalize_metadata_for_json(report), report_file, indent=2, sort_keys=True, allow_nan=False)  # Persist deterministic JSON report content.
+        label_mapping = {"confusion_matrix_order": class_names, "classification_report_order": class_names, "encoded_to_class": [{"encoded_label": encoded_label, "class_label": class_name} for encoded_label, class_name in zip(encoded_labels, class_names)]}  # Record exact matrix, report, and encoder ordering.
+        with open(temporary_directory / "class_label_mapping.json", "w", encoding="utf-8") as mapping_file:  # Open staged label mapping destination.
+            json.dump(label_mapping, mapping_file, indent=2, sort_keys=True, allow_nan=False)  # Persist deterministic label interpretation metadata.
+        metadata = {"artifact_identity": artifact_identity, "metrics": {field: result_entry.get(field) for field in ("f1_score", "accuracy", "precision", "recall", "fpr", "fnr")}, "experiment": {field: result_entry.get(field) for field in ("dataset", "execution_mode", "attack_types_combined", "feature_set", "classifier_type", "model_name", "model", "hyperparameter_mode", "experiment_id", "experiment_run", "experiment_mode", "augmentation_ratio", "data_augmentation_enabled", "n_features", "n_samples_train", "n_samples_test", "cv_method", "hyperparameters", "features_list")}, "timings_seconds": {field: result_entry.get(field) for field in ("elapsed_time_s", *PHASE_RUNTIME_COLUMNS)}, "configuration": {"evaluation": {field: config.get("evaluation", {}).get(field) for field in ("random_state", "test_size", "cv_folds", "n_jobs", "feature_extraction_n_jobs")}, "methods": config.get("stacking", {}).get("methods", {})}, "confusion_matrix_normalization": "Each row is divided by its true-class support; zero-support rows remain zero.", "class_labels_file": "class_label_mapping.json"}  # Store available metrics, identity, timing, and reproducibility configuration.
+        with open(temporary_directory / "experiment_metrics_metadata.json", "w", encoding="utf-8") as metadata_file:  # Open staged experiment metadata destination.
+            json.dump(normalize_metadata_for_json(metadata), metadata_file, indent=2, sort_keys=True, allow_nan=False)  # Persist deterministic metadata without invented values.
+        for matrix, title, filename, value_format in ((raw_matrix, "Raw confusion matrix", "confusion_matrix_raw.png", "d"), (normalized_matrix, "True-class row-normalized confusion matrix", "confusion_matrix_normalized_true.png", ".3f")):  # Render both required human-readable matrices consistently.
+            figure, axis = plt.subplots(figsize=(max(8, len(class_names) * 0.8), max(6, len(class_names) * 0.65)))  # Size figure for readable class labels.
+            try:  # Close each figure even if rendering fails.
+                sns.heatmap(matrix, annot=True, fmt=value_format, cmap="Blues", xticklabels=class_names, yticklabels=class_names, ax=axis)  # Render values with exact persisted class order.
+                axis.set_xlabel("Predicted class")  # Label prediction axis.
+                axis.set_ylabel("True class")  # Label true-class axis.
+                axis.set_title(title)  # Document raw or normalization semantics in image.
+                figure.tight_layout()  # Prevent class labels from being clipped.
+                figure.savefig(temporary_directory / filename, dpi=300, bbox_inches="tight")  # Persist staged PNG using existing matplotlib dependency.
+            finally:  # Release matplotlib state on success or failure.
+                plt.close(figure)  # Close exact staged figure.
+        if final_directory.exists():  # Avoid mixing or overwriting an existing deterministic bundle.
+            metadata_path = final_directory / "experiment_metrics_metadata.json"  # Resolve existing bundle identity source.
+            with open(metadata_path, "r", encoding="utf-8") as existing_file:  # Read existing identity before reuse.
+                existing_metadata = json.load(existing_file)  # Parse existing bundle metadata.
+            if existing_metadata.get("artifact_identity") != artifact_identity:  # Detect rounded-name collision or incomplete foreign content.
+                raise FileExistsError(f"Best-result artifact directory identity collision: {final_directory}")  # Preserve both scientific results without mixing files.
+            shutil.rmtree(temporary_directory)  # Remove redundant owned staging directory after exact identity match.
+            return str(final_directory)  # Reuse already complete identical bundle deterministically.
+        os.replace(temporary_directory, final_directory)  # Publish complete staged directory atomically within Cache_Results.
+        sync_cache_parent_directory(str(final_directory))  # Synchronize new directory entry where supported.
+        return str(final_directory)  # Return published bundle path.
+    finally:  # Remove only this call's unpublished staging directory.
+        if temporary_directory.exists():  # Avoid touching successfully published final directory.
+            shutil.rmtree(temporary_directory)  # Delete incomplete or redundant owned staging files.
+
+
+def persist_best_result_artifacts_safely(result_entry: dict, y_true: Any, y_pred: Any, label_classes: Any, cache_ref_file: str, config: dict) -> Optional[str]:  # Persist artifacts without changing durable experiment success.
+    """
+    Persist new-best artifacts while isolating artifact failures from cache state.
+
+    :param result_entry: Persisted result row containing metrics and identity.
+    :param y_true: Exact true labels used by metric calculation.
+    :param y_pred: Exact predictions used by metric calculation.
+    :param label_classes: Original class names in fitted encoder order.
+    :param cache_ref_file: Dataset reference used by existing cache placement.
+    :param config: Active runtime configuration dictionary.
+    :return: Artifact directory path or None when persistence fails.
+    """
+
+    try:  # Isolate observational artifact persistence from authoritative cache success.
+        artifact_path = persist_best_result_artifacts(result_entry, y_true, y_pred, label_classes, cache_ref_file, config)  # Persist exact evaluation evidence atomically.
+        print(f"{BackgroundColors.GREEN}[NEW BEST ARTIFACTS] Saved scientific evaluation bundle: {BackgroundColors.CYAN}{artifact_path}{Style.RESET_ALL}")  # Report successful bundle publication.
+        return artifact_path  # Return published path to callers needing confirmation.
+    except Exception as artifact_error:  # Preserve valid cached result when auxiliary artifact writing fails.
+        print(f"{BackgroundColors.YELLOW}[WARNING] New-best scientific artifact persistence failed: {artifact_error}{Style.RESET_ALL}")  # Make artifact failure visible in production logs.
+        send_exception_via_telegram(type(artifact_error), artifact_error, artifact_error.__traceback__)  # Reuse established remote failure reporting.
+        return None  # Report artifact failure without altering metrics or cache state.
+
+
 def register_known_best_result(result_entry: dict) -> None:
     """
     Register one known result without sending notifications.
@@ -13352,11 +13489,16 @@ def initialize_new_best_result_state(reference_path: str, cache_dict: Optional[d
                 print(f"{BackgroundColors.YELLOW}Warning: New-best initialization skipped final result source {BackgroundColors.CYAN}{final_path}{BackgroundColors.YELLOW}: {exc}{Style.RESET_ALL}")  # Log skipped historical source.
 
 
-def notify_new_best_result_if_applicable(result_entry: dict) -> bool:
+def notify_new_best_result_if_applicable(result_entry: dict, y_true: Any = None, y_pred: Any = None, label_classes: Any = None, cache_ref_file: Optional[str] = None, config: Optional[dict] = None) -> bool:  # Compare through existing semantics and optionally persist exact evaluation evidence.
     """
     Notify when one new result establishes a dataset-specific best F1.
 
     :param result_entry: Newly completed and persisted result entry.
+    :param y_true: Exact true labels used by metric calculation, when locally available.
+    :param y_pred: Exact predictions used by metric calculation, when locally available.
+    :param label_classes: Original class names in fitted encoder order, when locally available.
+    :param cache_ref_file: Dataset reference used by existing cache placement, when locally available.
+    :param config: Active runtime configuration dictionary, when locally available.
     :return: True when a new-best notification was emitted or attempted.
     """
 
@@ -13376,6 +13518,8 @@ def notify_new_best_result_if_applicable(result_entry: dict) -> bool:
         send_telegram_message(TELEGRAM_BOT, message)  # Reuse established Telegram mechanism.
     except Exception as telegram_error:  # Preserve existing failure-handling style for notification transport.
         print(f"{BackgroundColors.YELLOW}New-best Telegram notification failed: {telegram_error}{Style.RESET_ALL}")  # Log transport failure without corrupting execution.
+    if y_true is not None and y_pred is not None and label_classes is not None and cache_ref_file is not None:  # Persist artifacts only when exact local evaluation data accompanies a genuine new best.
+        persist_best_result_artifacts_safely(result_entry, y_true, y_pred, label_classes, cache_ref_file, config if isinstance(config, dict) else CONFIG)  # Preserve evidence after authoritative cache persistence and comparison.
     return True  # Report notification attempt.
 
 
@@ -13766,7 +13910,7 @@ def send_feature_process_training_eta_notification(status: dict, tasks_by_global
     return True  # Report handled ETA event.
 
 
-def send_feature_process_result_notification(task: dict, result_entry: dict, event: str, dynamic_total: int, notified_global_ids: set) -> bool:  # Send one coordinator-owned persisted-result notification at most once
+def send_feature_process_result_notification(task: dict, result_entry: dict, event: str, dynamic_total: int, notified_global_ids: set, new_best_decision: Any = None) -> bool:  # Send one coordinator-owned result notification and publish its best-result decision.
     """
     Send one computed or cached persistent-process result notification.
 
@@ -13775,6 +13919,7 @@ def send_feature_process_result_notification(task: dict, result_entry: dict, eve
     :param event: Computed or cached terminal event.
     :param dynamic_total: Actual evaluation-plan length.
     :param notified_global_ids: Coordinator-owned notification identity set.
+    :param new_best_decision: Optional shared signed global ID receiving the new-best decision.
     :return: True when this result consumed its sole notification attempt.
     """
 
@@ -13801,12 +13946,16 @@ def send_feature_process_result_notification(task: dict, result_entry: dict, eve
         send_telegram_message(TELEGRAM_BOT, telegram_msg)  # Send through the established host, OS, and script-prefixed utility
     except Exception:  # Preserve the utility's existing silent delivery-failure semantics under patched or alternate senders
         pass  # Keep persisted result, status, and future cache recovery valid
+    is_new_best = False  # Default cached and noncomputed events to no artifact publication.
     if event == "computed":  # Limit new-best detection to newly completed worker results.
-        notify_new_best_result_if_applicable(result_entry)  # Compare and notify from the coordinator after durable persistence.
+        is_new_best = notify_new_best_result_if_applicable(result_entry)  # Compare and notify from the coordinator after durable persistence.
+    if new_best_decision is not None:  # Return authoritative comparison outcome through tiny shared state instead of transporting evaluation vectors.
+        with new_best_decision.get_lock():  # Serialize decision publication with worker reads.
+            new_best_decision.value = global_id if is_new_best else -global_id  # Encode positive new-best and negative non-best outcomes for this task.
     return True  # Report that this combination consumed its one notification attempt
 
 
-def handle_feature_process_result_notification(status: dict, tasks_by_global_id: dict, dynamic_total: int, notified_global_ids: set, notification_acknowledgements: dict) -> bool:  # Handle one small worker result event in the coordinator
+def handle_feature_process_result_notification(status: dict, tasks_by_global_id: dict, dynamic_total: int, notified_global_ids: set, notification_acknowledgements: dict, new_best_decisions: Optional[dict] = None) -> bool:  # Handle one small worker result event and return authoritative best state.
     """
     Handle one persisted worker result event and release its feature worker.
 
@@ -13815,6 +13964,7 @@ def handle_feature_process_result_notification(status: dict, tasks_by_global_id:
     :param dynamic_total: Actual evaluation-plan length.
     :param notified_global_ids: Coordinator-owned notification identity set.
     :param notification_acknowledgements: Per-feature shared acknowledgement values.
+    :param new_best_decisions: Optional per-feature shared signed best-result decisions.
     :return: True when a notification result event was handled.
     """
 
@@ -13824,13 +13974,18 @@ def handle_feature_process_result_notification(status: dict, tasks_by_global_id:
     feature_set_name = status.get("feature_set")  # Resolve the reporting feature worker identity
     global_id = status.get("global_id")  # Resolve the original global task identity
     acknowledgement = notification_acknowledgements.get(feature_set_name)  # Resolve only this feature worker's shared acknowledgement
+    new_best_decision = (new_best_decisions or {}).get(feature_set_name)  # Resolve this worker's compact best-result response channel.
     try:  # Guarantee worker release even when notification metadata or transport is unavailable
         task = tasks_by_global_id.get(global_id)  # Resolve the event through the authoritative dynamic plan
         if task is None or task.get("feature_set") != feature_set_name:  # Reject unknown or cross-feature result events
             return True  # Mark malformed notification event as deterministically handled
-        send_feature_process_result_notification(task, notification_result, status.get("event"), dynamic_total, notified_global_ids)  # Send computed or cached result through the one coordinator-owned path
+        send_feature_process_result_notification(task, notification_result, status.get("event"), dynamic_total, notified_global_ids, new_best_decision)  # Send result and publish authoritative comparison outcome.
         return True  # Report completion-event handling regardless of Telegram delivery outcome
     finally:  # Release the exact feature worker after its notification event is handled
+        if new_best_decision is not None and global_id is not None:  # Ensure malformed notification data cannot leave worker waiting indefinitely.
+            with new_best_decision.get_lock():  # Serialize fallback decision publication with worker reads.
+                if abs(int(new_best_decision.value)) != int(global_id):  # Preserve only an outcome already published for this exact task.
+                    new_best_decision.value = -int(global_id)  # Release worker with non-best outcome when coordinator could not compare the row.
         if acknowledgement is not None and global_id is not None:  # Update only a production worker acknowledgement
             with acknowledgement.get_lock():  # Serialize the shared integer update across coordinator and child
                 acknowledgement.value = max(int(acknowledgement.value), int(global_id))  # Advance monotonically so stale duplicate events cannot release a future task incorrectly
@@ -14239,7 +14394,7 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
             log_training_phase(name, model_name, "Cache persistence", "Started", hyperparameters_enabled, augmentation_ratio)  # Mark contextual result cache persistence separately from training.
             persist_cache_result_entry(cache_ref_file, result_entry, cache_dict, config=config)  # Persist this atomic classifier result immediately and register its resume identity
             remove_eta_pending_run_experiment_task(active_pending_duration_tasks, current_combination)  # Remove persisted work from future pending-run ETA.
-            notify_new_best_result_if_applicable(result_entry)  # Notify only after the new individual result is durably cached.
+            notify_new_best_result_if_applicable(result_entry, model_y_test, metrics[7], label_encoder.classes_, cache_ref_file, config)  # Persist exact evaluation evidence only after durable cache and authoritative new-best comparison.
             log_training_phase(name, model_name, "Cache persistence", "Completed", hyperparameters_enabled, augmentation_ratio)  # Mark contextual durable cache completion before artifact export.
             write_memory_phase_event("after_cache_persist", config=config, **phase_metadata, event_outcome="persisted")  # Publish cache persistence completion
 
@@ -14434,7 +14589,7 @@ def run_stacking_evaluation_for_feature_set(name, stacking_model, X_train_df, y_
         log_training_phase(name, "StackingClassifier", "Cache persistence", "Started", hyperparameters_enabled, augmentation_ratio)  # Mark contextual stacking cache persistence separately from training.
         persist_cache_result_entry(cache_ref_file, stacking_result_entry, cache_dict, config=config)  # Persist this atomic stacking result immediately and register its resume identity
         remove_eta_pending_run_experiment_task(active_pending_duration_tasks, current_combination)  # Remove persisted stacking work from future pending-run ETA.
-        notify_new_best_result_if_applicable(stacking_result_entry)  # Notify only after the new stacking result is durably cached.
+        notify_new_best_result_if_applicable(stacking_result_entry, y_test, s_y_pred, label_encoder.classes_, cache_ref_file, config)  # Persist exact stacking evidence only after durable cache and authoritative new-best comparison.
         log_training_phase(name, "StackingClassifier", "Cache persistence", "Completed", hyperparameters_enabled, augmentation_ratio)  # Mark contextual durable stacking cache completion before artifact export.
         write_memory_phase_event("after_cache_persist", config=config, **phase_metadata, event_outcome="persisted")  # Publish stacking cache persistence completion
 
@@ -15006,7 +15161,7 @@ def evaluate_on_dataset(
                     phase_runtime_fields = build_runtime_phase_fields(config, name, model_name, bool(hyperparameters_enabled), preprocessing_time_s, training_ram_stats)  # Build phase runtime fields before immediate cache persistence.
                     result_entry = build_classifier_result_entry(loaded_model.__class__.__name__, file, execution_mode_str, attack_types_combined, name, classifier_type, model_name, data_source_label, experiment_id, experiment_mode, augmentation_ratio, len(subset_feature_names), original_train_count, len(y_augmented), metrics, subset_feature_names, hyperparams_map=hyperparams_map, hyperparameters_enabled=hyperparameters_enabled, effective_hyperparameters=serialize_effective_estimator_parameters(loaded_model), experiment_run=get_current_experiment_run(config), phase_runtime_fields=phase_runtime_fields)  # Persist the active run on augmented result rows.
                     persist_cache_result_entry(effective_cache_ref, result_entry, cache_dict, config=config)
-                    notify_new_best_result_if_applicable(result_entry)  # Notify only after the new augmented result is durably cached.
+                    notify_new_best_result_if_applicable(result_entry, y_augmented, metrics[7], artifact_bundle["label_encoder"].classes_, effective_cache_ref, config)  # Persist exact loaded-model evidence only after durable cache and authoritative new-best comparison.
                     all_results[(name, model_name)] = result_entry
                     progress_bar.update(1)
                     current_combination += 1
@@ -17788,7 +17943,7 @@ def log_feature_process_combination(task: dict, status_state: dict, message: str
     sys.stdout.flush()  # Flush every lifecycle record for detached SSH observability
 
 
-def evaluate_feature_process_original_task(task: dict, process_payload: dict, resources: dict, model_prototype: Any, cache_dict: dict, status_state: dict, status_queue: Any) -> dict:  # Fit and persist one original-data combination through existing scientific logic
+def evaluate_feature_process_original_task(task: dict, process_payload: dict, resources: dict, model_prototype: Any, cache_dict: dict, status_state: dict, status_queue: Any) -> Tuple[dict, Any, Any, Any]:  # Fit, persist, and retain exact labels until coordinator new-best decision.
     """
     Evaluate one original-data process task through the existing classifier path.
 
@@ -17799,7 +17954,7 @@ def evaluate_feature_process_original_task(task: dict, process_payload: dict, re
     :param cache_dict: Worker-local resume cache mapping.
     :param status_state: Shared process-safe global and feature-local counters.
     :param status_queue: Multiprocessing lifecycle queue.
-    :return: Durably persisted classifier result entry.
+    :return: Persisted result entry, exact true labels, predictions, and class order.
     """
 
     active_model = clone(model_prototype)  # Clone the process-local prototype so fitted state never crosses combinations
@@ -17830,12 +17985,14 @@ def evaluate_feature_process_original_task(task: dict, process_payload: dict, re
     persist_cache_result_entry(process_payload["cache_ref_file"], result_entry, cache_dict, config=process_payload["config"])  # Persist and verify this completed result immediately through the process-safe cache transaction
     export_model_and_scaler(active_model, resources["scaler"], dataset_name, task["classifier_name"], feature_set=artifact_feature_set, dataset_csv_path=process_payload["file"], config=process_payload["config"], artifact_context=artifact_context, label_encoder=resources["label_encoder"], transformer=resources["transformer"])  # Persist the fitted model and preprocessing through the existing process-safe model transaction
     log_feature_process_combination(task, status_state, "Persistence completed")  # Confirm result and model durability before completion counting
-    del active_model, artifact_context, metrics, training_ram_stats, phase_metadata  # Release fitted model and all combination-specific temporary metadata
+    exact_predictions = metrics[7]  # Retain exact predictions only until coordinator resolves existing new-best semantics.
+    label_classes = resources["label_encoder"].classes_  # Retain fitted encoder order for scientifically interpretable artifacts.
+    del active_model, artifact_context, training_ram_stats, phase_metadata  # Release fitted model and combination-specific metadata while retaining artifact evidence.
     gc.collect()  # Reclaim estimator, predictions, probabilities, and metric temporaries before the next task
-    return result_entry  # Return only the small persisted result record
+    return result_entry, model_y_test, exact_predictions, label_classes  # Return local evidence without copying it through multiprocessing transport.
 
 
-def evaluate_feature_process_augmented_task(task: dict, process_payload: dict, ratio_data: dict, model_prototype: Any, cache_dict: dict, status_state: dict) -> dict:  # Evaluate one augmented-testing combination through an exact persisted model artifact
+def evaluate_feature_process_augmented_task(task: dict, process_payload: dict, ratio_data: dict, model_prototype: Any, cache_dict: dict, status_state: dict) -> Tuple[dict, Any, Any, Any]:  # Evaluate, persist, and retain exact labels until coordinator new-best decision.
     """
     Evaluate one augmented-testing process task through the existing loaded-model path.
 
@@ -17845,7 +18002,7 @@ def evaluate_feature_process_augmented_task(task: dict, process_payload: dict, r
     :param model_prototype: Unfitted estimator prototype used for artifact identity.
     :param cache_dict: Worker-local resume cache mapping.
     :param status_state: Shared process-safe global and feature-local counters.
-    :return: Durably persisted classifier result entry.
+    :return: Persisted result entry, exact true labels, predictions, and class order.
     """
 
     if is_lstm_classifier_name(task["classifier_name"]):
@@ -17896,9 +18053,10 @@ def evaluate_feature_process_augmented_task(task: dict, process_payload: dict, r
     log_feature_process_combination(task, status_state, "Persistence started")  # Announce the atomic augmented result transaction
     persist_cache_result_entry(process_payload["cache_ref_file"], result_entry, cache_dict, config=process_payload["config"])  # Persist and verify this completed result immediately
     log_feature_process_combination(task, status_state, "Persistence completed")  # Confirm augmented result durability
-    del loaded_model, artifact_bundle, artifact_context, y_augmented, y_predicted, metrics, training_ram_stats  # Release model, predictions, labels, and metrics
+    label_classes = artifact_bundle["label_encoder"].classes_  # Retain fitted encoder order for scientifically interpretable artifacts.
+    del loaded_model, artifact_bundle, artifact_context, metrics, training_ram_stats  # Release model and metadata while retaining exact artifact evidence.
     gc.collect()  # Reclaim all combination-specific augmented evaluation memory
-    return result_entry  # Return only the small persisted result record
+    return result_entry, y_augmented, y_predicted, label_classes  # Return local evidence without copying it through multiprocessing transport.
 
 
 def reload_feature_process_task_cache(task: dict, process_payload: dict, model_prototype: Any) -> Tuple[Optional[dict], dict]:  # Perform final cache validation immediately before data loading or fitting
@@ -18072,6 +18230,24 @@ def await_feature_process_notification_acknowledgement(task: dict, process_paylo
         return  # Continue without blocking outside production coordinator ownership.
     while int(acknowledgement.value) < int(task["global_id"]):  # Wait until coordinator handles this start event.
         time.sleep(0.01)  # Poll tiny shared state without extra threads or dependencies.
+
+
+def await_feature_process_new_best_decision(task: dict, process_payload: dict) -> bool:  # Wait for coordinator's authoritative strict-F1 comparison outcome.
+    """
+    Wait for the coordinator new-best decision for one persisted worker result.
+
+    :param task: Authoritative feature-process task descriptor.
+    :param process_payload: Small worker payload containing the shared decision value.
+    :return: True when this task established a new best result.
+    """
+
+    decision = process_payload.get("new_best_decision")  # Resolve shared signed decision value when production wiring supplies it.
+    if decision is None:  # Preserve focused tests and alternate process targets without coordinator decision wiring.
+        return False  # Skip artifact publication when no authoritative comparison outcome exists.
+    global_id = int(task["global_id"])  # Resolve exact task identity represented by signed shared state.
+    while abs(int(decision.value)) != global_id:  # Wait until coordinator processes this exact task despite runtime queue sorting.
+        time.sleep(0.01)  # Poll tiny shared state without copying labels or predictions.
+    return int(decision.value) == global_id  # Accept only positive exact-task decision as new best.
 
 
 def create_feature_process_runtime_skip_state(process_context: Any, tasks: List[dict]) -> dict:
@@ -18261,7 +18437,7 @@ def process_feature_process_task(task: dict, process_payload: dict, model_maps: 
                 log_feature_process_combination(task, status_state, "Original memmap data loading started")  # Announce exact required original resource loading
                 resource_state["original_resources"] = prepare_feature_process_original_resources(process_payload)  # Open shared sources and build only this feature set's matrices
                 log_feature_process_combination(task, status_state, "Original memmap data loading completed")  # Confirm exact required original resources are ready
-            result_entry = evaluate_feature_process_original_task(task, process_payload, resource_state["original_resources"], model_prototype, resource_state["cache_dict"], status_state, status_queue)  # Fit, predict, calculate metrics, and persist through existing logic
+            evaluation_output = evaluate_feature_process_original_task(task, process_payload, resource_state["original_resources"], model_prototype, resource_state["cache_dict"], status_state, status_queue)  # Fit, predict, calculate metrics, and retain exact artifact evidence locally.
         else:  # Load only the exact augmentation ratio required by this pending task
             if resource_state["original_resources"] is not None:  # Release large original feature matrices before augmented-only prediction
                 cleanup_feature_process_original_resources(resource_state["original_resources"])  # Close worker mappings and delete only worker-owned feature files
@@ -18281,13 +18457,25 @@ def process_feature_process_task(task: dict, process_payload: dict, model_maps: 
             ratio_row_count = len(resource_state["ratio_data"]["y_encoded"] if "y_encoded" in resource_state["ratio_data"] else resource_state["ratio_data"]["y_raw"])  # Resolve current-ratio sample cardinality only after required loading
             task["expected_n_samples_test"] = ratio_row_count  # Record actual lazy sample count for result metadata without pre-execution scanning
             log_feature_process_combination(task, status_state, f"Augmentation ratio data loading completed with {ratio_row_count} rows")  # Confirm exact current-ratio sample size
-            result_entry = evaluate_feature_process_augmented_task(task, process_payload, resource_state["ratio_data"], model_prototype, resource_state["cache_dict"], status_state)  # Predict, calculate metrics, and persist through existing logic
+            evaluation_output = evaluate_feature_process_augmented_task(task, process_payload, resource_state["ratio_data"], model_prototype, resource_state["cache_dict"], status_state)  # Predict, calculate metrics, and retain exact artifact evidence locally.
+        if isinstance(evaluation_output, tuple) and len(evaluation_output) == 4:  # Accept production evaluator output containing local artifact evidence.
+            result_entry, artifact_y_true, artifact_y_pred, artifact_label_classes = evaluation_output  # Unpack without copying large evaluation vectors across processes.
+        else:  # Preserve focused tests and alternate evaluator targets returning only a result row.
+            result_entry = cast(dict, evaluation_output)  # Retain legacy small result-only behavior outside production evaluation.
+            artifact_y_true = artifact_y_pred = artifact_label_classes = None  # Mark exact evaluation evidence unavailable.
         transition_feature_process_status(status_state, task, "computed")  # Count durably persisted successful computation exactly once before noncritical cleanup
         finish_eta_pending_run_experiment(process_payload.get("eta_pending_run_experiments_state"), task)  # Remove persisted work from future pending-run estimates.
         task_finished = True  # Preserve completed status if later cleanup or logging fails
+        new_best_decision = process_payload.get("new_best_decision")  # Resolve per-worker response state before publishing current completion.
+        if new_best_decision is not None:  # Reset stale outcome because elapsed-time sorting may make global IDs nonmonotonic.
+            with new_best_decision.get_lock():  # Serialize reset with coordinator decision publication.
+                new_best_decision.value = 0  # Mark current task decision pending without transporting evaluation vectors.
         publish_feature_process_result_event(task, process_payload, result_entry, "computed", status_queue)  # Queue one coordinator-owned notification attempt before combination cleanup
+        is_new_best = await_feature_process_new_best_decision(task, process_payload)  # Receive authoritative coordinator comparison while exact vectors remain worker-local.
+        if is_new_best and artifact_y_true is not None and artifact_y_pred is not None and artifact_label_classes is not None:  # Persist only genuine new-best evidence with complete local inputs.
+            persist_best_result_artifacts_safely(result_entry, artifact_y_true, artifact_y_pred, artifact_label_classes, process_payload["cache_ref_file"], process_payload["config"])  # Publish bundle without retraining, prediction, or vector transport.
         log_feature_process_combination(task, status_state, "Combination cleanup started")  # Announce combination-specific release after durable completion
-        del result_entry  # Drop the completed result record after durable cache persistence
+        del result_entry, evaluation_output, artifact_y_true, artifact_y_pred, artifact_label_classes  # Drop result and exact evaluation evidence after optional artifact publication.
         gc.collect()  # Reclaim estimator, prediction, probability, metric, and temporary array memory
         log_feature_process_combination(task, status_state, "Combination cleanup completed")  # Confirm bounded cleanup before next task
     except RuntimeSkipRequested as error:  # Convert cooperative active cancellation into a skipped terminal state
@@ -18611,6 +18799,7 @@ def execute_feature_set_processes(pending_by_feature: dict, process_payload: dic
     notified_training_eta_global_ids = set()  # Track one coordinator-owned training-ETA notification attempt per non-cached combination
     training_start_unavailable_global_ids = set()  # Track start notifications that reported unavailable ETA
     notification_acknowledgements = {feature_set_name: context.Value("q", 0) for feature_set_name in process_payload["feature_mode_names"]}  # Create one monotonic acknowledgement per persistent feature worker
+    new_best_decisions = {feature_set_name: context.Value("q", 0) for feature_set_name in process_payload["feature_mode_names"]}  # Create one signed authoritative best-result response per worker.
     for task in tasks:  # Log each valid pre-start cache result without changing already initialized counters
         if task.get("global_id") not in cached_results:  # Skip pending tasks during cache recovery reporting
             continue  # Move to next authoritative task
@@ -18644,6 +18833,7 @@ def execute_feature_set_processes(pending_by_feature: dict, process_payload: dic
             child_payload["tasks"] = list(pending_by_feature[feature_set_name])  # Assign only matrix-free feature-local pending descriptors
             child_payload["feature_metadata"] = process_payload["feature_metadata_by_name"][feature_set_name]  # Assign only this feature set's small names and indices
             child_payload["notification_acknowledgement"] = notification_acknowledgements[feature_set_name]  # Pass one small feature-local synchronization value without Telegram credentials or result data
+            child_payload["new_best_decision"] = new_best_decisions[feature_set_name]  # Return coordinator comparison without transporting exact evaluation vectors.
             child_payload["runtime_skip_state"] = runtime_skip_state  # Pass only spawn-safe skip flags to workers
             child_payload["eta_pending_run_experiments_state"] = eta_pending_run_experiments_state  # Pass shared pending-run duration state to workers.
             child_payload["capacity_gate"] = capacity_gate  # Share only the coordinator-owned admission semaphore with every configured worker
@@ -18709,7 +18899,7 @@ def execute_feature_set_processes(pending_by_feature: dict, process_payload: dic
                 feature_snapshot = progress_snapshot["features"][feature_set_name]  # Resolve feature-local status for concise coordinator logging
                 print(f"[COORDINATOR STATUS] Feature Set={feature_set_name} | Global ID={status.get('global_id')} | Event={status.get('event')} | Global={progress_snapshot['global']} | Feature={feature_snapshot}")  # Log dynamic global and feature-local runtime state
                 if status.get("event") != "skipped":  # Skipped work has no persisted result to notify or acknowledge
-                    handle_feature_process_result_notification(status, tasks_by_global_id, len(tasks), notified_global_ids, notification_acknowledgements)  # Send only after persisted status no longer identifies this combination as running
+                    handle_feature_process_result_notification(status, tasks_by_global_id, len(tasks), notified_global_ids, notification_acknowledgements, new_best_decisions)  # Send and return authoritative new-best decision after durable persistence.
                 elif status.get("global_id") in active_cancel_global_ids:
                     send_telegram_message(TELEGRAM_BOT, format_skip_ack("Successfully aborted", execution_id, status.get("global_id"), detail="Execution continuing"))
                 active_cancel_global_ids.discard(status.get("global_id"))  # Clear stale accepted-cancel markers when natural completion wins the race
@@ -18735,7 +18925,7 @@ def execute_feature_set_processes(pending_by_feature: dict, process_payload: dic
                     registry_state = REGISTRY_SKIPPED if pending_status.get("event") == "skipped" else REGISTRY_COMPLETED  # Keep skipped work terminal but unsuccessful
                     RUNTIME_COMBINATION_REGISTRY.update_state(execution_id, pending_status.get("global_id"), registry_state, worker_pid=pending_status.get("pid"), last_event=pending_status.get("event"))  # Remove worker PID ownership before sibling termination
                 if pending_status.get("event") != "skipped":  # Skipped work has no persisted result to notify or acknowledge
-                    handle_feature_process_result_notification(pending_status, tasks_by_global_id, len(tasks), notified_global_ids, notification_acknowledgements)  # Send or acknowledge any persisted result event without changing scientific status
+                    handle_feature_process_result_notification(pending_status, tasks_by_global_id, len(tasks), notified_global_ids, notification_acknowledgements, new_best_decisions)  # Send or acknowledge persisted result and return authoritative new-best decision.
             for record in process_records:  # Terminate only children that remain active
                 running_task = running_task_by_feature.get(record["feature_set"], {})  # Resolve any current task owned by this worker before termination
                 if running_task.get("global_id") is not None:  # Mark interrupted sibling ownership before signaling the process
