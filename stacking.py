@@ -2180,22 +2180,44 @@ def normalize_experiment_run_column(df: pd.DataFrame, expected_experiment_run: i
 
 def normalize_stacking_metric_columns(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Populate canonical weighted metric columns from legacy stacking columns.
+    Migrate legacy stacking metric columns into the canonical schema.
 
     :param df: Stacking result DataFrame using current or legacy metric names.
-    :return: DataFrame with canonical weighted metric columns populated.
+    :return: DataFrame containing canonical metrics without obsolete aggregate columns.
     """
 
     normalized_df = df.copy()  # Preserve caller-owned DataFrames.
-    for canonical_column, legacy_column in (("weighted_precision", "precision"), ("weighted_recall", "recall"), ("weighted_f1_score", "f1_score")):  # Map legacy weighted metrics only at read boundaries.
+    normalized_df.columns = normalized_df.columns.str.strip()  # Normalize headers before legacy metric detection.
+    duplicate_mask = normalized_df.columns.duplicated()  # Locate duplicate normalized headers.
+    normalized_df = normalized_df.loc[:, ~duplicate_mask]  # Preserve the first occurrence of each header.
+    legacy_metrics = (  # Define read-boundary aliases for historical weighted metrics.
+        ("weighted_precision", "precision"),  # Map historical weighted precision.
+        ("weighted_recall", "recall"),  # Map historical weighted recall.
+        ("weighted_f1_score", "f1_score"),  # Map historical weighted F1.
+    )  # Finish the fixed legacy metric mapping.
+    for canonical_column, legacy_column in legacy_metrics:  # Process each compatibility alias once.
         if legacy_column not in normalized_df.columns:  # Leave current-only schemas unchanged.
             continue  # Move to the next compatibility alias.
         if canonical_column not in normalized_df.columns:  # Populate a missing canonical column from legacy storage.
             normalized_df[canonical_column] = normalized_df[legacy_column]  # Preserve historical numeric values exactly.
         else:  # Fill only missing canonical values when both columns exist.
-            missing_mask = normalized_df[canonical_column].isna()  # Locate rows needing legacy fallback.
-            normalized_df.loc[missing_mask, canonical_column] = normalized_df.loc[missing_mask, legacy_column]  # Preserve canonical values when already present.
-    return normalized_df  # Return canonicalized read representation without writing source files.
+            canonical_values = normalized_df[canonical_column]  # Read canonical values once.
+            legacy_values = normalized_df[legacy_column]  # Read historical values once.
+            canonical_blank = canonical_values.map(  # Locate blank canonical strings.
+                lambda value: isinstance(value, str) and not value.strip()  # Treat whitespace-only strings as empty.
+            )  # Finish blank canonical detection.
+            legacy_blank = legacy_values.map(  # Locate blank historical strings.
+                lambda value: isinstance(value, str) and not value.strip()  # Reject whitespace-only aliases.
+            )  # Finish blank historical detection.
+            canonical_missing = canonical_values.isna() | canonical_blank  # Combine null and blank canonical cells.
+            fill_mask = canonical_missing & legacy_values.notna() & ~legacy_blank  # Select safe legacy fills.
+            normalized_df.loc[fill_mask, canonical_column] = legacy_values.loc[fill_mask]  # Copy legacy values exactly.
+    for column in ("macro_f1_score", "per_class_f1_scores"):  # Add unavailable historical metrics as empty cells.
+        if column not in normalized_df.columns:  # Preserve populated canonical columns on repeated migration.
+            normalized_df[column] = None  # Serialize unavailable historical values as empty CSV cells.
+    obsolete_columns = ["precision", "recall", "f1_score"]  # Identify obsolete persisted aggregate columns.
+    normalized_df = normalized_df.drop(columns=obsolete_columns, errors="ignore")  # Remove migrated aliases.
+    return normalized_df  # Return idempotent canonical metric storage.
 
 
 def normalize_final_results_dataframe(df: pd.DataFrame, config: Optional[dict], expected_experiment_run: int, source_path: str) -> pd.DataFrame:
@@ -2381,6 +2403,20 @@ def migrate_cache_storage_for_reference(csv_path: str, config: Optional[dict] = 
             if not source_frames:  # Leave storage untouched when no valid source exists.
                 continue  # Move to the next run.
             merged_df = prepare_cache_dataframe(pd.concat(source_frames, ignore_index=True), config=config, expected_experiment_run=run_index)  # Merge and dedupe by canonical identity.
+            storage_is_current = (  # Detect a fully synchronized canonical cache without mutating it.
+                primary_df is not None  # Require validated primary content.
+                and backup_df is not None  # Require validated backup content.
+                and cache_file_schema_is_current(str(target_path), config=config)  # Require canonical primary columns.
+                and cache_file_schema_is_current(str(backup_path), config=config)  # Require canonical backup columns.
+                and primary_df.reset_index(drop=True).equals(  # Require authoritative primary content.
+                    merged_df.reset_index(drop=True)  # Compare normalized authoritative rows.
+                )  # Finish primary content comparison.
+                and backup_df.reset_index(drop=True).equals(  # Require synchronized backup content.
+                    merged_df.reset_index(drop=True)  # Compare normalized authoritative rows.
+                )  # Finish backup content comparison.
+            )  # Finish canonical cache state comparison.
+            if storage_is_current:  # Keep repeated migration byte-stable once primary and backup are canonical mirrors.
+                continue  # Skip unnecessary atomic replacement.
             persist_cache_dataframe_atomically(str(target_path), merged_df, primary_df, backup_df, config=config, expected_experiment_run=run_index)  # Publish normalized cache and backup atomically.
             print(f"{BackgroundColors.GREEN}[STARTUP MIGRATION] Normalized cache results for run {run_index}: {BackgroundColors.CYAN}{target_path}{Style.RESET_ALL}")  # Report cache migration.
 
@@ -2430,6 +2466,24 @@ def migrate_final_storage_for_reference(csv_path: str, config: Optional[dict] = 
             if not source_frames:  # Leave storage untouched when no valid source exists.
                 continue  # Move to the next run.
             merged_df = normalize_final_results_dataframe(pd.concat(source_frames, ignore_index=True), config, run_index, str(target_path))  # Merge and dedupe final rows by canonical identity.
+            final_columns = get_stacking_results_csv_columns(config)  # Resolve canonical final-result order once.
+            primary_is_current = (  # Preserve authoritative canonical primary content when merge adds nothing.
+                primary_df is not None  # Require validated primary content.
+                and result_file_schema_is_current(  # Require canonical primary columns.
+                    str(target_path), final_columns, allow_additional_columns=True  # Inspect the primary header.
+                )  # Finish primary schema comparison.
+                and primary_df.reset_index(drop=True).equals(  # Require unchanged authoritative content.
+                    merged_df.reset_index(drop=True)  # Compare normalized authoritative rows.
+                )  # Finish authoritative content comparison.
+            )  # Finish primary state comparison.
+            backup_schema_is_current = (  # Require migrated backup columns before idempotent skip.
+                backup_df is not None  # Require validated backup content.
+                and result_file_schema_is_current(  # Require canonical backup columns.
+                    str(backup_path), final_columns, allow_additional_columns=True  # Inspect the backup header.
+                )  # Finish backup schema comparison.
+            )  # Finish backup schema comparison.
+            if primary_is_current and backup_schema_is_current:  # Preserve byte-stable rolling final storage.
+                continue  # Skip unnecessary atomic replacement.
             persist_final_results_dataframe_atomically(str(target_path), merged_df, primary_df, backup_df, config=config, expected_experiment_run=run_index)  # Publish normalized final and backup atomically.
             print(f"{BackgroundColors.GREEN}[STARTUP MIGRATION] Normalized final results for run {run_index}: {BackgroundColors.CYAN}{target_path}{Style.RESET_ALL}")  # Report final-result migration.
 
@@ -9815,6 +9869,31 @@ def get_cache_results_csv_columns(config: Optional[dict] = None) -> List[str]:
     return list(get_default_stacking_config()["cache_results_csv_columns"])  # Return the default temporary cache order.
 
 
+def result_file_schema_is_current(
+    file_path: str, expected_columns: List[str], allow_additional_columns: bool = False
+) -> bool:
+    """
+    Return whether one stacking CSV header uses canonical metric columns and ordering.
+
+    :param file_path: Stacking result or cache CSV path to inspect.
+    :param expected_columns: Canonical configured column order.
+    :param allow_additional_columns: Whether legitimate extra columns may follow configured columns.
+    :return: True when the persisted header is already canonical.
+    """
+
+    try:  # Read only the header row without touching persisted values.
+        columns = pd.read_csv(file_path, nrows=0).columns  # Read persisted header names.
+        columns = columns.str.strip().tolist()  # Normalize header names.
+        legacy_columns = {"precision", "recall", "f1_score"}  # Identify obsolete aggregate metric columns.
+        if legacy_columns.intersection(columns):  # Reject persisted legacy metric names.
+            return False  # Require persisted canonical names only.
+        if allow_additional_columns:  # Preserve legitimate final-result extension columns after configured fields.
+            return columns[:len(expected_columns)] == expected_columns  # Require exact canonical prefix ordering.
+        return columns == expected_columns  # Require exact cache schema ordering.
+    except Exception:  # Let normal validation report unreadable or malformed files.
+        return False  # Treat unreadable headers as noncanonical.
+
+
 def cache_file_schema_is_current(cache_path: str, config: Optional[dict] = None) -> bool:
     """
     Return whether one cache CSV header matches the configured cache schema.
@@ -9827,11 +9906,8 @@ def cache_file_schema_is_current(cache_path: str, config: Optional[dict] = None)
     if config is None:  # Use global configuration when no configuration is provided.
         config = CONFIG  # Assign the global configuration reference.
 
-    try:  # Read only the header row to avoid touching cached result values.
-        columns = pd.read_csv(cache_path, nrows=0).columns.str.strip().tolist()  # Read normalized header names.
-        return columns == get_cache_results_csv_columns(config)  # Return exact canonical schema status.
-    except Exception:  # Treat unreadable files as not schema-ready so normal validation handles content errors.
-        return False  # Return false for missing or unreadable headers.
+    expected_columns = get_cache_results_csv_columns(config)  # Resolve canonical cache order.
+    return result_file_schema_is_current(cache_path, expected_columns)  # Reuse stacking schema validation.
 
 
 def resolve_boolean_value(value: Any, default: bool = False) -> bool:
