@@ -31,22 +31,24 @@ EXPERIMENT_CONFIGURATION_COLUMNS = [  # Preserve non-result columns useful for i
     "features_list",  # Include canonical feature payload for auditability.
 ]  # Finish deterministic configuration column order.
 AGGREGATED_METRICS = [  # Limit statistics to result metrics and code-backed runtime fields.
-    ("f1_score", "F1-Score", "higher"),  # Treat higher F1 as better.
-    ("accuracy", "Accuracy", "higher"),  # Treat higher accuracy as better.
-    ("precision", "Precision", "higher"),  # Treat higher precision as better.
-    ("recall", "Recall", "higher"),  # Treat higher recall as better.
-    ("fpr", "FPR", "lower"),  # Treat lower false-positive rate as better.
-    ("fnr", "FNR", "lower"),  # Treat lower false-negative rate as better.
-    ("elapsed_time_s", "elapsed_time_s", "lower"),  # Treat lower elapsed runtime as better.
-    ("preprocessing_time_s", "preprocessing_time_s", "lower"),  # Treat lower preprocessing runtime as better.
-    ("feature_selection_time_s", "feature_selection_time_s", "lower"),  # Treat lower selector runtime as better.
+    ("weighted_f1_score", "Weighted F1-Score", "higher", "f1_score"),  # Use authoritative weighted F1.
+    ("accuracy", "Accuracy", "higher", None),  # Treat higher accuracy as better.
+    ("weighted_precision", "Weighted Precision", "higher", "precision"),  # Aggregate weighted precision.
+    ("weighted_recall", "Weighted Recall", "higher", "recall"),  # Aggregate weighted recall with legacy reads.
+    ("macro_f1_score", "Macro F1-Score", "higher", None),  # Aggregate the unweighted mean per-class F1 diagnostic.
+    ("fpr", "FPR", "lower", None),  # Treat lower false-positive rate as better.
+    ("fnr", "FNR", "lower", None),  # Treat lower false-negative rate as better.
+    ("elapsed_time_s", "elapsed_time_s", "lower", None),  # Treat lower elapsed runtime as better.
+    ("preprocessing_time_s", "preprocessing_time_s", "lower", None),  # Treat lower preprocessing runtime as better.
+    ("feature_selection_time_s", "feature_selection_time_s", "lower", None),  # Treat lower selector runtime as better.
     (  # Treat lower search runtime as better.
         "hyperparameter_optimization_time_s",  # Use persisted optimization runtime column.
         "hyperparameter_optimization_time_s",  # Use existing column name as output label.
         "lower",  # Mark lower values as better.
+        None,  # No legacy alias exists for this runtime field.
     ),
-    ("training_time_s", "training_time_s", "lower"),  # Treat lower training runtime as better.
-    ("inference_time_s", "inference_time_s", "lower"),  # Treat lower inference runtime as better.
+    ("training_time_s", "training_time_s", "lower", None),  # Treat lower training runtime as better.
+    ("inference_time_s", "inference_time_s", "lower", None),  # Treat lower inference runtime as better.
 ]  # Finish deterministic metric order.
 
 
@@ -210,7 +212,7 @@ def build_run_metrics_header() -> List[str]:
     """
 
     header = list(EXPERIMENT_CONFIGURATION_COLUMNS) + ["Run Count", "Runs"]  # Start with identity and run fields.
-    for _, metric_label, _ in AGGREGATED_METRICS:  # Append one stable statistics block per metric.
+    for _, metric_label, _, _ in AGGREGATED_METRICS:  # Append one stable statistics block per metric.
         statistic_names = (  # Preserve deterministic statistic order.
             "Sample Count",  # Include valid finite value count.
             "Mean",  # Include arithmetic mean.
@@ -262,12 +264,14 @@ def build_summary_rows(observations_by_identity: Dict[tuple, dict]) -> List[dict
         }
         row["Run Count"] = len(run_numbers)  # Store distinct logical run count.
         row["Runs"] = ",".join(str(run_number) for run_number in run_numbers)  # Store sorted logical run numbers.
-        for metric_column, metric_label, direction in AGGREGATED_METRICS:  # Calculate every configured metric block.
-            metric_observations = [  # Keep valid finite values only.
-                (run_number, value)  # Store run number and finite metric value.
-                for run_number, result_row in group["run_rows"].items()  # Traverse one row per logical run.
-                if (value := finite_number(result_row.get(metric_column, None))) is not None  # Reject invalid values.
-            ]
+        for metric_column, metric_label, direction, legacy_column in AGGREGATED_METRICS:  # Calculate each metric block.
+            metric_observations = []  # Keep valid finite values only.
+            for run_number, result_row in group["run_rows"].items():  # Traverse one row per logical run.
+                value = finite_number(result_row.get(metric_column, None))  # Prefer the canonical metric column.
+                if value is None and legacy_column is not None:  # Accept historical columns only when reading.
+                    value = finite_number(result_row.get(legacy_column, None))  # Read the historical value.
+                if value is not None:  # Retain finite observations only.
+                    metric_observations.append((run_number, value))  # Store run number and finite metric value.
             metric_statistics = calculate_metric_statistics(metric_observations, direction)  # Calculate statistics.
             for statistic_name, statistic_value in metric_statistics.items():  # Append statistic values.
                 statistic_column = f"{metric_label} {statistic_name}"  # Build the output statistic column name.

@@ -469,11 +469,13 @@ stacking: # Stacking experiment settings
     - "n_samples_train" # Number of training samples
     - "n_samples_test" # Number of testing samples
     - "accuracy" # Classification accuracy (0.0-1.0)
-    - "precision" # Precision score (0.0-1.0)
-    - "recall" # Recall score (0.0-1.0)
-    - "f1_score" # F1 score (0.0-1.0)
-    - "fpr" # False Positive Rate (0.0-1.0)
-    - "fnr" # False Negative Rate (0.0-1.0)
+    - "weighted_precision" # Support-weighted precision (0.0-1.0)
+    - "weighted_recall" # Support-weighted recall (0.0-1.0)
+    - "weighted_f1_score" # Support-weighted F1 score; authoritative experiment score (0.0-1.0)
+    - "macro_f1_score" # Unweighted mean of per-class F1 scores (0.0-1.0)
+    - "per_class_f1_scores" # Deterministic JSON list in fitted LabelEncoder class order when available
+    - "fpr" # Binary FPR or support-weighted one-vs-rest FPR for multiclass predictions (0.0-1.0)
+    - "fnr" # Binary FNR or support-weighted one-vs-rest FNR for multiclass predictions (0.0-1.0)
     - "elapsed_time_s" # Elapsed time in seconds for evaluation
     - "preprocessing_time_s" # Preprocessing time in seconds
     - "feature_selection_time_s" # Feature-selection time in seconds
@@ -508,11 +510,13 @@ stacking: # Stacking experiment settings
     - "n_samples_train" # Number of training samples
     - "n_samples_test" # Number of testing samples
     - "accuracy" # Classification accuracy (0.0-1.0)
-    - "precision" # Precision score (0.0-1.0)
-    - "recall" # Recall score (0.0-1.0)
-    - "f1_score" # F1 score (0.0-1.0)
-    - "fpr" # False Positive Rate (0.0-1.0)
-    - "fnr" # False Negative Rate (0.0-1.0)
+    - "weighted_precision" # Support-weighted precision (0.0-1.0)
+    - "weighted_recall" # Support-weighted recall (0.0-1.0)
+    - "weighted_f1_score" # Support-weighted F1 score; authoritative experiment score (0.0-1.0)
+    - "macro_f1_score" # Unweighted mean of per-class F1 scores (0.0-1.0)
+    - "per_class_f1_scores" # Deterministic JSON list in fitted LabelEncoder class order when available
+    - "fpr" # Binary FPR or support-weighted one-vs-rest FPR for multiclass predictions (0.0-1.0)
+    - "fnr" # Binary FNR or support-weighted one-vs-rest FNR for multiclass predictions (0.0-1.0)
     - "elapsed_time_s" # Elapsed time in seconds for evaluation
     - "preprocessing_time_s" # Preprocessing time in seconds
     - "feature_selection_time_s" # Feature-selection time in seconds

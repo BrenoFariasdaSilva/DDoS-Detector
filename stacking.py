@@ -1290,7 +1290,7 @@ def get_default_stacking_config():
                 "feature_selection_enabled", "hyperparameters_enabled", "data_augmentation_enabled", "hyperparameter_mode",
                 "feature_set", "classifier_type", "model_name", "model",
                 "n_features", "n_samples_train", "n_samples_test",
-                "accuracy", "precision", "recall", "f1_score", "fpr", "fnr", "elapsed_time_s",
+                "accuracy", "weighted_precision", "weighted_recall", "weighted_f1_score", "macro_f1_score", "per_class_f1_scores", "fpr", "fnr", "elapsed_time_s",
                 "preprocessing_time_s", "feature_selection_time_s", "hyperparameter_optimization_time_s", "training_time_s", "inference_time_s",
                 "cv_method", "top_features", "rfe_ranking", "hyperparameters", "features_list", "Hardware",
             ],  # Column names for results CSV export
@@ -1300,7 +1300,7 @@ def get_default_stacking_config():
                 "feature_selection_enabled", "hyperparameters_enabled", "data_augmentation_enabled", "hyperparameter_mode",
                 "feature_set", "classifier_type", "model_name", "model",
                 "n_features", "n_samples_train", "n_samples_test",
-                "accuracy", "precision", "recall", "f1_score", "fpr", "fnr", "elapsed_time_s",
+                "accuracy", "weighted_precision", "weighted_recall", "weighted_f1_score", "macro_f1_score", "per_class_f1_scores", "fpr", "fnr", "elapsed_time_s",
                 "preprocessing_time_s", "feature_selection_time_s", "hyperparameter_optimization_time_s", "training_time_s", "inference_time_s",
                 "cv_method", "rfe_ranking", "hyperparameters", "features_list", "Hardware",
             ],  # Column names for temporary cache CSV export
@@ -2080,15 +2080,9 @@ def resolve_cached_rerun_f1_score(result_entry: dict) -> float:
     :return: Finite cached F1 score.
     """
 
-    raw_f1_value = result_entry.get("f1_score")  # Read the cached F1 score before numeric validation.
-    if not isinstance(raw_f1_value, (str, int, float, np.integer, np.floating)):  # Reject missing and unsupported F1 payloads.
-        raise ValueError(f"Cached result has invalid f1_score for rerun ordering: {result_entry.get('model_name')}")  # Surface bad source-cache metrics.
-    try:  # Parse numeric F1 values from CSV or in-memory rows.
-        f1_value = float(raw_f1_value)  # Normalize the cached F1 score.
-    except (TypeError, ValueError):  # Reject missing or malformed F1 values.
-        raise ValueError(f"Cached result has invalid f1_score for rerun ordering: {result_entry.get('model_name')}")  # Surface bad source-cache metrics.
-    if not math.isfinite(f1_value):  # Reject NaN and infinite F1 values.
-        raise ValueError(f"Cached result has non-finite f1_score for rerun ordering: {result_entry.get('model_name')}")  # Surface bad source-cache metrics.
+    f1_value = resolve_result_metric_float(result_entry, "weighted_f1_score")  # Read canonical weighted F1 with legacy f1_score fallback.
+    if f1_value is None:  # Reject missing, malformed, and non-finite F1 values.
+        raise ValueError(f"Cached result has invalid weighted_f1_score for rerun ordering: {result_entry.get('model_name')}")  # Surface bad source-cache metrics.
     return f1_value  # Return finite F1 score.
 
 
@@ -2184,6 +2178,26 @@ def normalize_experiment_run_column(df: pd.DataFrame, expected_experiment_run: i
     return normalized_df  # Return rows with a validated run column.
 
 
+def normalize_stacking_metric_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Populate canonical weighted metric columns from legacy stacking columns.
+
+    :param df: Stacking result DataFrame using current or legacy metric names.
+    :return: DataFrame with canonical weighted metric columns populated.
+    """
+
+    normalized_df = df.copy()  # Preserve caller-owned DataFrames.
+    for canonical_column, legacy_column in (("weighted_precision", "precision"), ("weighted_recall", "recall"), ("weighted_f1_score", "f1_score")):  # Map legacy weighted metrics only at read boundaries.
+        if legacy_column not in normalized_df.columns:  # Leave current-only schemas unchanged.
+            continue  # Move to the next compatibility alias.
+        if canonical_column not in normalized_df.columns:  # Populate a missing canonical column from legacy storage.
+            normalized_df[canonical_column] = normalized_df[legacy_column]  # Preserve historical numeric values exactly.
+        else:  # Fill only missing canonical values when both columns exist.
+            missing_mask = normalized_df[canonical_column].isna()  # Locate rows needing legacy fallback.
+            normalized_df.loc[missing_mask, canonical_column] = normalized_df.loc[missing_mask, legacy_column]  # Preserve canonical values when already present.
+    return normalized_df  # Return canonicalized read representation without writing source files.
+
+
 def normalize_final_results_dataframe(df: pd.DataFrame, config: Optional[dict], expected_experiment_run: int, source_path: str) -> pd.DataFrame:
     """
     Normalize one final-result CSV to the current run-aware schema.
@@ -2197,7 +2211,7 @@ def normalize_final_results_dataframe(df: pd.DataFrame, config: Optional[dict], 
 
     if config is None:  # Use global configuration when no configuration is supplied.
         config = CONFIG  # Preserve established configuration fallback.
-    normalized_df = normalize_experiment_run_column(df, expected_experiment_run, source_path)  # Apply filename-derived run metadata.
+    normalized_df = normalize_stacking_metric_columns(normalize_experiment_run_column(df, expected_experiment_run, source_path))  # Apply run metadata and legacy weighted-metric aliases in memory.
     cache_like_df = normalize_cache_dataframe(normalized_df, config=config, expected_experiment_run=expected_experiment_run)  # Reuse cache schema migration for identity validation.
     deserialize_cache_dataframe(deduplicate_cache_dataframe(cache_like_df))  # Prove canonical identities are recoverable.
     normalized_df["_cache_identity"] = [build_cache_identity_from_row(row) for _, row in cache_like_df.iterrows()]  # Attach canonical identities for final-file dedupe.
@@ -5031,16 +5045,19 @@ def save_augmentation_comparison_results(file_path, comparison_results, config=N
             "n_samples_train",
             "n_samples_test",
             "accuracy",
-            "precision",
-            "recall",
-            "f1_score",
+            "weighted_precision",
+            "weighted_recall",
+            "weighted_f1_score",
+            "macro_f1_score",
+            "per_class_f1_scores",
             "fpr",
             "fnr",
             "training_time",
             "accuracy_improvement",
-            "precision_improvement",
-            "recall_improvement",
-            "f1_score_improvement",
+            "weighted_precision_improvement",
+            "weighted_recall_improvement",
+            "weighted_f1_score_improvement",
+            "macro_f1_score_improvement",
             "fpr_improvement",
             "fnr_improvement",
             "training_time_improvement",
@@ -7904,6 +7921,33 @@ def compute_fpr_fnr(y_test, y_pred):
         raise
 
 
+def compute_classification_metrics(y_true: Any, y_pred: Any, class_labels: Optional[Any] = None) -> tuple:
+    """
+    Compute canonical classification metrics from one prediction vector.
+
+    :param y_true: Exact true labels used for evaluation.
+    :param y_pred: Exact predicted labels produced by the classifier.
+    :param class_labels: Original labels in fitted LabelEncoder order, or None when unavailable.
+    :return: Accuracy, weighted precision, weighted recall, weighted F1, FPR, FNR, macro F1, and per-class F1 JSON.
+    """
+
+    y_true_array = np.asarray(y_true)  # Normalize exact evaluated labels without changing their values.
+    y_pred_array = np.asarray(y_pred)  # Normalize exact predictions without recomputation.
+    if class_labels is None:  # Preserve encoded labels explicitly when no validated original-label mapping exists.
+        metric_labels = np.unique(np.concatenate((y_true_array, y_pred_array)))  # Build deterministic evaluated encoded-label order.
+        serialized_labels = [normalize_metadata_for_json(value) for value in metric_labels.tolist()]  # Preserve exact encoded label values in JSON-compatible form.
+    else:  # Use fitted LabelEncoder ordering when caller provides its validated mapping.
+        serialized_labels = [normalize_metadata_for_json(value) for value in np.asarray(class_labels).tolist()]  # Preserve original labels in encoder order.
+        metric_labels = np.arange(len(serialized_labels))  # Match LabelEncoder integer output positions.
+        observed_labels = set(np.unique(np.concatenate((y_true_array, y_pred_array))).tolist())  # Resolve every evaluated encoded value.
+        if not observed_labels.issubset(set(metric_labels.tolist())):  # Reject an incompatible mapping instead of guessing labels.
+            raise ValueError(f"Classification metrics lack mappings for encoded labels: {sorted(observed_labels - set(metric_labels.tolist()))}")  # Surface invalid label metadata.
+    per_class_scores = f1_score(y_true_array, y_pred_array, labels=metric_labels, average=None, zero_division=cast(Any, 0))  # Compute one F1 score per deterministic class position.
+    per_class_json = json.dumps([{"class_label": label, "f1_score": float(score)} for label, score in zip(serialized_labels, per_class_scores)], sort_keys=True, separators=(",", ":"), allow_nan=False)  # Serialize deterministic CSV-safe per-class metrics.
+    fpr, fnr = compute_fpr_fnr(y_true_array, y_pred_array)  # Preserve binary and support-weighted multiclass error-rate semantics.
+    return (accuracy_score(y_true_array, y_pred_array), precision_score(y_true_array, y_pred_array, average="weighted", zero_division=cast(Any, 0)), recall_score(y_true_array, y_pred_array, average="weighted", zero_division=cast(Any, 0)), f1_score(y_true_array, y_pred_array, average="weighted", zero_division=cast(Any, 0)), fpr, fnr, f1_score(y_true_array, y_pred_array, average="macro", zero_division=cast(Any, 0)), per_class_json)  # Return canonical metrics from the same evaluated vectors.
+
+
 def load_existing_model_if_available(model_name, dataset_file, dataset_name, feature_set, artifact_context, config=None):
     """
     Load one strictly compatible original-trained classifier and its preprocessing.
@@ -7994,7 +8038,7 @@ def load_existing_model_if_available(model_name, dataset_file, dataset_name, fea
             artifact_lock.close()  # Closing the descriptor releases flock automatically
 
 
-def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, y_test, dataset_file=None, scaler=None, feature_names=None, feature_set=None, config=None, phase_metadata=None, training_ram_stats=None, fit_model=True, notification_context=None, hyperparameters_enabled: Optional[bool] = None, augmentation_ratio: Optional[float] = None, precomputed_predictions: Optional[np.ndarray] = None, precomputed_prediction_seconds: float = 0.0, training_eta_callback: Optional[Callable[[str, Optional[float]], None]] = None, estimated_training_seconds: Optional[float] = None, cancellation_checker: Optional[Callable[[], bool]] = None, local_combination_index: Optional[int] = None, local_combination_total: Optional[int] = None, active_workers_callback: Optional[Callable[[], str]] = None, previous_run_duration_label: str = "unavailable", eta_pending_run_experiments_label: str = "unavailable"):  # Evaluate one classifier with watcher metadata, RAM statistics, optional bounded predictions, and cooperative cancellation
+def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, y_test, dataset_file=None, scaler=None, feature_names=None, feature_set=None, config=None, phase_metadata=None, training_ram_stats=None, fit_model=True, notification_context=None, hyperparameters_enabled: Optional[bool] = None, augmentation_ratio: Optional[float] = None, precomputed_predictions: Optional[np.ndarray] = None, precomputed_prediction_seconds: float = 0.0, training_eta_callback: Optional[Callable[[str, Optional[float]], None]] = None, estimated_training_seconds: Optional[float] = None, cancellation_checker: Optional[Callable[[], bool]] = None, local_combination_index: Optional[int] = None, local_combination_total: Optional[int] = None, active_workers_callback: Optional[Callable[[], str]] = None, previous_run_duration_label: str = "unavailable", eta_pending_run_experiments_label: str = "unavailable", class_labels: Optional[Any] = None):  # Evaluate one classifier with watcher metadata, RAM statistics, optional bounded predictions, and cooperative cancellation
     """
     Trains an individual classifier and evaluates its performance on the test set.
 
@@ -8022,7 +8066,8 @@ def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, 
     :param cancellation_checker: Optional callable returning True when this active evaluation should abort before persistence.
     :param previous_run_duration_label: Persisted earlier run duration label.
     :param eta_pending_run_experiments_label: Historical duration sum for pending run experiments.
-    :return: Metrics tuple (acc, prec, rec, f1, fpr, fnr, elapsed_time, y_pred)
+    :param class_labels: Original labels in fitted LabelEncoder order, or None when unavailable.
+    :return: Metrics tuple preserving (accuracy, weighted precision, weighted recall, weighted F1, FPR, FNR, elapsed time, predictions) before appended macro and per-class F1 values.
     """
     
     try:
@@ -8103,12 +8148,7 @@ def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, 
             training_ram_stats["inference_time_s"] = inference_time_seconds  # Store prediction-only runtime for result rows.
 
         log_training_phase(feature_set, model_name, "Metrics", "Started", hyperparameters_enabled, augmentation_ratio)  # Mark contextual metric computation as separate phase.
-        acc = accuracy_score(y_test, y_pred)  # Calculate Accuracy
-        prec = precision_score(y_test, y_pred, average="weighted", zero_division=cast(Any, 0))  # Calculate Precision
-        rec = recall_score(y_test, y_pred, average="weighted", zero_division=cast(Any, 0))  # Calculate Recall
-        f1 = f1_score(y_test, y_pred, average="weighted", zero_division=cast(Any, 0))  # Calculate F1-Score
-
-        fpr, fnr = compute_fpr_fnr(y_test, y_pred)  # Compute False Positive and False Negative rates
+        acc, prec, rec, f1, fpr, fnr, macro_f1, per_class_f1 = compute_classification_metrics(y_test, y_pred, class_labels=class_labels)  # Compute canonical metrics once from the existing prediction vector.
         log_training_phase(feature_set, model_name, "Metrics", "Completed", hyperparameters_enabled, augmentation_ratio)  # Mark contextual metrics completion before reporting and persistence.
         if callable(cancellation_checker) and cancellation_checker():
             raise RuntimeSkipRequested(f"Runtime skip requested after metrics for active {model_name}")
@@ -8125,14 +8165,14 @@ def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, 
             evaluation_mode = mode_raw.replace("_", " ").title().replace(" ", "")  # Normalize to CamelCase style
         if evaluation_mode is None:  # If still not resolved
             evaluation_mode = "SeparateFiles"  # Default to SeparateFiles when unknown
-        msg = f"{BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}: Mode {BackgroundColors.CYAN}{evaluation_mode}{BackgroundColors.GREEN} | F1-Score {BackgroundColors.CYAN}{f1}{BackgroundColors.GREEN} | Accuracy: {BackgroundColors.CYAN}{acc}{BackgroundColors.GREEN} | Precision: {BackgroundColors.CYAN}{prec}{BackgroundColors.GREEN} | Recall: {BackgroundColors.CYAN}{rec}{BackgroundColors.GREEN} | FPR: {BackgroundColors.CYAN}{fpr}{BackgroundColors.GREEN} | FNR: {BackgroundColors.CYAN}{fnr}{BackgroundColors.GREEN} | Training Time: {BackgroundColors.CYAN}{int(train_seconds)}s{BackgroundColors.GREEN} | Execution Time: {BackgroundColors.CYAN}{int(exec_seconds)}s{BackgroundColors.GREEN} | Total Time: {BackgroundColors.CYAN}{human_time}{BackgroundColors.GREEN} ({BackgroundColors.CYAN}{int(total_seconds)}s{BackgroundColors.GREEN}){Style.RESET_ALL}"  # Build final formatted classifier summary using raw floats for metrics and integer times
+        msg = f"{BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}: Mode {BackgroundColors.CYAN}{evaluation_mode}{BackgroundColors.GREEN} | Weighted F1-Score {BackgroundColors.CYAN}{f1}{BackgroundColors.GREEN} | Macro F1-Score: {BackgroundColors.CYAN}{macro_f1}{BackgroundColors.GREEN} | Accuracy: {BackgroundColors.CYAN}{acc}{BackgroundColors.GREEN} | Weighted Precision: {BackgroundColors.CYAN}{prec}{BackgroundColors.GREEN} | Weighted Recall: {BackgroundColors.CYAN}{rec}{BackgroundColors.GREEN} | FPR: {BackgroundColors.CYAN}{fpr}{BackgroundColors.GREEN} | FNR: {BackgroundColors.CYAN}{fnr}{BackgroundColors.GREEN} | Training Time: {BackgroundColors.CYAN}{int(train_seconds)}s{BackgroundColors.GREEN} | Execution Time: {BackgroundColors.CYAN}{int(exec_seconds)}s{BackgroundColors.GREEN} | Total Time: {BackgroundColors.CYAN}{human_time}{BackgroundColors.GREEN} ({BackgroundColors.CYAN}{int(total_seconds)}s{BackgroundColors.GREEN}){Style.RESET_ALL}"  # Report explicit averaging semantics.
         print(msg)  # Print the summary message to console
         notification_origin = "[COMPUTED] Model fitted and evaluated in this run" if fit_model else "[LOADED MODEL] Persisted model evaluated without fitting in this run"  # Distinguish fitting from persisted-model evaluation
         notification_label = notification_context or feature_set or model_name  # Preserve the most specific available evaluation identity
         telegram_msg = f"{notification_origin} | {notification_label}\n{msg}"  # Combine provenance, evaluation identity, and metrics
         send_telegram_message(TELEGRAM_BOT, telegram_msg)  # Send the provenance-aware individual-classifier result
 
-        return (acc, prec, rec, f1, fpr, fnr, int(round(elapsed_time)), y_pred)  # Return metrics and exact predictions.
+        return (acc, prec, rec, f1, fpr, fnr, int(round(elapsed_time)), y_pred, macro_f1, per_class_f1)  # Preserve existing positions and append new metrics after predictions.
     except RuntimeSkipRequested:
         try:
             model = None
@@ -8164,7 +8204,7 @@ def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, 
         raise
 
 
-def evaluate_stacking_classifier(model, X_train, y_train, X_test, y_test, config=None, training_ram_stats=None, fit_model=True, notification_context=None, feature_set=None, hyperparameters_enabled: Optional[bool] = None, augmentation_ratio: Optional[float] = None, training_eta_callback: Optional[Callable[[str, Optional[float]], None]] = None, local_combination_index: Optional[int] = None, local_combination_total: Optional[int] = None, previous_run_duration_label: str = "unavailable", eta_pending_run_experiments_label: str = "unavailable"):  # Evaluate stacking with RAM statistics and notification context
+def evaluate_stacking_classifier(model, X_train, y_train, X_test, y_test, config=None, training_ram_stats=None, fit_model=True, notification_context=None, feature_set=None, hyperparameters_enabled: Optional[bool] = None, augmentation_ratio: Optional[float] = None, training_eta_callback: Optional[Callable[[str, Optional[float]], None]] = None, local_combination_index: Optional[int] = None, local_combination_total: Optional[int] = None, previous_run_duration_label: str = "unavailable", eta_pending_run_experiments_label: str = "unavailable", class_labels: Optional[Any] = None):  # Evaluate stacking with RAM statistics and notification context
     """
     Trains the StackingClassifier model and evaluates its performance on the test set.
 
@@ -8183,7 +8223,8 @@ def evaluate_stacking_classifier(model, X_train, y_train, X_test, y_test, config
     :param training_eta_callback: Optional callback receiving the first emitted nonfinal training ETA.
     :param previous_run_duration_label: Persisted earlier run duration label.
     :param eta_pending_run_experiments_label: Historical duration sum for pending run experiments.
-    :return: Metrics tuple (acc, prec, rec, f1, fpr, fnr, elapsed_time, y_pred)
+    :param class_labels: Original labels in fitted LabelEncoder order, or None when unavailable.
+    :return: Metrics tuple preserving (accuracy, weighted precision, weighted recall, weighted F1, FPR, FNR, elapsed time, predictions) before appended macro and per-class F1 values.
     """
     
     try:
@@ -8229,12 +8270,7 @@ def evaluate_stacking_classifier(model, X_train, y_train, X_test, y_test, config
             training_ram_stats["inference_time_s"] = inference_time_seconds  # Store prediction-only runtime for result rows.
 
         log_training_phase(feature_set, "StackingClassifier", "Metrics", "Started", hyperparameters_enabled, augmentation_ratio)  # Mark contextual stacking metric computation as separate phase.
-        acc = accuracy_score(y_test, y_pred)  # Calculate Accuracy
-        prec = precision_score(y_test, y_pred, average="weighted", zero_division=cast(Any, 0))  # Calculate Precision (weighted)
-        rec = recall_score(y_test, y_pred, average="weighted", zero_division=cast(Any, 0))  # Calculate Recall (weighted)
-        f1 = f1_score(y_test, y_pred, average="weighted", zero_division=cast(Any, 0))  # Calculate F1-Score (weighted)
-
-        fpr, fnr = compute_fpr_fnr(y_test, y_pred)  # Compute False Positive and False Negative rates for binary or multiclass predictions
+        acc, prec, rec, f1, fpr, fnr, macro_f1, per_class_f1 = compute_classification_metrics(y_test, y_pred, class_labels=class_labels)  # Compute canonical metrics once from the existing prediction vector.
         log_training_phase(feature_set, "StackingClassifier", "Metrics", "Completed", hyperparameters_enabled, augmentation_ratio)  # Mark contextual stacking metrics completion before reporting and persistence.
 
         human_time = calculate_execution_time(elapsed_time)  # Convert elapsed duration to human-readable string using helper
@@ -8247,14 +8283,14 @@ def evaluate_stacking_classifier(model, X_train, y_train, X_test, y_test, config
             evaluation_mode = mode_raw.replace("_", " ").title().replace(" ", "")  # Normalize to CamelCase style
         if evaluation_mode is None:  # If still not resolved
             evaluation_mode = "SeparateFiles"  # Default to SeparateFiles when unknown
-        msg = f"{BackgroundColors.CYAN}StackingClassifier{BackgroundColors.GREEN}: Mode {BackgroundColors.CYAN}{evaluation_mode}{BackgroundColors.GREEN} | F1-Score {BackgroundColors.CYAN}{f1}{BackgroundColors.GREEN} | Accuracy: {BackgroundColors.CYAN}{acc}{BackgroundColors.GREEN} | Precision: {BackgroundColors.CYAN}{prec}{BackgroundColors.GREEN} | Recall: {BackgroundColors.CYAN}{rec}{BackgroundColors.GREEN} | FPR: {BackgroundColors.CYAN}{fpr}{BackgroundColors.GREEN} | FNR: {BackgroundColors.CYAN}{fnr}{BackgroundColors.GREEN} | Training Time: {BackgroundColors.CYAN}{int(train_seconds)}s{BackgroundColors.GREEN} | Execution Time: {BackgroundColors.CYAN}{int(exec_seconds)}s{BackgroundColors.GREEN} | Total Time: {BackgroundColors.CYAN}{human_time}{BackgroundColors.GREEN} ({BackgroundColors.CYAN}{int(total_seconds)}s{BackgroundColors.GREEN}){Style.RESET_ALL}"  # Build final formatted stacking summary with colors using raw floats and integer times
+        msg = f"{BackgroundColors.CYAN}StackingClassifier{BackgroundColors.GREEN}: Mode {BackgroundColors.CYAN}{evaluation_mode}{BackgroundColors.GREEN} | Weighted F1-Score {BackgroundColors.CYAN}{f1}{BackgroundColors.GREEN} | Macro F1-Score: {BackgroundColors.CYAN}{macro_f1}{BackgroundColors.GREEN} | Accuracy: {BackgroundColors.CYAN}{acc}{BackgroundColors.GREEN} | Weighted Precision: {BackgroundColors.CYAN}{prec}{BackgroundColors.GREEN} | Weighted Recall: {BackgroundColors.CYAN}{rec}{BackgroundColors.GREEN} | FPR: {BackgroundColors.CYAN}{fpr}{BackgroundColors.GREEN} | FNR: {BackgroundColors.CYAN}{fnr}{BackgroundColors.GREEN} | Training Time: {BackgroundColors.CYAN}{int(train_seconds)}s{BackgroundColors.GREEN} | Execution Time: {BackgroundColors.CYAN}{int(exec_seconds)}s{BackgroundColors.GREEN} | Total Time: {BackgroundColors.CYAN}{human_time}{BackgroundColors.GREEN} ({BackgroundColors.CYAN}{int(total_seconds)}s{BackgroundColors.GREEN}){Style.RESET_ALL}"  # Report explicit averaging semantics.
         print(msg)  # Print the summary message to console
         notification_origin = "[COMPUTED] Model fitted and evaluated in this run" if fit_model else "[LOADED MODEL] Persisted model evaluated without fitting in this run"  # Distinguish fitting from persisted-model evaluation
         notification_label = notification_context or "StackingClassifier"  # Preserve the exact evaluation identity when supplied
         telegram_msg = f"{notification_origin} | {notification_label}\n{msg}"  # Combine provenance, evaluation identity, and metrics
         send_telegram_message(TELEGRAM_BOT, telegram_msg)  # Send the provenance-aware stacking-classifier result
 
-        return (acc, prec, rec, f1, fpr, fnr, int(round(elapsed_time)), y_pred)  # Return the metrics tuple and predictions
+        return (acc, prec, rec, f1, fpr, fnr, int(round(elapsed_time)), y_pred, macro_f1, per_class_f1)  # Preserve existing positions and append new metrics after predictions.
     except Exception as e:
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
@@ -10085,7 +10121,7 @@ def flatten_and_serialize_results(results_list):
             row["feature_selection_enabled"] = resolve_persisted_feature_selection_enabled(row.get("feature_set", ""), row.get("feature_selection_enabled", False))  # Normalize row-level feature-selection metadata.
             row["data_augmentation_enabled"] = resolve_persisted_data_augmentation_enabled(row.get("experiment_mode", "original_only"), row.get("augmentation_ratio", None), row.get("data_augmentation_enabled", False))  # Normalize row-level data-augmentation metadata.
 
-            for metric in ["accuracy", "precision", "recall", "f1_score", "fpr", "fnr"]:  # Iterate over numeric metric field names
+            for metric in ["accuracy", "weighted_precision", "weighted_recall", "weighted_f1_score", "macro_f1_score", "fpr", "fnr"]:  # Iterate over canonical numeric metric field names.
                 if metric in row and row[metric] is not None:  # If metric field is present and has a value
                     row[metric] = row[metric]  # Preserve full float precision for classification metrics
 
@@ -10380,9 +10416,11 @@ def deserialize_cache_dataframe(df_cache: pd.DataFrame) -> dict:
             "n_samples_train": int(n_samples_train_value) if (n_samples_train_value := cache_row_value("n_samples_train", None)) is not None else None,  # Restore training sample count.
             "n_samples_test": int(n_samples_test_value) if (n_samples_test_value := cache_row_value("n_samples_test", None)) is not None else None,  # Restore test sample count.
             "accuracy": float(accuracy_value) if (accuracy_value := cache_row_value("accuracy", None)) is not None else None,  # Restore accuracy.
-            "precision": float(precision_value) if (precision_value := cache_row_value("precision", None)) is not None else None,  # Restore precision.
-            "recall": float(recall_value) if (recall_value := cache_row_value("recall", None)) is not None else None,  # Restore recall.
-            "f1_score": float(f1_score_value) if (f1_score_value := cache_row_value("f1_score", None)) is not None else None,  # Restore F1 score.
+            "weighted_precision": float(weighted_precision_value) if (weighted_precision_value := cache_row_value("weighted_precision", None)) is not None else None,  # Restore canonical weighted precision.
+            "weighted_recall": float(weighted_recall_value) if (weighted_recall_value := cache_row_value("weighted_recall", None)) is not None else None,  # Restore canonical weighted recall.
+            "weighted_f1_score": float(weighted_f1_value) if (weighted_f1_value := cache_row_value("weighted_f1_score", None)) is not None else None,  # Restore canonical weighted F1.
+            "macro_f1_score": float(macro_f1_value) if (macro_f1_value := cache_row_value("macro_f1_score", None)) is not None else None,  # Restore macro F1 when present.
+            "per_class_f1_scores": cache_row_value("per_class_f1_scores", None),  # Restore deterministic per-class F1 JSON when present.
             "fpr": float(fpr_value) if (fpr_value := cache_row_value("fpr", None)) is not None else None,  # Restore false-positive rate.
             "fnr": float(fnr_value) if (fnr_value := cache_row_value("fnr", None)) is not None else None,  # Restore false-negative rate.
             "elapsed_time_s": float(elapsed_time_value) if (elapsed_time_value := cache_row_value("elapsed_time_s", None)) is not None else None,  # Restore elapsed-time metadata.
@@ -10744,7 +10782,7 @@ def normalize_cache_dataframe(df: pd.DataFrame, config: Optional[dict] = None, e
     if config is None:  # Use global configuration when no configuration is provided.
         config = CONFIG  # Assign the global configuration reference.
 
-    normalized_df = df.copy()  # Work on a copy to avoid mutating caller-owned DataFrames.
+    normalized_df = normalize_stacking_metric_columns(df)  # Populate canonical weighted metrics from legacy columns without mutating caller data.
     normalized_df.columns = normalized_df.columns.str.strip()  # Normalize column names before schema migration.
     normalized_df = normalized_df.loc[:, ~normalized_df.columns.duplicated()]  # Preserve first duplicate column before canonical ordering.
     cache_columns = get_cache_results_csv_columns(config)  # Resolve canonical cache column order.
@@ -10873,9 +10911,9 @@ def validate_cache_result_payload(result_entry: dict, config: Optional[dict] = N
         "n_samples_train",  # Require training sample count.
         "n_samples_test",  # Require test sample count.
         "accuracy",  # Require completed accuracy metric.
-        "precision",  # Require completed precision metric.
-        "recall",  # Require completed recall metric.
-        "f1_score",  # Require completed F1 metric.
+        "weighted_precision",  # Require completed support-weighted precision.
+        "weighted_recall",  # Require completed support-weighted recall.
+        "weighted_f1_score",  # Require completed authoritative support-weighted F1.
         "fpr",  # Require completed false-positive-rate metric.
         "fnr",  # Require completed false-negative-rate metric.
         "elapsed_time_s",  # Require elapsed-time metric.
@@ -11903,10 +11941,7 @@ def evaluate_automl_model_on_test(model, model_name, X_train, y_train, X_test, y
         elapsed = time.time() - start_time  # Calculate elapsed training time
 
         log_training_phase("AutoML", model_name, "Metrics", "Started")  # Mark held-out AutoML metric computation separately.
-        acc = accuracy_score(y_test, y_pred)  # Calculate accuracy
-        prec = precision_score(y_test, y_pred, average="weighted", zero_division=cast(Any, 0))  # Calculate weighted precision
-        rec = recall_score(y_test, y_pred, average="weighted", zero_division=cast(Any, 0))  # Calculate weighted recall
-        f1 = f1_score(y_test, y_pred, average="weighted", zero_division=cast(Any, 0))  # Calculate weighted F1 score
+        acc, prec, rec, f1, fpr, fnr, macro_f1, per_class_f1 = compute_classification_metrics(y_test, y_pred)  # Compute canonical metrics and preserve exact encoded labels because AutoML retains no fitted original-label mapping.
 
         roc_auc = None  # Initialize ROC-AUC as None
         try:  # Try to compute ROC-AUC
@@ -11919,7 +11954,6 @@ def evaluate_automl_model_on_test(model, model_name, X_train, y_train, X_test, y
         except Exception:  # If ROC-AUC computation fails
             roc_auc = None  # Keep as None
 
-        fpr, fnr = compute_fpr_fnr(y_test, y_pred)  # Compute false positive and false negative rates for binary or multiclass predictions
         log_training_phase("AutoML", model_name, "Metrics", "Completed")  # Mark held-out metrics completion before reporting.
 
         total_seconds = int(round(elapsed))  # Reuse elapsed as total seconds for reporting
@@ -11929,15 +11963,17 @@ def evaluate_automl_model_on_test(model, model_name, X_train, y_train, X_test, y
             evaluation_mode = "SeparateFiles"  # Use SeparateFiles for binary classification
         else:  # For multiclass predictions
             evaluation_mode = "MultiClass"  # Use MultiClass for multi-class evaluation
-        msg = f"{BackgroundColors.GREEN}{model_name}: Mode {evaluation_mode} | F1-Score {BackgroundColors.CYAN}{f1}{BackgroundColors.GREEN} | Accuracy: {BackgroundColors.CYAN}{acc}{BackgroundColors.GREEN} | Precision: {BackgroundColors.CYAN}{prec}{BackgroundColors.GREEN} | Recall: {BackgroundColors.CYAN}{rec}{BackgroundColors.GREEN} | FPR: {BackgroundColors.CYAN}{fpr}{BackgroundColors.GREEN} | FNR: {BackgroundColors.CYAN}{fnr}{BackgroundColors.GREEN} | Training Time: {BackgroundColors.CYAN}{int(train_seconds)}s{BackgroundColors.GREEN} | Execution Time: {BackgroundColors.CYAN}{int(exec_seconds)}s{BackgroundColors.GREEN} | Total Time: {BackgroundColors.CYAN}{calculate_execution_time(elapsed)} ({total_seconds}s){Style.RESET_ALL}"  # Build colored summary using raw floats for metrics and integer times
+        msg = f"{BackgroundColors.GREEN}{model_name}: Mode {evaluation_mode} | Weighted F1-Score {BackgroundColors.CYAN}{f1}{BackgroundColors.GREEN} | Macro F1-Score: {BackgroundColors.CYAN}{macro_f1}{BackgroundColors.GREEN} | Accuracy: {BackgroundColors.CYAN}{acc}{BackgroundColors.GREEN} | Weighted Precision: {BackgroundColors.CYAN}{prec}{BackgroundColors.GREEN} | Weighted Recall: {BackgroundColors.CYAN}{rec}{BackgroundColors.GREEN} | FPR: {BackgroundColors.CYAN}{fpr}{BackgroundColors.GREEN} | FNR: {BackgroundColors.CYAN}{fnr}{BackgroundColors.GREEN} | Training Time: {BackgroundColors.CYAN}{int(train_seconds)}s{BackgroundColors.GREEN} | Execution Time: {BackgroundColors.CYAN}{int(exec_seconds)}s{BackgroundColors.GREEN} | Total Time: {BackgroundColors.CYAN}{calculate_execution_time(elapsed)} ({total_seconds}s){Style.RESET_ALL}"  # Report explicit averaging semantics.
         print(msg)  # Output test results to console
         send_telegram_message(TELEGRAM_BOT, msg)  # Send identical message to Telegram for remote monitoring of ratio experiment results
 
         return {  # Build and return metrics dictionary
             "accuracy": acc,  # Accuracy value
-            "precision": prec,  # Precision value
-            "recall": rec,  # Recall value
-            "f1_score": f1,  # F1 score value
+            "weighted_precision": prec,  # Support-weighted precision value.
+            "weighted_recall": rec,  # Support-weighted recall value.
+            "weighted_f1_score": f1,  # Authoritative support-weighted F1 value.
+            "macro_f1_score": macro_f1,  # Unweighted mean per-class F1 value.
+            "per_class_f1_scores": per_class_f1,  # Deterministic JSON over exact evaluated encoded labels.
             "roc_auc": roc_auc,  # ROC-AUC value
             "fpr": fpr,  # False positive rate
             "fnr": fnr,  # False negative rate
@@ -12178,12 +12214,14 @@ def build_automl_results_list(best_model_name, best_params, individual_metrics, 
             "n_features": len(feature_names),  # Number of features
             "n_samples_train": n_train,  # Training sample count
             "n_samples_test": n_test,  # Test sample count
-                "accuracy": individual_metrics["accuracy"],  # Accuracy as raw float
-                "precision": individual_metrics["precision"],  # Precision as raw float
-                "recall": individual_metrics["recall"],  # Recall as raw float
-                "f1_score": individual_metrics["f1_score"],  # F1 score as raw float
-                "fpr": individual_metrics["fpr"],  # False positive rate as raw float
-                "fnr": individual_metrics["fnr"],  # False negative rate as raw float
+            "accuracy": individual_metrics["accuracy"],  # Accuracy as raw float
+            "weighted_precision": individual_metrics["weighted_precision"],  # Support-weighted precision as raw float.
+            "weighted_recall": individual_metrics["weighted_recall"],  # Support-weighted recall as raw float.
+            "weighted_f1_score": individual_metrics["weighted_f1_score"],  # Authoritative support-weighted F1 as raw float.
+            "macro_f1_score": individual_metrics["macro_f1_score"],  # Macro F1 as raw float.
+            "per_class_f1_scores": individual_metrics["per_class_f1_scores"],  # Deterministic per-class F1 JSON.
+            "fpr": individual_metrics["fpr"],  # False positive rate as raw float
+            "fnr": individual_metrics["fnr"],  # False negative rate as raw float
             "elapsed_time_s": individual_metrics["elapsed_time_s"],  # Elapsed time
             "cv_method": f"Optuna({config.get("automl", {}).get("n_trials", 50)} trials, {config.get("automl", {}).get("cv_folds", 5)}-fold CV)",  # CV method description
             "top_features": json.dumps(feature_names),  # Feature names as JSON
@@ -12208,9 +12246,11 @@ def build_automl_results_list(best_model_name, best_params, individual_metrics, 
                 "n_samples_train": n_train,  # Training sample count
                 "n_samples_test": n_test,  # Test sample count
                 "accuracy": stacking_metrics["accuracy"],  # Accuracy as raw float
-                "precision": stacking_metrics["precision"],  # Precision as raw float
-                "recall": stacking_metrics["recall"],  # Recall as raw float
-                "f1_score": stacking_metrics["f1_score"],  # F1 score as raw float
+                "weighted_precision": stacking_metrics["weighted_precision"],  # Support-weighted precision as raw float.
+                "weighted_recall": stacking_metrics["weighted_recall"],  # Support-weighted recall as raw float.
+                "weighted_f1_score": stacking_metrics["weighted_f1_score"],  # Authoritative support-weighted F1 as raw float.
+                "macro_f1_score": stacking_metrics["macro_f1_score"],  # Macro F1 as raw float.
+                "per_class_f1_scores": stacking_metrics["per_class_f1_scores"],  # Deterministic per-class F1 JSON.
                 "fpr": stacking_metrics["fpr"],  # False positive rate as raw float
                 "fnr": stacking_metrics["fnr"],  # False negative rate as raw float
                 "elapsed_time_s": stacking_metrics["elapsed_time_s"],  # Elapsed time
@@ -12536,8 +12576,8 @@ def run_automl_pipeline(file, df, feature_names, data_source_label="Original", c
         )  # Output completion message
 
         send_telegram_message(
-            TELEGRAM_BOT, f"AutoML pipeline completed for {os.path.basename(file)} in {calculate_execution_time(0, automl_elapsed)}. Best model: {best_model_name} (F1: {individual_metrics['f1_score']})"
-        )  # Send Telegram notification with raw F1 float precision
+            TELEGRAM_BOT, f"AutoML pipeline completed for {os.path.basename(file)} in {calculate_execution_time(0, automl_elapsed)}. Best model: {best_model_name} (weighted F1: {individual_metrics['weighted_f1_score']})"
+        )  # Send Telegram notification with authoritative weighted F1.
 
         return {  # Return AutoML results summary
             "best_model_name": best_model_name,  # Best model name
@@ -13044,7 +13084,7 @@ def build_classifier_result_entry(model_class, file, execution_mode_str, attack_
     :param n_features: Number of features used
     :param n_samples_train: Number of training samples
     :param n_samples_test: Number of test samples
-    :param metrics_tuple: Tuple of (accuracy, precision, recall, f1, fpr, fnr, elapsed, ...)
+    :param metrics_tuple: Tuple preserving (accuracy, weighted precision, weighted recall, weighted F1, FPR, FNR, elapsed, predictions) with macro and per-class F1 appended.
     :param subset_feature_names: List of feature names used
     :param hyperparams_map: Dictionary mapping model names to hyperparameters
     :param effective_hyperparameters: Effective parameters read from the estimator evaluated for this row
@@ -13054,7 +13094,8 @@ def build_classifier_result_entry(model_class, file, execution_mode_str, attack_
     """
 
     try:
-        acc, prec, rec, f1, fpr, fnr, elapsed = metrics_tuple[:7]  # Unpack the first 7 metrics from the tuple
+        acc, weighted_precision, weighted_recall, weighted_f1, fpr, fnr, elapsed = metrics_tuple[:7]  # Preserve established metric tuple positions.
+        macro_f1, per_class_f1 = metrics_tuple[8:10]  # Read metrics appended after the unchanged prediction position.
         run_index = validate_experiment_runs(experiment_run, "experiment_run")  # Validate row-level run metadata.
         dataset_identity = resolve_canonical_dataset_identity(file, True) if execution_mode_str == "combined_files" else os.path.relpath(file)  # Resolve result-row dataset identity by execution mode.
         persisted_augmentation_ratio = resolve_persisted_augmentation_ratio(experiment_mode, augmentation_ratio)  # Resolve explicit baseline or augmented ratio metadata.
@@ -13079,9 +13120,11 @@ def build_classifier_result_entry(model_class, file, execution_mode_str, attack_
             "n_samples_train": n_samples_train,  # Number of training samples
             "n_samples_test": n_samples_test,  # Number of test samples
             "accuracy": acc,  # Accuracy as raw float
-            "precision": prec,  # Precision as raw float
-            "recall": rec,  # Recall as raw float
-            "f1_score": f1,  # F1 score as raw float
+            "weighted_precision": weighted_precision,  # Support-weighted precision as raw float.
+            "weighted_recall": weighted_recall,  # Support-weighted recall as raw float.
+            "weighted_f1_score": weighted_f1,  # Authoritative support-weighted F1 as raw float.
+            "macro_f1_score": macro_f1,  # Unweighted mean per-class F1 as raw float.
+            "per_class_f1_scores": per_class_f1,  # Deterministic CSV-safe per-class F1 JSON.
             "fpr": fpr,  # False positive rate as raw float
             "fnr": fnr,  # False negative rate as raw float
             "elapsed_time_s": int(round(elapsed)),  # Rounded elapsed time in seconds
@@ -13144,15 +13187,16 @@ def build_cached_telegram_result_messages(cached_result, feature_set_name, model
     cached_execution_mode = cached_result.get("execution_mode", execution_mode_str)  # Resolve execution mode from the persisted row
     evaluation_mode = str(cached_execution_mode).replace("_", " ").title().replace(" ", "") if cached_execution_mode else "SeparateFiles"  # Preserve the established CamelCase mode label
     acc = cached_result.get("accuracy", "N/A")  # Recover persisted accuracy
-    prec = cached_result.get("precision", "N/A")  # Recover persisted precision
-    rec = cached_result.get("recall", "N/A")  # Recover persisted recall
-    f1 = cached_result.get("f1_score", "N/A")  # Recover persisted F1 score
+    prec = resolve_result_metric_float(cached_result, "weighted_precision")  # Recover canonical weighted precision with legacy read fallback.
+    rec = resolve_result_metric_float(cached_result, "weighted_recall")  # Recover canonical weighted recall with legacy read fallback.
+    f1 = resolve_result_metric_float(cached_result, "weighted_f1_score")  # Recover authoritative weighted F1 with legacy read fallback.
+    macro_f1 = resolve_result_metric_float(cached_result, "macro_f1_score")  # Recover macro F1 when available.
     fpr = cached_result.get("fpr", "N/A")  # Recover persisted false-positive rate
     fnr = cached_result.get("fnr", "N/A")  # Recover persisted false-negative rate
     cached_elapsed = cached_result.get("elapsed_time_s", 0)  # Recover persisted elapsed seconds
     cached_elapsed = int(round(float(cached_elapsed))) if cached_elapsed is not None else 0  # Normalize persisted elapsed seconds for display
     cached_human_time = calculate_execution_time(cached_elapsed)  # Format elapsed time through the established duration formatter
-    cached_msg = f"{BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}: Mode {BackgroundColors.CYAN}{evaluation_mode}{BackgroundColors.GREEN} | F1-Score {BackgroundColors.CYAN}{f1}{BackgroundColors.GREEN} | Accuracy: {BackgroundColors.CYAN}{acc}{BackgroundColors.GREEN} | Precision: {BackgroundColors.CYAN}{prec}{BackgroundColors.GREEN} | Recall: {BackgroundColors.CYAN}{rec}{BackgroundColors.GREEN} | FPR: {BackgroundColors.CYAN}{fpr}{BackgroundColors.GREEN} | FNR: {BackgroundColors.CYAN}{fnr}{BackgroundColors.GREEN} | Training Time: {BackgroundColors.CYAN}{cached_elapsed}s{BackgroundColors.GREEN} | Execution Time: {BackgroundColors.CYAN}{cached_elapsed}s{BackgroundColors.GREEN} | Total Time: {BackgroundColors.CYAN}{cached_human_time}{BackgroundColors.GREEN} ({BackgroundColors.CYAN}{cached_elapsed}s{BackgroundColors.GREEN}){Style.RESET_ALL}"  # Preserve the existing recovered-result summary wording
+    cached_msg = f"{BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}: Mode {BackgroundColors.CYAN}{evaluation_mode}{BackgroundColors.GREEN} | Weighted F1-Score {BackgroundColors.CYAN}{format_result_value(f1)}{BackgroundColors.GREEN} | Macro F1-Score: {BackgroundColors.CYAN}{format_result_value(macro_f1)}{BackgroundColors.GREEN} | Accuracy: {BackgroundColors.CYAN}{acc}{BackgroundColors.GREEN} | Weighted Precision: {BackgroundColors.CYAN}{format_result_value(prec)}{BackgroundColors.GREEN} | Weighted Recall: {BackgroundColors.CYAN}{format_result_value(rec)}{BackgroundColors.GREEN} | FPR: {BackgroundColors.CYAN}{fpr}{BackgroundColors.GREEN} | FNR: {BackgroundColors.CYAN}{fnr}{BackgroundColors.GREEN} | Training Time: {BackgroundColors.CYAN}{cached_elapsed}s{BackgroundColors.GREEN} | Execution Time: {BackgroundColors.CYAN}{cached_elapsed}s{BackgroundColors.GREEN} | Total Time: {BackgroundColors.CYAN}{cached_human_time}{BackgroundColors.GREEN} ({BackgroundColors.CYAN}{cached_elapsed}s{BackgroundColors.GREEN}){Style.RESET_ALL}"  # Report explicit averaging semantics for recovered results.
     telegram_msg = f"[CACHE] Recovered saved result without fit, prediction, or metric recomputation | {combination_header}\n{cached_msg}"  # Preserve the existing cache notification wording
     return cached_msg, telegram_msg  # Return identical console and Telegram representations
 
@@ -13167,7 +13211,10 @@ def resolve_result_metric_float(result_entry: dict, metric_name: str) -> Optiona
     """
 
     try:  # Contain malformed legacy scalar values.
-        metric_value = result_entry.get(metric_name, None)  # Read the raw metric field.
+        legacy_aliases = {"weighted_precision": "precision", "weighted_recall": "recall", "weighted_f1_score": "f1_score"}  # Define read-only aliases for historical stacking rows.
+        metric_value = result_entry.get(metric_name, None)  # Prefer the canonical metric value.
+        if metric_value is None or bool(cast(Any, pd.isna(metric_value))):  # Detect a missing canonical value before legacy fallback.
+            metric_value = result_entry.get(legacy_aliases.get(metric_name, ""), None)  # Read the historical weighted alias when available.
         if metric_value is None or bool(cast(Any, pd.isna(metric_value))):  # Reject null and pandas missing scalars.
             return None  # Return no comparable value.
         metric_float = float(metric_value)  # Convert numeric strings and numpy scalars.
@@ -13238,7 +13285,7 @@ def metric_improvement_direction(metric_name: str) -> Optional[str]:
     """
 
     lower_metrics = {"fpr", "fnr", "elapsed_time_s"}  # Define lower-is-better metrics recorded by this framework.
-    higher_metrics = {"accuracy", "precision", "recall", "f1_score"}  # Define higher-is-better metrics recorded by this framework.
+    higher_metrics = {"accuracy", "weighted_precision", "weighted_recall", "weighted_f1_score", "macro_f1_score"}  # Define higher-is-better canonical metrics.
     if metric_name in lower_metrics or metric_name.endswith("_time_s") or metric_name.endswith("time_s"):  # Treat recorded second-based runtime metrics as lower-is-better.
         return "lower"  # Return downward improvement direction.
     if metric_name in higher_metrics:  # Match classifier quality metrics calculated in this file.
@@ -13255,7 +13302,7 @@ def list_comparable_result_metrics(previous_result: dict, new_result: dict) -> L
     :return: Ordered metric field names.
     """
 
-    ordered_metrics = ["f1_score", "accuracy", "precision", "recall", "fpr", "fnr", "elapsed_time_s"]  # Start with framework-required metrics.
+    ordered_metrics = ["weighted_f1_score", "macro_f1_score", "accuracy", "weighted_precision", "weighted_recall", "fpr", "fnr", "elapsed_time_s"]  # Start with canonical framework metrics.
     configured_metrics = [field for field in get_stacking_results_csv_columns(CONFIG) if metric_improvement_direction(str(field)) is not None]  # Add configured meaningful metrics with known direction.
     metric_names = list(dict.fromkeys(ordered_metrics + configured_metrics))  # Preserve order while removing duplicates.
     return [metric for metric in metric_names if resolve_result_metric_float(previous_result, metric) is not None and resolve_result_metric_float(new_result, metric) is not None]  # Keep metrics comparable in both rows.
@@ -13293,12 +13340,12 @@ def build_new_best_result_message(new_result: dict, previous_result: Optional[di
     """
 
     dataset_identity = resolve_result_dataset_identity(new_result) or "unknown"  # Resolve display dataset identity.
-    f1_value = resolve_result_metric_float(new_result, "f1_score")  # Read new F1 value.
-    lines = [f"[NEW DATASET BEST F1] Dataset: {dataset_identity}", f"New F1-Score: {format_result_value(f1_value)}"]  # Start notification with required headline.
+    f1_value = resolve_result_metric_float(new_result, "weighted_f1_score")  # Read authoritative weighted F1 value.
+    lines = [f"[NEW DATASET BEST WEIGHTED F1] Dataset: {dataset_identity}", f"New weighted F1-Score: {format_result_value(f1_value)}"]  # Start notification with explicit averaging semantics.
     lines.extend(["New experiment:", *build_result_identity_lines(new_result)])  # Add complete available new experiment identity.
     lines.append("New metrics:")  # Add new metric section heading.
     for metric_name in [metric for metric in get_stacking_results_csv_columns(CONFIG) if resolve_result_metric_float(new_result, str(metric)) is not None]:  # Include all recorded numeric framework metrics.
-        lines.append(f"{metric_name}: {format_result_value(new_result.get(metric_name))}")  # Add one new metric value.
+        lines.append(f"{metric_name}: {format_result_value(resolve_result_metric_float(new_result, str(metric_name)))}")  # Add one canonical or legacy-compatible metric value.
     if previous_result is None:  # Handle first valid row for this dataset.
         lines.append("Previous best: none; initial benchmark established.")  # Report initial benchmark explicitly.
     else:  # Compare against displaced dataset best.
@@ -13330,9 +13377,9 @@ def build_best_artifact_directory_name(result_entry: dict) -> str:  # Build the 
     :return: Deterministic artifact directory name.
     """
 
-    f1_value = resolve_result_metric_float(result_entry, "f1_score")  # Resolve the authoritative finite weighted F1 value.
+    f1_value = resolve_result_metric_float(result_entry, "weighted_f1_score")  # Resolve authoritative finite weighted F1 with legacy read fallback.
     if f1_value is None:  # Reject rows that cannot participate in existing best-result semantics.
-        raise ValueError("New-best artifact result has no finite F1 score")  # Prevent ambiguous artifact naming.
+        raise ValueError("New-best artifact result has no finite weighted F1 score")  # Prevent ambiguous artifact naming.
     execution_mode = result_entry.get("execution_mode")  # Read structured execution mode from authoritative persisted row.
     if execution_mode not in {"combined_files", "separate_files"}:  # Reject unsupported modes instead of mislabeling scientific evidence.
         raise ValueError(f"Unsupported best-result execution mode: {execution_mode}")  # Surface missing or ambiguous evaluation semantics.
@@ -13391,7 +13438,7 @@ def persist_best_result_artifacts(result_entry: dict, y_true: Any, y_pred: Any, 
         label_mapping = {"confusion_matrix_order": class_names, "classification_report_order": class_names, "encoded_to_class": [{"encoded_label": encoded_label, "class_label": class_name} for encoded_label, class_name in zip(encoded_labels, class_names)]}  # Record exact matrix, report, and encoder ordering.
         with open(temporary_directory / "class_label_mapping.json", "w", encoding="utf-8") as mapping_file:  # Open staged label mapping destination.
             json.dump(label_mapping, mapping_file, indent=2, sort_keys=True, allow_nan=False)  # Persist deterministic label interpretation metadata.
-        metadata = {"artifact_identity": artifact_identity, "metrics": {field: result_entry.get(field) for field in ("f1_score", "accuracy", "precision", "recall", "fpr", "fnr")}, "experiment": {field: result_entry.get(field) for field in ("dataset", "execution_mode", "attack_types_combined", "feature_set", "classifier_type", "model_name", "model", "hyperparameter_mode", "experiment_id", "experiment_run", "experiment_mode", "augmentation_ratio", "data_augmentation_enabled", "n_features", "n_samples_train", "n_samples_test", "cv_method", "hyperparameters", "features_list")}, "timings_seconds": {field: result_entry.get(field) for field in ("elapsed_time_s", *PHASE_RUNTIME_COLUMNS)}, "configuration": {"evaluation": {field: config.get("evaluation", {}).get(field) for field in ("random_state", "test_size", "cv_folds", "n_jobs", "feature_extraction_n_jobs")}, "methods": config.get("stacking", {}).get("methods", {})}, "confusion_matrix_normalization": "Each row is divided by its true-class support; zero-support rows remain zero.", "class_labels_file": "class_label_mapping.json"}  # Store available metrics, identity, timing, and reproducibility configuration.
+        metadata = {"artifact_identity": artifact_identity, "metrics": {field: result_entry.get(field) for field in ("accuracy", "weighted_precision", "weighted_recall", "weighted_f1_score", "macro_f1_score", "per_class_f1_scores", "fpr", "fnr")}, "experiment": {field: result_entry.get(field) for field in ("dataset", "execution_mode", "attack_types_combined", "feature_set", "classifier_type", "model_name", "model", "hyperparameter_mode", "experiment_id", "experiment_run", "experiment_mode", "augmentation_ratio", "data_augmentation_enabled", "n_features", "n_samples_train", "n_samples_test", "cv_method", "hyperparameters", "features_list")}, "timings_seconds": {field: result_entry.get(field) for field in ("elapsed_time_s", *PHASE_RUNTIME_COLUMNS)}, "configuration": {"evaluation": {field: config.get("evaluation", {}).get(field) for field in ("random_state", "test_size", "cv_folds", "n_jobs", "feature_extraction_n_jobs")}, "methods": config.get("stacking", {}).get("methods", {})}, "confusion_matrix_normalization": "Each row is divided by its true-class support; zero-support rows remain zero.", "class_labels_file": "class_label_mapping.json"}  # Store canonical metrics, identity, timing, and reproducibility configuration.
         with open(temporary_directory / "experiment_metrics_metadata.json", "w", encoding="utf-8") as metadata_file:  # Open staged experiment metadata destination.
             json.dump(normalize_metadata_for_json(metadata), metadata_file, indent=2, sort_keys=True, allow_nan=False)  # Persist deterministic metadata without invented values.
         for matrix, title, filename, value_format in ((raw_matrix, "Raw confusion matrix", "confusion_matrix_raw.png", "d"), (normalized_matrix, "True-class row-normalized confusion matrix", "confusion_matrix_normalized_true.png", ".3f")):  # Render both required human-readable matrices consistently.
@@ -13453,11 +13500,11 @@ def register_known_best_result(result_entry: dict) -> None:
     """
 
     dataset_identity = resolve_result_dataset_identity(result_entry)  # Resolve exact result-row dataset identity.
-    f1_value = resolve_result_metric_float(result_entry, "f1_score")  # Resolve comparable F1 value.
+    f1_value = resolve_result_metric_float(result_entry, "weighted_f1_score")  # Resolve comparable weighted F1 value with legacy read fallback.
     if dataset_identity is None or f1_value is None:  # Ignore rows without comparable dataset and F1.
         return  # Leave best state unchanged.
     current_best = NEW_BEST_RESULTS_BY_DATASET.get(dataset_identity)  # Read current dataset best state.
-    current_f1 = resolve_result_metric_float(current_best, "f1_score") if isinstance(current_best, dict) else None  # Resolve current best F1.
+    current_f1 = resolve_result_metric_float(current_best, "weighted_f1_score") if isinstance(current_best, dict) else None  # Resolve current best weighted F1.
     if current_f1 is None or f1_value > current_f1:  # Use strict F1 improvement for state updates.
         NEW_BEST_RESULTS_BY_DATASET[dataset_identity] = copy.deepcopy(result_entry)  # Store an isolated copy of the authoritative row.
 
@@ -13503,12 +13550,12 @@ def notify_new_best_result_if_applicable(result_entry: dict, y_true: Any = None,
     """
 
     dataset_identity = resolve_result_dataset_identity(result_entry)  # Resolve exact result-row dataset identity.
-    f1_value = resolve_result_metric_float(result_entry, "f1_score")  # Resolve comparable F1 value.
+    f1_value = resolve_result_metric_float(result_entry, "weighted_f1_score")  # Resolve comparable weighted F1 value with legacy read fallback.
     if dataset_identity is None or f1_value is None:  # Ignore incomplete or malformed rows.
         return False  # Report no notification.
     with NEW_BEST_RESULTS_LOCK:  # Make comparison and update atomic within this process.
         previous_best = NEW_BEST_RESULTS_BY_DATASET.get(dataset_identity)  # Read prior dataset best before current update.
-        previous_f1 = resolve_result_metric_float(previous_best, "f1_score") if isinstance(previous_best, dict) else None  # Resolve prior F1.
+        previous_f1 = resolve_result_metric_float(previous_best, "weighted_f1_score") if isinstance(previous_best, dict) else None  # Resolve prior weighted F1.
         if previous_f1 is not None and f1_value <= previous_f1:  # Enforce strict F1 improvement only.
             return False  # Report no notification for lower or tied F1.
         message = build_new_best_result_message(result_entry, previous_best if isinstance(previous_best, dict) else None)  # Build notification before state mutation.
@@ -13531,8 +13578,11 @@ def build_feature_process_notification_result(result_entry: dict) -> dict:  # Re
     :return: Small scalar-only notification result mapping.
     """
 
-    fields = ("dataset", "feature_set", "experiment_run", "hyperparameter_mode", "model_name", "execution_mode", "experiment_mode", "augmentation_ratio", "accuracy", "precision", "recall", "f1_score", "fpr", "fnr", "elapsed_time_s")  # List only fields required for identity, completion, and cache notifications
-    return {field: result_entry.get(field) for field in fields}  # Exclude estimators, matrices, predictions, probabilities, and feature lists
+    fields = ("dataset", "feature_set", "experiment_run", "hyperparameter_mode", "model_name", "execution_mode", "experiment_mode", "augmentation_ratio", "accuracy", "weighted_precision", "weighted_recall", "weighted_f1_score", "macro_f1_score", "per_class_f1_scores", "fpr", "fnr", "elapsed_time_s")  # List only fields required for identity, completion, and cache notifications.
+    notification_result = {field: result_entry.get(field) for field in fields}  # Exclude estimators, matrices, predictions, probabilities, and feature lists.
+    for metric_name in ("weighted_precision", "weighted_recall", "weighted_f1_score"):  # Populate canonical weighted metrics from legacy rows.
+        notification_result[metric_name] = resolve_result_metric_float(result_entry, metric_name)  # Apply read-only compatibility aliases.
+    return notification_result  # Return canonical scalar notification fields.
 
 
 def describe_process_exit_signal(exitcode: Optional[int]) -> Optional[str]:  # Resolve a multiprocessing negative exit code to a signal name
@@ -13939,7 +13989,7 @@ def send_feature_process_result_notification(task: dict, result_entry: dict, eve
     notified_global_ids.add(global_id)  # Reserve the sole application-level delivery attempt before external I/O
     if event == "computed":  # Restore the historical fresh-completion wording
         combination_header = build_telegram_combination_header(task["feature_set"], task["classifier_name"], task["augmentation_ratio"], task["hyperparameters_enabled"], include_model=False, experiment_run=task["experiment_run"])  # Reuse the established sequential combination formatter without trailing classifier
-        telegram_msg = f"Finished combination {global_id}/{int(dynamic_total)}: {task['classifier_name']} - {combination_header} with F1: {result_entry.get('f1_score')} in {calculate_execution_time(0, result_entry.get('elapsed_time_s', 0))}"  # Use plan identity and persisted result values
+        telegram_msg = f"Finished combination {global_id}/{int(dynamic_total)}: {task['classifier_name']} - {combination_header} with weighted F1: {resolve_result_metric_float(result_entry, 'weighted_f1_score')} in {calculate_execution_time(0, result_entry.get('elapsed_time_s', 0))}"  # Use authoritative weighted F1 with legacy read fallback.
     else:  # Preserve the established sequential cache-recovery semantics
         _, telegram_msg = build_cached_telegram_result_messages(result_entry, task["feature_set"], task["classifier_name"], task["augmentation_ratio"], task["hyperparameters_enabled"], task["execution_mode"])  # Reuse the existing cache message construction
     try:  # Isolate Telegram transport from completed scientific work
@@ -14374,8 +14424,9 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
                 local_combination_total=total_steps,  # Use the active feature-set combination count as the local denominator.
                 previous_run_duration_label=sequential_duration_by_model.get(model_name, "unavailable"),  # Pass resolved historical duration to progress output.
                 eta_pending_run_experiments_label=eta_pending_run_experiments_label,  # Pass pending-run historical duration sum to progress output.
+                class_labels=label_encoder.classes_,  # Use fitted encoder order for per-class F1 persistence.
             )  # Evaluate individual classifier sequentially using HP-isolated model artifact names
-            write_memory_phase_event("after_prediction_and_metrics", config=config, **phase_metadata, accuracy=metrics[0], precision=metrics[1], recall=metrics[2], f1_score=metrics[3], event_outcome="metrics_completed")  # Publish prediction and metrics completion
+            write_memory_phase_event("after_prediction_and_metrics", config=config, **phase_metadata, accuracy=metrics[0], weighted_precision=metrics[1], weighted_recall=metrics[2], weighted_f1_score=metrics[3], macro_f1_score=metrics[8], event_outcome="metrics_completed")  # Publish canonical prediction metrics.
 
             model_class = active_model.__class__.__name__  # Retrieve model class name for result entry
             effective_hyperparameters = serialize_effective_estimator_parameters(active_model)  # Serialize effective estimator parameters after fitting.
@@ -14559,10 +14610,10 @@ def run_stacking_evaluation_for_feature_set(name, stacking_model, X_train_df, y_
             training_eta_callback = send_rerun_stacking_training_eta  # Provide the callback object to the existing evaluator.
 
         stacking_metrics = evaluate_stacking_classifier(
-            active_stacking_model, X_train_df, y_train, X_test_df, y_test, config=config, training_ram_stats=stacking_ram_stats, notification_context=combination_header, feature_set=name, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio, training_eta_callback=training_eta_callback, local_combination_index=current_combination, local_combination_total=total_steps, previous_run_duration_label=previous_stacking_duration_label, eta_pending_run_experiments_label=eta_pending_stacking_label  # Include exact active combination metadata in progress output.
+            active_stacking_model, X_train_df, y_train, X_test_df, y_test, config=config, training_ram_stats=stacking_ram_stats, notification_context=combination_header, feature_set=name, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio, training_eta_callback=training_eta_callback, local_combination_index=current_combination, local_combination_total=total_steps, previous_run_duration_label=previous_stacking_duration_label, eta_pending_run_experiments_label=eta_pending_stacking_label, class_labels=label_encoder.classes_  # Include exact active combination metadata and encoder order.
         )  # Evaluate stacking model with DataFrames and retrieve metrics tuple
         write_memory_phase_event("after_classifier_fit", config=config, **phase_metadata, event_outcome="fit_and_prediction_completed")  # Publish stacking fit completion
-        write_memory_phase_event("after_prediction_and_metrics", config=config, **phase_metadata, accuracy=stacking_metrics[0], precision=stacking_metrics[1], recall=stacking_metrics[2], f1_score=stacking_metrics[3], event_outcome="metrics_completed")  # Publish stacking metrics completion
+        write_memory_phase_event("after_prediction_and_metrics", config=config, **phase_metadata, accuracy=stacking_metrics[0], weighted_precision=stacking_metrics[1], weighted_recall=stacking_metrics[2], weighted_f1_score=stacking_metrics[3], macro_f1_score=stacking_metrics[8], event_outcome="metrics_completed")  # Publish canonical stacking metrics.
 
         s_y_pred = stacking_metrics[7] if len(stacking_metrics) > 7 else None  # Extract stacking predictions from metrics tuple for plot generation
 
@@ -15153,10 +15204,10 @@ def evaluate_on_dataset(
                     preprocessing_time_s = time.perf_counter() - preprocessing_started_at  # Stop augmented preprocessing timer before model prediction.
                     training_ram_stats = {}
                     if model_name == "StackingClassifier":
-                        metrics = evaluate_stacking_classifier(loaded_model, None, None, X_augmented_df, y_augmented, config=config, training_ram_stats=training_ram_stats, fit_model=False, notification_context=combination_header, feature_set=name, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio, local_combination_index=current_combination, local_combination_total=total_steps)  # Report persisted stacking evaluation with authoritative combination metadata.
+                        metrics = evaluate_stacking_classifier(loaded_model, None, None, X_augmented_df, y_augmented, config=config, training_ram_stats=training_ram_stats, fit_model=False, notification_context=combination_header, feature_set=name, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio, local_combination_index=current_combination, local_combination_total=total_steps, class_labels=artifact_bundle["label_encoder"].classes_)  # Report persisted stacking evaluation with fitted encoder order.
                         classifier_type = "Stacking"
                     else:
-                        metrics = evaluate_individual_classifier(loaded_model, model_name, None, None, X_augmented_model, y_augmented, file, artifact_bundle["scaler"], subset_feature_names, artifact_feature_set, config=config, training_ram_stats=training_ram_stats, fit_model=False, notification_context=combination_header, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio, local_combination_index=current_combination, local_combination_total=total_steps)  # Report persisted individual evaluation with authoritative combination metadata.
+                        metrics = evaluate_individual_classifier(loaded_model, model_name, None, None, X_augmented_model, y_augmented, file, artifact_bundle["scaler"], subset_feature_names, artifact_feature_set, config=config, training_ram_stats=training_ram_stats, fit_model=False, notification_context=combination_header, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio, local_combination_index=current_combination, local_combination_total=total_steps, class_labels=artifact_bundle["label_encoder"].classes_)  # Report persisted individual evaluation with fitted encoder order.
                         classifier_type = "Individual"
                     phase_runtime_fields = build_runtime_phase_fields(config, name, model_name, bool(hyperparameters_enabled), preprocessing_time_s, training_ram_stats)  # Build phase runtime fields before immediate cache persistence.
                     result_entry = build_classifier_result_entry(loaded_model.__class__.__name__, file, execution_mode_str, attack_types_combined, name, classifier_type, model_name, data_source_label, experiment_id, experiment_mode, augmentation_ratio, len(subset_feature_names), original_train_count, len(y_augmented), metrics, subset_feature_names, hyperparams_map=hyperparams_map, hyperparameters_enabled=hyperparameters_enabled, effective_hyperparameters=serialize_effective_estimator_parameters(loaded_model), experiment_run=get_current_experiment_run(config), phase_runtime_fields=phase_runtime_fields)  # Persist the active run on augmented result rows.
@@ -15510,7 +15561,7 @@ def extract_metrics_from_result(result):
     Extracts metrics from a result dictionary into a list.
 
     :param result: Result dictionary containing metric keys
-    :return: List of [accuracy, precision, recall, f1_score, fpr, fnr, elapsed_time_s]
+    :return: List preserving accuracy, weighted precision, weighted recall, weighted F1, FPR, FNR, and elapsed time before appended macro and per-class F1.
     """
     
     try:
@@ -15520,12 +15571,14 @@ def extract_metrics_from_result(result):
 
         return [
             result.get("accuracy", 0),  # Get accuracy or default to 0
-            result.get("precision", 0),  # Get precision or default to 0
-            result.get("recall", 0),  # Get recall or default to 0
-            result.get("f1_score", 0),  # Get F1 score or default to 0
+            resolve_result_metric_float(result, "weighted_precision") or 0,  # Read weighted precision with legacy fallback.
+            resolve_result_metric_float(result, "weighted_recall") or 0,  # Read weighted recall with legacy fallback.
+            resolve_result_metric_float(result, "weighted_f1_score") or 0,  # Read authoritative weighted F1 with legacy fallback.
             result.get("fpr", 0),  # Get false positive rate or default to 0
             result.get("fnr", 0),  # Get false negative rate or default to 0
             result.get("elapsed_time_s", 0),  # Get elapsed time or default to 0
+            resolve_result_metric_float(result, "macro_f1_score") or 0,  # Read macro F1 when available.
+            result.get("per_class_f1_scores", None),  # Preserve deterministic per-class F1 JSON when available.
         ]  # Return list of metric values
     except Exception as e:
         print(str(e))
@@ -15537,8 +15590,8 @@ def calculate_all_improvements(orig_metrics, merged_metrics):
     """
     Calculates improvement percentages for all metrics comparing original vs merged data.
 
-    :param orig_metrics: List of original metrics [accuracy, precision, recall, f1, fpr, fnr, time]
-    :param merged_metrics: List of merged metrics [accuracy, precision, recall, f1, fpr, fnr, time]
+    :param orig_metrics: Metric list with established first seven positions and appended macro/per-class F1.
+    :param merged_metrics: Metric list with established first seven positions and appended macro/per-class F1.
     :return: Dictionary of improvement percentages for each metric
     """
     
@@ -15549,12 +15602,13 @@ def calculate_all_improvements(orig_metrics, merged_metrics):
 
         return {
             "accuracy": calculate_metric_improvement(orig_metrics[0], merged_metrics[0]),  # Calculate accuracy improvement
-            "precision": calculate_metric_improvement(orig_metrics[1], merged_metrics[1]),  # Calculate precision improvement
-            "recall": calculate_metric_improvement(orig_metrics[2], merged_metrics[2]),  # Calculate recall improvement
-            "f1_score": calculate_metric_improvement(orig_metrics[3], merged_metrics[3]),  # Calculate F1 score improvement
+            "weighted_precision": calculate_metric_improvement(orig_metrics[1], merged_metrics[1]),  # Calculate weighted precision improvement.
+            "weighted_recall": calculate_metric_improvement(orig_metrics[2], merged_metrics[2]),  # Calculate weighted recall improvement.
+            "weighted_f1_score": calculate_metric_improvement(orig_metrics[3], merged_metrics[3]),  # Calculate weighted F1 improvement.
             "fpr": calculate_metric_improvement(orig_metrics[4], merged_metrics[4]),  # Calculate FPR change (lower is better)
             "fnr": calculate_metric_improvement(orig_metrics[5], merged_metrics[5]),  # Calculate FNR change (lower is better)
             "training_time": calculate_metric_improvement(orig_metrics[6], merged_metrics[6]),  # Calculate time change (lower is better)
+            "macro_f1_score": calculate_metric_improvement(orig_metrics[7], merged_metrics[7]),  # Calculate macro F1 improvement.
         }  # Return dictionary of improvements
     except Exception as e:
         print(str(e))
@@ -15589,19 +15643,19 @@ def print_model_comparison(feature_set, model_name, orig_metrics, aug_metrics, m
         acc_values = f"    {BackgroundColors.GREEN}Original:{BackgroundColors.CYAN} {orig_metrics[0]} | {BackgroundColors.YELLOW}Augmented:{BackgroundColors.CYAN} {aug_metrics[0]} | {BackgroundColors.BOLD}Original+Augmented:{BackgroundColors.CYAN} {merged_metrics[0]} | {BackgroundColors.CYAN}Improvement: {improvements['accuracy']}%{Style.RESET_ALL}"  # Build accuracy comparison line using raw floats
         print(acc_values)  # Print accuracy comparison
 
-        prec_label = f"  {BackgroundColors.YELLOW}Precision:{Style.RESET_ALL}"  # Build precision label
+        prec_label = f"  {BackgroundColors.YELLOW}Weighted Precision:{Style.RESET_ALL}"  # Build explicit precision label.
         print(prec_label)  # Print precision label
-        prec_values = f"    {BackgroundColors.GREEN}Original:{BackgroundColors.CYAN} {orig_metrics[1]} | {BackgroundColors.YELLOW}Augmented:{BackgroundColors.CYAN} {aug_metrics[1]} | {BackgroundColors.BOLD}Original+Augmented:{BackgroundColors.CYAN} {merged_metrics[1]} | {BackgroundColors.CYAN}Improvement: {improvements['precision']}%{Style.RESET_ALL}"  # Build precision comparison line using raw floats
+        prec_values = f"    {BackgroundColors.GREEN}Original:{BackgroundColors.CYAN} {orig_metrics[1]} | {BackgroundColors.YELLOW}Augmented:{BackgroundColors.CYAN} {aug_metrics[1]} | {BackgroundColors.BOLD}Original+Augmented:{BackgroundColors.CYAN} {merged_metrics[1]} | {BackgroundColors.CYAN}Improvement: {improvements['weighted_precision']}%{Style.RESET_ALL}"  # Build weighted precision comparison.
         print(prec_values)  # Print precision comparison
 
-        recall_label = f"  {BackgroundColors.YELLOW}Recall:{Style.RESET_ALL}"  # Build recall label
+        recall_label = f"  {BackgroundColors.YELLOW}Weighted Recall:{Style.RESET_ALL}"  # Build explicit recall label.
         print(recall_label)  # Print recall label
-        recall_values = f"    {BackgroundColors.GREEN}Original:{BackgroundColors.CYAN} {orig_metrics[2]} | {BackgroundColors.YELLOW}Augmented:{BackgroundColors.CYAN} {aug_metrics[2]} | {BackgroundColors.BOLD}Original+Augmented:{BackgroundColors.CYAN} {merged_metrics[2]} | {BackgroundColors.CYAN}Improvement: {improvements['recall']}%{Style.RESET_ALL}"  # Build recall comparison line using raw floats
+        recall_values = f"    {BackgroundColors.GREEN}Original:{BackgroundColors.CYAN} {orig_metrics[2]} | {BackgroundColors.YELLOW}Augmented:{BackgroundColors.CYAN} {aug_metrics[2]} | {BackgroundColors.BOLD}Original+Augmented:{BackgroundColors.CYAN} {merged_metrics[2]} | {BackgroundColors.CYAN}Improvement: {improvements['weighted_recall']}%{Style.RESET_ALL}"  # Build weighted recall comparison.
         print(recall_values)  # Print recall comparison
 
-        f1_label = f"  {BackgroundColors.YELLOW}F1-Score:{Style.RESET_ALL}"  # Build F1 score label
+        f1_label = f"  {BackgroundColors.YELLOW}Weighted F1-Score:{Style.RESET_ALL}"  # Build explicit F1 label.
         print(f1_label)  # Print F1 score label
-        f1_values = f"    {BackgroundColors.GREEN}Original:{BackgroundColors.CYAN} {orig_metrics[3]} | {BackgroundColors.YELLOW}Augmented:{BackgroundColors.CYAN} {aug_metrics[3]} | {BackgroundColors.BOLD}Original+Augmented:{BackgroundColors.CYAN} {merged_metrics[3]} | {BackgroundColors.CYAN}Improvement: {improvements['f1_score']}%{Style.RESET_ALL}"  # Build F1 score comparison using raw floats
+        f1_values = f"    {BackgroundColors.GREEN}Original:{BackgroundColors.CYAN} {orig_metrics[3]} | {BackgroundColors.YELLOW}Augmented:{BackgroundColors.CYAN} {aug_metrics[3]} | {BackgroundColors.BOLD}Original+Augmented:{BackgroundColors.CYAN} {merged_metrics[3]} | {BackgroundColors.CYAN}Improvement: {improvements['weighted_f1_score']}%{Style.RESET_ALL}"  # Build weighted F1 comparison.
         print(f1_values)  # Print F1 score comparison
 
         fpr_label = f"  {BackgroundColors.YELLOW}FPR (lower is better):{Style.RESET_ALL}"  # Build FPR label
@@ -15633,7 +15687,7 @@ def build_comparison_result_entry(orig_result, feature_set, classifier_type, mod
     :param classifier_type: Type of classifier (e.g., 'Individual' or 'Stacking')
     :param model_name: Name of the model
     :param data_source: Data source label (e.g., 'Original', 'Augmented@50%')
-    :param metrics: List of metrics [accuracy, precision, recall, f1, fpr, fnr, time]
+    :param metrics: Metric list with established first seven positions and appended macro/per-class F1.
     :param improvements: Dictionary of improvement percentages
     :param n_features_override: Override for n_features (optional)
     :param n_samples_train_override: Override for n_samples_train (optional)
@@ -15663,16 +15717,19 @@ def build_comparison_result_entry(orig_result, feature_set, classifier_type, mod
             "n_samples_train": n_samples_train_override if n_samples_train_override is not None else orig_result["n_samples_train"],  # Training samples count
             "n_samples_test": n_samples_test_override if n_samples_test_override is not None else orig_result["n_samples_test"],  # Test samples count
             "accuracy": metrics[0],  # Accuracy metric
-            "precision": metrics[1],  # Precision metric
-            "recall": metrics[2],  # Recall metric
-            "f1_score": metrics[3],  # F1 score metric
+            "weighted_precision": metrics[1],  # Support-weighted precision metric.
+            "weighted_recall": metrics[2],  # Support-weighted recall metric.
+            "weighted_f1_score": metrics[3],  # Authoritative support-weighted F1 metric.
+            "macro_f1_score": metrics[7],  # Macro F1 metric.
+            "per_class_f1_scores": metrics[8],  # Deterministic per-class F1 JSON.
             "fpr": metrics[4],  # False positive rate
             "fnr": metrics[5],  # False negative rate
             "training_time": metrics[6],  # Training time in seconds
             "accuracy_improvement": improvements.get("accuracy", 0.0),  # Accuracy improvement percentage
-            "precision_improvement": improvements.get("precision", 0.0),  # Precision improvement percentage
-            "recall_improvement": improvements.get("recall", 0.0),  # Recall improvement percentage
-            "f1_score_improvement": improvements.get("f1_score", 0.0),  # F1 score improvement percentage
+            "weighted_precision_improvement": improvements.get("weighted_precision", 0.0),  # Weighted precision improvement percentage.
+            "weighted_recall_improvement": improvements.get("weighted_recall", 0.0),  # Weighted recall improvement percentage.
+            "weighted_f1_score_improvement": improvements.get("weighted_f1_score", 0.0),  # Weighted F1 improvement percentage.
+            "macro_f1_score_improvement": improvements.get("macro_f1_score", 0.0),  # Macro F1 improvement percentage.
             "fpr_improvement": improvements.get("fpr", 0.0),  # FPR improvement percentage
             "fnr_improvement": improvements.get("fnr", 0.0),  # FNR improvement percentage
             "training_time_improvement": improvements.get("training_time", 0.0),  # Training time improvement percentage
@@ -15711,7 +15768,7 @@ def generate_ratio_comparison_report(results_original, all_ratio_results, config
         )  # Print closing separator line
 
         comparison_results = []  # Initialize list for comparison result entries
-        no_improvements = {"accuracy": 0.0, "precision": 0.0, "recall": 0.0, "f1_score": 0.0, "fpr": 0.0, "fnr": 0.0, "training_time": 0.0}  # Zero improvements dict for original baseline entries
+        no_improvements = {"accuracy": 0.0, "weighted_precision": 0.0, "weighted_recall": 0.0, "weighted_f1_score": 0.0, "macro_f1_score": 0.0, "fpr": 0.0, "fnr": 0.0, "training_time": 0.0}  # Zero improvements for canonical baseline metrics.
 
         for key in results_original.keys():  # Iterate through each feature_set/model combination from original results
             orig_result = results_original[key]  # Get the original baseline result entry
@@ -15736,7 +15793,7 @@ def generate_ratio_comparison_report(results_original, all_ratio_results, config
             evaluation_mode = mode_raw.replace("_", " ").title().replace(" ", "") if mode_raw else "SeparateFiles"  # Normalize or default
             total_seconds_orig = int(round(orig_metrics[6]))  # Total seconds from original metrics
             human_time_orig = calculate_execution_time(0, total_seconds_orig)  # Human-readable original elapsed time
-            msg = f"{BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}: Mode {BackgroundColors.YELLOW}{evaluation_mode}{BackgroundColors.GREEN} | F1-Score {BackgroundColors.CYAN}{orig_metrics[3]}{BackgroundColors.GREEN} | Accuracy: {BackgroundColors.CYAN}{orig_metrics[0]}{BackgroundColors.GREEN} | Precision: {BackgroundColors.CYAN}{orig_metrics[1]}{BackgroundColors.GREEN} | Recall: {BackgroundColors.CYAN}{orig_metrics[2]}{BackgroundColors.GREEN} | FPR: {BackgroundColors.CYAN}{orig_metrics[4]}{BackgroundColors.GREEN} | FNR: {BackgroundColors.CYAN}{orig_metrics[5]}{BackgroundColors.GREEN} | Training Time: {BackgroundColors.CYAN}{int(total_seconds_orig)}s{BackgroundColors.GREEN} | Execution Time: {BackgroundColors.CYAN}{int(total_seconds_orig)}s{BackgroundColors.GREEN} | Total Time: {BackgroundColors.CYAN}{human_time_orig} ({total_seconds_orig}s){Style.RESET_ALL}"  # Build colored original baseline summary using raw floats and integer times
+            msg = f"{BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}: Mode {BackgroundColors.YELLOW}{evaluation_mode}{BackgroundColors.GREEN} | Weighted F1-Score {BackgroundColors.CYAN}{orig_metrics[3]}{BackgroundColors.GREEN} | Macro F1-Score: {BackgroundColors.CYAN}{orig_metrics[7]}{BackgroundColors.GREEN} | Accuracy: {BackgroundColors.CYAN}{orig_metrics[0]}{BackgroundColors.GREEN} | Weighted Precision: {BackgroundColors.CYAN}{orig_metrics[1]}{BackgroundColors.GREEN} | Weighted Recall: {BackgroundColors.CYAN}{orig_metrics[2]}{BackgroundColors.GREEN} | FPR: {BackgroundColors.CYAN}{orig_metrics[4]}{BackgroundColors.GREEN} | FNR: {BackgroundColors.CYAN}{orig_metrics[5]}{BackgroundColors.GREEN} | Training Time: {BackgroundColors.CYAN}{int(total_seconds_orig)}s{BackgroundColors.GREEN} | Execution Time: {BackgroundColors.CYAN}{int(total_seconds_orig)}s{BackgroundColors.GREEN} | Total Time: {BackgroundColors.CYAN}{human_time_orig} ({total_seconds_orig}s){Style.RESET_ALL}"  # Report explicit averaging semantics for baseline metrics.
             print(msg)  # Print original baseline metrics summary
 
             for ratio in sorted(all_ratio_results.keys()):  # Iterate over each ratio in sorted order
@@ -15763,11 +15820,11 @@ def generate_ratio_comparison_report(results_original, all_ratio_results, config
                     )
                 )  # Add ratio experiment entry with improvements to comparison results
 
-                f1_improvement = improvements.get("f1_score", 0.0)  # Extract F1 improvement for display
+                f1_improvement = improvements.get("weighted_f1_score", 0.0)  # Extract authoritative weighted F1 improvement for display.
                 improvement_color = BackgroundColors.GREEN if f1_improvement >= 0 else BackgroundColors.RED  # Choose color based on improvement direction
                 total_seconds_ratio = int(round(ratio_metrics[6]))  # Total seconds from ratio experiment metrics
                 human_time_ratio = calculate_execution_time(0, total_seconds_ratio)  # Human-readable ratio elapsed time
-                msg = f"{BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}: Mode {BackgroundColors.YELLOW}{evaluation_mode}{BackgroundColors.GREEN} | F1-Score {BackgroundColors.CYAN}{ratio_metrics[3]}{BackgroundColors.GREEN} | Accuracy: {BackgroundColors.CYAN}{ratio_metrics[0]}{BackgroundColors.GREEN} | Precision: {BackgroundColors.CYAN}{ratio_metrics[1]}{BackgroundColors.GREEN} | Recall: {BackgroundColors.CYAN}{ratio_metrics[2]}{BackgroundColors.GREEN} | FPR: {BackgroundColors.CYAN}{ratio_metrics[4]}{BackgroundColors.GREEN} | FNR: {BackgroundColors.CYAN}{ratio_metrics[5]}{BackgroundColors.GREEN} | Training Time: {BackgroundColors.CYAN}{int(total_seconds_ratio)}s{BackgroundColors.GREEN} | Execution Time: {BackgroundColors.CYAN}{int(total_seconds_ratio)}s{BackgroundColors.GREEN} | Total Time: {BackgroundColors.CYAN}{human_time_ratio} ({total_seconds_ratio}s){Style.RESET_ALL}"  # Build colored ratio summary using raw floats and integer times
+                msg = f"{BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}: Mode {BackgroundColors.YELLOW}{evaluation_mode}{BackgroundColors.GREEN} | Weighted F1-Score {BackgroundColors.CYAN}{ratio_metrics[3]}{BackgroundColors.GREEN} | Macro F1-Score: {BackgroundColors.CYAN}{ratio_metrics[7]}{BackgroundColors.GREEN} | Accuracy: {BackgroundColors.CYAN}{ratio_metrics[0]}{BackgroundColors.GREEN} | Weighted Precision: {BackgroundColors.CYAN}{ratio_metrics[1]}{BackgroundColors.GREEN} | Weighted Recall: {BackgroundColors.CYAN}{ratio_metrics[2]}{BackgroundColors.GREEN} | FPR: {BackgroundColors.CYAN}{ratio_metrics[4]}{BackgroundColors.GREEN} | FNR: {BackgroundColors.CYAN}{ratio_metrics[5]}{BackgroundColors.GREEN} | Training Time: {BackgroundColors.CYAN}{int(total_seconds_ratio)}s{BackgroundColors.GREEN} | Execution Time: {BackgroundColors.CYAN}{int(total_seconds_ratio)}s{BackgroundColors.GREEN} | Total Time: {BackgroundColors.CYAN}{human_time_ratio} ({total_seconds_ratio}s){Style.RESET_ALL}"  # Report explicit averaging semantics for ratio metrics.
                 print(msg)  # Print ratio result metrics with F1 improvement indicator
 
         return comparison_results  # Return list of all comparison result entries for CSV export
@@ -17975,7 +18032,7 @@ def evaluate_feature_process_original_task(task: dict, process_payload: dict, re
     cancellation_checker = lambda: feature_process_runtime_skip_requested(task, process_payload)  # Check Telegram active-skip flag only at safe boundaries.
     log_feature_process_combination(task, status_state, "Fit started")  # Announce the blocking fit before existing heartbeat or unit progress begins
     estimated_training_seconds = task.get("pending_elapsed_time_estimate_s") or estimate_feature_process_task_elapsed_seconds(task, cache_dict, process_payload)  # Use runtime-sort estimate or compute one from cache without reordering.
-    metrics = evaluate_individual_classifier(active_model, task["classifier_name"], model_X_train, model_y_train, model_X_test, model_y_test, process_payload["file"], resources["scaler"], task["expected_feature_names"], artifact_feature_set, config=process_payload["config"], phase_metadata=phase_metadata, training_ram_stats=training_ram_stats, fit_model=True, notification_context=build_telegram_combination_header(task["feature_set"], task["classifier_name"], None, task["hyperparameters_enabled"], experiment_run=task["experiment_run"]), hyperparameters_enabled=task["hyperparameters_enabled"], augmentation_ratio=task["augmentation_ratio"], training_eta_callback=training_eta_callback, estimated_training_seconds=estimated_training_seconds, cancellation_checker=cancellation_checker, local_combination_index=task.get("feature_local_position"), local_combination_total=task.get("feature_local_total"), active_workers_callback=active_workers_callback, previous_run_duration_label=task.get("previous_run_duration_label", "unavailable"), eta_pending_run_experiments_label=task.get("eta_pending_run_experiments_label", "unavailable"))  # Reuse unchanged evaluation with serialized authoritative combination metadata.
+    metrics = evaluate_individual_classifier(active_model, task["classifier_name"], model_X_train, model_y_train, model_X_test, model_y_test, process_payload["file"], resources["scaler"], task["expected_feature_names"], artifact_feature_set, config=process_payload["config"], phase_metadata=phase_metadata, training_ram_stats=training_ram_stats, fit_model=True, notification_context=build_telegram_combination_header(task["feature_set"], task["classifier_name"], None, task["hyperparameters_enabled"], experiment_run=task["experiment_run"]), hyperparameters_enabled=task["hyperparameters_enabled"], augmentation_ratio=task["augmentation_ratio"], training_eta_callback=training_eta_callback, estimated_training_seconds=estimated_training_seconds, cancellation_checker=cancellation_checker, local_combination_index=task.get("feature_local_position"), local_combination_total=task.get("feature_local_total"), active_workers_callback=active_workers_callback, previous_run_duration_label=task.get("previous_run_duration_label", "unavailable"), eta_pending_run_experiments_label=task.get("eta_pending_run_experiments_label", "unavailable"), class_labels=resources["label_encoder"].classes_)  # Reuse evaluation with fitted encoder order.
     if cancellation_checker():
         raise RuntimeSkipRequested(f"Runtime skip requested before persistence for active {task['classifier_name']}")
     log_feature_process_combination(task, status_state, "Prediction and metrics completed")  # Announce completion of existing prediction and metric phases
@@ -18044,7 +18101,7 @@ def evaluate_feature_process_augmented_task(task: dict, process_payload: dict, r
     training_ram_stats = {}  # Hold the established loaded-model evaluation RAM record shape
     log_feature_process_combination(task, status_state, "Metrics started")  # Announce persisted-model metrics after bounded prediction
     cancellation_checker = lambda: feature_process_runtime_skip_requested(task, process_payload)  # Check Telegram active-skip flag before metrics and persistence.
-    metrics = evaluate_individual_classifier(loaded_model, task["classifier_name"], None, None, None, y_augmented, process_payload["file"], artifact_bundle["scaler"], task["expected_feature_names"], artifact_feature_set, config=process_payload["config"], training_ram_stats=training_ram_stats, fit_model=False, notification_context=build_telegram_combination_header(task["feature_set"], task["classifier_name"], task["augmentation_ratio"], task["hyperparameters_enabled"], experiment_run=task["experiment_run"]), hyperparameters_enabled=task["hyperparameters_enabled"], augmentation_ratio=task["augmentation_ratio"], precomputed_predictions=y_predicted, precomputed_prediction_seconds=prediction_seconds, cancellation_checker=cancellation_checker, local_combination_index=task.get("feature_local_position"), local_combination_total=task.get("feature_local_total"))  # Reuse unchanged metrics and reporting without reconstructing a complete transformed matrix
+    metrics = evaluate_individual_classifier(loaded_model, task["classifier_name"], None, None, None, y_augmented, process_payload["file"], artifact_bundle["scaler"], task["expected_feature_names"], artifact_feature_set, config=process_payload["config"], training_ram_stats=training_ram_stats, fit_model=False, notification_context=build_telegram_combination_header(task["feature_set"], task["classifier_name"], task["augmentation_ratio"], task["hyperparameters_enabled"], experiment_run=task["experiment_run"]), hyperparameters_enabled=task["hyperparameters_enabled"], augmentation_ratio=task["augmentation_ratio"], precomputed_predictions=y_predicted, precomputed_prediction_seconds=prediction_seconds, cancellation_checker=cancellation_checker, local_combination_index=task.get("feature_local_position"), local_combination_total=task.get("feature_local_total"), class_labels=artifact_bundle["label_encoder"].classes_)  # Reuse predictions and fitted encoder order without reconstructing a complete transformed matrix.
     if cancellation_checker():
         raise RuntimeSkipRequested(f"Runtime skip requested before augmented persistence for active {task['classifier_name']}")
     log_feature_process_combination(task, status_state, "Prediction and metrics completed")  # Confirm existing loaded-model phases completed
