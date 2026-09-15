@@ -2358,7 +2358,7 @@ def persist_final_results_dataframe_atomically(final_path: str, result_df: pd.Da
         remove_cache_temporary_file(rollback_temporary)  # Remove unused rollback staging.
 
 
-def migrate_cache_storage_for_reference(csv_path: str, config: Optional[dict] = None, model_metric_cache: Optional[dict] = None, evaluation_data_cache: Optional[dict] = None) -> None:
+def migrate_cache_storage_for_reference(csv_path: str, config: Optional[dict] = None, model_metric_cache: Optional[dict] = None, evaluation_data_cache: Optional[dict] = None, artifact_metadata_cache: Optional[dict] = None) -> None:
     """
     Normalize cache CSV files for one dataset reference before planning.
 
@@ -2366,6 +2366,7 @@ def migrate_cache_storage_for_reference(csv_path: str, config: Optional[dict] = 
     :param config: Runtime configuration dictionary.
     :param model_metric_cache: Shared exact model-recovery metrics keyed by result identity.
     :param evaluation_data_cache: Shared reconstructed original-test populations keyed by artifact context.
+    :param artifact_metadata_cache: Shared dataset-local classifier metadata candidates.
     :return: None.
     """
 
@@ -2412,7 +2413,10 @@ def migrate_cache_storage_for_reference(csv_path: str, config: Optional[dict] = 
                 output = f"{BackgroundColors.GREEN}{message}{BackgroundColors.CYAN}"  # Add colors.
                 output += f"{target_path}{Style.RESET_ALL}"  # Add target path.
                 print(output)  # Report count.
-            merged_df, model_recovery = backfill_saved_model_metrics(merged_df, csv_path, config, model_metric_cache, evaluation_data_cache)  # Recover remaining metrics through exact persisted-model inference.
+            merged_df, filename_recovery = backfill_exported_model_filenames(merged_df, csv_path, config, artifact_metadata_cache)  # Recover exact classifier artifact basenames from validated companion metadata.
+            if filename_recovery["recovered"]:  # Report successful cache-row provenance recovery.
+                print(f"{BackgroundColors.GREEN}[MODEL PROVENANCE] Recovered {BackgroundColors.CYAN}{filename_recovery['recovered']}{BackgroundColors.GREEN} cache row filename(s): {BackgroundColors.CYAN}{target_path}{Style.RESET_ALL}")  # Emit factual metadata-maintenance result.
+            merged_df, model_recovery = backfill_saved_model_metrics(merged_df, csv_path, config, model_metric_cache, evaluation_data_cache, artifact_metadata_cache)  # Recover remaining metrics through exact persisted-model inference.
             if model_recovery["recovered"]:  # Report successful prediction-only recovery.
                 print(f"{BackgroundColors.GREEN}[MODEL RECOVERY] Recovered {BackgroundColors.CYAN}{model_recovery['recovered']}{BackgroundColors.GREEN} cache row(s): {BackgroundColors.CYAN}{target_path}{Style.RESET_ALL}")  # Emit factual maintenance result.
             storage_is_current = (  # Detect a fully synchronized canonical cache without mutating it.
@@ -2433,7 +2437,7 @@ def migrate_cache_storage_for_reference(csv_path: str, config: Optional[dict] = 
             print(f"{BackgroundColors.GREEN}[STARTUP MIGRATION] Normalized cache results for run {run_index}: {BackgroundColors.CYAN}{target_path}{Style.RESET_ALL}")  # Report cache migration.
 
 
-def migrate_final_storage_for_reference(csv_path: str, config: Optional[dict] = None, model_metric_cache: Optional[dict] = None, evaluation_data_cache: Optional[dict] = None) -> None:
+def migrate_final_storage_for_reference(csv_path: str, config: Optional[dict] = None, model_metric_cache: Optional[dict] = None, evaluation_data_cache: Optional[dict] = None, artifact_metadata_cache: Optional[dict] = None) -> None:
     """
     Normalize final-result CSV files for one dataset reference before planning.
 
@@ -2441,6 +2445,7 @@ def migrate_final_storage_for_reference(csv_path: str, config: Optional[dict] = 
     :param config: Runtime configuration dictionary.
     :param model_metric_cache: Shared exact model-recovery metrics keyed by result identity.
     :param evaluation_data_cache: Shared reconstructed original-test populations keyed by artifact context.
+    :param artifact_metadata_cache: Shared dataset-local classifier metadata candidates.
     :return: None.
     """
 
@@ -2490,7 +2495,10 @@ def migrate_final_storage_for_reference(csv_path: str, config: Optional[dict] = 
                 output = f"{BackgroundColors.GREEN}{message}{BackgroundColors.CYAN}"  # Add colors.
                 output += f"{target_path}{Style.RESET_ALL}"  # Add target path.
                 print(output)  # Report count.
-            merged_df, model_recovery = backfill_saved_model_metrics(merged_df, csv_path, config, model_metric_cache, evaluation_data_cache)  # Recover remaining metrics through exact persisted-model inference.
+            merged_df, filename_recovery = backfill_exported_model_filenames(merged_df, csv_path, config, artifact_metadata_cache)  # Recover exact classifier artifact basenames from validated companion metadata.
+            if filename_recovery["recovered"]:  # Report successful final-row provenance recovery.
+                print(f"{BackgroundColors.GREEN}[MODEL PROVENANCE] Recovered {BackgroundColors.CYAN}{filename_recovery['recovered']}{BackgroundColors.GREEN} final row filename(s): {BackgroundColors.CYAN}{target_path}{Style.RESET_ALL}")  # Emit factual metadata-maintenance result.
+            merged_df, model_recovery = backfill_saved_model_metrics(merged_df, csv_path, config, model_metric_cache, evaluation_data_cache, artifact_metadata_cache)  # Recover remaining metrics through exact persisted-model inference.
             if model_recovery["recovered"]:  # Report successful prediction-only recovery.
                 print(f"{BackgroundColors.GREEN}[MODEL RECOVERY] Recovered {BackgroundColors.CYAN}{model_recovery['recovered']}{BackgroundColors.GREEN} final row(s): {BackgroundColors.CYAN}{target_path}{Style.RESET_ALL}")  # Emit factual maintenance result.
             final_columns = get_stacking_results_csv_columns(config)  # Resolve canonical final-result order once.
@@ -2528,8 +2536,9 @@ def migrate_result_storage_files_for_reference(csv_path: str, config: Optional[d
         config = CONFIG  # Preserve established configuration fallback.
     model_metric_cache: dict = {}  # Reuse successful inference across matching cache and final rows during this migration.
     evaluation_data_cache: dict = {}  # Reuse exact reconstructed test populations across compatible classifier artifacts.
-    migrate_cache_storage_for_reference(csv_path, config=config, model_metric_cache=model_metric_cache, evaluation_data_cache=evaluation_data_cache)  # Normalize cache storage before cache lookup.
-    migrate_final_storage_for_reference(csv_path, config=config, model_metric_cache=model_metric_cache, evaluation_data_cache=evaluation_data_cache)  # Normalize final-result storage before final publication.
+    artifact_metadata_cache: dict = {}  # Reuse dataset-local companion metadata across cache and final-row maintenance.
+    migrate_cache_storage_for_reference(csv_path, config=config, model_metric_cache=model_metric_cache, evaluation_data_cache=evaluation_data_cache, artifact_metadata_cache=artifact_metadata_cache)  # Normalize cache storage before cache lookup.
+    migrate_final_storage_for_reference(csv_path, config=config, model_metric_cache=model_metric_cache, evaluation_data_cache=evaluation_data_cache, artifact_metadata_cache=artifact_metadata_cache)  # Normalize final-result storage before final publication.
 
 
 def migrate_experiment_result_files_for_startup(input_path: str, files_to_process: List[str], execution_mode: str, config: Optional[dict] = None) -> None:
@@ -14347,17 +14356,23 @@ def extract_stacking_model_artifact_context(metadata: dict) -> dict:
     return {field: metadata[field] for field in context_fields}  # Preserve exact persisted values used by the artifact hash.
 
 
-def discover_stacking_model_artifacts(csv_path: str, config: dict) -> List[Tuple[Path, dict, dict]]:
+def discover_stacking_model_artifacts(csv_path: str, config: dict, artifact_metadata_cache: Optional[dict] = None) -> List[Tuple[Path, dict, dict]]:
     """
     Discover identity-bearing classifier metadata for one stacking result reference.
 
     :param csv_path: Dataset file or directory identity used by stacking storage.
     :param config: Runtime configuration dictionary.
+    :param artifact_metadata_cache: Optional dataset-local metadata candidate cache.
     :return: Metadata path, full metadata, and artifact context tuples.
     """
 
+    cache_key = str(Path(str(csv_path)).expanduser().resolve())  # Identify one result family for shared metadata discovery.
+    if artifact_metadata_cache is not None and cache_key in artifact_metadata_cache:  # Reuse candidates across cache and final storage.
+        return artifact_metadata_cache[cache_key]  # Return previously parsed companion metadata.
     models_root = Path(get_stacking_output_dir(csv_path, config)) / "Models"  # Restrict discovery to the existing dataset-local model area.
     if not models_root.is_dir():  # Leave rows untouched when no model area exists.
+        if artifact_metadata_cache is not None:  # Cache empty discovery for this maintenance pass.
+            artifact_metadata_cache[cache_key] = []  # Avoid repeated directory access.
         return []  # Report no identity-bearing candidates.
     resolved_dataset_path = str(Path(str(csv_path)).expanduser().resolve())  # Resolve the exact result reference once.
     artifacts: List[Tuple[Path, dict, dict]] = []  # Accumulate readable contexts for this dataset reference.
@@ -14372,6 +14387,8 @@ def discover_stacking_model_artifacts(csv_path: str, config: dict) -> List[Tuple
             artifacts.append((metadata_path, metadata, context))  # Retain identity-bearing evidence without loading a model.
         except Exception:
             continue  # Leave unreadable artifacts untouched and unavailable for recovery.
+    if artifact_metadata_cache is not None:  # Share parsed candidates with subsequent provenance and metric recovery.
+        artifact_metadata_cache[cache_key] = artifacts  # Cache deterministic metadata evidence only.
     return artifacts  # Return deterministic metadata order.
 
 
@@ -14411,14 +14428,59 @@ def stacking_model_context_matches_result(result_entry: dict, csv_path: str, met
 
     if context.get("artifact_type") != "stacking_original_trained_classifier" or context.get("schema_version") != 1 or context.get("training_data") != "original_only":  # Require the supported fitted-bundle contract.
         return False  # Reject legacy or non-original training artifacts.
-    if str(result_entry.get("experiment_mode", "")).strip().lower() != "original_only":  # Prediction backfill supports the reproducible original test population only.
-        return False  # Reject augmented evaluation rows.
+    experiment_mode = str(result_entry.get("experiment_mode", "")).strip().lower()  # Read persisted evaluation mode.
     execution_mode = str(result_entry.get("execution_mode", ""))  # Read row execution mode.
     if execution_mode not in ("separate_files", "combined_files") or context.get("execution_mode") != execution_mode:  # Require a supported identical mode.
         return False  # Reject mode ambiguity.
+    augmentation_ratio = resolve_persisted_augmentation_ratio(experiment_mode, result_entry.get("augmentation_ratio"))  # Normalize persisted augmentation metadata.
+    augmentation_enabled = resolve_persisted_data_augmentation_enabled(experiment_mode, augmentation_ratio, result_entry.get("data_augmentation_enabled"))  # Resolve evaluation population semantics.
+    if experiment_mode == "original_only":  # Validate baseline rows against original-trained artifact semantics.
+        expected_data_source = "Original Combined Files" if execution_mode == "combined_files" else "Original"  # Rebuild canonical baseline source label.
+        if augmentation_enabled or augmentation_ratio != 0.0 or result_entry.get("data_source") != expected_data_source:  # Reject inconsistent baseline metadata.
+            return False  # Preserve exact evaluation-mode identity.
+    elif experiment_mode in ("original_plus_augmented", "original_training_augmented_testing"):  # Validate supported augmented-test rows that reuse original-trained models.
+        try:  # Parse exact persisted ratio for canonical augmented source identity.
+            ratio_value = float(augmentation_ratio)  # Convert numeric ratio metadata.
+        except (TypeError, ValueError):
+            return False  # Reject absent or malformed ratio identity.
+        expected_data_source = f"Augmented@{int(ratio_value * 100)}%{'_CombinedFiles' if execution_mode == 'combined_files' else ''}"  # Rebuild canonical augmented source label.
+        if not augmentation_enabled or not math.isfinite(ratio_value) or ratio_value <= 0.0 or result_entry.get("data_source") != expected_data_source:  # Require coherent augmented evaluation metadata.
+            return False  # Reject a malformed shared-model association.
+    else:
+        return False  # Reject unsupported experiment modes.
     expected_dataset = resolve_canonical_dataset_identity(csv_path, execution_mode == "combined_files")  # Rebuild production row dataset identity.
     if str(result_entry.get("dataset", "")).replace("\\", "/") != expected_dataset:  # Bind the result row to the active reference.
         return False  # Reject cross-dataset rows.
+    source_metadata = context.get("source_files")  # Read ordered source-file provenance bound into artifact identity.
+    if not isinstance(source_metadata, list) or not source_metadata:  # Require complete source provenance.
+        return False  # Reject context without an evaluated dataset population.
+    resolved_reference = Path(str(csv_path)).expanduser().resolve()  # Resolve active result-family reference.
+    for source_index, source_entry in enumerate(source_metadata):  # Validate ordered source identities without loading dataset contents.
+        if not isinstance(source_entry, dict) or source_entry.get("index") != source_index:  # Require exact persisted ordering.
+            return False  # Reject reordered or malformed provenance.
+        source_path = Path(str(source_entry.get("path", ""))).expanduser().resolve()  # Resolve persisted source location.
+        if not source_path.is_file():  # Require referenced source artifact to remain present.
+            return False  # Reject stale provenance.
+        source_stat = source_path.stat()  # Read current source integrity properties.
+        if source_entry.get("size") != int(source_stat.st_size) or source_entry.get("mtime_ns") != int(source_stat.st_mtime_ns):  # Require unchanged source identity.
+            return False  # Reject model metadata bound to altered source data.
+        if execution_mode == "separate_files" and (len(source_metadata) != 1 or source_path != resolved_reference):  # Bind single-file artifacts to exact active source.
+            return False  # Reject another file's artifact.
+        if execution_mode == "combined_files" and resolved_reference not in source_path.parents:  # Keep combined sources inside exact active dataset directory.
+            return False  # Reject cross-directory source provenance.
+    expected_scaler_class = f"{StandardScaler.__module__}.{StandardScaler.__name__}"  # Rebuild production scaler class identity.
+    expected_scaler_params = normalize_metadata_for_json(StandardScaler().get_params(deep=False))  # Rebuild production scaler configuration.
+    expected_label_encoder_class = f"{LabelEncoder.__module__}.{LabelEncoder.__name__}"  # Rebuild production label-mapping class identity.
+    if context.get("scaler_class") != expected_scaler_class or context.get("scaler_params") != expected_scaler_params or context.get("label_encoder_class") != expected_label_encoder_class:  # Require production preprocessing contracts.
+        return False  # Reject incompatible preprocessing metadata.
+    input_feature_names = context.get("input_feature_names")  # Read ordered scaler input schema.
+    label_classes = context.get("label_classes")  # Read persisted original-label order.
+    if not isinstance(input_feature_names, list) or not input_feature_names or len(set(input_feature_names)) != len(input_feature_names):  # Require deterministic unique input columns.
+        return False  # Reject ambiguous scaler input order.
+    if not isinstance(label_classes, list) or not label_classes or len({json.dumps(value, sort_keys=True) for value in label_classes}) != len(label_classes):  # Require deterministic unique class metadata.
+        return False  # Reject ambiguous label mapping.
+    if context.get("pre_split_feature_removal") is not False or context.get("test_size") != 0.2 or context.get("stratified") is not True:  # Require established production split semantics.
+        return False  # Reject another evaluation population contract.
     run_value = parse_persisted_experiment_run_value(result_entry.get("experiment_run"), "experiment_run")  # Normalize historical run metadata.
     if context.get("experiment_run") != run_value:  # Require exact repeated-run identity.
         return False  # Reject a model from another run.
@@ -14428,12 +14490,17 @@ def stacking_model_context_matches_result(result_entry: dict, csv_path: str, met
     feature_names = parse_historical_feature_names(result_entry)  # Recover exact classifier feature order.
     if feature_names is None or context.get("model_feature_names") != feature_names:  # Require ordered schema identity.
         return False  # Reject missing or reordered features.
+    transformer_metadata = context.get("transformer")  # Read optional feature transformer identity.
+    if str(result_entry.get("feature_set", "")) == "PCA Components":  # Require exact PCA preprocessing for PCA result rows.
+        expected_transformer_class = f"{PCA.__module__}.{PCA.__name__}"  # Rebuild production PCA class identity.
+        if not isinstance(transformer_metadata, dict) or transformer_metadata.get("class") != expected_transformer_class or not isinstance(transformer_metadata.get("params"), dict) or transformer_metadata["params"].get("n_components") != len(feature_names):  # Require matching PCA output width and configuration.
+            return False  # Reject missing or incompatible PCA provenance.
+    elif transformer_metadata is not None or any(feature not in input_feature_names for feature in feature_names):  # Require direct named feature selection for non-PCA rows.
+        return False  # Reject unexpected transforms or absent model inputs.
     historical_feature_count = resolve_result_metric_float(result_entry, "n_features")  # Parse persisted model feature width.
     historical_train_count = resolve_result_metric_float(result_entry, "n_samples_train")  # Parse persisted training population size.
     if historical_feature_count is None or historical_train_count is None or not historical_feature_count.is_integer() or not historical_train_count.is_integer() or int(historical_feature_count) != len(feature_names) or int(historical_train_count) != metadata.get("train_sample_count"):  # Require feature and fitted-scaler population evidence.
         return False  # Reject incompatible historical dimensions.
-    if resolve_result_metric_float(result_entry, "macro_f1_score") is not None and per_class_f1_value_is_valid(result_entry.get("per_class_f1_scores")):  # Avoid model work for complete rows.
-        return False  # Preserve already complete metrics.
     hyperparameter_label = str(result_entry.get("hyperparameter_mode", ""))  # Read persisted display label.
     expected_mode = "optimized" if hyperparameter_label == "Optimized Hyperparameters" else "default" if hyperparameter_label == "Default Hyperparameters" else None  # Map only established labels.
     expected_feature_set = f"{result_entry.get('feature_set')} - {hyperparameter_label}"  # Rebuild exact export slot.
@@ -14459,6 +14526,75 @@ def stacking_model_context_matches_result(result_entry: dict, csv_path: str, met
     if metadata.get("artifact_identity") != expected_identity:  # Require companion identity integrity before inference.
         return False  # Reject metadata tampering or partial migration.
     return True  # Accept only a complete persisted identity match.
+
+
+def resolve_historical_stacking_model_artifact(result_entry: dict, csv_path: str, config: dict, artifacts: List[Tuple[Path, dict, dict]]) -> Tuple[Path, dict, dict, str]:
+    """
+    Resolve one exact persisted classifier artifact for a historical row.
+
+    :param result_entry: Canonical historical result row.
+    :param csv_path: Dataset file or directory identity used by stacking storage.
+    :param config: Runtime configuration dictionary.
+    :param artifacts: Dataset-local identity-bearing companion metadata candidates.
+    :return: Metadata path, metadata, artifact context, and exact model basename.
+    """
+
+    candidates = [candidate for candidate in artifacts if stacking_model_context_matches_result(result_entry, csv_path, candidate[1], candidate[2])]  # Select only complete row-compatible identities.
+    if not candidates:  # Leave rows without exact metadata evidence unchanged.
+        raise FileNotFoundError("no exact compatible persisted classifier artifact exists")  # Report absence without filename inference.
+    if len(candidates) != 1:  # Refuse multiple identities that historical columns cannot disambiguate.
+        raise RuntimeError("multiple exact compatible persisted classifier artifacts exist")  # Preserve empty provenance under ambiguity.
+    metadata_path, metadata, context = candidates[0]  # Unpack unique identity-bearing metadata.
+    artifact_paths = resolve_stacking_model_artifact_paths(metadata_path.parent.name, csv_path, str(context["model_name"]), str(context["feature_set"]), context, config)  # Rebuild hash-bound artifact paths.
+    if Path(artifact_paths["metadata_path"]).resolve() != metadata_path.resolve():  # Require companion placement dictated by full identity.
+        raise ValueError("persisted classifier metadata path differs from its artifact identity")  # Reject renamed or misplaced metadata.
+    artifact_lock = acquire_stacking_artifact_lock(artifact_paths["lock_path"], exclusive=False)  # Stabilize model and metadata bytes during integrity validation.
+    try:  # Validate complete synchronized pair without loading model contents.
+        if not stacking_model_artifact_pair_is_valid(artifact_paths, context):  # Require model existence, basename, size, and SHA-256 integrity.
+            raise ValueError("persisted classifier pair failed integrity validation")  # Reject missing, stale, or replaced model artifacts.
+    finally:
+        artifact_lock.close()  # Release shared dataset artifact lock after provenance validation.
+    model_filename = Path(artifact_paths["model_path"]).name  # Persist portable exact artifact basename only.
+    return metadata_path, metadata, context, model_filename  # Return validated association evidence.
+
+
+def backfill_exported_model_filenames(result_df: pd.DataFrame, csv_path: str, config: dict, artifact_metadata_cache: Optional[dict] = None) -> Tuple[pd.DataFrame, dict]:
+    """
+    Fill missing historical model basenames from exact companion metadata.
+
+    :param result_df: Canonical cache or final-result DataFrame.
+    :param csv_path: Dataset file or directory identity used by stacking storage.
+    :param config: Runtime configuration dictionary.
+    :param artifact_metadata_cache: Optional shared dataset-local metadata candidate cache.
+    :return: Updated DataFrame and provenance recovery outcome counts.
+    """
+
+    recovered_df = result_df.copy()  # Preserve caller-owned storage snapshot.
+    outcomes = {"recovered": 0, "no_exact_artifact": 0, "incompatible": 0, "ambiguous": 0}  # Count metadata-only maintenance outcomes.
+    pending_rows = [(row_index, row.to_dict()) for row_index, row in recovered_df.iterrows() if not has_serialized_value(row.get("exported_model_filename"))]  # Select rows with unknown artifact provenance only.
+    if not pending_rows:  # Avoid filesystem discovery for already populated storage.
+        return recovered_df, outcomes  # Preserve idempotent content without artifact work.
+    artifacts = discover_stacking_model_artifacts(csv_path, config, artifact_metadata_cache)  # Parse dataset-local companion metadata without loading joblib objects.
+    for row_index, row_entry in pending_rows:  # Attempt each unknown historical association independently.
+        try:  # Keep one unavailable artifact from blocking unrelated rows.
+            _, _, _, model_filename = resolve_historical_stacking_model_artifact(row_entry, csv_path, config, artifacts)  # Prove unique full-context association and pair integrity.
+        except FileNotFoundError as exc:
+            outcomes["no_exact_artifact"] += 1  # Count rows lacking exact compatible metadata.
+            verbose_output(f"{BackgroundColors.YELLOW}[MODEL PROVENANCE SKIPPED] {row_entry.get('experiment_id', 'unknown')}: {exc}{Style.RESET_ALL}", config=config)  # Emit optional absence diagnostic.
+            continue  # Preserve genuinely empty filename.
+        except RuntimeError as exc:
+            outcomes["ambiguous"] += 1  # Count identities with multiple exact candidates.
+            print(f"{BackgroundColors.YELLOW}[MODEL PROVENANCE AMBIGUOUS] {row_entry.get('experiment_id', 'unknown')}: {exc}{Style.RESET_ALL}")  # Emit clear ambiguity diagnostic.
+            continue  # Refuse arbitrary candidate selection.
+        except Exception as exc:
+            outcomes["incompatible"] += 1  # Count malformed, missing, stale, or integrity-failed pairs.
+            print(f"{BackgroundColors.YELLOW}[MODEL PROVENANCE REJECTED] {row_entry.get('experiment_id', 'unknown')}: {exc}{Style.RESET_ALL}")  # Emit exact rejection reason.
+            continue  # Leave unknown provenance empty.
+        if recovered_df["exported_model_filename"].dtype != "object":  # Prepare basename storage only after exact recovery.
+            recovered_df["exported_model_filename"] = recovered_df["exported_model_filename"].astype("object")  # Preserve string values without coercion.
+        recovered_df.at[row_index, "exported_model_filename"] = model_filename  # Update only provenance metadata.
+        outcomes["recovered"] += 1  # Count one successfully changed historical row.
+    return recovered_df, outcomes  # Return existing atomic-writer input and factual counts.
 
 
 def reconstruct_historical_test_population(context: dict, config: dict, loaded_bundle: dict) -> Tuple[np.ndarray, np.ndarray, int]:
@@ -14521,7 +14657,7 @@ def reconstruct_historical_test_population(context: dict, config: dict, loaded_b
     return np.asarray(X_values[test_idx]), y_test, len(train_idx)  # Return only the prediction population and authoritative count evidence.
 
 
-def recover_metrics_from_stacking_model(result_entry: dict, csv_path: str, config: dict, artifacts: List[Tuple[Path, dict, dict]], evaluation_data_cache: dict) -> Tuple[float, str]:
+def recover_metrics_from_stacking_model(result_entry: dict, csv_path: str, config: dict, artifacts: List[Tuple[Path, dict, dict]], evaluation_data_cache: dict) -> Tuple[float, str, str]:
     """
     Recover missing F1 metrics through one exact persisted classifier inference.
 
@@ -14530,18 +14666,10 @@ def recover_metrics_from_stacking_model(result_entry: dict, csv_path: str, confi
     :param config: Runtime configuration dictionary.
     :param artifacts: Identity-bearing classifier metadata candidates.
     :param evaluation_data_cache: Reconstructed raw test populations keyed by split provenance.
-    :return: Exact Macro F1 and deterministic per-class F1 JSON.
+    :return: Exact Macro F1, deterministic per-class F1 JSON, and validated model basename.
     """
 
-    candidates = [candidate for candidate in artifacts if stacking_model_context_matches_result(result_entry, csv_path, candidate[1], candidate[2])]  # Select solely through complete persisted identity.
-    if len(candidates) != 1:  # Require one unambiguous fitted artifact.
-        if not candidates:
-            raise FileNotFoundError("no exact compatible persisted classifier artifact exists")  # Report absence without filename guessing.
-        raise ValueError("multiple exact compatible persisted classifier artifacts exist")  # Refuse ambiguous model association.
-    metadata_path, _, context = candidates[0]  # Unpack the single proven companion context.
-    artifact_paths = resolve_stacking_model_artifact_paths(metadata_path.parent.name, csv_path, str(context["model_name"]), str(context["feature_set"]), context, config)  # Resolve the exact hash-bound pair.
-    if Path(artifact_paths["metadata_path"]).resolve() != metadata_path.resolve() or not stacking_model_artifact_pair_is_valid(artifact_paths, context):  # Require synchronized path, size, and SHA-256 evidence.
-        raise ValueError("persisted classifier pair failed integrity validation")  # Reject replaced or incomplete files.
+    metadata_path, _, context, model_filename = resolve_historical_stacking_model_artifact(result_entry, csv_path, config, artifacts)  # Reuse exact metadata-only artifact association.
     bundle, rejection_reason = load_existing_model_if_available(str(context["model_name"]), csv_path, metadata_path.parent.name, str(context["feature_set"]), context, config=config)  # Reuse strict bundle and preprocessing validation.
     if bundle is None:  # Surface exact loader rejection without inference.
         raise ValueError(rejection_reason or "persisted classifier bundle is incompatible")  # Reject before prediction.
@@ -14577,10 +14705,10 @@ def recover_metrics_from_stacking_model(result_entry: dict, csv_path: str, confi
     fingerprint = {"accuracy": float(metrics[0]), "weighted_precision": float(metrics[1]), "weighted_recall": float(metrics[2]), "weighted_f1_score": float(metrics[3]), "fpr": float(metrics[4]), "fnr": float(metrics[5])}  # Build validation-only authoritative aggregates.
     validate_recovered_aggregate_fingerprint(result_entry, fingerprint)  # Require strict historical aggregate agreement.
     persist_per_run_confusion_matrix_artifacts(result_entry, y_test, predictions, bundle["label_encoder"].classes_, csv_path, config)  # Reuse the single validated historical prediction for all four artifacts.
-    return float(metrics[6]), str(metrics[7])  # Return only previously unavailable metrics.
+    return float(metrics[6]), str(metrics[7]), model_filename  # Return recovered metrics with the same proven artifact basename.
 
 
-def backfill_saved_model_metrics(result_df: pd.DataFrame, csv_path: str, config: dict, model_metric_cache: Optional[dict] = None, evaluation_data_cache: Optional[dict] = None) -> Tuple[pd.DataFrame, dict]:
+def backfill_saved_model_metrics(result_df: pd.DataFrame, csv_path: str, config: dict, model_metric_cache: Optional[dict] = None, evaluation_data_cache: Optional[dict] = None, artifact_metadata_cache: Optional[dict] = None) -> Tuple[pd.DataFrame, dict]:
     """
     Fill remaining historical F1 metrics through exact persisted-model inference.
 
@@ -14589,6 +14717,7 @@ def backfill_saved_model_metrics(result_df: pd.DataFrame, csv_path: str, config:
     :param config: Runtime configuration dictionary.
     :param model_metric_cache: Shared successful metrics keyed by production result identity.
     :param evaluation_data_cache: Shared reconstructed original-test populations.
+    :param artifact_metadata_cache: Optional shared dataset-local metadata candidate cache.
     :return: Updated DataFrame and recovery outcome counts.
     """
 
@@ -14605,7 +14734,7 @@ def backfill_saved_model_metrics(result_df: pd.DataFrame, csv_path: str, config:
             pending_rows.append((row_index, row_entry, macro_missing, per_class_missing))  # Retain only recovery-eligible rows.
     if not pending_rows:  # Avoid artifact discovery when every row is complete.
         return recovered_df, outcomes  # Return byte-stable content without model work.
-    artifacts = discover_stacking_model_artifacts(csv_path, config)  # Discover only dataset-local identity metadata.
+    artifacts = discover_stacking_model_artifacts(csv_path, config, artifact_metadata_cache)  # Reuse dataset-local identity metadata without duplicate discovery.
     for row_index, row_entry, macro_missing, per_class_missing in pending_rows:  # Attempt each remaining row independently.
         result_identity = (str(Path(str(csv_path)).expanduser().resolve()), parse_persisted_experiment_run_value(row_entry.get("experiment_run"), "experiment_run"), build_cache_identity_from_row(row_entry))  # Extend production result identity with dataset and repeated-run scope.
         try:  # Keep one unavailable or mismatched model from blocking unrelated rows.
@@ -14633,13 +14762,17 @@ def backfill_saved_model_metrics(result_df: pd.DataFrame, csv_path: str, config:
             outcomes["evaluation_data_unavailable"] += 1  # Count unprovable exact evaluation inputs.
             print(f"{BackgroundColors.YELLOW}[MODEL RECOVERY REJECTED] {row_entry.get('experiment_id', 'unknown')}: {exc}{Style.RESET_ALL}")  # Emit exact failure reason.
             continue  # Leave missing fields empty.
-        macro_f1, per_class_json = recovered_metrics  # Unpack validated prediction-derived metrics.
+        macro_f1, per_class_json, model_filename = recovered_metrics  # Unpack validated prediction-derived metrics and their proven artifact.
         if macro_missing:  # Fill only absent Macro F1.
             recovered_df.at[row_index, "macro_f1_score"] = macro_f1  # Preserve any Task 3 value.
         if per_class_missing:  # Fill only absent per-class JSON.
             if recovered_df["per_class_f1_scores"].dtype != "object":  # Permit deterministic JSON assignment.
                 recovered_df["per_class_f1_scores"] = recovered_df["per_class_f1_scores"].astype("object")  # Convert only when needed.
             recovered_df.at[row_index, "per_class_f1_scores"] = per_class_json  # Store Task 1 serialization unchanged.
+        if not has_serialized_value(row_entry.get("exported_model_filename")):  # Fill provenance from the same model used by successful metric recovery.
+            if recovered_df["exported_model_filename"].dtype != "object":  # Prepare exact basename storage.
+                recovered_df["exported_model_filename"] = recovered_df["exported_model_filename"].astype("object")  # Preserve string values without coercion.
+            recovered_df.at[row_index, "exported_model_filename"] = model_filename  # Reuse validated association without another search or prediction.
         outcomes["recovered"] += 1  # Count one changed historical row.
     return recovered_df, outcomes  # Return existing atomic-persistence input and factual counts.
 
