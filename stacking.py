@@ -13498,6 +13498,225 @@ def build_best_artifact_directory_name(result_entry: dict) -> str:  # Build the 
     return "-".join(sanitize_best_artifact_component(component) for component in components)  # Join sanitized components without altering safe characters.
 
 
+def sanitize_confusion_matrix_artifact_token(value: Any) -> str:
+    """
+    Build one deterministic cross-platform filename token.
+
+    :param value: Structured experiment value represented in a filename.
+    :return: Filesystem-safe token with meaningful alphanumeric text preserved.
+    """
+
+    token = re.sub(r"\s+", "_", str(value).strip())  # Replace locale-independent whitespace with one visible separator.
+    token = re.sub(r"[^A-Za-z0-9._-]", "_", token)  # Replace path separators, control characters, and platform-unsafe punctuation.
+    token = re.sub(r"_+", "_", token).strip("._-")  # Collapse replacement runs and prevent traversal components.
+    if not token or token in {".", ".."}:  # Reject settings that contain no safe meaningful text.
+        raise ValueError(f"Invalid confusion-matrix artifact token: {value!r}")  # Surface missing structured identity.
+    return token  # Return deterministic filesystem-safe text.
+
+
+def build_confusion_matrix_artifact_prefix(result_entry: dict) -> str:
+    """
+    Build one readable collision-resistant experiment filename prefix.
+
+    :param result_entry: Persisted result row containing authoritative experiment identity.
+    :return: Deterministic filename prefix for the experiment's confusion matrices.
+    """
+
+    model_token = sanitize_confusion_matrix_artifact_token(result_entry.get("model_name"))  # Preserve configured model identity.
+    feature_token = sanitize_confusion_matrix_artifact_token(result_entry.get("feature_set"))  # Preserve feature-set identity.
+    hyperparameter_token = sanitize_confusion_matrix_artifact_token(result_entry.get("hyperparameter_mode"))  # Preserve default or optimized mode.
+    augmentation_enabled = resolve_persisted_data_augmentation_enabled(result_entry.get("experiment_mode"), result_entry.get("augmentation_ratio"), result_entry.get("data_augmentation_enabled"))  # Resolve authoritative augmentation state.
+    augmentation_token = "Data_Augmentation" if augmentation_enabled else "No_Data_Augmentation"  # Build the readable augmentation mode token.
+    components = [model_token, feature_token, hyperparameter_token, augmentation_token]  # Start with the required human-readable experiment settings.
+    if augmentation_enabled:  # Distinguish multiple supported augmentation ratios in one run.
+        ratio = resolve_persisted_augmentation_ratio(result_entry.get("experiment_mode"), result_entry.get("augmentation_ratio"))  # Resolve the canonical persisted ratio.
+        if ratio is None or not math.isfinite(float(ratio)):  # Refuse ambiguous augmented experiment naming.
+            raise ValueError("Augmented confusion-matrix artifact lacks a finite ratio")  # Prevent cross-ratio overwrites.
+        ratio_token = sanitize_confusion_matrix_artifact_token(repr(float(ratio)).replace(".", "_"))  # Serialize the shortest exact round-trip ratio without locale dependence.
+        components.append(f"Ratio_{ratio_token}")  # Append only the required augmented-ratio dimension.
+    identity_fields = ("dataset", "execution_mode", "attack_types_combined", "feature_set", "classifier_type", "model_name", "model", "hyperparameter_mode", "experiment_id", "experiment_run", "experiment_mode", "augmentation_ratio", "data_source", "n_features", "n_samples_train", "n_samples_test", "hyperparameters", "features_list")  # Bind remaining dimensions that can distinguish experiments sharing readable settings.
+    identity_payload = {field: normalize_artifact_identity_value(result_entry.get(field)) for field in identity_fields}  # Normalize structured CSV and runtime values consistently.
+    identity_digest = hashlib.sha256(json.dumps(identity_payload, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")).hexdigest()[:16]  # Add compact deterministic collision protection.
+    components.append(f"Identity_{identity_digest}")  # Prevent distinct datasets, modes, scopes, parameters, or experiment IDs from overwriting one another.
+    return "-".join(components)  # Return the smallest readable prefix with complete collision identity.
+
+
+def write_confusion_matrix_artifact_files(destination: Path, filename_prefix: str, raw_matrix: np.ndarray, normalized_matrix: np.ndarray, class_names: List[str], normalized_float_format: str = "%.17g") -> List[Path]:
+    """
+    Write four machine-readable and visual confusion-matrix files.
+
+    :param destination: Existing staging directory receiving the complete file set.
+    :param filename_prefix: Optional filename prefix including its trailing delimiter.
+    :param raw_matrix: Exact integer count matrix in validated class order.
+    :param normalized_matrix: True-class row-normalized matrix in the same order.
+    :param class_names: Readable class labels in validated order.
+    :param normalized_float_format: CSV floating-point serialization format.
+    :return: Paths of the four completely written staged files.
+    """
+
+    raw_csv = destination / f"{filename_prefix}confusion_matrix_raw.csv"  # Resolve raw count CSV path.
+    raw_png = destination / f"{filename_prefix}confusion_matrix_raw.png"  # Resolve raw count PNG path.
+    normalized_csv = destination / f"{filename_prefix}confusion_matrix_normalized_true.csv"  # Resolve normalized CSV path.
+    normalized_png = destination / f"{filename_prefix}confusion_matrix_normalized_true.png"  # Resolve normalized PNG path.
+    raw_frame = pd.DataFrame(raw_matrix, index=class_names, columns=class_names)  # Label raw true and predicted axes in validated order.
+    normalized_frame = pd.DataFrame(normalized_matrix, index=class_names, columns=class_names)  # Label normalized true and predicted axes identically.
+    raw_frame.to_csv(raw_csv, index_label="true_label")  # Persist exact integer counts as the scientific source.
+    normalized_frame.to_csv(normalized_csv, index_label="true_label", float_format=normalized_float_format)  # Preserve caller-selected scientific serialization precision.
+    plot_specs = ((raw_matrix, "Raw confusion matrix", raw_png, "d"), (normalized_matrix, "True-class row-normalized confusion matrix", normalized_png, ".3f"))  # Define consistent raw and normalized visualizations.
+    for matrix, title, output_path, value_format in plot_specs:  # Render both required PNG files from the unchanged matrices.
+        figure, axis = plt.subplots(figsize=(max(8, len(class_names) * 0.8), max(6, len(class_names) * 0.65)))  # Scale the figure with class count.
+        try:  # Guarantee figure closure after successful or failed rendering.
+            sns.heatmap(matrix, annot=True, fmt=value_format, cmap="Blues", xticklabels=class_names, yticklabels=class_names, ax=axis)  # Render matrix values in validated order.
+            axis.set_xlabel("Predicted class")  # Label the column axis.
+            axis.set_ylabel("True class")  # Label the row axis.
+            axis.set_title(title)  # State raw or true-class normalization semantics.
+            figure.tight_layout()  # Keep long class labels inside the canvas.
+            figure.savefig(output_path, dpi=300, bbox_inches="tight")  # Write the complete staged PNG.
+        finally:  # Release matplotlib state for high-volume experiment runs.
+            plt.close(figure)  # Close the exact figure created for this file.
+    for output_path in (raw_csv, raw_png, normalized_csv, normalized_png):  # Synchronize all staged bytes before publication.
+        with open(output_path, "rb") as output_file:  # Open one completed artifact without modifying it.
+            os.fsync(output_file.fileno())  # Flush file contents to the same filesystem used for atomic replacement.
+    return [raw_csv, raw_png, normalized_csv, normalized_png]  # Return the complete staged bundle in publication order.
+
+
+def confusion_matrix_artifact_set_is_current(run_directory: Path, filename_prefix: str, raw_matrix: np.ndarray, normalized_matrix: np.ndarray, class_names: List[str]) -> bool:
+    """
+    Return whether one complete published artifact set matches exact matrix evidence.
+
+    :param run_directory: Authoritative Run-{Index} directory.
+    :param filename_prefix: Deterministic experiment prefix without its trailing delimiter.
+    :param raw_matrix: Expected exact count matrix.
+    :param normalized_matrix: Expected true-class normalized matrix.
+    :param class_names: Expected readable axis labels.
+    :return: True only for four complete matching artifacts.
+    """
+
+    prefix = f"{filename_prefix}-"  # Build the shared final filename prefix.
+    raw_csv = run_directory / f"{prefix}confusion_matrix_raw.csv"  # Resolve expected raw CSV.
+    raw_png = run_directory / f"{prefix}confusion_matrix_raw.png"  # Resolve expected raw PNG.
+    normalized_csv = run_directory / f"{prefix}confusion_matrix_normalized_true.csv"  # Resolve expected normalized CSV.
+    normalized_png = run_directory / f"{prefix}confusion_matrix_normalized_true.png"  # Resolve expected normalized PNG.
+    if not all(path.is_file() and path.stat().st_size > 0 for path in (raw_csv, raw_png, normalized_csv, normalized_png)):  # Require the complete nonempty four-file set.
+        return False  # Treat incomplete publication as eligible for safe regeneration.
+    try:  # Reject malformed or foreign files at this deterministic identity.
+        raw_frame = pd.read_csv(raw_csv, index_col="true_label")  # Read exact persisted raw counts.
+        normalized_frame = pd.read_csv(normalized_csv, index_col="true_label", float_precision="round_trip")  # Read normalized values without parser precision loss.
+        raw_frame.index = raw_frame.index.map(str)  # Normalize CSV label text.
+        raw_frame.columns = raw_frame.columns.map(str)  # Normalize predicted-label text.
+        normalized_frame.index = normalized_frame.index.map(str)  # Normalize normalized-row label text.
+        normalized_frame.columns = normalized_frame.columns.map(str)  # Normalize normalized-column label text.
+        labels_match = raw_frame.index.tolist() == class_names and raw_frame.columns.tolist() == class_names and normalized_frame.index.tolist() == class_names and normalized_frame.columns.tolist() == class_names  # Require identical validated axis ordering.
+        matrices_match = np.array_equal(raw_frame.to_numpy(dtype=float), raw_matrix.astype(float)) and np.array_equal(normalized_frame.to_numpy(dtype=float), normalized_matrix)  # Require exact count and round-trip normalized values.
+        plt.imread(raw_png)  # Parse the raw image to reject truncated files without creating a figure.
+        plt.imread(normalized_png)  # Parse the normalized image under the same rule.
+        return labels_match and matrices_match  # Reuse only a scientifically identical complete set.
+    except Exception:  # Treat unreadable, malformed, or mismatched artifacts as incomplete.
+        return False  # Permit replacement only while exact evidence is in memory.
+
+
+def persist_per_run_confusion_matrix_counts(result_entry: dict, raw_matrix: Any, class_names: List[str], cache_directory: Path) -> str:
+    """
+    Atomically publish one experiment's four per-run confusion-matrix artifacts.
+
+    :param result_entry: Persisted result row containing authoritative experiment identity.
+    :param raw_matrix: Exact raw confusion-matrix counts in validated class order.
+    :param class_names: Readable class labels in validated order.
+    :param cache_directory: Existing Cache_Results directory associated with result storage.
+    :return: Deterministic filename prefix of the published artifact set.
+    """
+
+    run_index = parse_persisted_experiment_run_value(result_entry.get("experiment_run"), "confusion-matrix experiment_run")  # Use authoritative persisted run metadata.
+    safe_class_names = [str(class_name) for class_name in class_names]  # Preserve validated label order as readable CSV and PNG text.
+    matrix = np.asarray(raw_matrix)  # Normalize exact count evidence without changing its values.
+    if matrix.ndim != 2 or matrix.shape != (len(safe_class_names), len(safe_class_names)) or not safe_class_names or len(set(safe_class_names)) != len(safe_class_names):  # Require one square uniquely labeled matrix.
+        raise ValueError("Confusion matrix shape or class ordering is invalid")  # Reject uninterpretable evidence.
+    if not np.isfinite(matrix).all() or (matrix < 0).any() or not np.equal(matrix, np.floor(matrix)).all():  # Require nonnegative exact counts.
+        raise ValueError("Raw confusion matrix contains invalid counts")  # Reject normalized or corrupted evidence.
+    integer_matrix = matrix.astype(np.int64)  # Persist count values as integers.
+    supports = integer_matrix.sum(axis=1, keepdims=True)  # Compute each true-class normalization denominator.
+    normalized_matrix = np.divide(integer_matrix.astype(float), supports, out=np.zeros_like(integer_matrix, dtype=float), where=supports != 0)  # Match sklearn normalize="true" including zero-support rows.
+    resolved_cache_directory = cache_directory.resolve()  # Normalize the authoritative Cache_Results location.
+    resolved_cache_directory.mkdir(parents=True, exist_ok=True)  # Preserve existing cache path creation behavior.
+    run_directory = resolved_cache_directory / f"Run-{run_index}"  # Build the required run-specific artifact directory.
+    validate_output_path(str(resolved_cache_directory), str(run_directory.resolve()))  # Prevent structured run metadata from escaping Cache_Results.
+    run_directory.mkdir(parents=True, exist_ok=True)  # Create only the required per-run directory.
+    filename_prefix = build_confusion_matrix_artifact_prefix(result_entry)  # Build readable complete experiment identity.
+    lock_path = resolved_cache_directory / ".confusion_matrix_artifacts.lock"  # Coordinate publication across workers and program instances.
+    lock_file = acquire_stacking_artifact_lock(str(lock_path), exclusive=True)  # Serialize validation and four-file publication.
+    temporary_directory = None  # Track only this call's staging directory.
+    try:  # Reuse exact existing artifacts or replace one incomplete set transactionally.
+        if confusion_matrix_artifact_set_is_current(run_directory, filename_prefix, integer_matrix, normalized_matrix, safe_class_names):  # Avoid duplicate rendering and writes.
+            return filename_prefix  # Return stable identity for an already complete exact set.
+        temporary_directory = Path(tempfile.mkdtemp(prefix=f".{filename_prefix}.", dir=str(run_directory)))  # Stage all four files on the destination filesystem.
+        staged_paths = write_confusion_matrix_artifact_files(temporary_directory, f"{filename_prefix}-", integer_matrix, normalized_matrix, safe_class_names)  # Fully generate the set before publishing any final name.
+        final_paths = [run_directory / staged_path.name for staged_path in staged_paths]  # Resolve only this deterministic experiment's four destinations.
+        for final_path in final_paths:  # Remove stale members so interruption cannot leave a mixed four-file set.
+            if final_path.is_file():  # Limit replacement cleanup to an existing owned artifact filename.
+                final_path.unlink()  # Remove the stale member immediately before atomic per-file publication.
+        for staged_path in staged_paths:  # Publish only after every staged file succeeded.
+            os.replace(staged_path, run_directory / staged_path.name)  # Atomically replace each corresponding final artifact.
+        sync_cache_parent_directory(str(run_directory / staged_paths[-1].name))  # Synchronize the completed run-directory publication metadata.
+        return filename_prefix  # Return the stable experiment artifact identity.
+    finally:  # Release synchronization and remove unpublished staging content.
+        if temporary_directory is not None and temporary_directory.exists():  # Remove only this call's staging directory.
+            shutil.rmtree(temporary_directory)  # Delete incomplete or consumed staged files.
+        lock_file.close()  # Release the process-safe Cache_Results artifact lock.
+
+
+def persist_per_run_confusion_matrix_artifacts(result_entry: dict, y_true: Any, y_pred: Any, label_classes: Any, cache_ref_file: str, config: dict) -> str:
+    """
+    Persist per-run confusion matrices from one already evaluated prediction vector.
+
+    :param result_entry: Persisted result row containing authoritative experiment identity.
+    :param y_true: Exact true labels used by metric calculation.
+    :param y_pred: Exact predictions already generated by the experiment.
+    :param label_classes: Original class names in fitted encoder order, or None for explicit encoded labels.
+    :param cache_ref_file: Dataset reference used by existing cache placement.
+    :param config: Active runtime configuration dictionary.
+    :return: Deterministic filename prefix of the published artifact set.
+    """
+
+    y_true_array = np.asarray(y_true)  # Normalize exact evaluated labels without recomputation.
+    y_pred_array = np.asarray(y_pred)  # Normalize exact predictions without invoking the model.
+    if y_true_array.ndim != 1 or y_pred_array.ndim != 1 or len(y_true_array) != len(y_pred_array) or len(y_true_array) == 0:  # Require aligned nonempty evaluation vectors.
+        raise ValueError("Confusion-matrix labels and predictions must be aligned nonempty one-dimensional arrays")  # Reject scientifically invalid inputs.
+    if label_classes is not None:  # Prefer the fitted encoder's validated mapping when available.
+        class_names = [str(value) for value in np.asarray(label_classes).tolist()]  # Preserve original label order.
+        labels = list(range(len(class_names)))  # Match fitted LabelEncoder integer semantics.
+        observed_labels = set(np.unique(np.concatenate((y_true_array, y_pred_array))).tolist())  # Resolve encoded values actually evaluated.
+        if not class_names or not observed_labels.issubset(set(labels)):  # Require every encoded value to have an original-label mapping.
+            raise ValueError("Confusion-matrix labels are incompatible with fitted encoder classes")  # Refuse guessed decoding.
+    else:  # Preserve exact encoded labels when no validated original mapping exists.
+        labels = np.unique(np.concatenate((y_true_array, y_pred_array))).tolist()  # Use deterministic numeric or lexical encoded-value order.
+        class_names = [str(value) for value in labels]  # Expose evaluated encoded labels explicitly.
+    raw_matrix = confusion_matrix(y_true_array, y_pred_array, labels=labels)  # Compute exact counts from the same vectors used for metrics.
+    run_index = parse_persisted_experiment_run_value(result_entry.get("experiment_run"), "confusion-matrix experiment_run")  # Resolve authoritative artifact run placement.
+    cache_directory = Path(get_cache_file_path(cache_ref_file, config=config, experiment_run=run_index)).parent  # Reuse configured combined, separate, and alternate cache placement.
+    return persist_per_run_confusion_matrix_counts(result_entry, raw_matrix, class_names, cache_directory)  # Publish the four-file set without another prediction.
+
+
+def persist_per_run_confusion_matrix_artifacts_safely(result_entry: dict, y_true: Any, y_pred: Any, label_classes: Any, cache_ref_file: str, config: dict) -> Optional[str]:
+    """
+    Persist per-run confusion matrices without changing durable experiment success.
+
+    :param result_entry: Persisted result row containing authoritative experiment identity.
+    :param y_true: Exact true labels used by metric calculation.
+    :param y_pred: Exact predictions already generated by the experiment.
+    :param label_classes: Original class names in fitted encoder order.
+    :param cache_ref_file: Dataset reference used by existing cache placement.
+    :param config: Active runtime configuration dictionary.
+    :return: Published filename prefix, or None after a visible artifact failure.
+    """
+
+    try:  # Isolate observational artifact failure from the authoritative persisted result.
+        return persist_per_run_confusion_matrix_artifacts(result_entry, y_true, y_pred, label_classes, cache_ref_file, config)  # Reuse exact in-memory vectors once.
+    except Exception as artifact_error:  # Preserve successful experiment persistence while reporting missing evidence.
+        print(f"{BackgroundColors.YELLOW}[WARNING] Per-run confusion-matrix persistence failed: {artifact_error}{Style.RESET_ALL}")  # Emit visible local diagnostics.
+        send_exception_via_telegram(type(artifact_error), artifact_error, artifact_error.__traceback__)  # Reuse established remote error reporting.
+        return None  # Report auxiliary artifact failure without mutating the result.
+
+
 def persist_best_result_artifacts(result_entry: dict, y_true: Any, y_pred: Any, label_classes: Any, cache_ref_file: str, config: dict) -> str:  # Atomically persist one new-best scientific artifact bundle.
     """
     Persist scientific evaluation artifacts for one new-best result.
@@ -13534,10 +13753,7 @@ def persist_best_result_artifacts(result_entry: dict, y_true: Any, y_pred: Any, 
     artifact_identity = normalize_metadata_for_json({"directory_name": directory_name, "result": result_entry})  # Preserve full persisted result identity for collision validation.
 
     try:  # Publish only a complete and internally consistent bundle.
-        raw_frame = pd.DataFrame(raw_matrix, index=class_names, columns=class_names)  # Label both raw matrix axes with fitted class order.
-        normalized_frame = pd.DataFrame(normalized_matrix, index=class_names, columns=class_names)  # Label both normalized matrix axes with fitted class order.
-        raw_frame.to_csv(temporary_directory / "confusion_matrix_raw.csv", index_label="true_label")  # Persist machine-readable raw counts.
-        normalized_frame.to_csv(temporary_directory / "confusion_matrix_normalized_true.csv", index_label="true_label", float_format="%.12g")  # Persist true-class row-normalized values.
+        write_confusion_matrix_artifact_files(temporary_directory, "", raw_matrix, normalized_matrix, class_names, normalized_float_format="%.12g")  # Reuse matrix rendering while preserving established new-best filenames and CSV precision.
         report_frame = pd.DataFrame(cast(dict, report)).transpose()  # Convert sklearn report mapping into tabular machine-readable form.
         report_frame.to_csv(temporary_directory / "classification_report.csv", index_label="label")  # Persist per-class and aggregate report rows.
         with open(temporary_directory / "classification_report.json", "w", encoding="utf-8") as report_file:  # Open staged JSON report destination.
@@ -13548,17 +13764,6 @@ def persist_best_result_artifacts(result_entry: dict, y_true: Any, y_pred: Any, 
         metadata = {"artifact_identity": artifact_identity, "metrics": {field: result_entry.get(field) for field in ("accuracy", "weighted_precision", "weighted_recall", "weighted_f1_score", "macro_f1_score", "per_class_f1_scores", "fpr", "fnr")}, "experiment": {field: result_entry.get(field) for field in ("dataset", "execution_mode", "attack_types_combined", "feature_set", "classifier_type", "model_name", "model", "hyperparameter_mode", "experiment_id", "experiment_run", "experiment_mode", "augmentation_ratio", "data_augmentation_enabled", "n_features", "n_samples_train", "n_samples_test", "cv_method", "hyperparameters", "features_list")}, "timings_seconds": {field: result_entry.get(field) for field in ("elapsed_time_s", *PHASE_RUNTIME_COLUMNS)}, "configuration": {"evaluation": {field: config.get("evaluation", {}).get(field) for field in ("random_state", "test_size", "cv_folds", "n_jobs", "feature_extraction_n_jobs")}, "methods": config.get("stacking", {}).get("methods", {})}, "confusion_matrix_normalization": "Each row is divided by its true-class support; zero-support rows remain zero.", "class_labels_file": "class_label_mapping.json"}  # Store canonical metrics, identity, timing, and reproducibility configuration.
         with open(temporary_directory / "experiment_metrics_metadata.json", "w", encoding="utf-8") as metadata_file:  # Open staged experiment metadata destination.
             json.dump(normalize_metadata_for_json(metadata), metadata_file, indent=2, sort_keys=True, allow_nan=False)  # Persist deterministic metadata without invented values.
-        for matrix, title, filename, value_format in ((raw_matrix, "Raw confusion matrix", "confusion_matrix_raw.png", "d"), (normalized_matrix, "True-class row-normalized confusion matrix", "confusion_matrix_normalized_true.png", ".3f")):  # Render both required human-readable matrices consistently.
-            figure, axis = plt.subplots(figsize=(max(8, len(class_names) * 0.8), max(6, len(class_names) * 0.65)))  # Size figure for readable class labels.
-            try:  # Close each figure even if rendering fails.
-                sns.heatmap(matrix, annot=True, fmt=value_format, cmap="Blues", xticklabels=class_names, yticklabels=class_names, ax=axis)  # Render values with exact persisted class order.
-                axis.set_xlabel("Predicted class")  # Label prediction axis.
-                axis.set_ylabel("True class")  # Label true-class axis.
-                axis.set_title(title)  # Document raw or normalization semantics in image.
-                figure.tight_layout()  # Prevent class labels from being clipped.
-                figure.savefig(temporary_directory / filename, dpi=300, bbox_inches="tight")  # Persist staged PNG using existing matplotlib dependency.
-            finally:  # Release matplotlib state on success or failure.
-                plt.close(figure)  # Close exact staged figure.
         if final_directory.exists():  # Avoid mixing or overwriting an existing deterministic bundle.
             metadata_path = final_directory / "experiment_metrics_metadata.json"  # Resolve existing bundle identity source.
             with open(metadata_path, "r", encoding="utf-8") as existing_file:  # Read existing identity before reuse.
@@ -13836,13 +14041,13 @@ def load_classification_report_recovery(report_path: Path, class_order: List[str
     return macro_f1, per_class_json, fingerprint  # Return exact recoverable metrics and aggregate evidence.
 
 
-def load_confusion_matrix_recovery(matrix_path: Path, class_order: List[str]) -> Tuple[float, str, dict]:
+def load_validated_confusion_matrix_counts(matrix_path: Path, class_order: List[str]) -> np.ndarray:
     """
-    Derive missing F1 metrics and aggregate fingerprint from exact raw counts.
+    Load exact raw confusion-matrix counts in validated class order.
 
     :param matrix_path: Raw confusion-matrix CSV path.
     :param class_order: Validated original class order.
-    :return: Macro F1, deterministic per-class JSON, and full aggregate fingerprint.
+    :return: Nonnegative integer count matrix.
     """
 
     matrix_frame = pd.read_csv(matrix_path, index_col="true_label")  # Load machine-readable counts only.
@@ -13852,15 +14057,29 @@ def load_confusion_matrix_recovery(matrix_path: Path, class_order: List[str]) ->
     column_order_matches = matrix_frame.columns.tolist() == class_order  # Validate prediction order.
     if not row_order_matches or not column_order_matches:  # Require exact mapped axes.
         raise ValueError("Raw confusion-matrix axes do not match validated class order")  # Reject guessed ordering.
-    matrix = matrix_frame.to_numpy(dtype=float)  # Convert exact numeric counts for derivation.
+    matrix: np.ndarray = matrix_frame.to_numpy(dtype=float)  # Convert exact numeric counts for validation.
     matrix_is_finite = np.isfinite(matrix).all()  # Reject undefined counts.
     matrix_is_nonnegative = not (matrix < 0.0).any()  # Reject negative counts.
     matrix_is_integral = np.equal(matrix, np.floor(matrix)).all()  # Reject normalized values.
     if not matrix_is_finite or not matrix_is_nonnegative or not matrix_is_integral:  # Require exact counts.
         raise ValueError("Raw confusion matrix contains invalid counts")  # Reject non-count data.
-    total = float(matrix.sum())  # Resolve evaluation sample count.
-    if total <= 0.0:  # Reject empty evidence.
+    integer_matrix: np.ndarray = matrix.astype(np.int64)  # Preserve exact counts in their scientific representation.
+    if int(integer_matrix.sum()) <= 0:  # Reject empty evaluation evidence.
         raise ValueError("Raw confusion matrix contains no samples")  # Prevent undefined recovery.
+    return integer_matrix  # Return validated exact counts.
+
+
+def load_confusion_matrix_recovery(matrix_path: Path, class_order: List[str]) -> Tuple[float, str, dict]:
+    """
+    Derive missing F1 metrics and aggregate fingerprint from exact raw counts.
+
+    :param matrix_path: Raw confusion-matrix CSV path.
+    :param class_order: Validated original class order.
+    :return: Macro F1, deterministic per-class JSON, and full aggregate fingerprint.
+    """
+
+    matrix: np.ndarray = load_validated_confusion_matrix_counts(matrix_path, class_order).astype(float)  # Reuse strict raw count and axis validation.
+    total = float(matrix.sum())  # Resolve evaluation sample count.
 
     true_positive = np.diag(matrix)  # Read per-class true positives.
     support = matrix.sum(axis=1)  # Read true-class support.
@@ -13991,6 +14210,33 @@ def recover_saved_evaluation_metrics(result_entry: dict, artifact_root: Path) ->
     return None  # Leave fields empty when no usable exact evidence exists.
 
 
+def persist_saved_raw_confusion_matrix_if_available(result_entry: dict, artifact_root: Path) -> bool:
+    """
+    Publish a validated Task 3 raw matrix into the per-run artifact layout.
+
+    :param result_entry: Canonical historical result row.
+    :param artifact_root: Cache-results directory containing scientific bundles.
+    :return: True when an exact raw matrix was validated and published or reused.
+    """
+
+    resolved_root = artifact_root.resolve()  # Normalize the authoritative Cache_Results directory.
+    artifact_directory = resolved_root / build_best_artifact_directory_name(result_entry)  # Resolve the identity-bearing Task 3 bundle.
+    validate_output_path(str(resolved_root), str(artifact_directory.resolve()))  # Contain historical artifact lookup within Cache_Results.
+    metadata_path = artifact_directory / "experiment_metrics_metadata.json"  # Resolve strongest persisted experiment identity.
+    mapping_path = artifact_directory / "class_label_mapping.json"  # Resolve validated original class ordering.
+    matrix_path = artifact_directory / "confusion_matrix_raw.csv"  # Resolve exact count evidence only.
+    if not artifact_directory.is_dir() or not metadata_path.is_file() or not mapping_path.is_file() or not matrix_path.is_file():  # Require a complete identity-bound raw matrix source.
+        return False  # Never infer a matrix from classification reports or aggregate metrics.
+    metadata = load_exact_artifact_json(metadata_path)  # Load exact bundle provenance.
+    validate_saved_artifact_identity(result_entry, artifact_directory, metadata)  # Prove row-to-artifact association.
+    class_order = load_saved_artifact_class_order(artifact_directory)  # Preserve exact fitted encoder order.
+    _, _, fingerprint = load_confusion_matrix_recovery(matrix_path, class_order)  # Derive validation aggregates from exact counts.
+    validate_recovered_aggregate_fingerprint(result_entry, fingerprint)  # Require authoritative historical agreement.
+    raw_matrix = load_validated_confusion_matrix_counts(matrix_path, class_order)  # Retain exact integer counts for publication.
+    persist_per_run_confusion_matrix_counts(result_entry, raw_matrix, class_order, resolved_root)  # Publish without prediction or invented values.
+    return True  # Report exact historical matrix availability.
+
+
 def per_class_f1_value_is_valid(value: Any) -> bool:
     """
     Return whether one persisted per-class F1 payload is complete and finite.
@@ -14032,6 +14278,11 @@ def backfill_saved_evaluation_metrics(result_df: pd.DataFrame, artifact_root: Pa
     recovered_count = 0  # Count rows changed by exact evidence.
     for row_index, row in recovered_df.iterrows():  # Inspect canonical rows without changing order.
         row_entry = row.to_dict()  # Build mapping for existing identity and metric readers.
+        try:  # Keep one unavailable or mismatched matrix from blocking unrelated historical rows.
+            persist_saved_raw_confusion_matrix_if_available(row_entry, artifact_root)  # Reuse exact Task 3 raw counts even when metrics are already complete.
+        except Exception as exc:  # Reject unproven matrix publication without changing metric recovery priority.
+            experiment_id = row_entry.get("experiment_id", "unknown")  # Identify the affected historical row.
+            print(f"{BackgroundColors.YELLOW}[CONFUSION MATRIX RECOVERY REJECTED] {experiment_id}: {exc}{Style.RESET_ALL}")  # Emit clear scientific evidence rejection.
         macro_missing = resolve_result_metric_float(row_entry, "macro_f1_score") is None  # Detect missing Macro F1.
         per_class_value = row_entry.get("per_class_f1_scores")  # Read persisted per-class payload.
         per_class_missing = not per_class_f1_value_is_valid(per_class_value)  # Detect absent or invalid per-class F1.
@@ -14301,6 +14552,7 @@ def recover_metrics_from_stacking_model(result_entry: dict, csv_path: str, confi
     metrics = compute_classification_metrics(y_test, predictions, bundle["label_encoder"].classes_)  # Compute every fingerprint metric from one prediction vector.
     fingerprint = {"accuracy": float(metrics[0]), "weighted_precision": float(metrics[1]), "weighted_recall": float(metrics[2]), "weighted_f1_score": float(metrics[3]), "fpr": float(metrics[4]), "fnr": float(metrics[5])}  # Build validation-only authoritative aggregates.
     validate_recovered_aggregate_fingerprint(result_entry, fingerprint)  # Require strict historical aggregate agreement.
+    persist_per_run_confusion_matrix_artifacts(result_entry, y_test, predictions, bundle["label_encoder"].classes_, csv_path, config)  # Reuse the single validated historical prediction for all four artifacts.
     return float(metrics[6]), str(metrics[7])  # Return only previously unavailable metrics.
 
 
@@ -15345,6 +15597,7 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
             log_training_phase(name, model_name, "Cache persistence", "Started", hyperparameters_enabled, augmentation_ratio)  # Mark contextual result cache persistence separately from training.
             persist_cache_result_entry(cache_ref_file, result_entry, cache_dict, config=config)  # Persist this atomic classifier result immediately and register its resume identity
             remove_eta_pending_run_experiment_task(active_pending_duration_tasks, current_combination)  # Remove persisted work from future pending-run ETA.
+            persist_per_run_confusion_matrix_artifacts_safely(result_entry, model_y_test, metrics[7], label_encoder.classes_, cache_ref_file, config)  # Persist all four per-run matrices from the existing prediction vector.
             notify_new_best_result_if_applicable(result_entry, model_y_test, metrics[7], label_encoder.classes_, cache_ref_file, config)  # Persist exact evaluation evidence only after durable cache and authoritative new-best comparison.
             log_training_phase(name, model_name, "Cache persistence", "Completed", hyperparameters_enabled, augmentation_ratio)  # Mark contextual durable cache completion before artifact export.
             write_memory_phase_event("after_cache_persist", config=config, **phase_metadata, event_outcome="persisted")  # Publish cache persistence completion
@@ -15540,6 +15793,7 @@ def run_stacking_evaluation_for_feature_set(name, stacking_model, X_train_df, y_
         log_training_phase(name, "StackingClassifier", "Cache persistence", "Started", hyperparameters_enabled, augmentation_ratio)  # Mark contextual stacking cache persistence separately from training.
         persist_cache_result_entry(cache_ref_file, stacking_result_entry, cache_dict, config=config)  # Persist this atomic stacking result immediately and register its resume identity
         remove_eta_pending_run_experiment_task(active_pending_duration_tasks, current_combination)  # Remove persisted stacking work from future pending-run ETA.
+        persist_per_run_confusion_matrix_artifacts_safely(stacking_result_entry, y_test, s_y_pred, label_encoder.classes_, cache_ref_file, config)  # Persist all four per-run matrices from the existing stacking prediction vector.
         notify_new_best_result_if_applicable(stacking_result_entry, y_test, s_y_pred, label_encoder.classes_, cache_ref_file, config)  # Persist exact stacking evidence only after durable cache and authoritative new-best comparison.
         log_training_phase(name, "StackingClassifier", "Cache persistence", "Completed", hyperparameters_enabled, augmentation_ratio)  # Mark contextual durable stacking cache completion before artifact export.
         write_memory_phase_event("after_cache_persist", config=config, **phase_metadata, event_outcome="persisted")  # Publish stacking cache persistence completion
@@ -16112,6 +16366,7 @@ def evaluate_on_dataset(
                     phase_runtime_fields = build_runtime_phase_fields(config, name, model_name, bool(hyperparameters_enabled), preprocessing_time_s, training_ram_stats)  # Build phase runtime fields before immediate cache persistence.
                     result_entry = build_classifier_result_entry(loaded_model.__class__.__name__, file, execution_mode_str, attack_types_combined, name, classifier_type, model_name, data_source_label, experiment_id, experiment_mode, augmentation_ratio, len(subset_feature_names), original_train_count, len(y_augmented), metrics, subset_feature_names, hyperparams_map=hyperparams_map, hyperparameters_enabled=hyperparameters_enabled, effective_hyperparameters=serialize_effective_estimator_parameters(loaded_model), experiment_run=get_current_experiment_run(config), phase_runtime_fields=phase_runtime_fields)  # Persist the active run on augmented result rows.
                     persist_cache_result_entry(effective_cache_ref, result_entry, cache_dict, config=config)
+                    persist_per_run_confusion_matrix_artifacts_safely(result_entry, y_augmented, metrics[7], artifact_bundle["label_encoder"].classes_, effective_cache_ref, config)  # Persist all four per-run matrices from the existing loaded-model prediction vector.
                     notify_new_best_result_if_applicable(result_entry, y_augmented, metrics[7], artifact_bundle["label_encoder"].classes_, effective_cache_ref, config)  # Persist exact loaded-model evidence only after durable cache and authoritative new-best comparison.
                     all_results[(name, model_name)] = result_entry
                     progress_bar.update(1)
@@ -19420,6 +19675,8 @@ def process_feature_process_task(task: dict, process_payload: dict, model_maps: 
         else:  # Preserve focused tests and alternate evaluator targets returning only a result row.
             result_entry = cast(dict, evaluation_output)  # Retain legacy small result-only behavior outside production evaluation.
             artifact_y_true = artifact_y_pred = artifact_label_classes = None  # Mark exact evaluation evidence unavailable.
+        if artifact_y_true is not None and artifact_y_pred is not None and artifact_label_classes is not None:  # Require complete exact worker-local evidence.
+            persist_per_run_confusion_matrix_artifacts_safely(result_entry, artifact_y_true, artifact_y_pred, artifact_label_classes, process_payload["cache_ref_file"], process_payload["config"])  # Publish per-run matrices without vector transport or another prediction.
         transition_feature_process_status(status_state, task, "computed")  # Count durably persisted successful computation exactly once before noncritical cleanup
         finish_eta_pending_run_experiment(process_payload.get("eta_pending_run_experiments_state"), task)  # Remove persisted work from future pending-run estimates.
         task_finished = True  # Preserve completed status if later cleanup or logging fails
