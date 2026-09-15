@@ -211,6 +211,10 @@ LSTM_SOURCE_FILE_COLUMN = "__stacking_lstm_source_file"  # Reserved nonnumeric s
 LSTM_ROW_ORDER_COLUMN = "__stacking_lstm_row_order"  # Reserved nonnumeric row chronology for verified LSTM windows.
 COOPERATIVE_CANCEL_CLASSIFIERS = {"XGBoost", "LightGBM", "Gradient Boosting", "FT-Transformer", "Tabular ResNet", "ResNet18", "AutoEncoder", "LSTM"}  # Classifiers with public training boundaries used for active Telegram skip.
 PHASE_RUNTIME_COLUMNS = ["preprocessing_time_s", "feature_selection_time_s", "hyperparameter_optimization_time_s", "training_time_s", "inference_time_s"]  # Define phase runtime result columns in seconds.
+HISTORICAL_MODEL_RECOVERY_OUTCOMES: dict = {}  # Memoize successful and rejected historical model recovery outcomes for this process.
+HISTORICAL_EVALUATION_SPLITS: dict = {}  # Reuse lightweight historical test indices and encoded labels for this process.
+HISTORICAL_MODEL_ARTIFACT_METADATA: dict = {}  # Reuse dataset-local model metadata discovered after relevant cache rows are loaded.
+HISTORICAL_MODEL_PROVENANCE_ATTEMPTS: set = set()  # Prevent repeated metadata-only recovery attempts for the same loaded historical result.
 
 class RuntimeSkipRequested(Exception):
     """Raised inside a worker when a Telegram skip wins before persistence."""
@@ -2358,15 +2362,12 @@ def persist_final_results_dataframe_atomically(final_path: str, result_df: pd.Da
         remove_cache_temporary_file(rollback_temporary)  # Remove unused rollback staging.
 
 
-def migrate_cache_storage_for_reference(csv_path: str, config: Optional[dict] = None, model_metric_cache: Optional[dict] = None, evaluation_data_cache: Optional[dict] = None, artifact_metadata_cache: Optional[dict] = None) -> None:
+def migrate_cache_storage_for_reference(csv_path: str, config: Optional[dict] = None) -> None:
     """
     Normalize cache CSV files for one dataset reference before planning.
 
     :param csv_path: Dataset file or directory identity used for cache placement.
     :param config: Runtime configuration dictionary.
-    :param model_metric_cache: Shared exact model-recovery metrics keyed by result identity.
-    :param evaluation_data_cache: Shared reconstructed original-test populations keyed by artifact context.
-    :param artifact_metadata_cache: Shared dataset-local classifier metadata candidates.
     :return: None.
     """
 
@@ -2413,12 +2414,6 @@ def migrate_cache_storage_for_reference(csv_path: str, config: Optional[dict] = 
                 output = f"{BackgroundColors.GREEN}{message}{BackgroundColors.CYAN}"  # Add colors.
                 output += f"{target_path}{Style.RESET_ALL}"  # Add target path.
                 print(output)  # Report count.
-            merged_df, filename_recovery = backfill_exported_model_filenames(merged_df, csv_path, config, artifact_metadata_cache)  # Recover exact classifier artifact basenames from validated companion metadata.
-            if filename_recovery["recovered"]:  # Report successful cache-row provenance recovery.
-                print(f"{BackgroundColors.GREEN}[MODEL PROVENANCE] Recovered {BackgroundColors.CYAN}{filename_recovery['recovered']}{BackgroundColors.GREEN} cache row filename(s): {BackgroundColors.CYAN}{target_path}{Style.RESET_ALL}")  # Emit factual metadata-maintenance result.
-            merged_df, model_recovery = backfill_saved_model_metrics(merged_df, csv_path, config, model_metric_cache, evaluation_data_cache, artifact_metadata_cache)  # Recover remaining metrics through exact persisted-model inference.
-            if model_recovery["recovered"]:  # Report successful prediction-only recovery.
-                print(f"{BackgroundColors.GREEN}[MODEL RECOVERY] Recovered {BackgroundColors.CYAN}{model_recovery['recovered']}{BackgroundColors.GREEN} cache row(s): {BackgroundColors.CYAN}{target_path}{Style.RESET_ALL}")  # Emit factual maintenance result.
             storage_is_current = (  # Detect a fully synchronized canonical cache without mutating it.
                 primary_df is not None  # Require validated primary content.
                 and backup_df is not None  # Require validated backup content.
@@ -2437,15 +2432,12 @@ def migrate_cache_storage_for_reference(csv_path: str, config: Optional[dict] = 
             print(f"{BackgroundColors.GREEN}[STARTUP MIGRATION] Normalized cache results for run {run_index}: {BackgroundColors.CYAN}{target_path}{Style.RESET_ALL}")  # Report cache migration.
 
 
-def migrate_final_storage_for_reference(csv_path: str, config: Optional[dict] = None, model_metric_cache: Optional[dict] = None, evaluation_data_cache: Optional[dict] = None, artifact_metadata_cache: Optional[dict] = None) -> None:
+def migrate_final_storage_for_reference(csv_path: str, config: Optional[dict] = None) -> None:
     """
     Normalize final-result CSV files for one dataset reference before planning.
 
     :param csv_path: Dataset file or directory identity used for final-result placement.
     :param config: Runtime configuration dictionary.
-    :param model_metric_cache: Shared exact model-recovery metrics keyed by result identity.
-    :param evaluation_data_cache: Shared reconstructed original-test populations keyed by artifact context.
-    :param artifact_metadata_cache: Shared dataset-local classifier metadata candidates.
     :return: None.
     """
 
@@ -2495,12 +2487,6 @@ def migrate_final_storage_for_reference(csv_path: str, config: Optional[dict] = 
                 output = f"{BackgroundColors.GREEN}{message}{BackgroundColors.CYAN}"  # Add colors.
                 output += f"{target_path}{Style.RESET_ALL}"  # Add target path.
                 print(output)  # Report count.
-            merged_df, filename_recovery = backfill_exported_model_filenames(merged_df, csv_path, config, artifact_metadata_cache)  # Recover exact classifier artifact basenames from validated companion metadata.
-            if filename_recovery["recovered"]:  # Report successful final-row provenance recovery.
-                print(f"{BackgroundColors.GREEN}[MODEL PROVENANCE] Recovered {BackgroundColors.CYAN}{filename_recovery['recovered']}{BackgroundColors.GREEN} final row filename(s): {BackgroundColors.CYAN}{target_path}{Style.RESET_ALL}")  # Emit factual metadata-maintenance result.
-            merged_df, model_recovery = backfill_saved_model_metrics(merged_df, csv_path, config, model_metric_cache, evaluation_data_cache, artifact_metadata_cache)  # Recover remaining metrics through exact persisted-model inference.
-            if model_recovery["recovered"]:  # Report successful prediction-only recovery.
-                print(f"{BackgroundColors.GREEN}[MODEL RECOVERY] Recovered {BackgroundColors.CYAN}{model_recovery['recovered']}{BackgroundColors.GREEN} final row(s): {BackgroundColors.CYAN}{target_path}{Style.RESET_ALL}")  # Emit factual maintenance result.
             final_columns = get_stacking_results_csv_columns(config)  # Resolve canonical final-result order once.
             primary_is_current = (  # Preserve authoritative canonical primary content when merge adds nothing.
                 primary_df is not None  # Require validated primary content.
@@ -2534,11 +2520,8 @@ def migrate_result_storage_files_for_reference(csv_path: str, config: Optional[d
 
     if config is None:  # Use global configuration when no configuration is supplied.
         config = CONFIG  # Preserve established configuration fallback.
-    model_metric_cache: dict = {}  # Reuse successful inference across matching cache and final rows during this migration.
-    evaluation_data_cache: dict = {}  # Reuse exact reconstructed test populations across compatible classifier artifacts.
-    artifact_metadata_cache: dict = {}  # Reuse dataset-local companion metadata across cache and final-row maintenance.
-    migrate_cache_storage_for_reference(csv_path, config=config, model_metric_cache=model_metric_cache, evaluation_data_cache=evaluation_data_cache, artifact_metadata_cache=artifact_metadata_cache)  # Normalize cache storage before cache lookup.
-    migrate_final_storage_for_reference(csv_path, config=config, model_metric_cache=model_metric_cache, evaluation_data_cache=evaluation_data_cache, artifact_metadata_cache=artifact_metadata_cache)  # Normalize final-result storage before final publication.
+    migrate_cache_storage_for_reference(csv_path, config=config)  # Normalize cache storage before cache lookup.
+    migrate_final_storage_for_reference(csv_path, config=config)  # Normalize final-result storage before final publication.
 
 
 def migrate_experiment_result_files_for_startup(input_path: str, files_to_process: List[str], execution_mode: str, config: Optional[dict] = None) -> None:
@@ -14597,14 +14580,16 @@ def backfill_exported_model_filenames(result_df: pd.DataFrame, csv_path: str, co
     return recovered_df, outcomes  # Return existing atomic-writer input and factual counts.
 
 
-def reconstruct_historical_test_population(context: dict, config: dict, loaded_bundle: dict) -> Tuple[np.ndarray, np.ndarray, int]:
+def reconstruct_historical_test_population(context: dict, loaded_bundle: dict, evaluation_df: pd.DataFrame, evaluation_source_files: List[str], evaluation_attack_types: Any) -> Tuple[np.ndarray, np.ndarray, int]:
     """
-    Reconstruct one exact original-only historical test population without fitting.
+    Reconstruct one exact historical test partition from the loaded evaluation population.
 
     :param context: Validated classifier artifact context.
-    :param config: Runtime configuration dictionary.
     :param loaded_bundle: Strictly validated fitted classifier bundle.
-    :return: Raw ordered test features, encoded test labels, and training sample count.
+    :param evaluation_df: Already-loaded production evaluation DataFrame.
+    :param evaluation_source_files: Ordered source files used to build the loaded DataFrame.
+    :param evaluation_attack_types: Loaded combined-files attack scope, or None for separate files.
+    :return: Test row indices, encoded test labels, and training sample count.
     """
 
     sklearn_module = sys.modules.get("sklearn")  # Resolve active library version used by split code.
@@ -14627,20 +14612,17 @@ def reconstruct_historical_test_population(context: dict, config: dict, loaded_b
         if int(source_entry.get("size", -1)) != int(source_stat.st_size) or int(source_entry.get("mtime_ns", -1)) != int(source_stat.st_mtime_ns):  # Require unchanged source identity.
             raise ValueError(f"Classifier source provenance changed: {source_path}")  # Refuse altered datasets.
         source_files.append(str(source_path))  # Preserve validated source order.
+    active_source_files = [str(Path(str(source_file)).expanduser().resolve()) for source_file in evaluation_source_files]  # Normalize the already-loaded source order.
+    if source_files != active_source_files:  # Require the active in-memory population to use exact persisted sources and ordering.
+        raise ValueError("Loaded evaluation source ordering differs from classifier provenance")  # Refuse another population without disk fallback.
     execution_mode = context.get("execution_mode")  # Read established population construction mode.
-    if execution_mode == "combined_files":  # Reuse exact combined-files production preparation.
-        combined_result = combine_files_for_combined_evaluation(source_files, config=config)  # Rebuild aligned sources and labels.
-        if combined_result[0] is None:  # Require successful exact combination.
-            raise ValueError("Combined historical evaluation population could not be reconstructed")  # Leave row unavailable.
-        evaluation_df, attack_types, target_column = combined_result  # Unpack production combined population.
-        if normalize_metadata_for_json(attack_types) != context.get("attack_types"):  # Require identical class scope.
-            raise ValueError("Combined historical attack scope differs from classifier provenance")  # Reject changed source contents.
-    elif execution_mode == "separate_files" and len(source_files) == 1:  # Reuse exact separate-file preprocessing.
-        evaluation_df, _ = load_and_preprocess_dataset(source_files[0], None, config=config)  # Rebuild cleaned original population.
-        target_column = evaluation_df.columns[-1] if evaluation_df is not None else None  # Preserve positional target semantics.
-    else:
-        raise ValueError("Classifier execution mode or source count is unsupported")  # Refuse uncertain population construction.
-    if evaluation_df is None or evaluation_df.empty or target_column != context.get("target_column") or evaluation_df.columns[-1] != target_column:  # Require exact target placement and identity.
+    if execution_mode == "combined_files":  # Validate the supplied combined-files population scope.
+        if normalize_metadata_for_json(evaluation_attack_types) != context.get("attack_types"):  # Require identical loaded class scope.
+            raise ValueError("Loaded combined attack scope differs from classifier provenance")  # Reject another combined population.
+    elif execution_mode != "separate_files" or len(source_files) != 1 or evaluation_attack_types is not None:  # Require exact separate-file population semantics.
+        raise ValueError("Loaded evaluation population is incompatible with classifier execution mode")  # Refuse uncertain population use.
+    target_column = str(evaluation_df.columns[-1]) if evaluation_df is not None and not evaluation_df.empty else None  # Preserve positional target semantics from the active frame.
+    if evaluation_df is None or evaluation_df.empty or target_column != context.get("target_column"):  # Require exact target placement and identity.
         raise ValueError("Historical target schema differs from classifier provenance")  # Reject changed preprocessing output.
     input_feature_names = [str(feature) for feature in context.get("input_feature_names", [])]  # Read ordered scaler input schema.
     current_feature_names = [str(feature) for feature in feature_columns_without_lstm_metadata(evaluation_df.iloc[:, :-1].select_dtypes(include=np.number).columns.tolist())]  # Rebuild production numeric schema.
@@ -14653,11 +14635,10 @@ def reconstruct_historical_test_population(context: dict, config: dict, loaded_b
     sample_indices: np.ndarray = np.arange(target_values.shape[0], dtype=np.int64)  # Reproduce index-based production splitting.
     train_idx, test_idx = train_test_split(sample_indices, test_size=float(context["test_size"]), random_state=int(context["random_state"]), stratify=target_values)  # Reproduce exact historical stratified split.
     y_test = np.asarray(label_encoder.transform(target_values[test_idx]), dtype=np.int64)  # Transform with persisted encoder only.
-    X_values = evaluation_df[input_feature_names].to_numpy(copy=False)  # Preserve exact persisted scaler input order.
-    return np.asarray(X_values[test_idx]), y_test, len(train_idx)  # Return only the prediction population and authoritative count evidence.
+    return np.asarray(test_idx, dtype=np.int64), y_test, len(train_idx)  # Cache only lightweight split evidence, never a model-sized test matrix.
 
 
-def recover_metrics_from_stacking_model(result_entry: dict, csv_path: str, config: dict, artifacts: List[Tuple[Path, dict, dict]], evaluation_data_cache: dict) -> Tuple[float, str, str]:
+def recover_metrics_from_stacking_model(result_entry: dict, csv_path: str, config: dict, artifacts: List[Tuple[Path, dict, dict]], evaluation_data_cache: dict, evaluation_df: pd.DataFrame, evaluation_source_files: List[str], evaluation_attack_types: Any) -> Tuple[float, str, str]:
     """
     Recover missing F1 metrics through one exact persisted classifier inference.
 
@@ -14665,7 +14646,10 @@ def recover_metrics_from_stacking_model(result_entry: dict, csv_path: str, confi
     :param csv_path: Dataset file or directory identity used by stacking storage.
     :param config: Runtime configuration dictionary.
     :param artifacts: Identity-bearing classifier metadata candidates.
-    :param evaluation_data_cache: Reconstructed raw test populations keyed by split provenance.
+    :param evaluation_data_cache: Lightweight test indices and labels keyed by split provenance.
+    :param evaluation_df: Already-loaded production evaluation DataFrame.
+    :param evaluation_source_files: Ordered files used to build the loaded evaluation population.
+    :param evaluation_attack_types: Loaded combined-files attack scope, or None for separate files.
     :return: Exact Macro F1, deterministic per-class F1 JSON, and validated model basename.
     """
 
@@ -14675,15 +14659,17 @@ def recover_metrics_from_stacking_model(result_entry: dict, csv_path: str, confi
         raise ValueError(rejection_reason or "persisted classifier bundle is incompatible")  # Reject before prediction.
     if is_lstm_classifier_name(context.get("model_name")):  # Current model metadata does not bind the generated sequence population counts.
         raise RuntimeError("exact LSTM sequence evaluation population is not proven by persisted metadata")  # Skip scientifically uncertain reconstruction.
-    population_identity = hashlib.sha256(json.dumps({field: context[field] for field in ("source_files", "execution_mode", "attack_types", "target_column", "input_feature_names", "label_classes", "pre_split_feature_removal", "test_size", "random_state", "stratified", "sklearn_version", "numpy_version")}, sort_keys=True, allow_nan=False).encode("utf-8")).hexdigest()  # Identify one exact raw historical split.
+    population_identity = hashlib.sha256(json.dumps({field: context[field] for field in ("source_files", "execution_mode", "attack_types", "target_column", "label_classes", "pre_split_feature_removal", "test_size", "random_state", "stratified", "sklearn_version", "numpy_version")}, sort_keys=True, allow_nan=False).encode("utf-8")).hexdigest()  # Identify one exact historical row partition independently from model features.
     if population_identity not in evaluation_data_cache:  # Reconstruct each shared test population once.
-        evaluation_data_cache[population_identity] = reconstruct_historical_test_population(context, config, bundle)  # Retain exact raw test inputs and labels.
-    X_test_raw, y_test, train_count = evaluation_data_cache[population_identity]  # Reuse the proven split across classifiers.
+        evaluation_data_cache[population_identity] = reconstruct_historical_test_population(context, bundle, evaluation_df, evaluation_source_files, evaluation_attack_types)  # Retain only exact test indices, labels, and count evidence.
+    test_indices, y_test, train_count = evaluation_data_cache[population_identity]  # Reuse the proven split across classifiers.
     historical_train_count = resolve_result_metric_float(result_entry, "n_samples_train")  # Parse persisted training population size.
     historical_test_count = resolve_result_metric_float(result_entry, "n_samples_test")  # Parse persisted testing population size.
     if historical_train_count is None or historical_test_count is None or not historical_train_count.is_integer() or not historical_test_count.is_integer() or int(historical_train_count) != train_count or int(historical_test_count) != len(y_test):  # Require historical population sizes.
         raise ValueError("Reconstructed train/test sample counts differ from historical row")  # Reject split mismatch.
     scaler = bundle["scaler"]  # Reuse fitted original-training scaler.
+    input_feature_names = [str(feature) for feature in bundle["input_feature_names"]]  # Read the exact persisted scaler input order.
+    X_test_raw = evaluation_df.iloc[test_indices].loc[:, input_feature_names].to_numpy(copy=False)  # Materialize only this model's test input from the active population.
     X_test_scaled = np.asarray(scaler.transform(X_test_raw))  # Apply persisted scaling without fitting.
     transformer = bundle.get("transformer")  # Read optional fitted feature transformer.
     model_feature_names = [str(feature) for feature in bundle["model_feature_names"]]  # Preserve exact classifier feature order.
@@ -14692,13 +14678,18 @@ def recover_metrics_from_stacking_model(result_entry: dict, csv_path: str, confi
         if X_model.ndim != 2 or X_model.shape[1] != len(model_feature_names):  # Require output schema width.
             raise ValueError("Persisted transformer output differs from model feature schema")  # Reject incompatible preprocessing.
     else:  # Select exact named feature columns after full-schema scaling.
-        input_feature_names = [str(feature) for feature in bundle["input_feature_names"]]  # Read scaler output names.
         try:
             feature_indices = [input_feature_names.index(feature) for feature in model_feature_names]  # Resolve ordered classifier columns.
         except ValueError as exc:
             raise ValueError("Persisted model feature schema is absent from scaler input schema") from exc  # Reject missing features.
         X_model = X_test_scaled[:, feature_indices]  # Preserve historical model input order.
-    predictions = np.asarray(bundle["model"].predict(X_model))  # Perform prediction only on the proven historical input.
+    prediction_input: Any = X_model  # Preserve array input unless fitted estimator metadata requires names.
+    fitted_feature_names = getattr(bundle["model"], "feature_names_in_", None)  # Read sklearn's fitted named-feature contract when present.
+    if fitted_feature_names is not None:  # Restore names only for estimators fitted with named columns.
+        if [str(feature) for feature in fitted_feature_names] != model_feature_names:  # Require the fitted contract to match validated artifact metadata.
+            raise ValueError("Persisted estimator feature names differ from model artifact metadata")  # Reject incompatible named input.
+        prediction_input = pd.DataFrame(X_model, columns=model_feature_names)  # Supply exact names without changing numeric values or ordering.
+    predictions = np.asarray(bundle["model"].predict(prediction_input))  # Perform one prediction on the proven historical input.
     if predictions.ndim != 1 or len(predictions) != len(y_test):  # Require row-aligned classifier output.
         raise ValueError("Persisted classifier predictions are not aligned with historical targets")  # Reject invalid inference output.
     metrics = compute_classification_metrics(y_test, predictions, bundle["label_encoder"].classes_)  # Compute every fingerprint metric from one prediction vector.
@@ -14708,58 +14699,71 @@ def recover_metrics_from_stacking_model(result_entry: dict, csv_path: str, confi
     return float(metrics[6]), str(metrics[7]), model_filename  # Return recovered metrics with the same proven artifact basename.
 
 
-def backfill_saved_model_metrics(result_df: pd.DataFrame, csv_path: str, config: dict, model_metric_cache: Optional[dict] = None, evaluation_data_cache: Optional[dict] = None, artifact_metadata_cache: Optional[dict] = None) -> Tuple[pd.DataFrame, dict]:
+def backfill_saved_model_metrics(result_df: pd.DataFrame, csv_path: str, config: dict, evaluation_df: pd.DataFrame, evaluation_source_files: List[str], evaluation_attack_types: Any, model_metric_cache: Optional[dict] = None, evaluation_data_cache: Optional[dict] = None, artifact_metadata_cache: Optional[dict] = None) -> Tuple[pd.DataFrame, dict]:
     """
     Fill remaining historical F1 metrics through exact persisted-model inference.
 
     :param result_df: Canonical cache or final-result DataFrame.
     :param csv_path: Dataset file or directory identity used by stacking storage.
     :param config: Runtime configuration dictionary.
-    :param model_metric_cache: Shared successful metrics keyed by production result identity.
-    :param evaluation_data_cache: Shared reconstructed original-test populations.
+    :param evaluation_df: Already-loaded production evaluation DataFrame.
+    :param evaluation_source_files: Ordered files used to build the loaded evaluation population.
+    :param evaluation_attack_types: Loaded combined-files attack scope, or None for separate files.
+    :param model_metric_cache: Shared successful and rejected outcomes keyed by production result identity.
+    :param evaluation_data_cache: Shared lightweight historical test partitions.
     :param artifact_metadata_cache: Optional shared dataset-local metadata candidate cache.
     :return: Updated DataFrame and recovery outcome counts.
     """
 
     recovered_df = result_df.copy()  # Preserve caller-owned storage snapshot.
-    metric_cache = model_metric_cache if model_metric_cache is not None else {}  # Share successful inference across cache and final storage.
-    population_cache = evaluation_data_cache if evaluation_data_cache is not None else {}  # Share exact reconstructed populations.
+    metric_cache = model_metric_cache if model_metric_cache is not None else {}  # Share successful and rejected outcomes across repeated cache representations.
+    population_cache = evaluation_data_cache if evaluation_data_cache is not None else {}  # Share exact lightweight test partitions.
     outcomes = {"recovered": 0, "no_compatible_model": 0, "fingerprint_rejected": 0, "evaluation_data_unavailable": 0}  # Count maintenance outcomes without altering experiment rows.
-    pending_rows: List[Tuple[Any, dict, bool, bool]] = []  # Collect rows still lacking either required metric.
+    pending_rows: List[Tuple[Any, dict, bool, bool, tuple]] = []  # Collect rows still lacking either required metric.
     for row_index, row in recovered_df.iterrows():  # Identify incomplete rows before model discovery.
         row_entry = row.to_dict()  # Build mapping for established metric readers.
         macro_missing = resolve_result_metric_float(row_entry, "macro_f1_score") is None  # Detect missing Macro F1.
         per_class_missing = not per_class_f1_value_is_valid(row_entry.get("per_class_f1_scores"))  # Detect missing per-class F1.
         if macro_missing or per_class_missing:  # Exclude Task 3-complete and already complete rows.
-            pending_rows.append((row_index, row_entry, macro_missing, per_class_missing))  # Retain only recovery-eligible rows.
+            result_identity = (str(Path(str(csv_path)).expanduser().resolve()), parse_persisted_experiment_run_value(row_entry.get("experiment_run"), "experiment_run"), build_cache_identity_from_row(row_entry))  # Extend production result identity with dataset and repeated-run scope.
+            pending_rows.append((row_index, row_entry, macro_missing, per_class_missing, result_identity))  # Retain only recovery-eligible rows.
     if not pending_rows:  # Avoid artifact discovery when every row is complete.
         return recovered_df, outcomes  # Return byte-stable content without model work.
-    artifacts = discover_stacking_model_artifacts(csv_path, config, artifact_metadata_cache)  # Reuse dataset-local identity metadata without duplicate discovery.
-    for row_index, row_entry, macro_missing, per_class_missing in pending_rows:  # Attempt each remaining row independently.
-        result_identity = (str(Path(str(csv_path)).expanduser().resolve()), parse_persisted_experiment_run_value(row_entry.get("experiment_run"), "experiment_run"), build_cache_identity_from_row(row_entry))  # Extend production result identity with dataset and repeated-run scope.
+    needs_discovery = any(result_identity not in metric_cache for _, _, _, _, result_identity in pending_rows)  # Discover metadata only when one exact incomplete row has no process outcome.
+    artifacts = discover_stacking_model_artifacts(csv_path, config, artifact_metadata_cache) if needs_discovery else []  # Avoid all model-directory access for completed or already-attempted rows.
+    for row_index, row_entry, macro_missing, per_class_missing, result_identity in pending_rows:  # Attempt each remaining row independently.
+        cached_outcome = metric_cache.get(result_identity)  # Reuse success and deterministic rejection outcomes for this process.
+        if isinstance(cached_outcome, dict) and cached_outcome.get("status") != "recovered":  # Skip a known failure without repeated discovery, loading, prediction, or diagnostics.
+            outcome_name = str(cached_outcome.get("outcome", "evaluation_data_unavailable"))  # Resolve the recorded outcome category.
+            outcomes[outcome_name] = outcomes.get(outcome_name, 0) + 1  # Count reuse without another attempt.
+            continue  # Leave the historical row unchanged.
         try:  # Keep one unavailable or mismatched model from blocking unrelated rows.
             if str(row_entry.get("experiment_mode", "")).strip().lower() != "original_only" or resolve_persisted_data_augmentation_enabled(row_entry.get("experiment_mode"), row_entry.get("augmentation_ratio"), row_entry.get("data_augmentation_enabled")):  # Require exact original-only evaluation semantics.
                 raise RuntimeError("exact augmented historical evaluation population is not reproducible from classifier metadata")  # Skip augmented rows without sampling guesses.
             if str(row_entry.get("model_name", "")) == "LSTM":  # Require sequence evidence unavailable in schema version one.
                 raise RuntimeError("exact LSTM sequence evaluation population is not proven by persisted metadata")  # Skip approximate sequence reconstruction.
-            recovered_metrics = metric_cache.get(result_identity)  # Reuse prior successful inference for matching cache/final rows.
+            recovered_metrics = cached_outcome.get("metrics") if isinstance(cached_outcome, dict) else None  # Reuse a prior successful inference for this exact result.
             if recovered_metrics is None:  # Load and predict only once per exact result identity.
-                recovered_metrics = recover_metrics_from_stacking_model(row_entry, csv_path, config, artifacts, population_cache)  # Perform exact prediction-only recovery.
-                metric_cache[result_identity] = recovered_metrics  # Prevent repeated inference during this migration.
+                recovered_metrics = recover_metrics_from_stacking_model(row_entry, csv_path, config, artifacts, population_cache, evaluation_df, evaluation_source_files, evaluation_attack_types)  # Perform exact prediction-only recovery from the active loaded population.
+                metric_cache[result_identity] = {"status": "recovered", "metrics": recovered_metrics}  # Prevent repeated inference for matching cache/final rows.
         except FileNotFoundError as exc:  # Distinguish absent exact compatible artifacts.
             outcomes["no_compatible_model"] += 1  # Count model unavailability.
+            metric_cache[result_identity] = {"status": "skipped", "outcome": "no_compatible_model", "reason": str(exc)}  # Memoize deterministic absence for this process.
             verbose_output(f"{BackgroundColors.YELLOW}[MODEL RECOVERY SKIPPED] {row_entry.get('experiment_id', 'unknown')}: {exc}{Style.RESET_ALL}", config=config)  # Emit optional diagnostic.
             continue  # Leave missing fields empty.
         except ArtifactFingerprintMismatch as exc:  # Reject scientifically different predictions.
             outcomes["fingerprint_rejected"] += 1  # Count aggregate mismatches.
+            metric_cache[result_identity] = {"status": "rejected", "outcome": "fingerprint_rejected", "reason": str(exc)}  # Memoize scientific rejection for this process.
             print(f"{BackgroundColors.YELLOW}[MODEL RECOVERY REJECTED] {row_entry.get('experiment_id', 'unknown')}: {exc}{Style.RESET_ALL}")  # Emit clear mandatory diagnostic.
             continue  # Preserve authoritative aggregates and empty fields.
         except RuntimeError as exc:  # Distinguish populations the metadata cannot prove.
             outcomes["evaluation_data_unavailable"] += 1  # Count exact reconstruction skips.
+            metric_cache[result_identity] = {"status": "skipped", "outcome": "evaluation_data_unavailable", "reason": str(exc)}  # Memoize unreconstructible population for this process.
             verbose_output(f"{BackgroundColors.YELLOW}[MODEL RECOVERY SKIPPED] {row_entry.get('experiment_id', 'unknown')}: {exc}{Style.RESET_ALL}", config=config)  # Emit optional diagnostic.
             continue  # Leave row unchanged.
         except Exception as exc:  # Treat integrity, preprocessing, or identity failures as rejection before persistence.
             outcomes["evaluation_data_unavailable"] += 1  # Count unprovable exact evaluation inputs.
+            metric_cache[result_identity] = {"status": "rejected", "outcome": "evaluation_data_unavailable", "reason": str(exc)}  # Memoize deterministic integrity rejection for this process.
             print(f"{BackgroundColors.YELLOW}[MODEL RECOVERY REJECTED] {row_entry.get('experiment_id', 'unknown')}: {exc}{Style.RESET_ALL}")  # Emit exact failure reason.
             continue  # Leave missing fields empty.
         macro_f1, per_class_json, model_filename = recovered_metrics  # Unpack validated prediction-derived metrics and their proven artifact.
@@ -14775,6 +14779,113 @@ def backfill_saved_model_metrics(result_df: pd.DataFrame, csv_path: str, config:
             recovered_df.at[row_index, "exported_model_filename"] = model_filename  # Reuse validated association without another search or prediction.
         outcomes["recovered"] += 1  # Count one changed historical row.
     return recovered_df, outcomes  # Return existing atomic-persistence input and factual counts.
+
+
+def synchronize_historical_recovery_to_final(csv_path: str, result_entry: dict, config: dict) -> None:
+    """
+    Copy recovered cache provenance and metrics into an existing matching final row.
+
+    :param csv_path: Dataset file or directory identity used by stacking storage.
+    :param result_entry: Fully normalized recovered cache row.
+    :param config: Run-specific runtime configuration dictionary.
+    :return: None.
+    """
+
+    run_index = get_current_experiment_run(config)  # Resolve the exact logical run represented by the recovered cache row.
+    final_path = str(get_stacking_results_file_path(csv_path, config=config, experiment_run=run_index, legacy=False))  # Resolve the corresponding run-specific final file.
+    backup_path = get_cache_backup_path(final_path)  # Resolve its synchronized backup.
+    if not os.path.isfile(final_path) and not os.path.isfile(backup_path):  # Leave absent final storage for normal later export.
+        return  # Avoid creating a final-result file from cache maintenance alone.
+    with cache_file_lock(final_path, exclusive=True):  # Hold the final lock only for short read, merge, and atomic publication.
+        primary_df = None  # Track validated primary content.
+        backup_df = None  # Track validated backup content.
+        if os.path.isfile(final_path):  # Read existing primary when present.
+            try:  # Exclude invalid primary content from authoritative merging.
+                primary_df = read_validated_final_results_file(final_path, config=config, expected_experiment_run=run_index)  # Normalize the current primary.
+            except Exception:  # Preserve existing recovery behavior through the backup.
+                primary_df = None  # Mark primary unavailable.
+        if os.path.isfile(backup_path):  # Read existing backup when present.
+            try:  # Exclude invalid backup content from authoritative merging.
+                backup_df = read_validated_final_results_file(backup_path, config=config, expected_experiment_run=run_index)  # Normalize the current backup.
+            except Exception:  # Preserve valid primary content when backup is unusable.
+                backup_df = None  # Mark backup unavailable.
+        frames = [frame for frame in (backup_df, primary_df) if frame is not None]  # Preserve primary precedence over backup duplicates.
+        if not frames:  # Leave unusable final storage untouched.
+            return  # Avoid fabricating a replacement without validated rows.
+        merged_df = normalize_final_results_dataframe(pd.concat(frames, ignore_index=True), config, run_index, final_path)  # Build authoritative final snapshot.
+        target_identity = build_cache_identity_from_row(result_entry)  # Reuse production result identity.
+        changed = False  # Track whether matching final content gains recovery data.
+        for row_index, row in merged_df.iterrows():  # Locate exact matching final representation.
+            if build_cache_identity_from_row(row) != target_identity:  # Ignore every unrelated experiment row.
+                continue  # Advance without mutation.
+            for column in ("macro_f1_score", "per_class_f1_scores", "exported_model_filename"):  # Copy only historical recovery fields.
+                recovered_value = result_entry.get(column)  # Read cache-authoritative recovered value.
+                if has_serialized_value(recovered_value) and not has_serialized_value(row.get(column)):  # Preserve any existing valid final value.
+                    if merged_df[column].dtype != "object" and column != "macro_f1_score":  # Permit string assignment without changing numeric Macro F1.
+                        merged_df[column] = merged_df[column].astype("object")  # Preserve JSON and basename text.
+                    merged_df.at[row_index, column] = recovered_value  # Reuse recovery without another model operation.
+                    changed = True  # Mark final snapshot for publication.
+            break  # Stop after the unique production identity.
+        if changed:  # Publish only when an existing final row gained data.
+            persist_final_results_dataframe_atomically(final_path, merged_df, primary_df, backup_df, config=config, expected_experiment_run=run_index)  # Keep primary and backup transactionally consistent.
+
+
+def recover_loaded_cache_model_metrics(csv_path: str, evaluation_df: pd.DataFrame, evaluation_source_files: List[str], evaluation_attack_types: Any, config: dict, run_numbers: Optional[List[int]] = None) -> dict:
+    """
+    Recover incomplete loaded cache rows using one active evaluation population.
+
+    :param csv_path: Dataset file or directory identity used by stacking storage.
+    :param evaluation_df: Already-loaded production evaluation DataFrame.
+    :param evaluation_source_files: Ordered files used to build the active population.
+    :param evaluation_attack_types: Combined-files attack scope, or None for separate files.
+    :param config: Runtime configuration dictionary.
+    :param run_numbers: Optional logical cache runs to maintain.
+    :return: Latest recovered cache rows keyed by production resume identity.
+    """
+
+    selected_runs = run_numbers if run_numbers is not None else [get_current_experiment_run(config)]  # Restrict maintenance to cache runs relevant to current execution.
+    latest_cache: dict = {}  # Accumulate synchronized in-memory cache entries.
+    for run_index in dict.fromkeys(int(value) for value in selected_runs):  # Visit each relevant logical run once.
+        run_config = build_experiment_run_config(config, run_index)  # Resolve run-specific paths and identity validation.
+        cache_dict = load_cache_results(csv_path, config=run_config, notify_discovery=False)  # Load authoritative primary/backup rows before selecting work.
+        latest_cache.update(cache_dict)  # Keep caller-visible cache representation synchronized.
+        if not cache_dict:  # Avoid snapshot reads and model work for empty caches.
+            continue  # Move to the next relevant run.
+        cache_path = get_cache_file_path(csv_path, config=run_config)  # Resolve authoritative run cache path.
+        with cache_file_lock(cache_path, exclusive=False):  # Hold a shared lock only while copying the normalized cache snapshot.
+            result_df, _ = read_validated_cache_file(cache_path, config=run_config, expected_experiment_run=run_index)  # Read the primary synchronized by load_cache_results.
+        incomplete_mask = result_df.apply(lambda row: resolve_result_metric_float(row, "macro_f1_score") is None or not per_class_f1_value_is_valid(row.get("per_class_f1_scores")), axis=1)  # Select incomplete loaded rows before any model discovery.
+        if not bool(incomplete_mask.any()):  # Complete caches require no metadata scan, joblib load, split, or prediction.
+            continue  # Move to the next relevant run.
+        original_df = result_df.copy()  # Preserve exact pre-recovery values for targeted persistence.
+        recovered_df, outcomes = backfill_saved_model_metrics(result_df, csv_path, run_config, evaluation_df, evaluation_source_files, evaluation_attack_types, HISTORICAL_MODEL_RECOVERY_OUTCOMES, HISTORICAL_EVALUATION_SPLITS, HISTORICAL_MODEL_ARTIFACT_METADATA)  # Perform selective prediction outside every CSV lock.
+        provenance_indices = []  # Collect unresolved model basenames not yet attempted in this process.
+        for row_index in recovered_df.index[incomplete_mask]:  # Restrict provenance maintenance to the same incomplete loaded rows.
+            row_entry = recovered_df.loc[row_index].to_dict()  # Build the exact production identity input.
+            provenance_identity = (str(Path(str(csv_path)).expanduser().resolve()), run_index, build_cache_identity_from_row(row_entry))  # Bind one provenance attempt to dataset, run, and result identity.
+            if not has_serialized_value(row_entry.get("exported_model_filename")) and provenance_identity not in HISTORICAL_MODEL_PROVENANCE_ATTEMPTS:  # Attempt unresolved metadata at most once per execution.
+                HISTORICAL_MODEL_PROVENANCE_ATTEMPTS.add(provenance_identity)  # Record the attempt before filesystem discovery.
+                provenance_indices.append(row_index)  # Retain this unresolved row for metadata-only recovery.
+        pending_df, filename_outcomes = backfill_exported_model_filenames(recovered_df.loc[provenance_indices].copy(), csv_path, run_config, HISTORICAL_MODEL_ARTIFACT_METADATA) if provenance_indices else (recovered_df.iloc[0:0].copy(), {"recovered": 0, "no_exact_artifact": 0, "incompatible": 0, "ambiguous": 0})  # Recover remaining basenames without repeated diagnostics or successful-model resolution.
+        for row_index in pending_df.index:  # Merge proven basenames into the complete authoritative snapshot.
+            if has_serialized_value(pending_df.at[row_index, "exported_model_filename"]):  # Preserve only proven portable artifact names.
+                if recovered_df["exported_model_filename"].dtype != "object":  # Prepare string storage after successful metadata association.
+                    recovered_df["exported_model_filename"] = recovered_df["exported_model_filename"].astype("object")  # Preserve exact basename text.
+                recovered_df.at[row_index, "exported_model_filename"] = pending_df.at[row_index, "exported_model_filename"]  # Copy metadata-only recovery into full row storage.
+        persisted_count = 0  # Count exact cache rows changed by provenance or metric recovery.
+        for row_index in recovered_df.index[incomplete_mask]:  # Inspect only rows eligible before model work.
+            before_values = tuple(None if not has_serialized_value(original_df.at[row_index, column]) else str(original_df.at[row_index, column]) for column in ("macro_f1_score", "per_class_f1_scores", "exported_model_filename"))  # Normalize old recovery fields for comparison.
+            after_values = tuple(None if not has_serialized_value(recovered_df.at[row_index, column]) else str(recovered_df.at[row_index, column]) for column in ("macro_f1_score", "per_class_f1_scores", "exported_model_filename"))  # Normalize recovered fields for comparison.
+            if before_values == after_values:  # Avoid unnecessary cache and final writes.
+                continue  # Leave byte-stable storage unchanged.
+            result_entry = recovered_df.loc[row_index].to_dict()  # Preserve every unrelated canonical row value.
+            persist_cache_result_entry(csv_path, result_entry, cache_dict, config=run_config)  # Reconcile and atomically replace exact cache identity under a short lock.
+            synchronize_historical_recovery_to_final(csv_path, result_entry, run_config)  # Reuse recovered values for an existing matching final row without inference.
+            latest_cache[build_cache_identity_from_row(result_entry)] = result_entry  # Synchronize process-local cache representation.
+            persisted_count += 1  # Record one durable maintenance update.
+        if persisted_count:  # Emit one concise summary per maintained run.
+            print(f"{BackgroundColors.GREEN}[MODEL RECOVERY] Updated {BackgroundColors.CYAN}{persisted_count}{BackgroundColors.GREEN} loaded cache row(s) for run {BackgroundColors.CYAN}{run_index}{BackgroundColors.GREEN}; metric recoveries: {BackgroundColors.CYAN}{outcomes['recovered']}{BackgroundColors.GREEN}; filename recoveries: {BackgroundColors.CYAN}{filename_outcomes['recovered']}{Style.RESET_ALL}")  # Report cache-aware maintenance outcome.
+    return latest_cache  # Return synchronized loaded rows without retaining model feature matrices.
 
 
 def persist_best_result_artifacts_safely(result_entry: dict, y_true: Any, y_pred: Any, label_classes: Any, cache_ref_file: str, config: dict) -> Optional[str]:  # Persist artifacts without changing durable experiment success.
@@ -17693,6 +17804,9 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
         reference_file = original_files_list[0] if original_files_list else "combined_files_combined"  # Get source file for feature metadata.
         combined_dataset_identity = resolve_combined_files_dataset_identity(original_files_list)  # Resolve canonical combined directory identity.
         combined_dataset_reference = combined_dataset_identity.rstrip("/")  # Use directory path text without trailing separator for path APIs.
+        if not config.get("stacking", {}).get("automl_only", False):  # Keep regular historical maintenance outside the isolated AutoML path.
+            recovery_runs = discover_cache_artifact_run_numbers(combined_dataset_reference, config=config) if rerun_cached_experiments else [get_current_experiment_run(config)]  # Restrict recovery to cache runs used by this loaded combined population.
+            recover_loaded_cache_model_metrics(combined_dataset_reference, combined_files_df, original_files_list, attack_types_list, config, recovery_runs)  # Reuse the normal combined DataFrame before planning consumes its reference.
         source_rerun_cache = None  # Initialize absent source cache for normal execution.
         ordering_rerun_cache = None  # Initialize absent ordering cache for normal execution.
         destination_rerun_cache = None  # Initialize absent destination cache for normal execution.
@@ -20935,6 +21049,14 @@ def orchestrate_all_combinations(input_path, dataset_name=None, config=None):
             df_original, feature_names = load_and_preprocess_dataset(file, None, config=config)  # Load the original dataset once for every grid slice
             if df_original is None:  # Skip files that cannot be loaded
                 continue  # Move to the next file
+            recovery_runs = discover_cache_artifact_run_numbers(file, config=config) if rerun_cached_experiments else [get_current_experiment_run(config)]  # Restrict recovery to cache runs used by this loaded separate-file population.
+            recover_loaded_cache_model_metrics(file, df_original, [file], None, config, recovery_runs)  # Reuse the normal preprocessed DataFrame before grid evaluation.
+            if rerun_cached_experiments:  # Refresh cache views after any atomic historical maintenance.
+                source_rerun_cache, source_runs = load_cached_rerun_source_cache(file, config=config)  # Synchronize the source union without another dataset load.
+                if destination_run > 2:  # Refresh prior-run ordering metadata when that generation is active.
+                    ordering_config = build_experiment_run_config(config, destination_run - 1)  # Resolve the established ordering run.
+                    ordering_rerun_cache = load_cache_results(file, config=ordering_config, notify_discovery=False) or None  # Synchronize ordering rows after recovery.
+                destination_rerun_cache = load_cache_results(file, config=config, notify_discovery=False)  # Synchronize destination membership rows after recovery.
             ga_sel, rfe_sel, extra_trees_sel = sanitize_and_verify_feature_selections(ga_sel, rfe_sel, extra_trees_sel, feature_names, config=config)  # Normalize artifacts before grid counting so the denominator matches assembled feature modes
 
             default_models = get_models(config=config)  # Create an untouched default/current parameter model map
