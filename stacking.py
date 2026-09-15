@@ -9905,12 +9905,12 @@ def result_file_schema_is_current(
     file_path: str, expected_columns: List[str], allow_additional_columns: bool = False
 ) -> bool:
     """
-    Return whether one stacking CSV header uses canonical ordering or the compatible historical artifact omission.
+    Return whether one stacking CSV header uses canonical columns and ordering.
 
     :param file_path: Stacking result or cache CSV path to inspect.
     :param expected_columns: Canonical configured column order.
     :param allow_additional_columns: Whether legitimate extra columns may follow configured columns.
-    :return: True when the persisted header is canonical or only omits the optional historical artifact field.
+    :return: True when the persisted header uses the canonical configured schema.
     """
 
     try:  # Read only the header row without touching persisted values.
@@ -9919,10 +9919,9 @@ def result_file_schema_is_current(
         legacy_columns = {"precision", "recall", "f1_score"}  # Identify obsolete aggregate metric columns.
         if legacy_columns.intersection(columns):  # Reject persisted legacy metric names.
             return False  # Require persisted canonical names only.
-        comparison_columns = expected_columns if "exported_model_filename" in columns else [column for column in expected_columns if column != "exported_model_filename"]  # Avoid rewriting historical files solely because the optional artifact field is absent.
         if allow_additional_columns:  # Preserve legitimate final-result extension columns after configured fields.
-            return columns[:len(comparison_columns)] == comparison_columns  # Require exact canonical prefix ordering without forcing historical artifact-field migration.
-        return columns == comparison_columns  # Require exact cache schema ordering while tolerating the absent historical artifact field.
+            return columns[:len(expected_columns)] == expected_columns  # Require exact canonical prefix ordering.
+        return columns == expected_columns  # Require exact cache schema ordering.
     except Exception:  # Let normal validation report unreadable or malformed files.
         return False  # Treat unreadable headers as noncanonical.
 
