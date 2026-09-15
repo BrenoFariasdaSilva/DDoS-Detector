@@ -1288,7 +1288,7 @@ def get_default_stacking_config():
                 "experiment_id", "experiment_run", "experiment_mode", "execution_mode", "data_source",
                 "dataset", "attack_types_combined", "augmentation_ratio",
                 "feature_selection_enabled", "hyperparameters_enabled", "data_augmentation_enabled", "hyperparameter_mode",
-                "feature_set", "classifier_type", "model_name", "model",
+                "feature_set", "classifier_type", "model_name", "model", "exported_model_filename",
                 "n_features", "n_samples_train", "n_samples_test",
                 "accuracy", "weighted_precision", "weighted_recall", "weighted_f1_score", "macro_f1_score", "per_class_f1_scores", "fpr", "fnr", "elapsed_time_s",
                 "preprocessing_time_s", "feature_selection_time_s", "hyperparameter_optimization_time_s", "training_time_s", "inference_time_s",
@@ -1298,7 +1298,7 @@ def get_default_stacking_config():
                 "experiment_id", "experiment_run", "experiment_mode", "execution_mode", "data_source",
                 "dataset", "attack_types_combined", "augmentation_ratio",
                 "feature_selection_enabled", "hyperparameters_enabled", "data_augmentation_enabled", "hyperparameter_mode",
-                "feature_set", "classifier_type", "model_name", "model",
+                "feature_set", "classifier_type", "model_name", "model", "exported_model_filename",
                 "n_features", "n_samples_train", "n_samples_test",
                 "accuracy", "weighted_precision", "weighted_recall", "weighted_f1_score", "macro_f1_score", "per_class_f1_scores", "fpr", "fnr", "elapsed_time_s",
                 "preprocessing_time_s", "feature_selection_time_s", "hyperparameter_optimization_time_s", "training_time_s", "inference_time_s",
@@ -8111,6 +8111,7 @@ def load_existing_model_if_available(model_name, dataset_file, dataset_name, fea
             loaded_transformer_metadata = {"class": f"{loaded_transformer.__class__.__module__}.{loaded_transformer.__class__.__name__}", "params": normalize_metadata_for_json(loaded_transformer.get_params(deep=False) if hasattr(loaded_transformer, "get_params") else {})}
             if loaded_transformer_metadata != expected_transformer:
                 return None, "classifier bundle transformer configuration is incompatible"
+        bundle["exported_model_filename"] = os.path.basename(model_path)  # Expose the exact validated artifact basename to new loaded-model result rows.
         cleanup_superseded_stacking_model_artifacts(artifact_paths, artifact_context, config=config)  # Retire only proven older slot versions while the dataset lock is exclusive
         verbose_output(f"{BackgroundColors.GREEN}Loaded compatible original-trained classifier from {BackgroundColors.CYAN}{model_path}{Style.RESET_ALL}", config=config)
         return bundle, None
@@ -9904,12 +9905,12 @@ def result_file_schema_is_current(
     file_path: str, expected_columns: List[str], allow_additional_columns: bool = False
 ) -> bool:
     """
-    Return whether one stacking CSV header uses canonical metric columns and ordering.
+    Return whether one stacking CSV header uses canonical ordering or the compatible historical artifact omission.
 
     :param file_path: Stacking result or cache CSV path to inspect.
     :param expected_columns: Canonical configured column order.
     :param allow_additional_columns: Whether legitimate extra columns may follow configured columns.
-    :return: True when the persisted header is already canonical.
+    :return: True when the persisted header is canonical or only omits the optional historical artifact field.
     """
 
     try:  # Read only the header row without touching persisted values.
@@ -9918,9 +9919,10 @@ def result_file_schema_is_current(
         legacy_columns = {"precision", "recall", "f1_score"}  # Identify obsolete aggregate metric columns.
         if legacy_columns.intersection(columns):  # Reject persisted legacy metric names.
             return False  # Require persisted canonical names only.
+        comparison_columns = expected_columns if "exported_model_filename" in columns else [column for column in expected_columns if column != "exported_model_filename"]  # Avoid rewriting historical files solely because the optional artifact field is absent.
         if allow_additional_columns:  # Preserve legitimate final-result extension columns after configured fields.
-            return columns[:len(expected_columns)] == expected_columns  # Require exact canonical prefix ordering.
-        return columns == expected_columns  # Require exact cache schema ordering.
+            return columns[:len(comparison_columns)] == comparison_columns  # Require exact canonical prefix ordering without forcing historical artifact-field migration.
+        return columns == comparison_columns  # Require exact cache schema ordering while tolerating the absent historical artifact field.
     except Exception:  # Let normal validation report unreadable or malformed files.
         return False  # Treat unreadable headers as noncanonical.
 
@@ -10511,6 +10513,7 @@ def deserialize_cache_dataframe(df_cache: pd.DataFrame) -> dict:
             "hyperparameter_mode": hyperparameter_mode_row,  # Restore explicit hyperparameter-mode metadata.
             "classifier_type": cache_row_value("classifier_type", ""),  # Restore classifier grouping metadata.
             "model_name": model_name,  # Restore configured classifier identity.
+            "exported_model_filename": cache_row_value("exported_model_filename", None),  # Restore the exact classifier artifact basename when present.
             "data_source": data_source_row,  # Restore data-source metadata.
             "experiment_id": cache_row_value("experiment_id", None),  # Restore experiment identity metadata.
             "experiment_run": parse_persisted_experiment_run_value(cache_row_value("experiment_run", 1), "experiment_run"),  # Restore run metadata with legacy run 1 fallback.
@@ -11282,6 +11285,27 @@ def persist_cache_result_entry(cache_ref_file: Optional[str], result_entry: dict
 
     if cache_dict is not None:  # Register successful writes for the remainder of the current process.
         cache_dict[resume_key] = result_entry  # Store the result under its resume identity.
+
+
+def persist_exported_model_filename(cache_ref_file: Optional[str], result_entry: dict, cache_dict: Optional[dict], exported_model_path: str, config: Optional[dict] = None) -> str:
+    """
+    Persist the exact basename returned by a successful classifier export.
+
+    :param cache_ref_file: Dataset file path used to derive the cache file location.
+    :param result_entry: Already-persisted classifier result entry to update.
+    :param cache_dict: Mutable in-memory resume cache keyed by result identity, or None.
+    :param exported_model_path: Actual classifier artifact path returned by model export.
+    :param config: Configuration dictionary, or None to use the global configuration.
+    :return: Persisted classifier artifact basename.
+    """
+
+    model_path = Path(exported_model_path)  # Preserve the authoritative path returned by model export.
+    if not model_path.is_file():  # Require the referenced classifier artifact to exist before recording it.
+        raise FileNotFoundError(f"Exported classifier artifact is unavailable: {model_path}")  # Reject false artifact references.
+    exported_model_filename = model_path.name  # Keep CSV references portable by storing only the exact basename.
+    result_entry["exported_model_filename"] = exported_model_filename  # Update the same in-memory result dictionary used by final aggregation.
+    persist_cache_result_entry(cache_ref_file, result_entry, cache_dict, config=config)  # Atomically replace the exact cache identity and synchronize its backup.
+    return exported_model_filename  # Return the recorded basename for direct validation.
 
 
 def save_cache_result_entry(csv_path: str, result_entry: dict, config=None) -> None:
@@ -13218,6 +13242,7 @@ def build_classifier_result_entry(model_class, file, execution_mode_str, attack_
             "hyperparameter_mode": "Optimized Hyperparameters" if hyperparameters_enabled else "Default Hyperparameters",  # Explicit HP mode for result separation and resume safety
             "classifier_type": classifier_type,  # Classifier type (Individual or Stacking)
             "model_name": model_name,  # Model name for result identification
+            "exported_model_filename": None,  # Leave artifact identity empty until a real classifier export or validated load succeeds.
             "data_source": data_source_label,  # Data source label for experiment traceability
             "experiment_id": experiment_id,  # Unique experiment identifier
             "experiment_run": run_index,  # Persist repeated-run index for auditability.
@@ -15605,7 +15630,8 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
             results_dict[(name, model_name)] = result_entry  # Store result keyed by feature set and model only after durable cache verification
 
             log_training_phase(name, model_name, "Model export", "Started", hyperparameters_enabled, augmentation_ratio)  # Mark contextual fitted artifact export separately from cache persistence.
-            export_model_and_scaler(active_model, scaler, dataset_name, model_name, feature_set=artifact_feature_set, dataset_csv_path=file, config=config, artifact_context=artifact_context, label_encoder=label_encoder, transformer=transformer)  # Atomically persist the original-trained classifier and fitted preprocessing.
+            exported_model_path = export_model_and_scaler(active_model, scaler, dataset_name, model_name, feature_set=artifact_feature_set, dataset_csv_path=file, config=config, artifact_context=artifact_context, label_encoder=label_encoder, transformer=transformer)  # Atomically persist the original-trained classifier and fitted preprocessing.
+            persist_exported_model_filename(cache_ref_file, result_entry, cache_dict, exported_model_path, config=config)  # Atomically replace the exact persisted row with the successful export basename.
             log_training_phase(name, model_name, "Model export", "Completed", hyperparameters_enabled, augmentation_ratio)  # Mark contextual model export completion before explainability scheduling.
             pass  # Verify removal of duplicate individual model accuracy print
             progress_bar.update(1)  # Advance progress bar by one step
@@ -15802,7 +15828,8 @@ def run_stacking_evaluation_for_feature_set(name, stacking_model, X_train_df, y_
         artifact_feature_set = f"{name} - {'Optimized Hyperparameters' if hyperparameters_enabled else 'Default Hyperparameters'}"  # Keep stacking artifacts isolated by HP mode
         artifact_context = build_stacking_model_artifact_context(file, source_files, execution_mode_str, attack_types_combined, target_column, "StackingClassifier", active_stacking_model, artifact_feature_set, input_feature_names, subset_feature_names, list(label_encoder.classes_), transformer, hyperparameters_enabled, get_current_experiment_run(config), config.get("evaluation", {}).get("random_state", 42))  # Build run-specific original-training artifact identity.
         log_training_phase(name, "StackingClassifier", "Model export", "Started", hyperparameters_enabled, augmentation_ratio)  # Mark contextual fitted stacking export separately from cache persistence.
-        export_model_and_scaler(active_stacking_model, scaler, dataset_name, "StackingClassifier", feature_set=artifact_feature_set, dataset_csv_path=file, config=config, artifact_context=artifact_context, label_encoder=label_encoder, transformer=transformer)  # Atomically persist fitted stacking and preprocessing.
+        exported_model_path = export_model_and_scaler(active_stacking_model, scaler, dataset_name, "StackingClassifier", feature_set=artifact_feature_set, dataset_csv_path=file, config=config, artifact_context=artifact_context, label_encoder=label_encoder, transformer=transformer)  # Atomically persist fitted stacking and preprocessing.
+        persist_exported_model_filename(cache_ref_file, stacking_result_entry, cache_dict, exported_model_path, config=config)  # Atomically replace the exact persisted stacking row with the successful export basename.
         log_training_phase(name, "StackingClassifier", "Model export", "Completed", hyperparameters_enabled, augmentation_ratio)  # Mark contextual stacking export completion before explainability scheduling.
         pass  # Verify removal of duplicate stacking classifier accuracy print
         progress_bar.update(1)  # Advance progress bar after stacking evaluation
@@ -16365,6 +16392,7 @@ def evaluate_on_dataset(
                         classifier_type = "Individual"
                     phase_runtime_fields = build_runtime_phase_fields(config, name, model_name, bool(hyperparameters_enabled), preprocessing_time_s, training_ram_stats)  # Build phase runtime fields before immediate cache persistence.
                     result_entry = build_classifier_result_entry(loaded_model.__class__.__name__, file, execution_mode_str, attack_types_combined, name, classifier_type, model_name, data_source_label, experiment_id, experiment_mode, augmentation_ratio, len(subset_feature_names), original_train_count, len(y_augmented), metrics, subset_feature_names, hyperparams_map=hyperparams_map, hyperparameters_enabled=hyperparameters_enabled, effective_hyperparameters=serialize_effective_estimator_parameters(loaded_model), experiment_run=get_current_experiment_run(config), phase_runtime_fields=phase_runtime_fields)  # Persist the active run on augmented result rows.
+                    result_entry["exported_model_filename"] = artifact_bundle["exported_model_filename"]  # Reference the exact validated original-trained artifact used by this new augmented evaluation.
                     persist_cache_result_entry(effective_cache_ref, result_entry, cache_dict, config=config)
                     persist_per_run_confusion_matrix_artifacts_safely(result_entry, y_augmented, metrics[7], artifact_bundle["label_encoder"].classes_, effective_cache_ref, config)  # Persist all four per-run matrices from the existing loaded-model prediction vector.
                     notify_new_best_result_if_applicable(result_entry, y_augmented, metrics[7], artifact_bundle["label_encoder"].classes_, effective_cache_ref, config)  # Persist exact loaded-model evidence only after durable cache and authoritative new-best comparison.
@@ -19195,7 +19223,8 @@ def evaluate_feature_process_original_task(task: dict, process_payload: dict, re
     result_entry = build_classifier_result_entry(active_model.__class__.__name__, process_payload["file"], process_payload["execution_mode"], process_payload["attack_types_combined"], task["feature_set"], "Individual", task["classifier_name"], task["data_source_label"], task["experiment_id"], task["experiment_mode"], None, task["expected_n_features"], len(model_y_train), len(model_y_test), metrics, task["expected_feature_names"], hyperparams_map=process_payload["optimized_params"] if task["hyperparameters_enabled"] else {}, hyperparameters_enabled=task["hyperparameters_enabled"], effective_hyperparameters=serialize_effective_estimator_parameters(active_model), experiment_run=task["experiment_run"], phase_runtime_fields=phase_runtime_fields)  # Build the run-scoped cache and export result payload
     log_feature_process_combination(task, status_state, "Persistence started")  # Announce the atomic result transaction
     persist_cache_result_entry(process_payload["cache_ref_file"], result_entry, cache_dict, config=process_payload["config"])  # Persist and verify this completed result immediately through the process-safe cache transaction
-    export_model_and_scaler(active_model, resources["scaler"], dataset_name, task["classifier_name"], feature_set=artifact_feature_set, dataset_csv_path=process_payload["file"], config=process_payload["config"], artifact_context=artifact_context, label_encoder=resources["label_encoder"], transformer=resources["transformer"])  # Persist the fitted model and preprocessing through the existing process-safe model transaction
+    exported_model_path = export_model_and_scaler(active_model, resources["scaler"], dataset_name, task["classifier_name"], feature_set=artifact_feature_set, dataset_csv_path=process_payload["file"], config=process_payload["config"], artifact_context=artifact_context, label_encoder=resources["label_encoder"], transformer=resources["transformer"])  # Persist the fitted model and preprocessing through the existing process-safe model transaction
+    persist_exported_model_filename(process_payload["cache_ref_file"], result_entry, cache_dict, exported_model_path, config=process_payload["config"])  # Atomically replace the exact persisted worker row with the successful export basename.
     log_feature_process_combination(task, status_state, "Persistence completed")  # Confirm result and model durability before completion counting
     exact_predictions = metrics[7]  # Retain exact predictions only until coordinator resolves existing new-best semantics.
     label_classes = resources["label_encoder"].classes_  # Retain fitted encoder order for scientifically interpretable artifacts.
@@ -19262,6 +19291,7 @@ def evaluate_feature_process_augmented_task(task: dict, process_payload: dict, r
     log_feature_process_combination(task, status_state, "Prediction and metrics completed")  # Confirm existing loaded-model phases completed
     phase_runtime_fields = build_runtime_phase_fields(process_payload["config"], task["feature_set"], task["classifier_name"], task["hyperparameters_enabled"], preprocessing_seconds, training_ram_stats)  # Build phase runtime fields before immediate cache persistence.
     result_entry = build_classifier_result_entry(loaded_model.__class__.__name__, process_payload["file"], process_payload["execution_mode"], process_payload["attack_types_combined"], task["feature_set"], "Individual", task["classifier_name"], task["data_source_label"], task["experiment_id"], task["experiment_mode"], task["augmentation_ratio"], task["expected_n_features"], task["expected_n_samples_train"], len(y_augmented), metrics, task["expected_feature_names"], hyperparams_map=process_payload["optimized_params"] if task["hyperparameters_enabled"] else {}, hyperparameters_enabled=task["hyperparameters_enabled"], effective_hyperparameters=serialize_effective_estimator_parameters(loaded_model), experiment_run=task["experiment_run"], phase_runtime_fields=phase_runtime_fields)  # Build the run-scoped augmented-testing result payload
+    result_entry["exported_model_filename"] = artifact_bundle["exported_model_filename"]  # Reference the exact validated original-trained artifact used by this new augmented evaluation.
     log_feature_process_combination(task, status_state, "Persistence started")  # Announce the atomic augmented result transaction
     persist_cache_result_entry(process_payload["cache_ref_file"], result_entry, cache_dict, config=process_payload["config"])  # Persist and verify this completed result immediately
     log_feature_process_combination(task, status_state, "Persistence completed")  # Confirm augmented result durability

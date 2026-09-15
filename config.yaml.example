@@ -465,6 +465,7 @@ stacking: # Stacking experiment settings
     - "classifier_type" # Classifier grouping: Individual or Stacking
     - "model_name" # Configured model label (e.g., "Random Forest")
     - "model" # Concrete estimator class name (e.g., "RandomForestClassifier")
+    - "exported_model_filename" # Exact basename of the persisted trained classifier artifact for this experiment
     - "n_features" # Number of features used for the evaluated row
     - "n_samples_train" # Number of training samples
     - "n_samples_test" # Number of testing samples
@@ -506,6 +507,7 @@ stacking: # Stacking experiment settings
     - "classifier_type" # Classifier grouping: Individual or Stacking
     - "model_name" # Configured model label (e.g., "Random Forest")
     - "model" # Concrete estimator class name (e.g., "RandomForestClassifier")
+    - "exported_model_filename" # Exact basename of the persisted trained classifier artifact for this experiment
     - "n_features" # Number of features used for the evaluated row
     - "n_samples_train" # Number of training samples
     - "n_samples_test" # Number of testing samples
