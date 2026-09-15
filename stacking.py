@@ -2403,6 +2403,13 @@ def migrate_cache_storage_for_reference(csv_path: str, config: Optional[dict] = 
             if not source_frames:  # Leave storage untouched when no valid source exists.
                 continue  # Move to the next run.
             merged_df = prepare_cache_dataframe(pd.concat(source_frames, ignore_index=True), config=config, expected_experiment_run=run_index)  # Merge and dedupe by canonical identity.
+            artifact_root = target_path.parent  # Resolve run cache artifact directory.
+            merged_df, recovered_count = backfill_saved_evaluation_metrics(merged_df, artifact_root)  # Recover metrics.
+            if recovered_count:  # Report successful cache-row artifact recovery.
+                message = f"[ARTIFACT RECOVERY] Recovered {recovered_count} cache row(s): "  # Build message.
+                output = f"{BackgroundColors.GREEN}{message}{BackgroundColors.CYAN}"  # Add colors.
+                output += f"{target_path}{Style.RESET_ALL}"  # Add target path.
+                print(output)  # Report count.
             storage_is_current = (  # Detect a fully synchronized canonical cache without mutating it.
                 primary_df is not None  # Require validated primary content.
                 and backup_df is not None  # Require validated backup content.
@@ -2466,6 +2473,16 @@ def migrate_final_storage_for_reference(csv_path: str, config: Optional[dict] = 
             if not source_frames:  # Leave storage untouched when no valid source exists.
                 continue  # Move to the next run.
             merged_df = normalize_final_results_dataframe(pd.concat(source_frames, ignore_index=True), config, run_index, str(target_path))  # Merge and dedupe final rows by canonical identity.
+            cache_path = get_cache_file_path(  # Resolve run-specific cache store.
+                csv_path, config=config, experiment_run=run_index, legacy=False  # Use exact result reference and run.
+            )  # Finish cache path resolution.
+            artifact_root = Path(cache_path).parent  # Resolve scientific artifact directory.
+            merged_df, recovered_count = backfill_saved_evaluation_metrics(merged_df, artifact_root)  # Recover metrics.
+            if recovered_count:  # Report successful final-row artifact recovery.
+                message = f"[ARTIFACT RECOVERY] Recovered {recovered_count} final row(s): "  # Build message.
+                output = f"{BackgroundColors.GREEN}{message}{BackgroundColors.CYAN}"  # Add colors.
+                output += f"{target_path}{Style.RESET_ALL}"  # Add target path.
+                print(output)  # Report count.
             final_columns = get_stacking_results_csv_columns(config)  # Resolve canonical final-result order once.
             primary_is_current = (  # Preserve authoritative canonical primary content when merge adds nothing.
                 primary_df is not None  # Require validated primary content.
@@ -13542,6 +13559,489 @@ def persist_best_result_artifacts(result_entry: dict, y_true: Any, y_pred: Any, 
     finally:  # Remove only this call's unpublished staging directory.
         if temporary_directory.exists():  # Avoid touching successfully published final directory.
             shutil.rmtree(temporary_directory)  # Delete incomplete or redundant owned staging files.
+
+
+class ArtifactFingerprintMismatch(ValueError):
+    """Signal materially different scientific artifact aggregates."""
+
+
+def load_exact_artifact_json(file_path: Path) -> Any:
+    """
+    Load JSON evidence while rejecting duplicate object keys.
+
+    :param file_path: Exact scientific artifact path.
+    :return: Parsed JSON value.
+    """
+
+    def reject_duplicate_keys(pairs: list) -> dict:
+        """
+        Build one JSON object while rejecting ambiguous duplicate keys.
+
+        :param pairs: Ordered key-value pairs emitted by JSON decoder.
+        :return: Parsed mapping with unique keys.
+        """
+
+        parsed = {}  # Accumulate unique JSON fields.
+        for key, value in pairs:  # Process source keys in persisted order.
+            if key in parsed:  # Reject ambiguous evidence instead of choosing one value.
+                raise ValueError(f"Duplicate JSON key in {file_path}: {key}")  # Surface exact malformed artifact.
+            parsed[key] = value  # Preserve unique artifact field.
+        return parsed  # Return unambiguous JSON object.
+
+    with open(file_path, "r", encoding="utf-8") as artifact_file:  # Open exact persisted evidence read-only.
+        return json.load(artifact_file, object_pairs_hook=reject_duplicate_keys)  # Parse with duplicate-key rejection.
+
+
+def normalize_artifact_identity_value(value: Any) -> Any:
+    """
+    Normalize one persisted identity value for semantic comparison.
+
+    :param value: CSV or JSON identity value.
+    :return: Deterministic JSON-compatible value.
+    """
+
+    if isinstance(value, str):  # Decode structured CSV fields without altering ordinary text.
+        stripped_value = value.strip()  # Remove serialization-only surrounding whitespace.
+        if stripped_value.startswith(("[", "{")):  # Limit JSON parsing to structured fields.
+            try:  # Parse canonical serialized collections.
+                value = json.loads(stripped_value)  # Recover list or mapping semantics.
+            except Exception:  # Preserve malformed text so identity comparison fails safely.
+                value = value  # Retain exact source text.
+    return normalize_metadata_for_json(value)  # Reuse deterministic metadata normalization.
+
+
+def validate_saved_artifact_identity(result_entry: dict, artifact_directory: Path, metadata: Any) -> None:
+    """
+    Prove one scientific artifact bundle belongs to one persisted result row.
+
+    :param result_entry: Canonical historical result row.
+    :param artifact_directory: Deterministic candidate artifact directory.
+    :param metadata: Parsed experiment metrics metadata.
+    :return: None.
+    """
+
+    if not isinstance(metadata, dict):  # Require structured provenance metadata.
+        raise ValueError("experiment_metrics_metadata.json is not an object")  # Reject unprovable provenance.
+    artifact_identity = metadata.get("artifact_identity")  # Read strongest persisted bundle identity.
+    if not isinstance(artifact_identity, dict):  # Require full artifact identity object.
+        raise ValueError("Artifact metadata lacks artifact_identity")  # Reject weak filename-only association.
+    directory_name = artifact_identity.get("directory_name")  # Read identity-bound directory name.
+    if directory_name != artifact_directory.name:  # Require metadata to bind exact resolved directory.
+        raise ValueError("Artifact identity directory does not match candidate directory")  # Reject mixed bundles.
+    artifact_result = artifact_identity.get("result")  # Read full result snapshot used during publication.
+    experiment = metadata.get("experiment")  # Read explicit scientific experiment identity.
+    if not isinstance(artifact_result, dict) or not isinstance(experiment, dict):  # Require both identity layers.
+        raise ValueError("Artifact metadata lacks result or experiment identity")  # Reject incomplete provenance.
+
+    identity_fields = (  # List every experiment field persisted in artifact metadata.
+        "dataset", "execution_mode", "attack_types_combined", "feature_set", "classifier_type", "model_name",
+        "model", "hyperparameter_mode", "experiment_id", "experiment_run", "experiment_mode", "augmentation_ratio",
+        "data_augmentation_enabled", "n_features", "n_samples_train", "n_samples_test", "cv_method",
+        "hyperparameters", "features_list",
+    )  # Finish exact persisted experiment identity fields.
+    required_sources = (experiment, artifact_result, result_entry)  # Group three identity layers.
+    for field in identity_fields:  # Validate every recorded experiment dimension.
+        if any(field not in source for source in required_sources):  # Require field in all three sources.
+            raise ValueError(f"Artifact identity lacks required field: {field}")  # Reject incomplete exact association.
+        row_value = normalize_artifact_identity_value(result_entry.get(field))  # Normalize CSV identity value.
+        experiment_value = normalize_artifact_identity_value(experiment.get(field))  # Normalize metadata value.
+        artifact_value = normalize_artifact_identity_value(artifact_result.get(field))  # Normalize full snapshot value.
+        if row_value != experiment_value or row_value != artifact_value:  # Require exact three-way semantic identity.
+            raise ValueError(f"Artifact identity mismatch for {field}")  # Reject foreign experiment evidence.
+
+    identity_row = dict(artifact_result)  # Copy artifact result before cache identity normalization.
+    attack_scope = identity_row.get("attack_types_combined")  # Read native artifact attack scope.
+    if isinstance(attack_scope, (list, dict)):  # Adapt native metadata to cache identity reader.
+        identity_row["attack_types_combined"] = json.dumps(attack_scope, sort_keys=True)  # Serialize attack scope.
+    row_identity = build_cache_identity_from_row(result_entry)  # Build production historical identity.
+    artifact_cache_identity = build_cache_identity_from_row(identity_row)  # Build production artifact identity.
+    if row_identity != artifact_cache_identity:  # Require production resume identity match.
+        raise ValueError("Artifact cache identity does not match historical row")  # Reject cross-experiment evidence.
+
+    metadata_metrics = metadata.get("metrics")  # Read aggregate fingerprint stored beside exact evidence.
+    if not isinstance(metadata_metrics, dict):  # Require aggregate provenance data.
+        raise ValueError("Artifact metadata lacks aggregate metrics")  # Reject incomplete bundle metadata.
+    aggregate_names = (  # List authoritative aggregates.
+        "accuracy", "weighted_precision", "weighted_recall", "weighted_f1_score", "fpr", "fnr",
+    )  # Finish aggregate names.
+    for metric_name in aggregate_names:  # Validate authoritative aggregates.
+        row_metric = resolve_result_metric_float(result_entry, metric_name)  # Read historical authoritative value.
+        artifact_metric = resolve_result_metric_float(metadata_metrics, metric_name)  # Read artifact value.
+        if row_metric is None or artifact_metric is None:  # Require complete aggregate fingerprint.
+            raise ValueError(f"Artifact aggregate fingerprint lacks {metric_name}")  # Reject incomplete association.
+        if not math.isclose(row_metric, artifact_metric, rel_tol=1e-12, abs_tol=1e-12):  # Allow CSV noise only.
+            message = f"Artifact aggregate fingerprint mismatch for {metric_name}"  # Build rejection detail.
+            raise ArtifactFingerprintMismatch(message)  # Reject materially different result.
+
+
+def load_saved_artifact_class_order(artifact_directory: Path) -> List[str]:
+    """
+    Load and validate original class order from scientific artifact metadata.
+
+    :param artifact_directory: Exact scientific artifact directory.
+    :return: Validated original class labels in encoder order.
+    """
+
+    mapping_path = artifact_directory / "class_label_mapping.json"  # Resolve exact label evidence.
+    mapping = load_exact_artifact_json(mapping_path)  # Read exact label evidence.
+    if not isinstance(mapping, dict):  # Require structured class mapping.
+        raise ValueError("class_label_mapping.json is not an object")  # Reject uninterpretable labels.
+    report_order = mapping.get("classification_report_order")  # Read report label order.
+    matrix_order = mapping.get("confusion_matrix_order")  # Read raw-matrix label order.
+    encoded_mapping = mapping.get("encoded_to_class")  # Read encoder position mapping.
+    if not isinstance(report_order, list) or not report_order:  # Require deterministic nonempty report order.
+        raise ValueError("Artifact classification report order is missing")  # Reject guessed class labels.
+    if report_order != matrix_order:  # Require one order across saved exact artifacts.
+        raise ValueError("Artifact report and confusion-matrix class orders differ")  # Reject mixed evidence.
+    labels_are_strings = all(isinstance(label, str) for label in report_order)  # Validate original label type.
+    labels_are_unique = len(set(report_order)) == len(report_order)  # Validate unique report keys.
+    if not labels_are_strings or not labels_are_unique:  # Require unique original labels.
+        raise ValueError("Artifact class labels are invalid or duplicated")  # Reject ambiguous labels.
+    if not isinstance(encoded_mapping, list) or len(encoded_mapping) != len(report_order):  # Require full mapping.
+        raise ValueError("Artifact encoded class mapping is incomplete")  # Reject incomplete class interpretation.
+    mapping_rows = zip(range(len(report_order)), report_order, encoded_mapping)  # Align encoder positions and labels.
+    for encoded_label, class_label, mapping_entry in mapping_rows:  # Validate each encoder slot.
+        if not isinstance(mapping_entry, dict):  # Require structured mapping entry.
+            raise ValueError("Artifact encoded class mapping entry is invalid")  # Reject malformed evidence.
+        encoded_matches = mapping_entry.get("encoded_label") == encoded_label  # Validate encoded position.
+        class_matches = mapping_entry.get("class_label") == class_label  # Validate original label.
+        if not encoded_matches or not class_matches:  # Require exact positional mapping.
+            raise ValueError("Artifact encoded class mapping order is inconsistent")  # Reject reordered labels.
+    return report_order  # Return proven original class order.
+
+
+def finite_artifact_number(value: Any, field_name: str) -> float:
+    """
+    Parse one finite numeric value from exact evaluation evidence.
+
+    :param value: Persisted numeric value.
+    :param field_name: Diagnostic field name.
+    :return: Finite float value.
+    """
+
+    number = float(value)  # Parse JSON or CSV numeric scalar.
+    if not math.isfinite(number):  # Reject NaN and infinity.
+        raise ValueError(f"Artifact metric is not finite: {field_name}")  # Prevent fake or undefined recovery.
+    return number  # Return validated finite evidence.
+
+
+def load_classification_report_recovery(report_path: Path, class_order: List[str]) -> Tuple[float, str, dict]:
+    """
+    Recover missing F1 metrics and aggregate fingerprint from one saved report.
+
+    :param report_path: JSON or CSV classification report path.
+    :param class_order: Validated original class order.
+    :return: Macro F1, deterministic per-class JSON, and comparable aggregate fingerprint.
+    """
+
+    if report_path.suffix.lower() == ".json":  # Parse preferred lossless JSON report.
+        report = load_exact_artifact_json(report_path)  # Load strict report object.
+        if not isinstance(report, dict):  # Require sklearn report mapping.
+            raise ValueError("classification_report.json is not an object")  # Reject malformed report evidence.
+    else:  # Parse tabular report fallback.
+        report_frame = pd.read_csv(report_path, index_col="label")  # Load report rows without image inference.
+        report_frame.index = report_frame.index.map(str)  # Normalize class label text.
+        if report_frame.index.has_duplicates:  # Reject ambiguous class or aggregate rows.
+            raise ValueError("classification_report.csv contains duplicate labels")  # Prevent silent row selection.
+        report = report_frame.to_dict(orient="index")  # Convert CSV rows to report mapping.
+        if "accuracy" in report:  # Restore sklearn JSON scalar shape from tabular expansion.
+            report["accuracy"] = report["accuracy"].get("f1-score")  # Use persisted accuracy scalar.
+
+    reserved_labels = {"accuracy", "macro avg", "weighted avg", "micro avg", "samples avg"}  # Aggregate keys.
+    if reserved_labels.intersection(class_order):  # Reject class names indistinguishable from aggregate report rows.
+        raise ValueError("Artifact class label collides with report aggregate key")  # Prevent guessed row meaning.
+    required_keys = set(class_order) | {"accuracy", "macro avg", "weighted avg"}  # Require complete report.
+    if not required_keys.issubset(report):  # Reject partial report before recovery.
+        raise ValueError("Classification report is incomplete")  # Allow caller to try next exact artifact type.
+
+    per_class_rows = []  # Accumulate validated class metrics in mapped order.
+    per_class_f1 = []  # Accumulate F1 values for consistency validation.
+    supports = []  # Accumulate exact class support.
+    precisions = []  # Accumulate per-class precision.
+    recalls = []  # Accumulate per-class recall.
+    for class_label in class_order:  # Read each class in validated encoder order.
+        class_metrics = report.get(class_label)  # Resolve exact class report row.
+        if not isinstance(class_metrics, dict):  # Require structured class metrics.
+            raise ValueError(f"Classification report row is invalid: {class_label}")  # Reject incomplete row.
+        precision_name = f"{class_label}.precision"  # Build precise report field name.
+        recall_name = f"{class_label}.recall"  # Build precise report field name.
+        f1_name = f"{class_label}.f1-score"  # Build precise report field name.
+        support_name = f"{class_label}.support"  # Build precise report field name.
+        precision = finite_artifact_number(class_metrics.get("precision"), precision_name)  # Read precision.
+        recall = finite_artifact_number(class_metrics.get("recall"), recall_name)  # Read recall.
+        class_f1 = finite_artifact_number(class_metrics.get("f1-score"), f1_name)  # Read F1.
+        support = finite_artifact_number(class_metrics.get("support"), support_name)  # Read support.
+        if support < 0.0 or not support.is_integer():  # Require exact nonnegative sample counts.
+            raise ValueError(f"Classification report support is invalid: {class_label}")  # Reject non-count evidence.
+        precisions.append(precision)  # Preserve class precision for aggregate validation.
+        recalls.append(recall)  # Preserve class recall for aggregate validation.
+        per_class_f1.append(class_f1)  # Preserve exact class F1.
+        supports.append(support)  # Preserve exact class support.
+        per_class_rows.append({"class_label": class_label, "f1_score": class_f1})  # Build Task 1 shape.
+
+    total_support = float(sum(supports))  # Resolve aggregate denominator.
+    if total_support <= 0.0:  # Reject empty evaluation evidence.
+        raise ValueError("Classification report has no class support")  # Prevent undefined aggregate recovery.
+    macro_row = report.get("macro avg")  # Read direct macro aggregate row.
+    weighted_row = report.get("weighted avg")  # Read direct weighted aggregate row.
+    if not isinstance(macro_row, dict) or not isinstance(weighted_row, dict):  # Require aggregate mappings.
+        raise ValueError("Classification report aggregate rows are invalid")  # Reject partial evidence.
+    macro_f1 = finite_artifact_number(macro_row.get("f1-score"), "macro avg.f1-score")  # Recover Macro F1.
+    fingerprint = {  # Read direct aggregate report fingerprint.
+        "accuracy": finite_artifact_number(report.get("accuracy"), "accuracy"),  # Read report accuracy.
+        "weighted_precision": finite_artifact_number(  # Read weighted precision.
+            weighted_row.get("precision"), "weighted avg.precision"  # Pass exact report field.
+        ),  # Finish weighted precision parsing.
+        "weighted_recall": finite_artifact_number(  # Read weighted recall.
+            weighted_row.get("recall"), "weighted avg.recall"  # Pass exact report field.
+        ),  # Finish weighted recall parsing.
+        "weighted_f1_score": finite_artifact_number(  # Read weighted F1.
+            weighted_row.get("f1-score"), "weighted avg.f1-score"  # Pass exact report field.
+        ),  # Finish weighted F1 parsing.
+    }  # Finish report aggregate fingerprint.
+    derived_values = {  # Derive internal report consistency values from exact class rows.
+        "accuracy": sum(recall * support for recall, support in zip(recalls, supports)) / total_support,
+        "weighted_precision": sum(  # Derive support-weighted precision.
+            precision * support for precision, support in zip(precisions, supports)  # Weight each class.
+        ) / total_support,  # Normalize by total support.
+        "weighted_recall": sum(recall * support for recall, support in zip(recalls, supports)) / total_support,
+        "weighted_f1_score": sum(  # Derive support-weighted F1.
+            class_f1 * support for class_f1, support in zip(per_class_f1, supports)  # Weight each class.
+        ) / total_support,  # Normalize by total support.
+        "macro_f1_score": sum(per_class_f1) / len(per_class_f1),
+    }  # Finish exact consistency derivation.
+    for metric_name, derived_value in derived_values.items():  # Validate direct aggregates against class rows.
+        is_macro = metric_name == "macro_f1_score"  # Identify derived Macro F1.
+        reported_value = macro_f1 if is_macro else fingerprint[metric_name]  # Select report value.
+        if not math.isclose(reported_value, derived_value, rel_tol=1e-12, abs_tol=1e-12):  # Allow noise only.
+            message = f"Classification report is internally inconsistent for {metric_name}"  # Build detail.
+            raise ArtifactFingerprintMismatch(message)  # Reject corrupted report.
+    per_class_json = json.dumps(  # Match Task 1 deterministic format.
+        per_class_rows, sort_keys=True, separators=(",", ":"), allow_nan=False  # Serialize exact class order.
+    )  # Finish deterministic per-class JSON.
+    return macro_f1, per_class_json, fingerprint  # Return exact recoverable metrics and aggregate evidence.
+
+
+def load_confusion_matrix_recovery(matrix_path: Path, class_order: List[str]) -> Tuple[float, str, dict]:
+    """
+    Derive missing F1 metrics and aggregate fingerprint from exact raw counts.
+
+    :param matrix_path: Raw confusion-matrix CSV path.
+    :param class_order: Validated original class order.
+    :return: Macro F1, deterministic per-class JSON, and full aggregate fingerprint.
+    """
+
+    matrix_frame = pd.read_csv(matrix_path, index_col="true_label")  # Load machine-readable counts only.
+    matrix_frame.index = matrix_frame.index.map(str)  # Normalize persisted row labels.
+    matrix_frame.columns = matrix_frame.columns.map(str)  # Normalize persisted prediction labels.
+    row_order_matches = matrix_frame.index.tolist() == class_order  # Validate true-label order.
+    column_order_matches = matrix_frame.columns.tolist() == class_order  # Validate prediction order.
+    if not row_order_matches or not column_order_matches:  # Require exact mapped axes.
+        raise ValueError("Raw confusion-matrix axes do not match validated class order")  # Reject guessed ordering.
+    matrix = matrix_frame.to_numpy(dtype=float)  # Convert exact numeric counts for derivation.
+    matrix_is_finite = np.isfinite(matrix).all()  # Reject undefined counts.
+    matrix_is_nonnegative = not (matrix < 0.0).any()  # Reject negative counts.
+    matrix_is_integral = np.equal(matrix, np.floor(matrix)).all()  # Reject normalized values.
+    if not matrix_is_finite or not matrix_is_nonnegative or not matrix_is_integral:  # Require exact counts.
+        raise ValueError("Raw confusion matrix contains invalid counts")  # Reject non-count data.
+    total = float(matrix.sum())  # Resolve evaluation sample count.
+    if total <= 0.0:  # Reject empty evidence.
+        raise ValueError("Raw confusion matrix contains no samples")  # Prevent undefined recovery.
+
+    true_positive = np.diag(matrix)  # Read per-class true positives.
+    support = matrix.sum(axis=1)  # Read true-class support.
+    predicted = matrix.sum(axis=0)  # Read predicted-class totals.
+    precision = np.divide(  # Derive class precision.
+        true_positive, predicted, out=np.zeros_like(true_positive), where=predicted > 0.0  # Guard zero totals.
+    )  # Finish class precision.
+    recall = np.divide(  # Derive class recall.
+        true_positive, support, out=np.zeros_like(true_positive), where=support > 0.0  # Guard zero support.
+    )  # Finish class recall.
+    f1_denominator = precision + recall  # Resolve class F1 denominators.
+    per_class_f1 = np.divide(  # Derive class F1.
+        2.0 * precision * recall,  # Use harmonic-mean numerator.
+        f1_denominator,  # Use precision-plus-recall denominator.
+        out=np.zeros_like(true_positive),  # Match sklearn zero division.
+        where=f1_denominator > 0.0,  # Divide only valid classes.
+    )  # Finish class F1.
+    macro_f1 = float(per_class_f1.mean())  # Match sklearn explicit-label macro averaging.
+    weighted_precision = float(np.average(precision, weights=support))  # Match sklearn support-weighted precision.
+    weighted_recall = float(np.average(recall, weights=support))  # Match sklearn support-weighted recall.
+    weighted_f1 = float(np.average(per_class_f1, weights=support))  # Match sklearn support-weighted F1.
+    accuracy = float(true_positive.sum() / total)  # Match existing accuracy calculation.
+
+    supported_classes = np.flatnonzero(support > 0.0)  # Recover unique true-label positions.
+    if len(supported_classes) == 2:  # Preserve existing binary confusion-matrix semantics.
+        observed_classes = np.flatnonzero((support + predicted) > 0.0)  # Recover sklearn label union.
+        if len(observed_classes) != 2:  # Existing binary path could not have produced a scalar result otherwise.
+            raise ValueError("Raw confusion matrix is incompatible with binary FPR/FNR semantics")  # Reject evidence.
+        binary_matrix = matrix[np.ix_(observed_classes, observed_classes)]  # Match sklearn encoded labels.
+        binary_values = binary_matrix.ravel()  # Flatten binary counts.
+        true_negative, false_positive, false_negative, true_positive_binary = binary_values  # Decompose counts.
+        fpr_denominator = false_positive + true_negative  # Resolve binary negative support.
+        fnr_denominator = false_negative + true_positive_binary  # Resolve binary positive support.
+        fpr = float(false_positive / fpr_denominator) if fpr_denominator > 0.0 else 0.0  # Match binary FPR guard.
+        fnr = float(false_negative / fnr_denominator) if fnr_denominator > 0.0 else 0.0  # Match binary FNR guard.
+    else:  # Preserve support-weighted multiclass one-vs-rest semantics.
+        false_positive = predicted - true_positive  # Derive one-vs-rest false positives.
+        false_negative = support - true_positive  # Derive one-vs-rest false negatives.
+        true_negative = total - (true_positive + false_positive + false_negative)  # Derive true negatives.
+        fpr_denominator = false_positive + true_negative  # Resolve class FPR denominators.
+        fnr_denominator = false_negative + true_positive  # Resolve class FNR denominators.
+        fpr_per_class = np.divide(  # Derive class FPR.
+            false_positive, fpr_denominator, out=np.zeros_like(true_positive), where=fpr_denominator > 0.0
+        )  # Finish class FPR.
+        fnr_per_class = np.divide(  # Derive class FNR.
+            false_negative, fnr_denominator, out=np.zeros_like(true_positive), where=fnr_denominator > 0.0
+        )  # Finish class FNR.
+        fpr = float(np.average(fpr_per_class, weights=support))  # Match support-weighted multiclass FPR.
+        fnr = float(np.average(fnr_per_class, weights=support))  # Match support-weighted multiclass FNR.
+
+    per_class_rows = [  # Build deterministic Task 1 serialization shape.
+        {"class_label": class_label, "f1_score": float(class_f1)}  # Preserve label and derived F1.
+        for class_label, class_f1 in zip(class_order, per_class_f1)  # Traverse validated order.
+    ]  # Finish per-class metric list.
+    per_class_json = json.dumps(  # Match new-result serialization.
+        per_class_rows, sort_keys=True, separators=(",", ":"), allow_nan=False  # Preserve mapped order.
+    )  # Finish deterministic per-class JSON.
+    fingerprint = {  # Return every aggregate derivable from counts.
+        "accuracy": accuracy, "weighted_precision": weighted_precision, "weighted_recall": weighted_recall,
+        "weighted_f1_score": weighted_f1, "fpr": fpr, "fnr": fnr,
+    }  # Finish full aggregate fingerprint.
+    return macro_f1, per_class_json, fingerprint  # Return exact derived recovery values and fingerprint.
+
+
+def validate_recovered_aggregate_fingerprint(result_entry: dict, fingerprint: dict) -> None:
+    """
+    Validate artifact-derived aggregates against authoritative historical metrics.
+
+    :param result_entry: Canonical historical result row.
+    :param fingerprint: Aggregate metrics derived or read from exact evidence.
+    :return: None.
+    """
+
+    for metric_name, artifact_value in fingerprint.items():  # Compare aggregates supported by evidence.
+        historical_value = resolve_result_metric_float(result_entry, metric_name)  # Read historical value.
+        if historical_value is None:  # Require enough row evidence for exact association.
+            raise ValueError(f"Historical row lacks aggregate fingerprint metric: {metric_name}")  # Reject recovery.
+        if not math.isclose(historical_value, artifact_value, rel_tol=1e-12, abs_tol=1e-12):  # Allow noise only.
+            message = f"Aggregate fingerprint mismatch for {metric_name}"  # Build rejection detail.
+            raise ArtifactFingerprintMismatch(message)  # Reject materially different artifact.
+
+
+def recover_saved_evaluation_metrics(result_entry: dict, artifact_root: Path) -> Optional[Tuple[float, str]]:
+    """
+    Recover missing Macro and per-class F1 from one exact artifact bundle.
+
+    :param result_entry: Canonical historical result row.
+    :param artifact_root: Cache-results directory containing scientific bundles.
+    :return: Recovered Macro F1 and per-class JSON, or None when no exact bundle exists.
+    """
+
+    artifact_root = artifact_root.resolve()  # Normalize symlinked temporary and production roots.
+    directory_name = build_best_artifact_directory_name(result_entry)  # Resolve row artifact candidate.
+    artifact_directory = artifact_root / directory_name  # Build candidate beside authoritative result storage.
+    validate_output_path(str(artifact_root), str(artifact_directory.resolve()))  # Contain candidate path.
+    metadata_path = artifact_directory / "experiment_metrics_metadata.json"  # Require identity-bearing metadata.
+    mapping_path = artifact_directory / "class_label_mapping.json"  # Require original deterministic class labels.
+    identity_files_exist = metadata_path.is_file() and mapping_path.is_file()  # Require both identity files.
+    if not artifact_directory.is_dir() or not identity_files_exist:  # Skip incomplete or absent bundles.
+        return None  # Refuse filename-only association.
+
+    metadata = load_exact_artifact_json(metadata_path)  # Load exact bundle provenance.
+    validate_saved_artifact_identity(result_entry, artifact_directory, metadata)  # Prove experiment association first.
+    class_order = load_saved_artifact_class_order(artifact_directory)  # Prove original class ordering.
+    report_json = artifact_directory / "classification_report.json"  # Resolve preferred report evidence.
+    report_csv = artifact_directory / "classification_report.csv"  # Resolve report fallback evidence.
+    matrix_csv = artifact_directory / "confusion_matrix_raw.csv"  # Resolve exact-count fallback evidence.
+    candidates = (report_json, report_csv, matrix_csv)  # Define required recovery priority.
+    evidence_paths = [path for path in candidates if path.is_file()]  # Keep available evidence in priority order.
+    if not evidence_paths:  # Reject bundles without numeric machine-readable evidence.
+        return None  # Leave historical metrics empty.
+    last_error = None  # Preserve incomplete artifact diagnostics across fallbacks.
+    for evidence_path in evidence_paths:  # Attempt exact evidence in required priority order.
+        try:  # Isolate malformed evidence while allowing lower-priority complete evidence.
+            if evidence_path.name == "confusion_matrix_raw.csv":  # Derive metrics only from raw exact counts.
+                recovered = load_confusion_matrix_recovery(evidence_path, class_order)  # Recover from counts.
+            else:  # Read direct sklearn report evidence.
+                recovered = load_classification_report_recovery(evidence_path, class_order)  # Recover report metrics.
+            macro_f1, per_class_json, fingerprint = recovered  # Unpack chosen exact evidence.
+            validate_recovered_aggregate_fingerprint(result_entry, fingerprint)  # Require historical aggregate match.
+            return macro_f1, per_class_json  # Accept first complete, matching evidence source.
+        except ArtifactFingerprintMismatch:  # Reject whole bundle after any materially different aggregate evidence.
+            raise  # Do not accept a lower-priority representation from mismatched bundle.
+        except Exception as exc:  # Preserve diagnostic and try next exact representation.
+            last_error = exc  # Retain strongest available rejection reason.
+    if last_error is not None:  # Emit clear diagnostic after every exact representation fails.
+        raise ValueError(str(last_error))  # Reject bundle for this row without mutation.
+    return None  # Leave fields empty when no usable exact evidence exists.
+
+
+def per_class_f1_value_is_valid(value: Any) -> bool:
+    """
+    Return whether one persisted per-class F1 payload is complete and finite.
+
+    :param value: Persisted JSON text or decoded value.
+    :return: True when value follows Task 1 per-class metric schema.
+    """
+
+    if not has_serialized_value(value):  # Reject empty payloads.
+        return False  # Mark value eligible for exact recovery.
+    try:  # Contain malformed historical JSON.
+        parsed_value = json.loads(value) if isinstance(value, str) else value  # Decode CSV JSON text.
+        if not isinstance(parsed_value, list) or not parsed_value:  # Require nonempty class entries.
+            return False  # Reject wrong payload shape.
+        labels = []  # Track labels to reject ambiguous duplicates.
+        for entry in parsed_value:  # Validate every persisted class metric.
+            if not isinstance(entry, dict) or "class_label" not in entry or "f1_score" not in entry:  # Require fields.
+                return False  # Reject incomplete entry.
+            score = float(entry["f1_score"])  # Parse numeric F1 value.
+            if not math.isfinite(score):  # Reject NaN and infinity.
+                return False  # Mark invalid metric eligible for recovery.
+            label_identity = json.dumps(entry["class_label"], sort_keys=True, allow_nan=False)  # Normalize label.
+            labels.append(label_identity)  # Track class identity.
+        return len(labels) == len(set(labels))  # Accept only unique deterministic class labels.
+    except Exception:  # Treat malformed JSON or values as invalid.
+        return False  # Allow exact artifact recovery to replace invalid payload.
+
+
+def backfill_saved_evaluation_metrics(result_df: pd.DataFrame, artifact_root: Path) -> Tuple[pd.DataFrame, int]:
+    """
+    Fill missing historical Macro and per-class F1 from exact saved artifacts.
+
+    :param result_df: Canonical cache or final-result DataFrame.
+    :param artifact_root: Cache-results directory containing scientific bundles.
+    :return: Updated DataFrame and number of rows recovered.
+    """
+
+    recovered_df = result_df.copy()  # Preserve caller-owned snapshot.
+    recovered_count = 0  # Count rows changed by exact evidence.
+    for row_index, row in recovered_df.iterrows():  # Inspect canonical rows without changing order.
+        row_entry = row.to_dict()  # Build mapping for existing identity and metric readers.
+        macro_missing = resolve_result_metric_float(row_entry, "macro_f1_score") is None  # Detect missing Macro F1.
+        per_class_value = row_entry.get("per_class_f1_scores")  # Read persisted per-class payload.
+        per_class_missing = not per_class_f1_value_is_valid(per_class_value)  # Detect absent or invalid per-class F1.
+        if not macro_missing and not per_class_missing:  # Preserve complete rows without artifact parsing.
+            continue  # Move to next historical row.
+        try:  # Keep one rejected artifact from blocking other rows.
+            recovered_metrics = recover_saved_evaluation_metrics(row_entry, artifact_root)  # Attempt exact recovery.
+        except Exception as exc:  # Reject identity or aggregate mismatches without mutation.
+            experiment_id = row_entry.get("experiment_id", "unknown")  # Identify rejected historical row.
+            message = f"[ARTIFACT RECOVERY REJECTED] {experiment_id}: {exc}"  # Build clear diagnostic.
+            print(f"{BackgroundColors.YELLOW}{message}{Style.RESET_ALL}")  # Emit rejection.
+            continue  # Leave missing fields empty.
+        if recovered_metrics is None:  # Leave rows without complete exact evidence untouched.
+            continue  # Move to next row.
+        macro_f1, per_class_json = recovered_metrics  # Unpack exact recovered metrics.
+        if macro_missing:  # Fill only absent Macro F1.
+            recovered_df.at[row_index, "macro_f1_score"] = macro_f1  # Preserve any existing valid value.
+        if per_class_missing:  # Fill only absent per-class F1.
+            if recovered_df["per_class_f1_scores"].dtype != "object":  # Prepare string storage only after recovery.
+                per_class_column = recovered_df["per_class_f1_scores"].astype("object")  # Convert column safely.
+                recovered_df["per_class_f1_scores"] = per_class_column  # Store JSON-compatible dtype.
+            recovered_df.at[row_index, "per_class_f1_scores"] = per_class_json  # Preserve existing JSON.
+        recovered_count += 1  # Record one successfully changed row.
+    return recovered_df, recovered_count  # Return atomic-writer input and recovery count.
 
 
 def persist_best_result_artifacts_safely(result_entry: dict, y_true: Any, y_pred: Any, label_classes: Any, cache_ref_file: str, config: dict) -> Optional[str]:  # Persist artifacts without changing durable experiment success.
