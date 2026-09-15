@@ -7771,7 +7771,7 @@ def stacking_model_artifact_pair_is_valid(artifact_paths: dict, artifact_context
 
 def cleanup_superseded_stacking_model_artifacts(artifact_paths: dict, artifact_context: dict, config: Optional[dict] = None) -> None:
     """
-    Remove superseded classifier pairs for the exact current model-retention slot.
+    Remove temporary classifier files for the exact current artifact identity.
 
     :param artifact_paths: Resolved current classifier artifact paths.
     :param artifact_context: Current deterministic compatibility context.
@@ -7779,39 +7779,14 @@ def cleanup_superseded_stacking_model_artifacts(artifact_paths: dict, artifact_c
     :return: None.
     """
 
-    models_directory = Path(str(artifact_paths["models_directory"]))  # Restrict cleanup to the current dataset model directory
-    current_metadata_path = Path(str(artifact_paths["metadata_path"]))  # Preserve the newly validated metadata
-    slot_fields = ("artifact_type", "dataset_path", "execution_mode", "attack_types", "target_column", "feature_set", "hyperparameter_mode", "model_name")  # Define the exact semantic retention slot
-    for metadata_candidate in models_directory.glob("*_meta.json"):  # Inspect only classifier-style companion metadata files
-        if metadata_candidate == current_metadata_path:
-            continue  # Preserve the current valid pair
-        try:
-            with open(metadata_candidate, "r", encoding="utf-8") as metadata_file:
-                metadata = json.load(metadata_file)  # Use provenance rather than sanitized filename guesses
-        except Exception:
-            continue  # Preserve unreadable or legacy metadata conservatively
-        if not isinstance(metadata, dict) or any(metadata.get(field_name) != artifact_context.get(field_name) for field_name in slot_fields):
-            continue  # Preserve artifacts from different datasets, modes, classifiers, feature sets, or HP modes
-        model_artifact = metadata.get("model_artifact")  # Read the exact companion model basename
-        if not isinstance(model_artifact, str) or os.path.basename(model_artifact) != model_artifact or not model_artifact.endswith("_model.joblib"):
-            continue  # Preserve malformed references rather than risking unrelated deletion
-        expected_metadata_name = f"{model_artifact[:-len('_model.joblib')]}_meta.json"  # Derive the only valid companion metadata name
-        if metadata_candidate.name != expected_metadata_name:
-            continue  # Require a synchronized naming pair before deletion
-        model_candidate = models_directory / model_artifact  # Resolve the proven companion inside the locked model directory
-        try:
-            if model_candidate.is_file():
-                model_candidate.unlink()  # Remove the superseded model only after the new pair is fully published
-            metadata_candidate.unlink()  # Remove companion metadata after its model is gone
-            verbose_output(f"{BackgroundColors.GREEN}Removed superseded stacking classifier artifact pair: {BackgroundColors.CYAN}{model_artifact}{Style.RESET_ALL}", config=config)  # Log retention cleanup when verbose
-        except Exception as exc:
-            print(f"{BackgroundColors.YELLOW}[WARNING] Failed to remove superseded stacking classifier artifacts for {metadata_candidate}: {exc}{Style.RESET_ALL}")  # Keep cleanup failure non-fatal
-    for current_path in (Path(str(artifact_paths["model_path"])), current_metadata_path):  # Remove only temporary files for the exact current identity
+    models_directory = Path(str(artifact_paths["models_directory"]))  # Restrict cleanup to current dataset model directory.
+    current_metadata_path = Path(str(artifact_paths["metadata_path"]))  # Resolve current full-identity metadata path.
+    for current_path in (Path(str(artifact_paths["model_path"])), current_metadata_path):  # Remove only temporary files for exact current identity.
         for temporary_candidate in models_directory.glob(f".{current_path.name}.*.tmp"):
             try:
-                temporary_candidate.unlink()  # Remove an incomplete atomic-write file after exclusive lock acquisition
+                temporary_candidate.unlink()  # Remove incomplete atomic-write file after exclusive lock acquisition.
             except Exception as exc:
-                print(f"{BackgroundColors.YELLOW}[WARNING] Failed to remove incomplete stacking artifact {temporary_candidate}: {exc}{Style.RESET_ALL}")  # Keep temporary cleanup non-fatal
+                print(f"{BackgroundColors.YELLOW}[WARNING] Failed to remove incomplete stacking artifact {temporary_candidate}: {exc}{Style.RESET_ALL}")  # Keep temporary cleanup non-fatal.
 
 
 def cleanup_incomplete_stacking_model_transactions(models_directory: str, config: Optional[dict] = None) -> None:
@@ -7903,7 +7878,7 @@ def export_model_and_scaler(model, scaler, dataset_name, model_name, feature_set
         artifact_lock = acquire_stacking_artifact_lock(artifact_paths["lock_path"], exclusive=True)  # Prevent concurrent loads, writes, or cleanup in this dataset directory
         cleanup_incomplete_stacking_model_transactions(artifact_paths["models_directory"], config=config)  # Recover only ownership-proven interrupted writes
         if stacking_model_artifact_pair_is_valid(artifact_paths, artifact_context):  # Reuse an identical complete artifact instead of rewriting it
-            cleanup_superseded_stacking_model_artifacts(artifact_paths, artifact_context, config=config)  # Retain only this valid semantic slot version
+            cleanup_superseded_stacking_model_artifacts(artifact_paths, artifact_context, config=config)  # Remove temporary files for this reused full identity.
             return artifact_paths["model_path"]  # Preserve the existing artifact bytes and timestamp
         bundle = {
             "model": model,
@@ -7937,7 +7912,7 @@ def export_model_and_scaler(model, scaler, dataset_name, model_name, feature_set
             pass  # Treat an already absent marker as complete cleanup
         except Exception as cleanup_exc:
             print(f"{BackgroundColors.YELLOW}[WARNING] Failed to remove completed stacking artifact transaction marker {transaction_path}: {cleanup_exc}{Style.RESET_ALL}")  # Preserve the valid pair and allow the next locked run to retry
-        cleanup_superseded_stacking_model_artifacts(artifact_paths, artifact_context, config=config)  # Remove only older proven versions after the new pair is valid
+        cleanup_superseded_stacking_model_artifacts(artifact_paths, artifact_context, config=config)  # Remove temporary files without deleting distinct valid identities.
         relative_model = os.path.relpath(artifact_paths["model_path"], artifact_paths["stacking_output_dir"])
         verbose_output(f"{BackgroundColors.GREEN}Exported original-trained classifier and fitted preprocessing to {BackgroundColors.CYAN}{relative_model}{Style.RESET_ALL}", config=config)
         return artifact_paths["model_path"]
@@ -8104,7 +8079,7 @@ def load_existing_model_if_available(model_name, dataset_file, dataset_name, fea
             if loaded_transformer_metadata != expected_transformer:
                 return None, "classifier bundle transformer configuration is incompatible"
         bundle["exported_model_filename"] = os.path.basename(model_path)  # Expose the exact validated artifact basename to new loaded-model result rows.
-        cleanup_superseded_stacking_model_artifacts(artifact_paths, artifact_context, config=config)  # Retire only proven older slot versions while the dataset lock is exclusive
+        cleanup_superseded_stacking_model_artifacts(artifact_paths, artifact_context, config=config)  # Remove temporary files without deleting distinct valid identities.
         verbose_output(f"{BackgroundColors.GREEN}Loaded compatible original-trained classifier from {BackgroundColors.CYAN}{model_path}{Style.RESET_ALL}", config=config)
         return bundle, None
     except Exception as e:
@@ -14398,6 +14373,135 @@ def parse_historical_feature_names(result_entry: dict) -> Optional[List[str]]:
     return names if names else None  # Require at least one model feature.
 
 
+def format_historical_model_recovery_identity(result_entry: dict) -> str:
+    """
+    Format one historical recovery target with its distinguishing fields.
+
+    :param result_entry: Canonical historical result row.
+    :return: Concise run, model, feature, hyperparameter, and experiment identity.
+    """
+
+    run_value = result_entry.get("experiment_run", "unknown")  # Read authoritative persisted run.
+    model_name = result_entry.get("model_name", "unknown")  # Read logical classifier identity.
+    feature_set = result_entry.get("feature_set", "unknown")  # Read feature-set identity.
+    hyperparameter_mode = resolve_hyperparameter_mode_from_row(result_entry)  # Normalize persisted hyperparameter mode.
+    experiment_id = result_entry.get("experiment_id", "unknown")  # Read diagnostic experiment identifier.
+    return f"Run {run_value} | {model_name} | {feature_set} | {hyperparameter_mode} | Experiment ID: {experiment_id}"  # Distinguish combinations sharing one experiment identifier.
+
+
+def describe_stacking_model_context_mismatch(result_entry: dict, csv_path: str, metadata: dict, context: dict) -> Optional[str]:
+    """
+    Describe the first decisive incompatibility between one row and artifact context.
+
+    :param result_entry: Canonical historical result row.
+    :param csv_path: Dataset file or directory identity used by stacking storage.
+    :param metadata: Complete classifier companion metadata.
+    :param context: Exact hashed artifact context.
+    :return: Deterministic incompatibility reason, or None for an exact match.
+    """
+
+    if stacking_model_context_matches_result(result_entry, csv_path, metadata, context):  # Reuse authoritative strict comparison first.
+        return None  # Report exact compatibility.
+    if context.get("artifact_type") != "stacking_original_trained_classifier" or context.get("schema_version") != 1 or context.get("training_data") != "original_only":  # Compare supported bundle contract.
+        return "artifact type, schema version, or training-data contract differs"  # Identify unsupported artifact contract.
+    resolved_reference = Path(str(csv_path)).expanduser().resolve()  # Resolve active dataset reference.
+    if context.get("dataset_path") != str(resolved_reference):  # Compare exact dataset path bound into artifact identity.
+        return "dataset path differs"  # Identify cross-dataset metadata.
+    execution_mode = str(result_entry.get("execution_mode", ""))  # Read row execution mode.
+    if context.get("execution_mode") != execution_mode:  # Compare separate-versus-combined semantics.
+        return "execution mode differs"  # Identify incompatible population construction.
+    experiment_mode = str(result_entry.get("experiment_mode", "")).strip().lower()  # Read historical evaluation mode.
+    augmentation_ratio = resolve_persisted_augmentation_ratio(experiment_mode, result_entry.get("augmentation_ratio"))  # Normalize historical ratio.
+    augmentation_enabled = resolve_persisted_data_augmentation_enabled(experiment_mode, augmentation_ratio, result_entry.get("data_augmentation_enabled"))  # Resolve historical augmentation semantics.
+    if experiment_mode == "original_only":  # Diagnose baseline population identity.
+        expected_data_source = "Original Combined Files" if execution_mode == "combined_files" else "Original"  # Rebuild original-only source identity.
+        if augmentation_enabled or augmentation_ratio != 0.0 or result_entry.get("data_source") != expected_data_source:  # Require coherent baseline metadata.
+            return "experiment mode, data source, or augmentation semantics differ"  # Identify inconsistent baseline population.
+    elif experiment_mode in ("original_plus_augmented", "original_training_augmented_testing"):  # Diagnose supported augmented-test identity.
+        try:  # Parse ratio without accepting malformed augmented provenance.
+            ratio_value = float(augmentation_ratio)  # Parse exact persisted ratio.
+        except (TypeError, ValueError):  # Reject nonnumeric ratio evidence.
+            return "augmentation ratio is invalid"  # Identify malformed augmented population evidence.
+        expected_data_source = f"Augmented@{int(ratio_value * 100)}%{'_CombinedFiles' if execution_mode == 'combined_files' else ''}"  # Rebuild canonical augmented source identity.
+        if not augmentation_enabled or not math.isfinite(ratio_value) or ratio_value <= 0.0 or result_entry.get("data_source") != expected_data_source:  # Require coherent augmented metadata.
+            return "experiment mode, data source, or augmentation semantics differ"  # Identify inconsistent augmented population.
+    else:
+        return "experiment mode is unsupported"  # Identify unproven evaluation semantics.
+    expected_dataset = resolve_canonical_dataset_identity(csv_path, execution_mode == "combined_files")  # Rebuild result dataset identity.
+    if str(result_entry.get("dataset", "")).replace("\\", "/") != expected_dataset:  # Compare persisted result dataset.
+        return "historical result dataset differs"  # Identify cross-dataset row.
+    try:
+        run_value = parse_persisted_experiment_run_value(result_entry.get("experiment_run"), "experiment_run")  # Normalize row run.
+    except Exception:
+        return "historical experiment run is invalid"  # Identify unusable run evidence.
+    if context.get("experiment_run") != run_value:  # Compare exact repeated-run identity.
+        return "experiment run differs"  # Identify cross-run candidate.
+    if context.get("model_name") != str(result_entry.get("model_name", "")):  # Compare logical classifier identity.
+        return "model name differs"  # Identify another classifier.
+    expected_classifier_type = "Stacking" if context.get("model_name") == "StackingClassifier" else "Individual"  # Derive artifact classifier type.
+    if str(result_entry.get("classifier_type", "")) != expected_classifier_type:  # Compare individual-versus-stacking identity.
+        return "classifier type differs"  # Identify incompatible result kind.
+    hyperparameter_label = str(result_entry.get("hyperparameter_mode", ""))  # Read persisted display mode.
+    expected_mode = "optimized" if hyperparameter_label == "Optimized Hyperparameters" else "default" if hyperparameter_label == "Default Hyperparameters" else None  # Map established modes.
+    expected_feature_set = f"{result_entry.get('feature_set')} - {hyperparameter_label}"  # Rebuild exported feature identity.
+    if expected_mode is None or context.get("hyperparameter_mode") != expected_mode:  # Compare hyperparameter mode.
+        return "hyperparameter mode differs"  # Identify parameter-mode mismatch.
+    if context.get("feature_set") != expected_feature_set:  # Compare feature-set export identity.
+        return "feature set differs"  # Identify another feature representation.
+    model_class = str(result_entry.get("model", ""))  # Read historical concrete estimator class.
+    if not model_class or str(context.get("model_class", "")).rsplit(".", 1)[-1] != model_class:  # Compare estimator implementation.
+        return "model class differs"  # Identify wrapper or implementation drift.
+    feature_names = parse_historical_feature_names(result_entry)  # Decode ordered historical model features.
+    if feature_names is None:  # Require historical feature evidence.
+        return "historical model feature order is unavailable"  # Identify absent schema.
+    if context.get("model_feature_names") != feature_names:  # Compare ordered model schema.
+        return "model feature order differs"  # Identify reordered or changed features.
+    input_feature_names = context.get("input_feature_names")  # Read ordered scaler schema.
+    if not isinstance(input_feature_names, list) or not input_feature_names or len(set(input_feature_names)) != len(input_feature_names):  # Require deterministic scaler inputs.
+        return "input feature schema is missing or duplicated"  # Identify unusable input metadata.
+    transformer_metadata = context.get("transformer")  # Read optional persisted transformer identity.
+    if str(result_entry.get("feature_set", "")) == "PCA Components":  # Validate PCA result semantics.
+        if not isinstance(transformer_metadata, dict) or transformer_metadata.get("class") != f"{PCA.__module__}.{PCA.__name__}" or not isinstance(transformer_metadata.get("params"), dict) or transformer_metadata["params"].get("n_components") != len(feature_names):  # Compare transformer class and output width.
+            return "PCA transformer identity differs"  # Identify incompatible transformed schema.
+    elif transformer_metadata is not None or any(feature not in input_feature_names for feature in feature_names):  # Validate named selection without transformer.
+        return "transformer presence or selected-feature mapping differs"  # Identify incompatible preprocessing path.
+    row_parameters = normalize_artifact_identity_value(result_entry.get("hyperparameters"))  # Decode effective historical parameters.
+    if not isinstance(row_parameters, dict):  # Require parameter evidence.
+        return "historical model parameters are unavailable"  # Identify absent effective configuration.
+    row_parameters = dict(row_parameters)  # Isolate fitted audit metadata removal.
+    row_parameters.pop("effective_training_configuration", None)  # Remove runtime audit state absent from artifact identity.
+    if normalize_metadata_for_json(row_parameters) != context.get("model_params"):  # Compare exact estimator parameters.
+        return "effective model parameters differ"  # Identify model configuration drift.
+    attack_scope = normalize_artifact_identity_value(result_entry.get("attack_types_combined"))  # Decode historical class scope.
+    if normalize_metadata_for_json(attack_scope) != context.get("attack_types"):  # Compare attack scope.
+        return "attack scope differs"  # Identify another classification population.
+    if context.get("scaler_class") != f"{StandardScaler.__module__}.{StandardScaler.__name__}" or context.get("scaler_params") != normalize_metadata_for_json(StandardScaler().get_params(deep=False)):  # Compare fitted scaler contract.
+        return "scaler identity differs"  # Identify incompatible preprocessing.
+    if context.get("label_encoder_class") != f"{LabelEncoder.__module__}.{LabelEncoder.__name__}" or not isinstance(context.get("label_classes"), list) or not context.get("label_classes"):  # Compare label encoder contract.
+        return "label encoder identity or class order differs"  # Identify unusable label mapping.
+    if context.get("pre_split_feature_removal") is not False or context.get("test_size") != 0.2 or context.get("stratified") is not True:  # Compare split semantics.
+        return "train/test split semantics differ"  # Identify another evaluation partition contract.
+    source_metadata = context.get("source_files")  # Read persisted source provenance.
+    if not isinstance(source_metadata, list) or not source_metadata:  # Require ordered source evidence.
+        return "source provenance is unavailable"  # Identify incomplete artifact context.
+    for source_index, source_entry in enumerate(source_metadata):  # Inspect ordered source evidence.
+        if not isinstance(source_entry, dict) or source_entry.get("index") != source_index:  # Require deterministic source order.
+            return "source ordering differs"  # Identify malformed ordering.
+        source_path = Path(str(source_entry.get("path", ""))).expanduser().resolve()  # Resolve persisted source path.
+        if not source_path.is_file():  # Require source existence.
+            return f"source artifact is missing: {source_path}"  # Identify absent scientific input.
+        source_stat = source_path.stat()  # Read current source identity.
+        if source_entry.get("size") != int(source_stat.st_size) or source_entry.get("mtime_ns") != int(source_stat.st_mtime_ns):  # Compare persisted source integrity fields.
+            return f"source provenance differs: {source_path}"  # Identify altered source data.
+    historical_train_count = resolve_result_metric_float(result_entry, "n_samples_train")  # Parse historical fitted population size.
+    if historical_train_count is None or not historical_train_count.is_integer() or int(historical_train_count) != metadata.get("train_sample_count"):  # Compare fitted scaler population.
+        return "training sample count differs"  # Identify another fitted population.
+    expected_identity = hashlib.sha256(json.dumps(context, sort_keys=True, allow_nan=False).encode("utf-8")).hexdigest()  # Recompute full metadata identity.
+    if metadata.get("artifact_identity") != expected_identity:  # Compare metadata integrity.
+        return "artifact identity digest differs"  # Identify tampered or partial metadata.
+    return "one or more strict preprocessing, split, augmentation, or label-encoding dimensions differ"  # Preserve strict rejection for remaining validated dimensions.
+
+
 def stacking_model_context_matches_result(result_entry: dict, csv_path: str, metadata: dict, context: dict) -> bool:
     """
     Return whether classifier metadata proves compatibility with one historical row.
@@ -14438,6 +14542,8 @@ def stacking_model_context_matches_result(result_entry: dict, csv_path: str, met
     if not isinstance(source_metadata, list) or not source_metadata:  # Require complete source provenance.
         return False  # Reject context without an evaluated dataset population.
     resolved_reference = Path(str(csv_path)).expanduser().resolve()  # Resolve active result-family reference.
+    if context.get("dataset_path") != str(resolved_reference):  # Bind artifact context to exact active dataset reference.
+        return False  # Reject metadata copied from another result family.
     for source_index, source_entry in enumerate(source_metadata):  # Validate ordered source identities without loading dataset contents.
         if not isinstance(source_entry, dict) or source_entry.get("index") != source_index:  # Require exact persisted ordering.
             return False  # Reject reordered or malformed provenance.
@@ -14511,20 +14617,65 @@ def stacking_model_context_matches_result(result_entry: dict, csv_path: str, met
     return True  # Accept only a complete persisted identity match.
 
 
-def resolve_historical_stacking_model_artifact(result_entry: dict, csv_path: str, config: dict, artifacts: List[Tuple[Path, dict, dict]]) -> Tuple[Path, dict, dict, str]:
+def resolve_historical_stacking_model_artifact(result_entry: dict, csv_path: str, config: dict, artifacts: Optional[List[Tuple[Path, dict, dict]]] = None, artifact_metadata_cache: Optional[dict] = None) -> Tuple[Path, dict, dict, str]:
     """
     Resolve one exact persisted classifier artifact for a historical row.
 
     :param result_entry: Canonical historical result row.
     :param csv_path: Dataset file or directory identity used by stacking storage.
     :param config: Runtime configuration dictionary.
-    :param artifacts: Dataset-local identity-bearing companion metadata candidates.
+    :param artifacts: Optional dataset-local identity-bearing companion metadata candidates.
+    :param artifact_metadata_cache: Optional dataset-local metadata candidate cache.
     :return: Metadata path, metadata, artifact context, and exact model basename.
     """
 
-    candidates = [candidate for candidate in artifacts if stacking_model_context_matches_result(result_entry, csv_path, candidate[1], candidate[2])]  # Select only complete row-compatible identities.
+    direct_reason = None  # Preserve exact row-linked locator failure for diagnostics.
+    candidates: List[Tuple[Path, dict, dict]] = []  # Accumulate exact compatible identities.
+    exported_filename = result_entry.get("exported_model_filename")  # Prefer explicit persisted provenance when available.
+    models_root = Path(get_stacking_output_dir(csv_path, config)) / "Models"  # Resolve established dataset-local model area.
+    if has_serialized_value(exported_filename):  # Resolve exact basename before broad metadata discovery.
+        exported_basename = str(exported_filename).strip()  # Normalize CSV text without changing filename content.
+        if os.path.basename(exported_basename) != exported_basename or not exported_basename.endswith("_model.joblib"):  # Reject path-bearing or malformed locators.
+            direct_reason = "exported_model_filename is not a safe model basename"  # Record invalid direct provenance.
+        else:
+            direct_models = [directory / exported_basename for directory in models_root.iterdir() if directory.is_dir() and (directory / exported_basename).is_file()] if models_root.is_dir() else []  # Search exact basename only inside established model directories.
+            if len(direct_models) > 1:  # Refuse duplicate basename ambiguity across dataset folders.
+                raise RuntimeError("exported_model_filename resolves to multiple persisted model artifacts")  # Preserve exact provenance under ambiguity.
+            if not direct_models:  # Record missing row-linked model before metadata fallback.
+                direct_reason = f"exported_model_filename references a missing artifact: {exported_basename}"  # Identify exact absent file.
+            else:
+                direct_model_path = direct_models[0]  # Resolve unique exact row-linked model.
+                direct_metadata_path = direct_model_path.with_name(f"{direct_model_path.name[:-len('_model.joblib')]}_meta.json")  # Resolve synchronized companion name.
+                if not direct_metadata_path.is_file():  # Require companion provenance.
+                    direct_reason = f"exported_model_filename companion metadata is missing: {direct_metadata_path.name}"  # Identify incomplete pair.
+                else:
+                    try:
+                        direct_metadata = load_exact_artifact_json(direct_metadata_path)  # Parse exact companion metadata.
+                        direct_context = extract_stacking_model_artifact_context(direct_metadata)  # Extract full hashed context.
+                        mismatch_reason = describe_stacking_model_context_mismatch(result_entry, csv_path, direct_metadata, direct_context)  # Validate row compatibility without filename trust.
+                        if mismatch_reason is None:  # Accept direct locator only after strict compatibility.
+                            candidates = [(direct_metadata_path, direct_metadata, direct_context)]  # Reuse exact pair without broad discovery.
+                        else:
+                            direct_reason = f"exported_model_filename is incompatible: {mismatch_reason}"  # Preserve decisive direct-candidate mismatch.
+                    except Exception as exc:
+                        direct_reason = f"exported_model_filename metadata is invalid: {exc}"  # Preserve malformed companion reason.
+    if not candidates:  # Fall back to exact companion-metadata discovery only when direct provenance is absent or rejected.
+        available_artifacts = artifacts if artifacts is not None else discover_stacking_model_artifacts(csv_path, config, artifact_metadata_cache)  # Reuse cached dataset-local metadata evidence.
+        candidates = [candidate for candidate in available_artifacts if stacking_model_context_matches_result(result_entry, csv_path, candidate[1], candidate[2])]  # Select only complete row-compatible identities.
     if not candidates:  # Leave rows without exact metadata evidence unchanged.
-        raise FileNotFoundError("no exact compatible persisted classifier artifact exists")  # Report absence without filename inference.
+        hyperparameter_label = str(result_entry.get("hyperparameter_mode", ""))  # Read established display mode.
+        expected_feature_set = f"{result_entry.get('feature_set')} - {hyperparameter_label}"  # Rebuild exported feature identity.
+        near_candidates = [candidate for candidate in available_artifacts if candidate[2].get("model_name") == str(result_entry.get("model_name", "")) and candidate[2].get("feature_set") == expected_feature_set]  # Narrow diagnostics to same classifier and feature/parameter slot.
+        mismatch_reasons = list(dict.fromkeys(reason for candidate in near_candidates if (reason := describe_stacking_model_context_mismatch(result_entry, csv_path, candidate[1], candidate[2])) is not None))  # Collect deterministic decisive incompatibilities.
+        if mismatch_reasons:  # Report candidate evidence rather than opaque absence.
+            reason = f"{len(near_candidates)} near candidate(s) rejected: {', '.join(mismatch_reasons[:4])}"  # Bound diagnostic size while preserving useful causes.
+        elif available_artifacts:
+            reason = "no physical artifact pair exists for the exact run, model, feature-set, and hyperparameter identity"  # Distinguish deleted or never-exported pair.
+        else:
+            reason = "no persisted classifier metadata exists for this dataset"  # Distinguish an empty model area.
+        if direct_reason is not None:  # Preserve explicit row-linked locator failure before fallback outcome.
+            reason = f"{direct_reason}; metadata discovery found {reason}"  # Report both provenance paths.
+        raise FileNotFoundError(reason)  # Leave scientifically unproven rows unchanged.
     if len(candidates) != 1:  # Refuse multiple identities that historical columns cannot disambiguate.
         raise RuntimeError("multiple exact compatible persisted classifier artifacts exist")  # Preserve empty provenance under ambiguity.
     metadata_path, metadata, context = candidates[0]  # Unpack unique identity-bearing metadata.
@@ -14533,6 +14684,8 @@ def resolve_historical_stacking_model_artifact(result_entry: dict, csv_path: str
         raise ValueError("persisted classifier metadata path differs from its artifact identity")  # Reject renamed or misplaced metadata.
     artifact_lock = acquire_stacking_artifact_lock(artifact_paths["lock_path"], exclusive=False)  # Stabilize model and metadata bytes during integrity validation.
     try:  # Validate complete synchronized pair without loading model contents.
+        if not Path(artifact_paths["model_path"]).is_file():  # Distinguish metadata left without its exact model.
+            raise FileNotFoundError("exact historical model artifact is not present on disk")  # Report physical absence truthfully.
         if not stacking_model_artifact_pair_is_valid(artifact_paths, context):  # Require model existence, basename, size, and SHA-256 integrity.
             raise ValueError("persisted classifier pair failed integrity validation")  # Reject missing, stale, or replaced model artifacts.
     finally:
@@ -14557,21 +14710,20 @@ def backfill_exported_model_filenames(result_df: pd.DataFrame, csv_path: str, co
     pending_rows = [(row_index, row.to_dict()) for row_index, row in recovered_df.iterrows() if not has_serialized_value(row.get("exported_model_filename"))]  # Select rows with unknown artifact provenance only.
     if not pending_rows:  # Avoid filesystem discovery for already populated storage.
         return recovered_df, outcomes  # Preserve idempotent content without artifact work.
-    artifacts = discover_stacking_model_artifacts(csv_path, config, artifact_metadata_cache)  # Parse dataset-local companion metadata without loading joblib objects.
     for row_index, row_entry in pending_rows:  # Attempt each unknown historical association independently.
         try:  # Keep one unavailable artifact from blocking unrelated rows.
-            _, _, _, model_filename = resolve_historical_stacking_model_artifact(row_entry, csv_path, config, artifacts)  # Prove unique full-context association and pair integrity.
+            _, _, _, model_filename = resolve_historical_stacking_model_artifact(row_entry, csv_path, config, artifact_metadata_cache=artifact_metadata_cache)  # Prove unique full-context association and pair integrity.
         except FileNotFoundError as exc:
             outcomes["no_exact_artifact"] += 1  # Count rows lacking exact compatible metadata.
-            verbose_output(f"{BackgroundColors.YELLOW}[MODEL PROVENANCE SKIPPED] {row_entry.get('experiment_id', 'unknown')}: {exc}{Style.RESET_ALL}", config=config)  # Emit optional absence diagnostic.
+            verbose_output(f"{BackgroundColors.YELLOW}[MODEL PROVENANCE SKIPPED] {format_historical_model_recovery_identity(row_entry)} | Reason: {exc}{Style.RESET_ALL}", config=config)  # Emit combination-specific absence diagnostic.
             continue  # Preserve genuinely empty filename.
         except RuntimeError as exc:
             outcomes["ambiguous"] += 1  # Count identities with multiple exact candidates.
-            print(f"{BackgroundColors.YELLOW}[MODEL PROVENANCE AMBIGUOUS] {row_entry.get('experiment_id', 'unknown')}: {exc}{Style.RESET_ALL}")  # Emit clear ambiguity diagnostic.
+            print(f"{BackgroundColors.YELLOW}[MODEL PROVENANCE AMBIGUOUS] {format_historical_model_recovery_identity(row_entry)} | Reason: {exc}{Style.RESET_ALL}")  # Emit combination-specific ambiguity diagnostic.
             continue  # Refuse arbitrary candidate selection.
         except Exception as exc:
             outcomes["incompatible"] += 1  # Count malformed, missing, stale, or integrity-failed pairs.
-            print(f"{BackgroundColors.YELLOW}[MODEL PROVENANCE REJECTED] {row_entry.get('experiment_id', 'unknown')}: {exc}{Style.RESET_ALL}")  # Emit exact rejection reason.
+            print(f"{BackgroundColors.YELLOW}[MODEL PROVENANCE REJECTED] {format_historical_model_recovery_identity(row_entry)} | Reason: {exc}{Style.RESET_ALL}")  # Emit combination-specific rejection reason.
             continue  # Leave unknown provenance empty.
         if recovered_df["exported_model_filename"].dtype != "object":  # Prepare basename storage only after exact recovery.
             recovered_df["exported_model_filename"] = recovered_df["exported_model_filename"].astype("object")  # Preserve string values without coercion.
@@ -14621,14 +14773,15 @@ def reconstruct_historical_test_population(context: dict, loaded_bundle: dict, e
             raise ValueError("Loaded combined attack scope differs from classifier provenance")  # Reject another combined population.
     elif execution_mode != "separate_files" or len(source_files) != 1 or evaluation_attack_types is not None:  # Require exact separate-file population semantics.
         raise ValueError("Loaded evaluation population is incompatible with classifier execution mode")  # Refuse uncertain population use.
-    target_column = str(evaluation_df.columns[-1]) if evaluation_df is not None and not evaluation_df.empty else None  # Preserve positional target semantics from the active frame.
-    if evaluation_df is None or evaluation_df.empty or target_column != context.get("target_column"):  # Require exact target placement and identity.
+    target_column = str(context.get("target_column", ""))  # Read target identity from proven artifact context.
+    if evaluation_df is None or evaluation_df.empty or target_column not in evaluation_df.columns or str(evaluation_df.columns[-1]) != target_column:  # Require exact target placement and identity.
         raise ValueError("Historical target schema differs from classifier provenance")  # Reject changed preprocessing output.
-    input_feature_names = [str(feature) for feature in context.get("input_feature_names", [])]  # Read ordered scaler input schema.
-    current_feature_names = [str(feature) for feature in feature_columns_without_lstm_metadata(evaluation_df.iloc[:, :-1].select_dtypes(include=np.number).columns.tolist())]  # Rebuild production numeric schema.
+    persisted_input_feature_names = [str(feature) for feature in context.get("input_feature_names", [])]  # Read identity-bound historical feature metadata.
+    input_feature_names = [str(feature) for feature in feature_columns_without_lstm_metadata(persisted_input_feature_names)]  # Reproduce numeric scaling semantics by excluding only reserved nonnumeric sequence provenance.
+    current_feature_names = [str(column) for column, dtype in evaluation_df.dtypes.items() if str(column) != target_column and not is_lstm_metadata_column(column) and pd.api.types.is_numeric_dtype(dtype)]  # Rebuild numeric schema without copying active rows.
     if not input_feature_names or current_feature_names != input_feature_names:  # Require exact feature ordering.
         raise ValueError("Historical input feature schema differs from classifier provenance")  # Reject reordered or removed inputs.
-    target_values = evaluation_df.iloc[:, -1].to_numpy(copy=False)  # Recover original target values without fitting an encoder.
+    target_values = evaluation_df[target_column].to_numpy(copy=False)  # Recover original target values without fitting an encoder.
     label_encoder = loaded_bundle["label_encoder"]  # Reuse the persisted fitted label mapping.
     if normalize_metadata_for_json(np.unique(target_values)) != context.get("label_classes"):  # Require the complete original class universe.
         raise ValueError("Historical target classes differ from classifier provenance")  # Reject changed labels.
@@ -14638,27 +14791,52 @@ def reconstruct_historical_test_population(context: dict, loaded_bundle: dict, e
     return np.asarray(test_idx, dtype=np.int64), y_test, len(train_idx)  # Cache only lightweight split evidence, never a model-sized test matrix.
 
 
-def recover_metrics_from_stacking_model(result_entry: dict, csv_path: str, config: dict, artifacts: List[Tuple[Path, dict, dict]], evaluation_data_cache: dict, evaluation_df: pd.DataFrame, evaluation_source_files: List[str], evaluation_attack_types: Any) -> Tuple[float, str, str]:
+def recover_metrics_from_stacking_model(result_entry: dict, csv_path: str, config: dict, artifacts: Optional[List[Tuple[Path, dict, dict]]], evaluation_data_cache: dict, evaluation_df: pd.DataFrame, evaluation_source_files: List[str], evaluation_attack_types: Any, artifact_metadata_cache: Optional[dict] = None) -> Tuple[float, str, str]:
     """
     Recover missing F1 metrics through one exact persisted classifier inference.
 
     :param result_entry: Canonical historical result row.
     :param csv_path: Dataset file or directory identity used by stacking storage.
     :param config: Runtime configuration dictionary.
-    :param artifacts: Identity-bearing classifier metadata candidates.
+    :param artifacts: Optional identity-bearing classifier metadata candidates.
     :param evaluation_data_cache: Lightweight test indices and labels keyed by split provenance.
     :param evaluation_df: Already-loaded production evaluation DataFrame.
     :param evaluation_source_files: Ordered files used to build the loaded evaluation population.
     :param evaluation_attack_types: Loaded combined-files attack scope, or None for separate files.
+    :param artifact_metadata_cache: Optional dataset-local metadata candidate cache.
     :return: Exact Macro F1, deterministic per-class F1 JSON, and validated model basename.
     """
 
-    metadata_path, _, context, model_filename = resolve_historical_stacking_model_artifact(result_entry, csv_path, config, artifacts)  # Reuse exact metadata-only artifact association.
+    metadata_path, _, context, model_filename = resolve_historical_stacking_model_artifact(result_entry, csv_path, config, artifacts, artifact_metadata_cache)  # Prefer exact row-linked provenance before cached discovery.
     bundle, rejection_reason = load_existing_model_if_available(str(context["model_name"]), csv_path, metadata_path.parent.name, str(context["feature_set"]), context, config=config)  # Reuse strict bundle and preprocessing validation.
     if bundle is None:  # Surface exact loader rejection without inference.
         raise ValueError(rejection_reason or "persisted classifier bundle is incompatible")  # Reject before prediction.
     if is_lstm_classifier_name(context.get("model_name")):  # Current model metadata does not bind the generated sequence population counts.
         raise RuntimeError("exact LSTM sequence evaluation population is not proven by persisted metadata")  # Skip scientifically uncertain reconstruction.
+    persisted_input_feature_names = [str(feature) for feature in bundle["input_feature_names"]]  # Read exact identity-bound feature metadata before shared split reuse.
+    if not persisted_input_feature_names or len(set(persisted_input_feature_names)) != len(persisted_input_feature_names):  # Require unambiguous persisted feature metadata.
+        raise ValueError("Persisted scaler input feature schema is empty or duplicated")  # Reject ambiguous feature selection.
+    reserved_input_features = [feature for feature in persisted_input_feature_names if is_lstm_metadata_column(feature)]  # Identify historical combined-mode provenance recorded beside numeric features.
+    for reserved_feature in reserved_input_features:  # Prove each excluded field is the established nonnumeric sequence metadata.
+        if reserved_feature not in evaluation_df.columns or pd.api.types.is_numeric_dtype(evaluation_df[reserved_feature].dtype):  # Refuse exclusion when active semantics differ from original nonnumeric filtering.
+            raise ValueError(f"Reserved LSTM metadata has incompatible active semantics: {reserved_feature}")  # Reject an unproven scaler schema correction.
+    input_feature_names = [str(feature) for feature in feature_columns_without_lstm_metadata(persisted_input_feature_names)]  # Match original StandardScaler inputs by excluding only proven reserved nonnumeric columns.
+    target_column = str(context.get("target_column", ""))  # Read proven target identity.
+    if target_column in input_feature_names:  # Keep labels out of numeric preprocessing.
+        raise ValueError("Persisted scaler input schema contains the target column")  # Reject target leakage.
+    missing_features = [feature for feature in input_feature_names if feature not in evaluation_df.columns]  # Validate every required active column.
+    if missing_features:  # Reject changed active schemas before array materialization.
+        raise ValueError(f"Loaded evaluation data is missing persisted input features: {missing_features}")  # Report exact absent names.
+    if not evaluation_df.columns.is_unique:  # Require unambiguous active column positions.
+        raise ValueError("Loaded evaluation data contains duplicate column names")  # Reject ambiguous feature selection.
+    input_feature_indices = [int(evaluation_df.columns.get_loc(feature)) for feature in input_feature_names]  # Resolve exact active positions without copying all rows.
+    nonnumeric_features = [feature for feature, position in zip(input_feature_names, input_feature_indices) if not pd.api.types.is_numeric_dtype(evaluation_df.dtypes.iloc[position])]  # Identify nonnumeric persisted input without a full-frame copy.
+    if nonnumeric_features:  # Prevent strings or metadata from reaching fitted preprocessing.
+        raise ValueError(f"Persisted tabular input features are nonnumeric: {nonnumeric_features}")  # Report schema corruption before transformation.
+    scaler = bundle["scaler"]  # Reuse fitted original-training scaler.
+    scaler_feature_count = getattr(scaler, "n_features_in_", None)  # Read fitted scaler width when available.
+    if scaler_feature_count is not None and int(scaler_feature_count) != len(input_feature_names):  # Require persisted names to cover exact scaler input width.
+        raise ValueError("Persisted scaler width differs from input feature metadata")  # Reject incomplete or polluted metadata.
     population_identity = hashlib.sha256(json.dumps({field: context[field] for field in ("source_files", "execution_mode", "attack_types", "target_column", "label_classes", "pre_split_feature_removal", "test_size", "random_state", "stratified", "sklearn_version", "numpy_version")}, sort_keys=True, allow_nan=False).encode("utf-8")).hexdigest()  # Identify one exact historical row partition independently from model features.
     if population_identity not in evaluation_data_cache:  # Reconstruct each shared test population once.
         evaluation_data_cache[population_identity] = reconstruct_historical_test_population(context, bundle, evaluation_df, evaluation_source_files, evaluation_attack_types)  # Retain only exact test indices, labels, and count evidence.
@@ -14667,9 +14845,7 @@ def recover_metrics_from_stacking_model(result_entry: dict, csv_path: str, confi
     historical_test_count = resolve_result_metric_float(result_entry, "n_samples_test")  # Parse persisted testing population size.
     if historical_train_count is None or historical_test_count is None or not historical_train_count.is_integer() or not historical_test_count.is_integer() or int(historical_train_count) != train_count or int(historical_test_count) != len(y_test):  # Require historical population sizes.
         raise ValueError("Reconstructed train/test sample counts differ from historical row")  # Reject split mismatch.
-    scaler = bundle["scaler"]  # Reuse fitted original-training scaler.
-    input_feature_names = [str(feature) for feature in bundle["input_feature_names"]]  # Read the exact persisted scaler input order.
-    X_test_raw = evaluation_df.iloc[test_indices].loc[:, input_feature_names].to_numpy(copy=False)  # Materialize only this model's test input from the active population.
+    X_test_raw = evaluation_df.iloc[test_indices, input_feature_indices].to_numpy(copy=False)  # Materialize only exact numeric persisted features from active population.
     X_test_scaled = np.asarray(scaler.transform(X_test_raw))  # Apply persisted scaling without fitting.
     transformer = bundle.get("transformer")  # Read optional fitted feature transformer.
     model_feature_names = [str(feature) for feature in bundle["model_feature_names"]]  # Preserve exact classifier feature order.
@@ -14686,9 +14862,17 @@ def recover_metrics_from_stacking_model(result_entry: dict, csv_path: str, confi
     prediction_input: Any = X_model  # Preserve array input unless fitted estimator metadata requires names.
     fitted_feature_names = getattr(bundle["model"], "feature_names_in_", None)  # Read sklearn's fitted named-feature contract when present.
     if fitted_feature_names is not None:  # Restore names only for estimators fitted with named columns.
-        if [str(feature) for feature in fitted_feature_names] != model_feature_names:  # Require the fitted contract to match validated artifact metadata.
-            raise ValueError("Persisted estimator feature names differ from model artifact metadata")  # Reject incompatible named input.
-        prediction_input = pd.DataFrame(X_model, columns=model_feature_names)  # Supply exact names without changing numeric values or ordering.
+        fitted_names = [str(feature) for feature in fitted_feature_names]  # Normalize fitted estimator names without reordering.
+        prediction_names = model_feature_names  # Use scientific artifact names for ordinary named estimators.
+        if fitted_names != model_feature_names:  # Distinguish LightGBM's deterministic NumPy names from genuine mismatches.
+            positional_names = [f"Column_{index}" for index in range(len(model_feature_names))]  # Rebuild LightGBM names produced by original NumPy fitting.
+            booster = getattr(bundle["model"], "booster_", None)  # Read fitted LightGBM booster when available.
+            booster_names = [str(feature) for feature in booster.feature_name()] if booster is not None and callable(getattr(booster, "feature_name", None)) else None  # Validate underlying booster order.
+            if isinstance(bundle["model"], lgb.LGBMClassifier) and fitted_names == positional_names and booster_names == positional_names:  # Accept only proven one-to-one positional equivalence.
+                prediction_names = fitted_names  # Supply estimator-accepted names without changing feature values or order.
+            else:
+                raise ValueError("Persisted estimator feature names differ from model artifact metadata")  # Reject genuine named-schema mismatch.
+        prediction_input = pd.DataFrame(X_model, columns=prediction_names)  # Supply exact accepted names without changing numeric values or ordering.
     predictions = np.asarray(bundle["model"].predict(prediction_input))  # Perform one prediction on the proven historical input.
     if predictions.ndim != 1 or len(predictions) != len(y_test):  # Require row-aligned classifier output.
         raise ValueError("Persisted classifier predictions are not aligned with historical targets")  # Reject invalid inference output.
@@ -14725,12 +14909,10 @@ def backfill_saved_model_metrics(result_df: pd.DataFrame, csv_path: str, config:
         macro_missing = resolve_result_metric_float(row_entry, "macro_f1_score") is None  # Detect missing Macro F1.
         per_class_missing = not per_class_f1_value_is_valid(row_entry.get("per_class_f1_scores"))  # Detect missing per-class F1.
         if macro_missing or per_class_missing:  # Exclude Task 3-complete and already complete rows.
-            result_identity = (str(Path(str(csv_path)).expanduser().resolve()), parse_persisted_experiment_run_value(row_entry.get("experiment_run"), "experiment_run"), build_cache_identity_from_row(row_entry))  # Extend production result identity with dataset and repeated-run scope.
+            result_identity = (str(Path(str(csv_path)).expanduser().resolve()), parse_persisted_experiment_run_value(row_entry.get("experiment_run"), "experiment_run"), str(row_entry.get("experiment_id", "")), str(row_entry.get("classifier_type", "")), build_cache_identity_from_row(row_entry))  # Bind memoization to full persisted row and canonical resume identity.
             pending_rows.append((row_index, row_entry, macro_missing, per_class_missing, result_identity))  # Retain only recovery-eligible rows.
     if not pending_rows:  # Avoid artifact discovery when every row is complete.
         return recovered_df, outcomes  # Return byte-stable content without model work.
-    needs_discovery = any(result_identity not in metric_cache for _, _, _, _, result_identity in pending_rows)  # Discover metadata only when one exact incomplete row has no process outcome.
-    artifacts = discover_stacking_model_artifacts(csv_path, config, artifact_metadata_cache) if needs_discovery else []  # Avoid all model-directory access for completed or already-attempted rows.
     for row_index, row_entry, macro_missing, per_class_missing, result_identity in pending_rows:  # Attempt each remaining row independently.
         cached_outcome = metric_cache.get(result_identity)  # Reuse success and deterministic rejection outcomes for this process.
         if isinstance(cached_outcome, dict) and cached_outcome.get("status") != "recovered":  # Skip a known failure without repeated discovery, loading, prediction, or diagnostics.
@@ -14744,27 +14926,27 @@ def backfill_saved_model_metrics(result_df: pd.DataFrame, csv_path: str, config:
                 raise RuntimeError("exact LSTM sequence evaluation population is not proven by persisted metadata")  # Skip approximate sequence reconstruction.
             recovered_metrics = cached_outcome.get("metrics") if isinstance(cached_outcome, dict) else None  # Reuse a prior successful inference for this exact result.
             if recovered_metrics is None:  # Load and predict only once per exact result identity.
-                recovered_metrics = recover_metrics_from_stacking_model(row_entry, csv_path, config, artifacts, population_cache, evaluation_df, evaluation_source_files, evaluation_attack_types)  # Perform exact prediction-only recovery from the active loaded population.
+                recovered_metrics = recover_metrics_from_stacking_model(row_entry, csv_path, config, None, population_cache, evaluation_df, evaluation_source_files, evaluation_attack_types, artifact_metadata_cache)  # Prefer direct row provenance, then cached exact discovery.
                 metric_cache[result_identity] = {"status": "recovered", "metrics": recovered_metrics}  # Prevent repeated inference for matching cache/final rows.
         except FileNotFoundError as exc:  # Distinguish absent exact compatible artifacts.
             outcomes["no_compatible_model"] += 1  # Count model unavailability.
             metric_cache[result_identity] = {"status": "skipped", "outcome": "no_compatible_model", "reason": str(exc)}  # Memoize deterministic absence for this process.
-            verbose_output(f"{BackgroundColors.YELLOW}[MODEL RECOVERY SKIPPED] {row_entry.get('experiment_id', 'unknown')}: {exc}{Style.RESET_ALL}", config=config)  # Emit optional diagnostic.
+            verbose_output(f"{BackgroundColors.YELLOW}[MODEL RECOVERY SKIPPED] {format_historical_model_recovery_identity(row_entry)} | Reason: {exc}{Style.RESET_ALL}", config=config)  # Emit combination-specific diagnostic.
             continue  # Leave missing fields empty.
         except ArtifactFingerprintMismatch as exc:  # Reject scientifically different predictions.
             outcomes["fingerprint_rejected"] += 1  # Count aggregate mismatches.
             metric_cache[result_identity] = {"status": "rejected", "outcome": "fingerprint_rejected", "reason": str(exc)}  # Memoize scientific rejection for this process.
-            print(f"{BackgroundColors.YELLOW}[MODEL RECOVERY REJECTED] {row_entry.get('experiment_id', 'unknown')}: {exc}{Style.RESET_ALL}")  # Emit clear mandatory diagnostic.
+            print(f"{BackgroundColors.YELLOW}[MODEL RECOVERY REJECTED] {format_historical_model_recovery_identity(row_entry)} | Reason: {exc}{Style.RESET_ALL}")  # Emit combination-specific mandatory diagnostic.
             continue  # Preserve authoritative aggregates and empty fields.
         except RuntimeError as exc:  # Distinguish populations the metadata cannot prove.
             outcomes["evaluation_data_unavailable"] += 1  # Count exact reconstruction skips.
             metric_cache[result_identity] = {"status": "skipped", "outcome": "evaluation_data_unavailable", "reason": str(exc)}  # Memoize unreconstructible population for this process.
-            verbose_output(f"{BackgroundColors.YELLOW}[MODEL RECOVERY SKIPPED] {row_entry.get('experiment_id', 'unknown')}: {exc}{Style.RESET_ALL}", config=config)  # Emit optional diagnostic.
+            verbose_output(f"{BackgroundColors.YELLOW}[MODEL RECOVERY SKIPPED] {format_historical_model_recovery_identity(row_entry)} | Reason: {exc}{Style.RESET_ALL}", config=config)  # Emit combination-specific diagnostic.
             continue  # Leave row unchanged.
         except Exception as exc:  # Treat integrity, preprocessing, or identity failures as rejection before persistence.
             outcomes["evaluation_data_unavailable"] += 1  # Count unprovable exact evaluation inputs.
             metric_cache[result_identity] = {"status": "rejected", "outcome": "evaluation_data_unavailable", "reason": str(exc)}  # Memoize deterministic integrity rejection for this process.
-            print(f"{BackgroundColors.YELLOW}[MODEL RECOVERY REJECTED] {row_entry.get('experiment_id', 'unknown')}: {exc}{Style.RESET_ALL}")  # Emit exact failure reason.
+            print(f"{BackgroundColors.YELLOW}[MODEL RECOVERY REJECTED] {format_historical_model_recovery_identity(row_entry)} | Reason: {exc}{Style.RESET_ALL}")  # Emit exact combination-specific reason.
             continue  # Leave missing fields empty.
         macro_f1, per_class_json, model_filename = recovered_metrics  # Unpack validated prediction-derived metrics and their proven artifact.
         if macro_missing:  # Fill only absent Macro F1.
@@ -14773,11 +14955,12 @@ def backfill_saved_model_metrics(result_df: pd.DataFrame, csv_path: str, config:
             if recovered_df["per_class_f1_scores"].dtype != "object":  # Permit deterministic JSON assignment.
                 recovered_df["per_class_f1_scores"] = recovered_df["per_class_f1_scores"].astype("object")  # Convert only when needed.
             recovered_df.at[row_index, "per_class_f1_scores"] = per_class_json  # Store Task 1 serialization unchanged.
-        if not has_serialized_value(row_entry.get("exported_model_filename")):  # Fill provenance from the same model used by successful metric recovery.
+        if str(row_entry.get("exported_model_filename", "")).strip() != model_filename:  # Synchronize provenance with the strictly validated model used by recovery.
             if recovered_df["exported_model_filename"].dtype != "object":  # Prepare exact basename storage.
                 recovered_df["exported_model_filename"] = recovered_df["exported_model_filename"].astype("object")  # Preserve string values without coercion.
             recovered_df.at[row_index, "exported_model_filename"] = model_filename  # Reuse validated association without another search or prediction.
         outcomes["recovered"] += 1  # Count one changed historical row.
+        verbose_output(f"{BackgroundColors.GREEN}[MODEL RECOVERY SUCCEEDED] {format_historical_model_recovery_identity(row_entry)} | Artifact: {model_filename}{Style.RESET_ALL}", config=config)  # Emit exact successful association when verbose.
     return recovered_df, outcomes  # Return existing atomic-persistence input and factual counts.
 
 
@@ -14862,7 +15045,7 @@ def recover_loaded_cache_model_metrics(csv_path: str, evaluation_df: pd.DataFram
         provenance_indices = []  # Collect unresolved model basenames not yet attempted in this process.
         for row_index in recovered_df.index[incomplete_mask]:  # Restrict provenance maintenance to the same incomplete loaded rows.
             row_entry = recovered_df.loc[row_index].to_dict()  # Build the exact production identity input.
-            provenance_identity = (str(Path(str(csv_path)).expanduser().resolve()), run_index, build_cache_identity_from_row(row_entry))  # Bind one provenance attempt to dataset, run, and result identity.
+            provenance_identity = (str(Path(str(csv_path)).expanduser().resolve()), run_index, str(row_entry.get("experiment_id", "")), str(row_entry.get("classifier_type", "")), build_cache_identity_from_row(row_entry))  # Bind one provenance attempt to full persisted row and canonical resume identity.
             if not has_serialized_value(row_entry.get("exported_model_filename")) and provenance_identity not in HISTORICAL_MODEL_PROVENANCE_ATTEMPTS:  # Attempt unresolved metadata at most once per execution.
                 HISTORICAL_MODEL_PROVENANCE_ATTEMPTS.add(provenance_identity)  # Record the attempt before filesystem discovery.
                 provenance_indices.append(row_index)  # Retain this unresolved row for metadata-only recovery.
@@ -17876,7 +18059,7 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
             rfe_selected_features = None  # Suppress RFE features when feature selection is disabled
             extra_trees_selected_features = None  # Suppress Extra Trees features when feature selection is disabled
         
-        feature_names = [col for col in combined_files_df.columns if col != 'attack_type']  # Get feature column names
+        feature_names = feature_columns_without_lstm_metadata([column for column in combined_files_df.columns if column != "attack_type"])  # Exclude reserved sequence metadata from classifier feature identities.
         ga_selected_features, rfe_selected_features, extra_trees_selected_features = sanitize_and_verify_feature_selections(ga_selected_features, rfe_selected_features, extra_trees_selected_features, feature_names, config=config)  # Normalize artifacts before grid counting so the denominator matches assembled feature modes
         
         verbose_output(
