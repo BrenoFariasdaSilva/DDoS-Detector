@@ -38,6 +38,7 @@ The current headline empirical result is from the CICDDoS2019 `01-12` combined-f
   - [Table of Contents](#table-of-contents)
   - [Introduction](#introduction)
   - [Architecture](#architecture)
+    - [Methodology-to-Code Workflow](#methodology-to-code-workflow)
   - [Capabilities](#capabilities)
   - [Supported Classifiers](#supported-classifiers)
   - [Setup](#setup)
@@ -71,38 +72,113 @@ Configuration is centralized in `config.yaml`, with script defaults and CLI flag
 
 ## Architecture
 
-Current repository modules:
+This diagram maps the paper's dataset-configurable methodology to the current code. Solid arrows follow the original-data experiment path; dashed arrows show optional tools, artifact handoffs, or software extensions. The separate dashed box contains implemented capabilities excluded from the paper's evaluated 99-configuration snapshot. Repository inputs and evaluation modes can exceed the paper's ARFF/CSV/TXT/Parquet contract.
 
-```text
-config.yaml                         Unified runtime configuration
-Makefile                            Main automation targets
-dataset_converter.py                Dataset format conversion
-dataset_descriptor.py               Dataset metadata, class summaries, t-SNE reports
-genetic_algorithm.py                DEAP Genetic Algorithm feature selection
-extratrees.py                       Extra Trees feature ranking/selection
-pca.py                              PCA component sweeps
-rfe.py                              Recursive Feature Elimination
-hyperparameters_optimization.py     Manual grid-search hyperparameter optimization
-stacking.py                         Classifier grid, stacking, AutoML, cache/resume
-wgangp.py                           Conditional WGAN-GP augmentation
-telegram_bot.py                     Telegram notifications and runtime control plumbing
-utils/                              Shared runtime, stacking, Telegram, OOM, and skip-rule helpers
-tests/                              Focused tests for stacking, AutoML, cache, and CLI behavior
+### Methodology-to-Code Workflow
+
+```mermaid
+flowchart LR
+    cfg["Configuration and launch<br/>config.yaml / config.yaml.example<br/>CLI / Makefile"]
+    files["Flow dataset(s)<br/>ARFF / CSV / TXT / Parquet"]
+    convert["Optional format conversion<br/>dataset_converter.py"]
+    diagnose["Optional schema, label and compatibility reports<br/>dataset_descriptor.py"]
+    load["Load and inspect schema / labels<br/>stacking.py: load_dataset, process_single_file"]
+    clean["Clean and partition<br/>stacking.py: preprocess_dataframe,<br/>prepare_evaluation_data_splits, scale_and_split"]
+    train["Original training partition"]
+    test["Held-out original test partition"]
+
+    subgraph features["Feature Representation / Selection"]
+        full["Full: retain numeric predictors<br/>stacking.py: assemble_feature_sets"]
+        pca["PCA: latent components<br/>pca.py sweep CSV; stacking.py fits / loads PCA"]
+        ga["GA: selected predictors<br/>genetic_algorithm.py CSV; stacking.py loads mask"]
+        et["Extra Trees: selected predictors<br/>extratrees.py CSV; stacking.py loads ranking"]
+        rfe["RFE: selected predictors<br/>rfe.py CSV; stacking.py loads mask"]
+        explicit["Repository extension: explicit feature list<br/>stacking.py: assemble_feature_sets"]
+    end
+
+    feature_csv["Selector result CSVs<br/>Feature_Analysis/"]
+    assemble["Training and test feature matrices<br/>stacking.py: assemble_feature_sets"]
+    search["10-fold training CV for selector sweeps and manual parameter grids<br/>pca.py / genetic_algorithm.py / extratrees.py / rfe.py<br/>hyperparameters_optimization.py"]
+    hp_csv["Optimized parameter CSV<br/>Classifiers_Hyperparameters/"]
+    models["Classifier configuration<br/>stacking.py: get_models, default / loaded optimized params<br/>RF, XGBoost, LR, KNN, NC, GB, LightGBM, MLP"]
+    neural["Dedicated neural estimators<br/>ft_transformer.py / tabular_resnet.py / resnet18.py<br/>autoencoder.py / lstm.py"]
+    seq["Partition-local sequence windows for LSTM<br/>stacking.py / utils/lstm_sequences.py"]
+    fit["Final fit on original training partition<br/>stacking.py: evaluate_individual_classifier"]
+    eval["Predict and score on held-out test partition<br/>stacking.py: evaluate_individual_classifier"]
+    persist["Models, fitted transforms, result/cache CSVs<br/>metrics, reports, matrices, timing, hardware,<br/>configuration and provenance: stacking.py<br/>utils/stacking/run_metrics.py"]
+
+    subgraph ext["Implemented extensions - not evaluated in the paper snapshot"]
+        wgan["WGAN-GP generation from supplied CSV<br/>wgangp.py"]
+        augmented["Optional augmented-test evaluation<br/>stacking.py"]
+        stacker["Out-of-fold StackingClassifier<br/>stacking.py / utils/stacking/planning.py"]
+        automl["Optuna model and stacking search<br/>stacking.py"]
+        shap["SHAP explanations<br/>stacking.py / utils/stacking/shap.py"]
+    end
+    more["Repository-only capabilities<br/>SVM classifier; PCAP / stats conversion;<br/>LIME and other explanations"]
+    main["Separate evaluator<br/>main.py"]
+
+    cfg -.-> load
+    cfg -.-> models
+    files --> load --> clean
+    files -.-> convert -.-> load
+    files -.-> diagnose
+    clean --> train
+    clean --> test
+    train --> full
+    train --> pca
+    train --> ga
+    train --> et
+    train --> rfe
+    cfg -.-> explicit
+    pca -.-> feature_csv
+    ga -.-> feature_csv
+    et -.-> feature_csv
+    rfe -.-> feature_csv
+    feature_csv -.-> assemble
+    full --> assemble
+    pca --> assemble
+    ga --> assemble
+    et --> assemble
+    rfe --> assemble
+    explicit -.-> assemble
+    train -.-> search
+    search -.-> feature_csv
+    search -.-> hp_csv -.-> models
+    assemble --> models
+    models --> fit
+    neural --> models
+    assemble --> seq --> fit
+    test --> eval
+    fit --> eval --> persist
+    persist -.-> models
+    files -.-> wgan -.-> augmented
+    fit -.-> augmented
+    assemble -.-> stacker
+    assemble -.-> automl
+    eval -.-> shap
+    files -.-> main
+    cfg -.-> more
+
+    classDef core fill:#e8f2ee,stroke:#456b5c,color:#172b23
+    classDef artifact fill:#edf0f6,stroke:#56647a,color:#1e293b
+    classDef extension fill:#f6f1e8,stroke:#876c42,stroke-dasharray:5 5,color:#352b1c
+    classDef repo fill:#f2edf6,stroke:#705d7b,color:#2e2434
+    class files,load,clean,train,test,full,pca,ga,et,rfe,assemble,search,models,neural,seq,fit,eval core
+    class cfg,convert,diagnose,feature_csv,hp_csv,persist artifact
+    class wgan,augmented,stacker,automl,shap extension
+    class explicit,more,main repo
+    style ext fill:#fbf9f4,stroke:#876c42,stroke-dasharray:5 5
 ```
 
-Verified high-level workflow:
+**Reading the arrows:** Solid arrows are the conceptual original-data path, not direct Python imports. Dashed arrows are optional execution paths, artifact handoffs, or configuration inputs. The standalone feature scripts write selector results under `Feature_Analysis/`; `stacking.py` reads GA/RFE/Extra Trees feature names and the PCA component count, then fits or reuses its *own* PCA transformer on the training partition. It applies each representation to the matching test matrix without fitting the scaler or PCA on that held-out partition. An explicit feature list is supported by the repository, outside the five paper representations. By default, trained artifacts are stored under dataset-local `Stacking/Models/`, run caches and per-run report bundles under `Stacking/Cache_Results/`, and result CSVs under `Feature_Analysis/` or the configured stacking output directory.
 
-```text
-Dataset files
-  -> loading, cleaning, numeric feature extraction, label encoding, scaling
-  -> optional feature selection: Full, PCA, RFE, GA, Extra Trees, or explicit features
-  -> optional hyperparameter loading/search
-  -> classifier evaluation and optional StackingClassifier evaluation
-  -> optional WGAN-GP augmented-test evaluation
-  -> optional Optuna AutoML model/stacking search
-  -> cache/result/model/explainability exports with runtime and hardware metadata
-  -> optional Telegram progress, skip control, errors, and completion messages
-```
+The 10-fold CV in this diagram belongs to standalone selection and manual hyperparameter search (the latter uses GA-selected features); the ordinary `stacking.py` individual-classifier grid performs a final fit and held-out evaluation, despite storing a `cv_method` description. Its optional `StackingClassifier` has its own 10-fold out-of-fold training, and AutoML uses configurable CV (five folds by default). Selector CSVs are separate studies: for example, the PCA component chooser can rank rows by `test_f1_score`, so the code does **not** prove a fully nested, training-only model-selection procedure. In `hyperparameters_optimization.py`, scaling also precedes the CV folds, so its fold scores do not establish fold-local preprocessing. `stacking.py` also removes zero-variance columns before the split and drops nonnumeric predictors rather than encoding them; its label encoder, scaler, and PCA fit are training-partition scoped.
+
+The paper's dashed block describes **training-only** WGAN-GP augmentation. The current `wgangp.py` trains on the supplied CSV, without making its own train/test split; pass it a pre-isolated training CSV to enforce that boundary. The optional `stacking.py` integration evaluates original-trained models on generated samples as an augmented **test** path, rather than adding generated rows to the original training partition. Neither path contributed to the 99 original-only configurations in [RESULTS.md](RESULTS.md). The same exclusion applies to stacking, AutoML, and SHAP; SVM and explicit features are other repository capabilities outside that snapshot.
+
+`dataset_descriptor.py` is an optional diagnostic tool, and `main.py` is a separate evaluator; neither is called by the `stacking.py` paper-trace path. The configured dataset paths are examples, not a CICDDoS2019 requirement. Reusing a trained model or feature mask on another dataset requires matching predictor and label semantics; configurable ingestion alone does not establish cross-dataset transfer.
+
+Ancillary modules: `training_progress.py` and `classifier_eta.py` report progress and estimates; `utils/stacking/planning.py` builds experiment plans; `utils/stacking/run_metrics.py` aggregates run caches; `utils/stacking/shap.py` implements SHAP helpers. `Makefile` launches scripts independently.
 
 ## Capabilities
 
