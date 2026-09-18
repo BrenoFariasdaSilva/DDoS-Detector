@@ -147,7 +147,9 @@ from sklearn.tree import DecisionTreeClassifier  # For Decision Tree classifier 
 from telegram_bot import TelegramBot, send_exception_via_telegram, send_telegram_message, setup_global_exception_hook  # For sending progress messages to Telegram
 from threadpoolctl import threadpool_limits  # For narrowly limiting BLAS and OpenMP threads during feature extraction
 from tqdm import tqdm  # For progress bars
-from typing import Any, Callable, Dict, Optional, List, Set, Tuple, cast  # For optional and collection typing hints
+from typing import (  # For optional and collection typing hints.
+    Any, Callable, Dict, Iterator, Optional, List, Set, Tuple, cast,  # Preserve existing annotations.
+)
 from xgboost import XGBClassifier  # For XGBoost classifier
 from ft_transformer import FTTransformerClassifier  # Import the standalone sklearn-compatible FT-Transformer classifier
 from tabular_resnet import TabularResNetClassifier  # Import the standalone sklearn-compatible Tabular ResNet classifier
@@ -14814,6 +14816,58 @@ def reconstruct_historical_test_population(context: dict, loaded_bundle: dict, e
     return np.asarray(test_idx, dtype=np.int64), y_test, len(train_idx)  # Cache only lightweight split evidence, never a model-sized test matrix.
 
 
+@contextmanager
+def report_historical_recovery_stage(
+    result_entry: dict, progress: str, stage: str, config: dict,
+    start_detail: str = "", completed_detail: str = "", heartbeat: bool = True,
+) -> Iterator[None]:
+    """
+    Report one historical recovery stage with scoped periodic activity.
+
+    :param result_entry: Authoritative cached experiment row.
+    :param progress: Position within the current historical recovery pass.
+    :param stage: Current blocking recovery operation.
+    :param config: Active run configuration containing the progress interval.
+    :param start_detail: Optional factual operation details for the start record.
+    :param completed_detail: Optional factual result details after success.
+    :param heartbeat: Whether this stage can require periodic activity records.
+    :return: Context scope that preserves the wrapped operation's outcome.
+    """
+
+    def emit(message: str) -> None:  # Keep stage output failures from changing recovery outcomes.
+        try:  # Preserve the wrapped operation when the output stream is unavailable.
+            print(message, flush=True)  # Publish one complete line to the existing logger.
+        except Exception:  # Isolate logging failures from scientific execution.
+            pass  # Leave the original recovery outcome unchanged.
+
+    prefix = (  # Bind immutable experiment and stage identity.
+        f"[MODEL RECOVERY {progress}] "  # Include the current recovery position.
+        f"{format_historical_model_recovery_identity(result_entry)} | Stage: {stage}"  # Include the cached experiment.
+    )  # Finish the stage identity.
+    configured_minutes = config.get("evaluation", {}).get(  # Read the shared progress interval.
+        "training_progress_interval_minutes", DEFAULT_TRAINING_PROGRESS_INTERVAL_MINUTES  # Reuse its fallback.
+    )  # Finish interval selection.
+    interval_minutes = validate_training_progress_interval_minutes(configured_minutes)  # Reuse its validated minutes.
+    monitor = TrainingProgress(  # Reuse the existing scoped timer and stop event.
+        None, "Historical recovery", calculate_execution_time,  # Keep training-specific fields absent.
+        output_stream=sys.stdout, heartbeat=heartbeat,  # Emit stage activity to the active logger.
+        report_interval_seconds=interval_minutes * 60.0,  # Use the configured cadence.
+        heartbeat_message_formatter=lambda elapsed: f"{prefix} | Still running | Elapsed: {elapsed}",  # Name stage.
+    )  # Finish the scoped monitor.
+    started = time.monotonic()  # Time this stage without relying on wall-clock adjustments.
+    emit(f"{prefix} | Starting{start_detail}")  # Announce the operation before it blocks.
+    try:  # Preserve the operation's original success or failure.
+        with monitor:  # Stop the heartbeat before the next stage can begin.
+            yield  # Execute the existing recovery operation unchanged.
+    except BaseException as exc:  # Identify the failing stage without changing its exception.
+        elapsed = calculate_execution_time(time.monotonic() - started)  # Format elapsed failure time.
+        emit(f"{prefix} | FAILED after {elapsed} | Error: {exc}")  # Report the original failure.
+        raise  # Preserve the original recovery failure.
+    else:  # Report only stages that finished successfully.
+        elapsed = calculate_execution_time(time.monotonic() - started)  # Format elapsed completion time.
+        emit(f"{prefix} | Completed in {elapsed}{completed_detail}")  # Report completed stage.
+
+
 def recover_metrics_from_stacking_model(
     result_entry: dict, csv_path: str, config: dict,
     artifacts: Optional[List[Tuple[Path, dict, dict]]], evaluation_data_cache: dict,
@@ -14838,90 +14892,110 @@ def recover_metrics_from_stacking_model(
     :return: Canonical prediction-derived metrics and validated model basename.
     """
 
-    metadata_path, _, context, model_filename = resolve_historical_stacking_model_artifact(result_entry, csv_path, config, artifacts, artifact_metadata_cache)  # Prefer exact row-linked provenance before cached discovery.
+    with report_historical_recovery_stage(result_entry, progress, "Artifact validation", config):  # Trace pair.
+        metadata_path, _, context, model_filename = resolve_historical_stacking_model_artifact(result_entry, csv_path, config, artifacts, artifact_metadata_cache)  # Prefer exact row-linked provenance before cached discovery.
     print(  # Identify the exact model before deserialization.
         f"{BackgroundColors.GREEN}[MODEL RECOVERY {progress}] "  # Include the current recovery position.
         f"{format_historical_model_recovery_identity(result_entry)} | "  # Include the exact cached experiment.
         f"Loading artifact: {model_filename}{Style.RESET_ALL}"  # Name the validated artifact.
     )  # Emit the loading event.
-    bundle, rejection_reason = load_existing_model_if_available(str(context["model_name"]), csv_path, metadata_path.parent.name, str(context["feature_set"]), context, config=config)  # Reuse strict bundle and preprocessing validation.
-    if bundle is None:  # Surface exact loader rejection without inference.
-        raise ValueError(rejection_reason or "persisted classifier bundle is incompatible")  # Reject before prediction.
+    with report_historical_recovery_stage(result_entry, progress, "Model loading", config):  # Trace deserialization.
+        bundle, rejection_reason = load_existing_model_if_available(str(context["model_name"]), csv_path, metadata_path.parent.name, str(context["feature_set"]), context, config=config)  # Reuse strict bundle and preprocessing validation.
+        if bundle is None:  # Surface exact loader rejection without inference.
+            raise ValueError(rejection_reason or "persisted classifier bundle is incompatible")  # Reject bundle.
     try:  # Keep one loaded bundle scoped to this historical recovery.
-        if is_lstm_classifier_name(context.get("model_name")):  # Current model metadata does not bind the generated sequence population counts.
-            raise RuntimeError("exact LSTM sequence evaluation population is not proven by persisted metadata")  # Skip scientifically uncertain reconstruction.
-        persisted_input_feature_names = [str(feature) for feature in bundle["input_feature_names"]]  # Read exact identity-bound feature metadata before shared split reuse.
-        if not persisted_input_feature_names or len(set(persisted_input_feature_names)) != len(persisted_input_feature_names):  # Require unambiguous persisted feature metadata.
-            raise ValueError("Persisted scaler input feature schema is empty or duplicated")  # Reject ambiguous feature selection.
-        reserved_input_features = [feature for feature in persisted_input_feature_names if is_lstm_metadata_column(feature)]  # Identify historical combined-mode provenance recorded beside numeric features.
-        for reserved_feature in reserved_input_features:  # Prove each excluded field is the established nonnumeric sequence metadata.
-            if reserved_feature not in evaluation_df.columns or pd.api.types.is_numeric_dtype(evaluation_df[reserved_feature].dtype):  # Refuse exclusion when active semantics differ from original nonnumeric filtering.
-                raise ValueError(f"Reserved LSTM metadata has incompatible active semantics: {reserved_feature}")  # Reject an unproven scaler schema correction.
-        input_feature_names = [str(feature) for feature in feature_columns_without_lstm_metadata(persisted_input_feature_names)]  # Match original StandardScaler inputs by excluding only proven reserved nonnumeric columns.
-        target_column = str(context.get("target_column", ""))  # Read proven target identity.
-        if target_column in input_feature_names:  # Keep labels out of numeric preprocessing.
-            raise ValueError("Persisted scaler input schema contains the target column")  # Reject target leakage.
-        missing_features = [feature for feature in input_feature_names if feature not in evaluation_df.columns]  # Validate every required active column.
-        if missing_features:  # Reject changed active schemas before array materialization.
-            raise ValueError(f"Loaded evaluation data is missing persisted input features: {missing_features}")  # Report exact absent names.
-        if not evaluation_df.columns.is_unique:  # Require unambiguous active column positions.
-            raise ValueError("Loaded evaluation data contains duplicate column names")  # Reject ambiguous feature selection.
-        input_feature_indices = [int(evaluation_df.columns.get_loc(feature)) for feature in input_feature_names]  # Resolve exact active positions without copying all rows.
-        nonnumeric_features = [feature for feature, position in zip(input_feature_names, input_feature_indices) if not pd.api.types.is_numeric_dtype(evaluation_df.dtypes.iloc[position])]  # Identify nonnumeric persisted input without a full-frame copy.
-        if nonnumeric_features:  # Prevent strings or metadata from reaching fitted preprocessing.
-            raise ValueError(f"Persisted tabular input features are nonnumeric: {nonnumeric_features}")  # Report schema corruption before transformation.
-        scaler = bundle["scaler"]  # Reuse fitted original-training scaler.
-        scaler_feature_count = getattr(scaler, "n_features_in_", None)  # Read fitted scaler width when available.
-        if scaler_feature_count is not None and int(scaler_feature_count) != len(input_feature_names):  # Require persisted names to cover exact scaler input width.
-            raise ValueError("Persisted scaler width differs from input feature metadata")  # Reject incomplete or polluted metadata.
-        population_identity = hashlib.sha256(json.dumps({field: context[field] for field in ("source_files", "execution_mode", "attack_types", "target_column", "label_classes", "pre_split_feature_removal", "test_size", "random_state", "stratified", "sklearn_version", "numpy_version")}, sort_keys=True, allow_nan=False).encode("utf-8")).hexdigest()  # Identify one exact historical row partition independently from model features.
-        if population_identity not in evaluation_data_cache:  # Reconstruct each shared test population once.
-            evaluation_data_cache[population_identity] = reconstruct_historical_test_population(context, bundle, evaluation_df, evaluation_source_files, evaluation_attack_types)  # Retain only exact test indices, labels, and count evidence.
-        test_indices, y_test, train_count = evaluation_data_cache[population_identity]  # Reuse the proven split across classifiers.
-        historical_train_count = resolve_result_metric_float(result_entry, "n_samples_train")  # Parse persisted training population size.
-        historical_test_count = resolve_result_metric_float(result_entry, "n_samples_test")  # Parse persisted testing population size.
-        if historical_train_count is None or historical_test_count is None or not historical_train_count.is_integer() or not historical_test_count.is_integer() or int(historical_train_count) != train_count or int(historical_test_count) != len(y_test):  # Require historical population sizes.
-            raise ValueError("Reconstructed train/test sample counts differ from historical row")  # Reject mismatch.
-        X_test_raw = evaluation_df.iloc[test_indices, input_feature_indices].to_numpy(copy=False)  # Materialize only exact numeric persisted features from active population.
-        X_test_scaled = np.asarray(scaler.transform(X_test_raw))  # Apply persisted scaling without fitting.
-        transformer = bundle.get("transformer")  # Read optional fitted feature transformer.
-        model_feature_names = [str(feature) for feature in bundle["model_feature_names"]]  # Preserve exact classifier feature order.
-        if transformer is not None:  # Apply a fitted PCA or equivalent persisted transformer.
-            X_model = np.asarray(transformer.transform(X_test_scaled))  # Transform only, preserving fitted state.
-            if X_model.ndim != 2 or X_model.shape[1] != len(model_feature_names):  # Require output schema width.
-                raise ValueError("Persisted transformer output differs from model feature schema")  # Reject incompatible preprocessing.
-        else:  # Select exact named feature columns after full-schema scaling.
-            try:
-                feature_indices = [input_feature_names.index(feature) for feature in model_feature_names]  # Resolve ordered classifier columns.
-            except ValueError as exc:
-                raise ValueError("Persisted model feature schema is absent from scaler input schema") from exc  # Reject missing features.
-            X_model = X_test_scaled[:, feature_indices]  # Preserve historical model input order.
-        prediction_input: Any = X_model  # Preserve array input unless fitted estimator metadata requires names.
-        fitted_feature_names = getattr(bundle["model"], "feature_names_in_", None)  # Read sklearn's fitted named-feature contract when present.
-        if fitted_feature_names is not None:  # Restore names only for estimators fitted with named columns.
-            fitted_names = [str(feature) for feature in fitted_feature_names]  # Normalize fitted estimator names without reordering.
-            prediction_names = model_feature_names  # Use scientific artifact names for ordinary named estimators.
-            if fitted_names != model_feature_names:  # Distinguish LightGBM's deterministic NumPy names from genuine mismatches.
-                positional_names = [f"Column_{index}" for index in range(len(model_feature_names))]  # Rebuild LightGBM names produced by original NumPy fitting.
-                booster = getattr(bundle["model"], "booster_", None)  # Read fitted LightGBM booster when available.
-                booster_names = [str(feature) for feature in booster.feature_name()] if booster is not None and callable(getattr(booster, "feature_name", None)) else None  # Validate underlying booster order.
-                if isinstance(bundle["model"], lgb.LGBMClassifier) and fitted_names == positional_names and booster_names == positional_names:  # Accept only proven one-to-one positional equivalence.
-                    prediction_names = fitted_names  # Supply estimator-accepted names without changing feature values or order.
-                else:
-                    raise ValueError("Persisted estimator feature names differ from model artifact metadata")  # Reject genuine named-schema mismatch.
-            prediction_input = pd.DataFrame(X_model, columns=prediction_names)  # Supply exact accepted names without changing numeric values or ordering.
-        predictions = np.asarray(bundle["model"].predict(prediction_input))  # Perform one prediction on the proven historical input.
-        if predictions.ndim != 1 or len(predictions) != len(y_test):  # Require row-aligned classifier output.
-            raise ValueError("Persisted classifier predictions are not aligned with historical targets")  # Reject invalid inference output.
+        with report_historical_recovery_stage(result_entry, progress, "Evaluation population", config):  # Trace split.
+            if is_lstm_classifier_name(context.get("model_name")):  # Current model metadata does not bind the generated sequence population counts.
+                raise RuntimeError("exact LSTM sequence evaluation population is not proven by persisted metadata")  # Skip scientifically uncertain reconstruction.
+            persisted_input_feature_names = [str(feature) for feature in bundle["input_feature_names"]]  # Read exact identity-bound feature metadata before shared split reuse.
+            if not persisted_input_feature_names or len(set(persisted_input_feature_names)) != len(persisted_input_feature_names):  # Require unambiguous persisted feature metadata.
+                raise ValueError("Persisted scaler input feature schema is empty or duplicated")  # Reject ambiguous feature selection.
+            reserved_input_features = [feature for feature in persisted_input_feature_names if is_lstm_metadata_column(feature)]  # Identify historical combined-mode provenance recorded beside numeric features.
+            for reserved_feature in reserved_input_features:  # Prove each excluded field is the established nonnumeric sequence metadata.
+                if reserved_feature not in evaluation_df.columns or pd.api.types.is_numeric_dtype(evaluation_df[reserved_feature].dtype):  # Refuse exclusion when active semantics differ from original nonnumeric filtering.
+                    raise ValueError(f"Reserved LSTM metadata has incompatible active semantics: {reserved_feature}")  # Reject an unproven scaler schema correction.
+            input_feature_names = [str(feature) for feature in feature_columns_without_lstm_metadata(persisted_input_feature_names)]  # Match original StandardScaler inputs by excluding only proven reserved nonnumeric columns.
+            target_column = str(context.get("target_column", ""))  # Read proven target identity.
+            if target_column in input_feature_names:  # Keep labels out of numeric preprocessing.
+                raise ValueError("Persisted scaler input schema contains the target column")  # Reject target leakage.
+            missing_features = [feature for feature in input_feature_names if feature not in evaluation_df.columns]  # Validate every required active column.
+            if missing_features:  # Reject changed active schemas before array materialization.
+                raise ValueError(f"Loaded evaluation data is missing persisted input features: {missing_features}")  # Report exact absent names.
+            if not evaluation_df.columns.is_unique:  # Require unambiguous active column positions.
+                raise ValueError("Loaded evaluation data contains duplicate column names")  # Reject ambiguous feature selection.
+            input_feature_indices = [int(evaluation_df.columns.get_loc(feature)) for feature in input_feature_names]  # Resolve exact active positions without copying all rows.
+            nonnumeric_features = [feature for feature, position in zip(input_feature_names, input_feature_indices) if not pd.api.types.is_numeric_dtype(evaluation_df.dtypes.iloc[position])]  # Identify nonnumeric persisted input without a full-frame copy.
+            if nonnumeric_features:  # Prevent strings or metadata from reaching fitted preprocessing.
+                raise ValueError(f"Persisted tabular input features are nonnumeric: {nonnumeric_features}")  # Report schema corruption before transformation.
+            scaler = bundle["scaler"]  # Reuse fitted original-training scaler.
+            scaler_feature_count = getattr(scaler, "n_features_in_", None)  # Read fitted scaler width when available.
+            if scaler_feature_count is not None and int(scaler_feature_count) != len(input_feature_names):  # Require persisted names to cover exact scaler input width.
+                raise ValueError("Persisted scaler width differs from input feature metadata")  # Reject incomplete or polluted metadata.
+            population_identity = hashlib.sha256(json.dumps({field: context[field] for field in ("source_files", "execution_mode", "attack_types", "target_column", "label_classes", "pre_split_feature_removal", "test_size", "random_state", "stratified", "sklearn_version", "numpy_version")}, sort_keys=True, allow_nan=False).encode("utf-8")).hexdigest()  # Identify one exact historical row partition independently from model features.
+            if population_identity not in evaluation_data_cache:  # Reconstruct each shared test population once.
+                evaluation_data_cache[population_identity] = reconstruct_historical_test_population(context, bundle, evaluation_df, evaluation_source_files, evaluation_attack_types)  # Retain only exact test indices, labels, and count evidence.
+            test_indices, y_test, train_count = evaluation_data_cache[population_identity]  # Reuse the proven split across classifiers.
+            historical_train_count = resolve_result_metric_float(result_entry, "n_samples_train")  # Parse persisted training population size.
+            historical_test_count = resolve_result_metric_float(result_entry, "n_samples_test")  # Parse persisted testing population size.
+            if historical_train_count is None or historical_test_count is None or not historical_train_count.is_integer() or not historical_test_count.is_integer() or int(historical_train_count) != train_count or int(historical_test_count) != len(y_test):  # Require historical population sizes.
+                raise ValueError("Reconstructed train/test sample counts differ from historical row")  # Reject drift.
+        with report_historical_recovery_stage(result_entry, progress, "Feature preparation", config):  # Trace input.
+            X_test_raw = evaluation_df.iloc[test_indices, input_feature_indices].to_numpy(copy=False)  # Materialize only exact numeric persisted features from active population.
+            X_test_scaled = np.asarray(scaler.transform(X_test_raw))  # Apply persisted scaling without fitting.
+            transformer = bundle.get("transformer")  # Read optional fitted feature transformer.
+            model_feature_names = [str(feature) for feature in bundle["model_feature_names"]]  # Preserve exact classifier feature order.
+            if transformer is not None:  # Apply a fitted PCA or equivalent persisted transformer.
+                X_model = np.asarray(transformer.transform(X_test_scaled))  # Transform only, preserving fitted state.
+                if X_model.ndim != 2 or X_model.shape[1] != len(model_feature_names):  # Require output schema width.
+                    raise ValueError("Persisted transformer output differs from model feature schema")  # Reject incompatible preprocessing.
+            else:  # Select exact named feature columns after full-schema scaling.
+                try:
+                    feature_indices = [input_feature_names.index(feature) for feature in model_feature_names]  # Resolve ordered classifier columns.
+                except ValueError as exc:
+                    raise ValueError("Persisted model feature schema is absent from scaler input schema") from exc  # Reject missing features.
+                X_model = X_test_scaled[:, feature_indices]  # Preserve historical model input order.
+            prediction_input: Any = X_model  # Preserve array input unless fitted estimator metadata requires names.
+            fitted_feature_names = getattr(bundle["model"], "feature_names_in_", None)  # Read sklearn's fitted named-feature contract when present.
+            if fitted_feature_names is not None:  # Restore names only for estimators fitted with named columns.
+                fitted_names = [str(feature) for feature in fitted_feature_names]  # Normalize fitted estimator names without reordering.
+                prediction_names = model_feature_names  # Use scientific artifact names for ordinary named estimators.
+                if fitted_names != model_feature_names:  # Distinguish LightGBM's deterministic NumPy names from genuine mismatches.
+                    positional_names = [f"Column_{index}" for index in range(len(model_feature_names))]  # Rebuild LightGBM names produced by original NumPy fitting.
+                    booster = getattr(bundle["model"], "booster_", None)  # Read fitted LightGBM booster when available.
+                    booster_names = [str(feature) for feature in booster.feature_name()] if booster is not None and callable(getattr(booster, "feature_name", None)) else None  # Validate underlying booster order.
+                    if isinstance(bundle["model"], lgb.LGBMClassifier) and fitted_names == positional_names and booster_names == positional_names:  # Accept only proven one-to-one positional equivalence.
+                        prediction_names = fitted_names  # Supply estimator-accepted names without changing feature values or order.
+                    else:
+                        raise ValueError("Persisted estimator feature names differ from model artifact metadata")  # Reject genuine named-schema mismatch.
+                prediction_input = pd.DataFrame(X_model, columns=prediction_names)  # Supply exact accepted names without changing numeric values or ordering.
+        with report_historical_recovery_stage(  # Trace the opaque estimator call.
+            result_entry, progress, "Prediction", config,  # Bind the current experiment and stage.
+            start_detail=(  # Report existing input shape.
+                f" | Samples: {prediction_input.shape[0]:,}"  # Include current row count.
+                f" | Features: {prediction_input.shape[1]:,}"  # Include current feature width.
+            ),  # Finish factual prediction detail.
+            completed_detail=f" | Predictions: {prediction_input.shape[0]:,}",  # Report aligned output size on success.
+        ):  # Finish prediction timing scope.
+            predictions = np.asarray(bundle["model"].predict(prediction_input))  # Perform one prediction on the proven historical input.
+            if predictions.ndim != 1 or len(predictions) != len(y_test):  # Require row-aligned classifier output.
+                raise ValueError("Persisted classifier predictions are not aligned with historical targets")  # Reject invalid inference output.
         print(  # Identify missing metrics before canonical calculation.
             f"{BackgroundColors.GREEN}[MODEL METRICS RECOVERY {progress}] "  # Include the current position.
             f"{format_historical_model_recovery_identity(result_entry)} | "  # Include the exact experiment.
             f"Computing missing fields: {', '.join(missing_metric_fields)}{Style.RESET_ALL}"  # Name absent fields.
         )  # Emit the metric-calculation event.
-        metrics = compute_classification_metrics(y_test, predictions, bundle["label_encoder"].classes_)  # Compute every fingerprint metric from one prediction vector.
-        fingerprint = {"accuracy": float(metrics[0]), "weighted_precision": float(metrics[1]), "weighted_recall": float(metrics[2]), "weighted_f1_score": float(metrics[3]), "fpr": float(metrics[4]), "fnr": float(metrics[5])}  # Build validation-only authoritative aggregates.
-        validate_recovered_aggregate_fingerprint(result_entry, fingerprint, allow_missing=True)  # Validate aggregates.
-        persist_per_run_confusion_matrix_artifacts(result_entry, y_test, predictions, bundle["label_encoder"].classes_, csv_path, config)  # Reuse the single validated historical prediction for all four artifacts.
+        with report_historical_recovery_stage(  # Trace canonical metrics.
+            result_entry, progress, "Missing metrics", config,  # Bind the current stage.
+            start_detail=f" | Fields: {', '.join(missing_metric_fields)}",  # Name actual missing fields.
+        ):  # Finish metric stage scope.
+            metrics = compute_classification_metrics(y_test, predictions, bundle["label_encoder"].classes_)  # Compute every fingerprint metric from one prediction vector.
+            fingerprint = {"accuracy": float(metrics[0]), "weighted_precision": float(metrics[1]), "weighted_recall": float(metrics[2]), "weighted_f1_score": float(metrics[3]), "fpr": float(metrics[4]), "fnr": float(metrics[5])}  # Build validation-only authoritative aggregates.
+        with report_historical_recovery_stage(  # Trace aggregate proof.
+            result_entry, progress, "Recovery validation", config, heartbeat=False,  # Bind the active stage.
+        ):  # Finish validation scope.
+            validate_recovered_aggregate_fingerprint(result_entry, fingerprint, allow_missing=True)  # Validate.
+        with report_historical_recovery_stage(result_entry, progress, "Confusion matrix", config):  # Trace artifacts.
+            persist_per_run_confusion_matrix_artifacts(result_entry, y_test, predictions, bundle["label_encoder"].classes_, csv_path, config)  # Reuse the single validated historical prediction for all four artifacts.
         print(  # Report exact matrix publication.
             f"{BackgroundColors.GREEN}[CONFUSION MATRIX RECOVERED] "  # Name the artifact event.
             f"{format_historical_model_recovery_identity(result_entry)} | "  # Identify the experiment.
@@ -14934,23 +15008,27 @@ def recover_metrics_from_stacking_model(
         }  # Finish prediction-derived metrics.
         return metric_values, model_filename  # Return metrics with proven artifact basename.
     finally:  # Release heavy recovery references on success and failure.
-        bundle.clear()  # Drop the deserialized estimator and fitted preprocessing from retained frames.
-        if "scaler" in locals():  # Release the fitted scaler alias.
-            del scaler  # Drop fitted preprocessing after the recovery finishes.
-        if "transformer" in locals():  # Release the optional fitted transformer alias.
-            del transformer  # Drop transformed feature preprocessing after the recovery finishes.
-        if "booster" in locals():  # Release an optional LightGBM native model alias.
-            del booster  # Drop the alias after model feature validation.
-        if "prediction_input" in locals():  # Release any temporary named prediction frame.
-            del prediction_input  # Drop the prediction input after inference and artifact work.
-        if "predictions" in locals():  # Release the temporary prediction vector.
-            del predictions  # Drop predictions after metrics and confusion matrices.
-        if "X_model" in locals():  # Release the transformed model input.
-            del X_model  # Drop model features after inference.
-        if "X_test_scaled" in locals():  # Release the scaled evaluation matrix.
-            del X_test_scaled  # Drop scaled features after inference.
-        if "X_test_raw" in locals():  # Release the temporary evaluation view.
-            del X_test_raw  # Drop raw feature references after inference.
+        with report_historical_recovery_stage(  # Trace released recovery state.
+            result_entry, progress, "Cleanup", config,  # Bind the current stage.
+            completed_detail=" | Released model and recovery temporaries", heartbeat=False,  # Report actual release.
+        ):  # Finish cleanup stage scope.
+            bundle.clear()  # Drop the deserialized estimator and fitted preprocessing from retained frames.
+            if "scaler" in locals():  # Release the fitted scaler alias.
+                del scaler  # Drop fitted preprocessing after the recovery finishes.
+            if "transformer" in locals():  # Release the optional fitted transformer alias.
+                del transformer  # Drop transformed feature preprocessing after the recovery finishes.
+            if "booster" in locals():  # Release an optional LightGBM native model alias.
+                del booster  # Drop the alias after model feature validation.
+            if "prediction_input" in locals():  # Release any temporary named prediction frame.
+                del prediction_input  # Drop the prediction input after inference and artifact work.
+            if "predictions" in locals():  # Release the temporary prediction vector.
+                del predictions  # Drop predictions after metrics and confusion matrices.
+            if "X_model" in locals():  # Release the transformed model input.
+                del X_model  # Drop model features after inference.
+            if "X_test_scaled" in locals():  # Release the scaled evaluation matrix.
+                del X_test_scaled  # Drop scaled features after inference.
+            if "X_test_raw" in locals():  # Release the temporary evaluation view.
+                del X_test_raw  # Drop raw feature references after inference.
 
 
 def backfill_saved_model_metrics(
@@ -15079,13 +15157,17 @@ def backfill_saved_model_metrics(
                 recovered_df["exported_model_filename"] = recovered_df["exported_model_filename"].astype("object")  # Preserve string values without coercion.
             recovered_df.at[row_index, "exported_model_filename"] = model_filename  # Reuse validated association without another search or prediction.
         result_entry = recovered_df.loc[row_index].to_dict()  # Preserve every unrelated historical row value.
-        persist_cache_result_entry(csv_path, result_entry, cache_dict, config=config)  # Commit before next model.
+        with report_historical_recovery_stage(row_entry, progress, "Cache persistence", config):  # Trace writes.
+            persist_cache_result_entry(csv_path, result_entry, cache_dict, config=config)  # Commit before next model.
         print(  # Confirm this row's primary and backup write.
             f"{BackgroundColors.GREEN}[MODEL RECOVERY CACHE PERSISTED] "  # Name the durable event.
             f"Progress: {progress} | "  # Include the current position.
             f"{format_historical_model_recovery_identity(row_entry)}{Style.RESET_ALL}"  # Identify the experiment.
         )  # Emit the durable event.
-        synchronize_historical_recovery_to_final(csv_path, result_entry, config)  # Update matching final row.
+        with report_historical_recovery_stage(  # Trace optional final CSV publication.
+            row_entry, progress, "Final-result synchronization", config,  # Bind the active result.
+        ):  # Finish final-result scope.
+            synchronize_historical_recovery_to_final(csv_path, result_entry, config)  # Update matching final row.
         metric_cache[result_identity] = {"status": "recovered", "metrics": recovered_metrics}  # Memoize result.
         outcomes["recovered"] += 1  # Count one durably recovered historical row.
         print(  # Identify proven metric fields.

@@ -84,7 +84,7 @@ def interactive_terminal_attached(output_stream: Optional[Any] = None) -> bool: 
 class TrainingProgress:  # Report genuine public units or heartbeat-only activity
     """Report genuine training units or low-frequency active heartbeats."""
 
-    def __init__(self, feature_set: Optional[str], classifier_name: str, duration_formatter: Callable[[float], str], output_stream: Optional[Any] = None, total_units: Optional[int] = None, unit_label: Optional[str] = None, heartbeat: bool = False, report_interval_seconds: float = DEFAULT_TRAINING_PROGRESS_INTERVAL_SECONDS, hyperparameters_enabled: Optional[bool] = None, augmentation_ratio: Optional[float] = None, eta_callback: Optional[Callable[[str, Optional[float]], None]] = None, resource_suffix_callback: Optional[Callable[[], str]] = None, estimated_finish_suffix_callback: Optional[Callable[[float], str]] = None, estimated_total_seconds: Optional[float] = None, local_combination_index: Optional[int] = None, local_combination_total: Optional[int] = None, previous_run_duration_label: str = "unavailable", eta_pending_run_experiments_label: str = "unavailable"):  # Initialize one training progress scope
+    def __init__(self, feature_set: Optional[str], classifier_name: str, duration_formatter: Callable[[float], str], output_stream: Optional[Any] = None, total_units: Optional[int] = None, unit_label: Optional[str] = None, heartbeat: bool = False, report_interval_seconds: float = DEFAULT_TRAINING_PROGRESS_INTERVAL_SECONDS, hyperparameters_enabled: Optional[bool] = None, augmentation_ratio: Optional[float] = None, eta_callback: Optional[Callable[[str, Optional[float]], None]] = None, resource_suffix_callback: Optional[Callable[[], str]] = None, estimated_finish_suffix_callback: Optional[Callable[[float], str]] = None, estimated_total_seconds: Optional[float] = None, local_combination_index: Optional[int] = None, local_combination_total: Optional[int] = None, previous_run_duration_label: str = "unavailable", eta_pending_run_experiments_label: str = "unavailable", heartbeat_message_formatter: Optional[Callable[[str], str]] = None):  # Initialize one training progress scope.
         """
         Initialize one classifier training progress scope.
 
@@ -104,6 +104,7 @@ class TrainingProgress:  # Report genuine public units or heartbeat-only activit
         :param estimated_total_seconds: Optional historical total duration for heartbeat-only ETA.
         :param previous_run_duration_label: Persisted earlier run duration label.
         :param eta_pending_run_experiments_label: Historical duration sum for pending run experiments.
+        :param heartbeat_message_formatter: Optional caller-specific active-stage message formatter.
         :return: None.
         """
 
@@ -122,6 +123,7 @@ class TrainingProgress:  # Report genuine public units or heartbeat-only activit
         self.total_units = int(total_units) if total_units is not None else None  # Store the exact public unit total when available.
         self.unit_label = str(unit_label) if unit_label is not None else None  # Store the public unit label when available.
         self.heartbeat = bool(heartbeat)  # Store whether this scope emits active heartbeats.
+        self.heartbeat_message_formatter = heartbeat_message_formatter  # Store optional stage text.
         self.interval_seconds = resolved_interval if math.isfinite(resolved_interval) and resolved_interval > 0 else DEFAULT_TRAINING_PROGRESS_INTERVAL_SECONDS  # Use the configured positive finite interval or stable fallback.
         self.start_time: Optional[float] = None  # Initialize the monotonic training start timestamp.
         self.last_report_time: Optional[float] = None  # Initialize this task's independent recurring-report timestamp.
@@ -204,7 +206,8 @@ class TrainingProgress:  # Report genuine public units or heartbeat-only activit
         try:  # Keep cleanup reporting from masking the original fit result or exception.
             self.stop_event.set()  # Signal the heartbeat wait to stop in every exit path.
             if self.thread is not None:  # Join only when this scope started a heartbeat thread.
-                self.thread.join(timeout=1.0)  # Wait briefly for event-driven heartbeat shutdown.
+                join_timeout = None if self.heartbeat_message_formatter is not None else 1.0  # Stop recovery fully.
+                self.thread.join(timeout=join_timeout)  # Stop this scope's heartbeat before exit.
                 if self.thread.is_alive():  # Report a cleanup anomaly without masking the classifier result.
                     print(f"{self.combination_prefix}[TRAINING] Feature Set: {self.feature_set} | Classifier: {self.classifier_name}{self.combination_fields} | Status: Heartbeat shutdown pending | PID: {os.getpid()}{self.resource_suffix()}", file=self.output_stream)  # Write a durable contextual cleanup warning.
                     self.output_stream.flush()  # Flush the cleanup warning immediately.
@@ -241,6 +244,11 @@ class TrainingProgress:  # Report genuine public units or heartbeat-only activit
                     return False  # Retain silence until this task's next interval boundary.
                 elapsed_seconds = max(now - self.start_time, 0.0)  # Calculate elapsed time from the monotonic training start.
                 elapsed_label = self.duration_formatter(elapsed_seconds)  # Format elapsed time through the caller's established formatter.
+                if self.heartbeat_message_formatter is not None:  # Use recovery stage text.
+                    print(self.heartbeat_message_formatter(elapsed_label), file=self.output_stream)  # Emit stage.
+                    self.output_stream.flush()  # Make long-stage activity visible in detached logs.
+                    self.last_report_time = now  # Schedule the next heartbeat for this stage only.
+                    return True  # Skip training ETA output for a recovery stage.
                 completed = int(self.latest_completed_units) if self.latest_completed_units is not None else 0  # Read the latest genuine public unit count.
                 total = int(self.total_units) if self.total_units is not None else 0  # Read the configured public unit total.
                 if completed > 0 and total > completed:  # Prefer genuine public estimator units when available.
