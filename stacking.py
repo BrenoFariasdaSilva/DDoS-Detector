@@ -14839,85 +14839,104 @@ def recover_metrics_from_stacking_model(
     bundle, rejection_reason = load_existing_model_if_available(str(context["model_name"]), csv_path, metadata_path.parent.name, str(context["feature_set"]), context, config=config)  # Reuse strict bundle and preprocessing validation.
     if bundle is None:  # Surface exact loader rejection without inference.
         raise ValueError(rejection_reason or "persisted classifier bundle is incompatible")  # Reject before prediction.
-    if is_lstm_classifier_name(context.get("model_name")):  # Current model metadata does not bind the generated sequence population counts.
-        raise RuntimeError("exact LSTM sequence evaluation population is not proven by persisted metadata")  # Skip scientifically uncertain reconstruction.
-    persisted_input_feature_names = [str(feature) for feature in bundle["input_feature_names"]]  # Read exact identity-bound feature metadata before shared split reuse.
-    if not persisted_input_feature_names or len(set(persisted_input_feature_names)) != len(persisted_input_feature_names):  # Require unambiguous persisted feature metadata.
-        raise ValueError("Persisted scaler input feature schema is empty or duplicated")  # Reject ambiguous feature selection.
-    reserved_input_features = [feature for feature in persisted_input_feature_names if is_lstm_metadata_column(feature)]  # Identify historical combined-mode provenance recorded beside numeric features.
-    for reserved_feature in reserved_input_features:  # Prove each excluded field is the established nonnumeric sequence metadata.
-        if reserved_feature not in evaluation_df.columns or pd.api.types.is_numeric_dtype(evaluation_df[reserved_feature].dtype):  # Refuse exclusion when active semantics differ from original nonnumeric filtering.
-            raise ValueError(f"Reserved LSTM metadata has incompatible active semantics: {reserved_feature}")  # Reject an unproven scaler schema correction.
-    input_feature_names = [str(feature) for feature in feature_columns_without_lstm_metadata(persisted_input_feature_names)]  # Match original StandardScaler inputs by excluding only proven reserved nonnumeric columns.
-    target_column = str(context.get("target_column", ""))  # Read proven target identity.
-    if target_column in input_feature_names:  # Keep labels out of numeric preprocessing.
-        raise ValueError("Persisted scaler input schema contains the target column")  # Reject target leakage.
-    missing_features = [feature for feature in input_feature_names if feature not in evaluation_df.columns]  # Validate every required active column.
-    if missing_features:  # Reject changed active schemas before array materialization.
-        raise ValueError(f"Loaded evaluation data is missing persisted input features: {missing_features}")  # Report exact absent names.
-    if not evaluation_df.columns.is_unique:  # Require unambiguous active column positions.
-        raise ValueError("Loaded evaluation data contains duplicate column names")  # Reject ambiguous feature selection.
-    input_feature_indices = [int(evaluation_df.columns.get_loc(feature)) for feature in input_feature_names]  # Resolve exact active positions without copying all rows.
-    nonnumeric_features = [feature for feature, position in zip(input_feature_names, input_feature_indices) if not pd.api.types.is_numeric_dtype(evaluation_df.dtypes.iloc[position])]  # Identify nonnumeric persisted input without a full-frame copy.
-    if nonnumeric_features:  # Prevent strings or metadata from reaching fitted preprocessing.
-        raise ValueError(f"Persisted tabular input features are nonnumeric: {nonnumeric_features}")  # Report schema corruption before transformation.
-    scaler = bundle["scaler"]  # Reuse fitted original-training scaler.
-    scaler_feature_count = getattr(scaler, "n_features_in_", None)  # Read fitted scaler width when available.
-    if scaler_feature_count is not None and int(scaler_feature_count) != len(input_feature_names):  # Require persisted names to cover exact scaler input width.
-        raise ValueError("Persisted scaler width differs from input feature metadata")  # Reject incomplete or polluted metadata.
-    population_identity = hashlib.sha256(json.dumps({field: context[field] for field in ("source_files", "execution_mode", "attack_types", "target_column", "label_classes", "pre_split_feature_removal", "test_size", "random_state", "stratified", "sklearn_version", "numpy_version")}, sort_keys=True, allow_nan=False).encode("utf-8")).hexdigest()  # Identify one exact historical row partition independently from model features.
-    if population_identity not in evaluation_data_cache:  # Reconstruct each shared test population once.
-        evaluation_data_cache[population_identity] = reconstruct_historical_test_population(context, bundle, evaluation_df, evaluation_source_files, evaluation_attack_types)  # Retain only exact test indices, labels, and count evidence.
-    test_indices, y_test, train_count = evaluation_data_cache[population_identity]  # Reuse the proven split across classifiers.
-    historical_train_count = resolve_result_metric_float(result_entry, "n_samples_train")  # Parse persisted training population size.
-    historical_test_count = resolve_result_metric_float(result_entry, "n_samples_test")  # Parse persisted testing population size.
-    if historical_train_count is None or historical_test_count is None or not historical_train_count.is_integer() or not historical_test_count.is_integer() or int(historical_train_count) != train_count or int(historical_test_count) != len(y_test):  # Require historical population sizes.
-        raise ValueError("Reconstructed train/test sample counts differ from historical row")  # Reject split mismatch.
-    X_test_raw = evaluation_df.iloc[test_indices, input_feature_indices].to_numpy(copy=False)  # Materialize only exact numeric persisted features from active population.
-    X_test_scaled = np.asarray(scaler.transform(X_test_raw))  # Apply persisted scaling without fitting.
-    transformer = bundle.get("transformer")  # Read optional fitted feature transformer.
-    model_feature_names = [str(feature) for feature in bundle["model_feature_names"]]  # Preserve exact classifier feature order.
-    if transformer is not None:  # Apply a fitted PCA or equivalent persisted transformer.
-        X_model = np.asarray(transformer.transform(X_test_scaled))  # Transform only, preserving fitted state.
-        if X_model.ndim != 2 or X_model.shape[1] != len(model_feature_names):  # Require output schema width.
-            raise ValueError("Persisted transformer output differs from model feature schema")  # Reject incompatible preprocessing.
-    else:  # Select exact named feature columns after full-schema scaling.
-        try:
-            feature_indices = [input_feature_names.index(feature) for feature in model_feature_names]  # Resolve ordered classifier columns.
-        except ValueError as exc:
-            raise ValueError("Persisted model feature schema is absent from scaler input schema") from exc  # Reject missing features.
-        X_model = X_test_scaled[:, feature_indices]  # Preserve historical model input order.
-    prediction_input: Any = X_model  # Preserve array input unless fitted estimator metadata requires names.
-    fitted_feature_names = getattr(bundle["model"], "feature_names_in_", None)  # Read sklearn's fitted named-feature contract when present.
-    if fitted_feature_names is not None:  # Restore names only for estimators fitted with named columns.
-        fitted_names = [str(feature) for feature in fitted_feature_names]  # Normalize fitted estimator names without reordering.
-        prediction_names = model_feature_names  # Use scientific artifact names for ordinary named estimators.
-        if fitted_names != model_feature_names:  # Distinguish LightGBM's deterministic NumPy names from genuine mismatches.
-            positional_names = [f"Column_{index}" for index in range(len(model_feature_names))]  # Rebuild LightGBM names produced by original NumPy fitting.
-            booster = getattr(bundle["model"], "booster_", None)  # Read fitted LightGBM booster when available.
-            booster_names = [str(feature) for feature in booster.feature_name()] if booster is not None and callable(getattr(booster, "feature_name", None)) else None  # Validate underlying booster order.
-            if isinstance(bundle["model"], lgb.LGBMClassifier) and fitted_names == positional_names and booster_names == positional_names:  # Accept only proven one-to-one positional equivalence.
-                prediction_names = fitted_names  # Supply estimator-accepted names without changing feature values or order.
-            else:
-                raise ValueError("Persisted estimator feature names differ from model artifact metadata")  # Reject genuine named-schema mismatch.
-        prediction_input = pd.DataFrame(X_model, columns=prediction_names)  # Supply exact accepted names without changing numeric values or ordering.
-    predictions = np.asarray(bundle["model"].predict(prediction_input))  # Perform one prediction on the proven historical input.
-    if predictions.ndim != 1 or len(predictions) != len(y_test):  # Require row-aligned classifier output.
-        raise ValueError("Persisted classifier predictions are not aligned with historical targets")  # Reject invalid inference output.
-    metrics = compute_classification_metrics(y_test, predictions, bundle["label_encoder"].classes_)  # Compute every fingerprint metric from one prediction vector.
-    fingerprint = {"accuracy": float(metrics[0]), "weighted_precision": float(metrics[1]), "weighted_recall": float(metrics[2]), "weighted_f1_score": float(metrics[3]), "fpr": float(metrics[4]), "fnr": float(metrics[5])}  # Build validation-only authoritative aggregates.
-    validate_recovered_aggregate_fingerprint(result_entry, fingerprint, allow_missing=True)  # Validate aggregates.
-    persist_per_run_confusion_matrix_artifacts(result_entry, y_test, predictions, bundle["label_encoder"].classes_, csv_path, config)  # Reuse the single validated historical prediction for all four artifacts.
-    print(  # Report exact matrix publication.
-        f"{BackgroundColors.GREEN}[CONFUSION MATRIX RECOVERED] "  # Name the artifact event.
-        f"{format_historical_model_recovery_identity(result_entry)}{Style.RESET_ALL}"  # Identify the experiment.
-    )  # Emit the artifact event.
-    metric_values = {  # Retain all canonical metrics.
-        **fingerprint,  # Include established aggregates.
-        "macro_f1_score": float(metrics[6]),  # Include macro F1.
-        "per_class_f1_scores": str(metrics[7]),  # Include per-class F1 JSON.
-    }  # Finish prediction-derived metrics.
-    return metric_values, model_filename  # Return metrics with proven artifact basename.
+    try:  # Keep one loaded bundle scoped to this historical recovery.
+        if is_lstm_classifier_name(context.get("model_name")):  # Current model metadata does not bind the generated sequence population counts.
+            raise RuntimeError("exact LSTM sequence evaluation population is not proven by persisted metadata")  # Skip scientifically uncertain reconstruction.
+        persisted_input_feature_names = [str(feature) for feature in bundle["input_feature_names"]]  # Read exact identity-bound feature metadata before shared split reuse.
+        if not persisted_input_feature_names or len(set(persisted_input_feature_names)) != len(persisted_input_feature_names):  # Require unambiguous persisted feature metadata.
+            raise ValueError("Persisted scaler input feature schema is empty or duplicated")  # Reject ambiguous feature selection.
+        reserved_input_features = [feature for feature in persisted_input_feature_names if is_lstm_metadata_column(feature)]  # Identify historical combined-mode provenance recorded beside numeric features.
+        for reserved_feature in reserved_input_features:  # Prove each excluded field is the established nonnumeric sequence metadata.
+            if reserved_feature not in evaluation_df.columns or pd.api.types.is_numeric_dtype(evaluation_df[reserved_feature].dtype):  # Refuse exclusion when active semantics differ from original nonnumeric filtering.
+                raise ValueError(f"Reserved LSTM metadata has incompatible active semantics: {reserved_feature}")  # Reject an unproven scaler schema correction.
+        input_feature_names = [str(feature) for feature in feature_columns_without_lstm_metadata(persisted_input_feature_names)]  # Match original StandardScaler inputs by excluding only proven reserved nonnumeric columns.
+        target_column = str(context.get("target_column", ""))  # Read proven target identity.
+        if target_column in input_feature_names:  # Keep labels out of numeric preprocessing.
+            raise ValueError("Persisted scaler input schema contains the target column")  # Reject target leakage.
+        missing_features = [feature for feature in input_feature_names if feature not in evaluation_df.columns]  # Validate every required active column.
+        if missing_features:  # Reject changed active schemas before array materialization.
+            raise ValueError(f"Loaded evaluation data is missing persisted input features: {missing_features}")  # Report exact absent names.
+        if not evaluation_df.columns.is_unique:  # Require unambiguous active column positions.
+            raise ValueError("Loaded evaluation data contains duplicate column names")  # Reject ambiguous feature selection.
+        input_feature_indices = [int(evaluation_df.columns.get_loc(feature)) for feature in input_feature_names]  # Resolve exact active positions without copying all rows.
+        nonnumeric_features = [feature for feature, position in zip(input_feature_names, input_feature_indices) if not pd.api.types.is_numeric_dtype(evaluation_df.dtypes.iloc[position])]  # Identify nonnumeric persisted input without a full-frame copy.
+        if nonnumeric_features:  # Prevent strings or metadata from reaching fitted preprocessing.
+            raise ValueError(f"Persisted tabular input features are nonnumeric: {nonnumeric_features}")  # Report schema corruption before transformation.
+        scaler = bundle["scaler"]  # Reuse fitted original-training scaler.
+        scaler_feature_count = getattr(scaler, "n_features_in_", None)  # Read fitted scaler width when available.
+        if scaler_feature_count is not None and int(scaler_feature_count) != len(input_feature_names):  # Require persisted names to cover exact scaler input width.
+            raise ValueError("Persisted scaler width differs from input feature metadata")  # Reject incomplete or polluted metadata.
+        population_identity = hashlib.sha256(json.dumps({field: context[field] for field in ("source_files", "execution_mode", "attack_types", "target_column", "label_classes", "pre_split_feature_removal", "test_size", "random_state", "stratified", "sklearn_version", "numpy_version")}, sort_keys=True, allow_nan=False).encode("utf-8")).hexdigest()  # Identify one exact historical row partition independently from model features.
+        if population_identity not in evaluation_data_cache:  # Reconstruct each shared test population once.
+            evaluation_data_cache[population_identity] = reconstruct_historical_test_population(context, bundle, evaluation_df, evaluation_source_files, evaluation_attack_types)  # Retain only exact test indices, labels, and count evidence.
+        test_indices, y_test, train_count = evaluation_data_cache[population_identity]  # Reuse the proven split across classifiers.
+        historical_train_count = resolve_result_metric_float(result_entry, "n_samples_train")  # Parse persisted training population size.
+        historical_test_count = resolve_result_metric_float(result_entry, "n_samples_test")  # Parse persisted testing population size.
+        if historical_train_count is None or historical_test_count is None or not historical_train_count.is_integer() or not historical_test_count.is_integer() or int(historical_train_count) != train_count or int(historical_test_count) != len(y_test):  # Require historical population sizes.
+            raise ValueError("Reconstructed train/test sample counts differ from historical row")  # Reject mismatch.
+        X_test_raw = evaluation_df.iloc[test_indices, input_feature_indices].to_numpy(copy=False)  # Materialize only exact numeric persisted features from active population.
+        X_test_scaled = np.asarray(scaler.transform(X_test_raw))  # Apply persisted scaling without fitting.
+        transformer = bundle.get("transformer")  # Read optional fitted feature transformer.
+        model_feature_names = [str(feature) for feature in bundle["model_feature_names"]]  # Preserve exact classifier feature order.
+        if transformer is not None:  # Apply a fitted PCA or equivalent persisted transformer.
+            X_model = np.asarray(transformer.transform(X_test_scaled))  # Transform only, preserving fitted state.
+            if X_model.ndim != 2 or X_model.shape[1] != len(model_feature_names):  # Require output schema width.
+                raise ValueError("Persisted transformer output differs from model feature schema")  # Reject incompatible preprocessing.
+        else:  # Select exact named feature columns after full-schema scaling.
+            try:
+                feature_indices = [input_feature_names.index(feature) for feature in model_feature_names]  # Resolve ordered classifier columns.
+            except ValueError as exc:
+                raise ValueError("Persisted model feature schema is absent from scaler input schema") from exc  # Reject missing features.
+            X_model = X_test_scaled[:, feature_indices]  # Preserve historical model input order.
+        prediction_input: Any = X_model  # Preserve array input unless fitted estimator metadata requires names.
+        fitted_feature_names = getattr(bundle["model"], "feature_names_in_", None)  # Read sklearn's fitted named-feature contract when present.
+        if fitted_feature_names is not None:  # Restore names only for estimators fitted with named columns.
+            fitted_names = [str(feature) for feature in fitted_feature_names]  # Normalize fitted estimator names without reordering.
+            prediction_names = model_feature_names  # Use scientific artifact names for ordinary named estimators.
+            if fitted_names != model_feature_names:  # Distinguish LightGBM's deterministic NumPy names from genuine mismatches.
+                positional_names = [f"Column_{index}" for index in range(len(model_feature_names))]  # Rebuild LightGBM names produced by original NumPy fitting.
+                booster = getattr(bundle["model"], "booster_", None)  # Read fitted LightGBM booster when available.
+                booster_names = [str(feature) for feature in booster.feature_name()] if booster is not None and callable(getattr(booster, "feature_name", None)) else None  # Validate underlying booster order.
+                if isinstance(bundle["model"], lgb.LGBMClassifier) and fitted_names == positional_names and booster_names == positional_names:  # Accept only proven one-to-one positional equivalence.
+                    prediction_names = fitted_names  # Supply estimator-accepted names without changing feature values or order.
+                else:
+                    raise ValueError("Persisted estimator feature names differ from model artifact metadata")  # Reject genuine named-schema mismatch.
+            prediction_input = pd.DataFrame(X_model, columns=prediction_names)  # Supply exact accepted names without changing numeric values or ordering.
+        predictions = np.asarray(bundle["model"].predict(prediction_input))  # Perform one prediction on the proven historical input.
+        if predictions.ndim != 1 or len(predictions) != len(y_test):  # Require row-aligned classifier output.
+            raise ValueError("Persisted classifier predictions are not aligned with historical targets")  # Reject invalid inference output.
+        metrics = compute_classification_metrics(y_test, predictions, bundle["label_encoder"].classes_)  # Compute every fingerprint metric from one prediction vector.
+        fingerprint = {"accuracy": float(metrics[0]), "weighted_precision": float(metrics[1]), "weighted_recall": float(metrics[2]), "weighted_f1_score": float(metrics[3]), "fpr": float(metrics[4]), "fnr": float(metrics[5])}  # Build validation-only authoritative aggregates.
+        validate_recovered_aggregate_fingerprint(result_entry, fingerprint, allow_missing=True)  # Validate aggregates.
+        persist_per_run_confusion_matrix_artifacts(result_entry, y_test, predictions, bundle["label_encoder"].classes_, csv_path, config)  # Reuse the single validated historical prediction for all four artifacts.
+        print(  # Report exact matrix publication.
+            f"{BackgroundColors.GREEN}[CONFUSION MATRIX RECOVERED] "  # Name the artifact event.
+            f"{format_historical_model_recovery_identity(result_entry)}{Style.RESET_ALL}"  # Identify the experiment.
+        )  # Emit the artifact event.
+        metric_values = {  # Retain all canonical metrics.
+            **fingerprint,  # Include established aggregates.
+            "macro_f1_score": float(metrics[6]),  # Include macro F1.
+            "per_class_f1_scores": str(metrics[7]),  # Include per-class F1 JSON.
+        }  # Finish prediction-derived metrics.
+        return metric_values, model_filename  # Return metrics with proven artifact basename.
+    finally:  # Release heavy recovery references on success and failure.
+        bundle.clear()  # Drop the deserialized estimator and fitted preprocessing from retained frames.
+        if "scaler" in locals():  # Release the fitted scaler alias.
+            del scaler  # Drop fitted preprocessing after the recovery finishes.
+        if "transformer" in locals():  # Release the optional fitted transformer alias.
+            del transformer  # Drop transformed feature preprocessing after the recovery finishes.
+        if "booster" in locals():  # Release an optional LightGBM native model alias.
+            del booster  # Drop the alias after model feature validation.
+        if "prediction_input" in locals():  # Release any temporary named prediction frame.
+            del prediction_input  # Drop the prediction input after inference and artifact work.
+        if "predictions" in locals():  # Release the temporary prediction vector.
+            del predictions  # Drop predictions after metrics and confusion matrices.
+        if "X_model" in locals():  # Release the transformed model input.
+            del X_model  # Drop model features after inference.
+        if "X_test_scaled" in locals():  # Release the scaled evaluation matrix.
+            del X_test_scaled  # Drop scaled features after inference.
+        if "X_test_raw" in locals():  # Release the temporary evaluation view.
+            del X_test_raw  # Drop raw feature references after inference.
 
 
 def backfill_saved_model_metrics(
