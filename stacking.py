@@ -14840,10 +14840,33 @@ def report_historical_recovery_stage(
         except Exception:  # Isolate logging failures from scientific execution.
             pass  # Leave the original recovery outcome unchanged.
 
+    def format_eta(elapsed_seconds: float) -> str:  # Describe remaining time from the available historical timing.
+        if prediction_estimate is None:  # Require a recorded duration before estimating completion.
+            return "unavailable (no historical timing)"  # Avoid inventing estimator progress.
+        remaining_seconds = prediction_estimate[0] - elapsed_seconds  # Subtract prediction stage time.
+        if remaining_seconds <= 0:  # Avoid a false zero ETA after the historical duration expires.
+            return "unavailable (historical duration exceeded)"  # Avoid a false deadline.
+        return f"~{calculate_execution_time(remaining_seconds)} ({prediction_estimate[1]})"  # Name source.
+
+    def format_stage_heartbeat(elapsed_label: str) -> str:  # Add prediction ETA to the existing stage heartbeat.
+        message = f"{prefix} | Still running | Elapsed: {elapsed_label}"  # Show stage and elapsed time.
+        if stage == "Prediction":  # Show an estimate only for the requested opaque prediction stage.
+            message += f" | ETA: {format_eta(time.monotonic() - started)}"  # Use the same monotonic stage clock.
+        return message  # Leave every other stage heartbeat unchanged.
+
     prefix = (  # Bind immutable experiment and stage identity.
         f"[MODEL RECOVERY {progress}] "  # Include the current recovery position.
         f"{format_historical_model_recovery_identity(result_entry)} | Stage: {stage}"  # Include the cached experiment.
     )  # Finish the stage identity.
+    prediction_estimate: Optional[Tuple[float, str]] = None  # Keep prediction ETA absent for other recovery stages.
+    if stage == "Prediction":  # Read only the active cached row's recorded runtime evidence.
+        inference_seconds = resolve_runtime_elapsed_seconds(result_entry.get("inference_time_s"))  # Use inference time.
+        if inference_seconds is not None:  # Use the comparable historical prediction phase when available.
+            prediction_estimate = (inference_seconds, "historical inference time")  # Preserve its provenance in logs.
+        else:  # Older cache rows may predate prediction-only phase timing.
+            total_seconds = resolve_runtime_elapsed_seconds(result_entry.get("elapsed_time_s"))  # Read full-run time.
+            if total_seconds is not None:  # Offer a rough reference without presenting it as prediction timing.
+                prediction_estimate = (total_seconds, "historical full run; includes training")  # Explain the fallback.
     configured_minutes = config.get("evaluation", {}).get(  # Read the shared progress interval.
         "training_progress_interval_minutes", DEFAULT_TRAINING_PROGRESS_INTERVAL_MINUTES  # Reuse its fallback.
     )  # Finish interval selection.
@@ -14852,10 +14875,11 @@ def report_historical_recovery_stage(
         None, "Historical recovery", calculate_execution_time,  # Keep training-specific fields absent.
         output_stream=sys.stdout, heartbeat=heartbeat,  # Emit stage activity to the active logger.
         report_interval_seconds=interval_minutes * 60.0,  # Use the configured cadence.
-        heartbeat_message_formatter=lambda elapsed: f"{prefix} | Still running | Elapsed: {elapsed}",  # Name stage.
+        heartbeat_message_formatter=format_stage_heartbeat,  # Include stage and optional ETA.
     )  # Finish the scoped monitor.
     started = time.monotonic()  # Time this stage without relying on wall-clock adjustments.
-    emit(f"{prefix} | Starting{start_detail}")  # Announce the operation before it blocks.
+    eta_suffix = f" | ETA: {format_eta(0.0)}" if stage == "Prediction" else ""  # Show the initial prediction estimate.
+    emit(f"{prefix} | Starting{start_detail}{eta_suffix}")  # Announce the operation before it blocks.
     try:  # Preserve the operation's original success or failure.
         with monitor:  # Stop the heartbeat before the next stage can begin.
             yield  # Execute the existing recovery operation unchanged.
