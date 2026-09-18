@@ -14818,6 +14818,7 @@ def recover_metrics_from_stacking_model(
     result_entry: dict, csv_path: str, config: dict,
     artifacts: Optional[List[Tuple[Path, dict, dict]]], evaluation_data_cache: dict,
     evaluation_df: pd.DataFrame, evaluation_source_files: List[str], evaluation_attack_types: Any,
+    progress: str, missing_metric_fields: List[str],
     artifact_metadata_cache: Optional[dict] = None,
 ) -> Tuple[dict, str]:
     """
@@ -14831,11 +14832,18 @@ def recover_metrics_from_stacking_model(
     :param evaluation_df: Already-loaded production evaluation DataFrame.
     :param evaluation_source_files: Ordered files used to build the loaded evaluation population.
     :param evaluation_attack_types: Loaded combined-files attack scope, or None for separate files.
+    :param progress: Position within the current historical recovery pass.
+    :param missing_metric_fields: Recoverable metrics absent from this historical row.
     :param artifact_metadata_cache: Optional dataset-local metadata candidate cache.
     :return: Canonical prediction-derived metrics and validated model basename.
     """
 
     metadata_path, _, context, model_filename = resolve_historical_stacking_model_artifact(result_entry, csv_path, config, artifacts, artifact_metadata_cache)  # Prefer exact row-linked provenance before cached discovery.
+    print(  # Identify the exact model before deserialization.
+        f"{BackgroundColors.GREEN}[MODEL RECOVERY {progress}] "  # Include the current recovery position.
+        f"{format_historical_model_recovery_identity(result_entry)} | "  # Include the exact cached experiment.
+        f"Loading artifact: {model_filename}{Style.RESET_ALL}"  # Name the validated artifact.
+    )  # Emit the loading event.
     bundle, rejection_reason = load_existing_model_if_available(str(context["model_name"]), csv_path, metadata_path.parent.name, str(context["feature_set"]), context, config=config)  # Reuse strict bundle and preprocessing validation.
     if bundle is None:  # Surface exact loader rejection without inference.
         raise ValueError(rejection_reason or "persisted classifier bundle is incompatible")  # Reject before prediction.
@@ -14905,13 +14913,19 @@ def recover_metrics_from_stacking_model(
         predictions = np.asarray(bundle["model"].predict(prediction_input))  # Perform one prediction on the proven historical input.
         if predictions.ndim != 1 or len(predictions) != len(y_test):  # Require row-aligned classifier output.
             raise ValueError("Persisted classifier predictions are not aligned with historical targets")  # Reject invalid inference output.
+        print(  # Identify missing metrics before canonical calculation.
+            f"{BackgroundColors.GREEN}[MODEL METRICS RECOVERY {progress}] "  # Include the current position.
+            f"{format_historical_model_recovery_identity(result_entry)} | "  # Include the exact experiment.
+            f"Computing missing fields: {', '.join(missing_metric_fields)}{Style.RESET_ALL}"  # Name absent fields.
+        )  # Emit the metric-calculation event.
         metrics = compute_classification_metrics(y_test, predictions, bundle["label_encoder"].classes_)  # Compute every fingerprint metric from one prediction vector.
         fingerprint = {"accuracy": float(metrics[0]), "weighted_precision": float(metrics[1]), "weighted_recall": float(metrics[2]), "weighted_f1_score": float(metrics[3]), "fpr": float(metrics[4]), "fnr": float(metrics[5])}  # Build validation-only authoritative aggregates.
         validate_recovered_aggregate_fingerprint(result_entry, fingerprint, allow_missing=True)  # Validate aggregates.
         persist_per_run_confusion_matrix_artifacts(result_entry, y_test, predictions, bundle["label_encoder"].classes_, csv_path, config)  # Reuse the single validated historical prediction for all four artifacts.
         print(  # Report exact matrix publication.
             f"{BackgroundColors.GREEN}[CONFUSION MATRIX RECOVERED] "  # Name the artifact event.
-            f"{format_historical_model_recovery_identity(result_entry)}{Style.RESET_ALL}"  # Identify the experiment.
+            f"{format_historical_model_recovery_identity(result_entry)} | "  # Identify the experiment.
+            f"Progress: {progress}{Style.RESET_ALL}"  # Include the current recovery position.
         )  # Emit the artifact event.
         metric_values = {  # Retain all canonical metrics.
             **fingerprint,  # Include established aggregates.
@@ -14979,11 +14993,23 @@ def backfill_saved_model_metrics(
             pending_rows.append((row_index, row_entry, result_identity))  # Retain only recovery-eligible rows.
     if not pending_rows:  # Avoid artifact discovery when every row is complete.
         return recovered_df, outcomes  # Return byte-stable content without model work.
-    for row_index, row_entry, result_identity in pending_rows:  # Attempt each remaining row independently.
+    for position, (row_index, row_entry, result_identity) in enumerate(pending_rows, start=1):  # Visit each row once.
+        progress = f"{position}/{len(pending_rows)}"  # Use the exact collection processed by this recovery pass.
+        identity = format_historical_model_recovery_identity(row_entry)  # Reuse the cached row identity.
+        print(  # Identify each attempt before discovery or a cached skip.
+            f"{BackgroundColors.GREEN}[MODEL RECOVERY {progress}] "  # Include the current position.
+            f"{identity} | Starting{Style.RESET_ALL}"  # Include the exact experiment.
+        )  # Emit the start event.
         cached_outcome = metric_cache.get(result_identity)  # Reuse success and deterministic rejection outcomes for this process.
         if isinstance(cached_outcome, dict) and cached_outcome.get("status") != "recovered":  # Skip a known failure without repeated discovery, loading, prediction, or diagnostics.
             outcome_name = str(cached_outcome.get("outcome", "evaluation_data_unavailable"))  # Resolve the recorded outcome category.
             outcomes[outcome_name] = outcomes.get(outcome_name, 0) + 1  # Count reuse without another attempt.
+            skip_reason = cached_outcome.get("reason", outcome_name)  # Reuse the stored rejection detail.
+            verbose_output(  # Report the memoized skip at its current position.
+                f"{BackgroundColors.YELLOW}[MODEL RECOVERY SKIPPED] {identity} | "  # Name the skip event.
+                f"Progress: {progress} | Reason: {skip_reason}{Style.RESET_ALL}",  # Include position and reason.
+                config=config,  # Preserve configured verbosity.
+            )  # Emit the memoized skip.
             continue  # Leave the historical row unchanged.
         try:  # Keep one unavailable or mismatched model from blocking unrelated rows.
             if str(row_entry.get("experiment_mode", "")).strip().lower() != "original_only" or resolve_persisted_data_augmentation_enabled(row_entry.get("experiment_mode"), row_entry.get("augmentation_ratio"), row_entry.get("data_augmentation_enabled")):  # Require exact original-only evaluation semantics.
@@ -14992,26 +15018,50 @@ def backfill_saved_model_metrics(
                 raise RuntimeError("exact LSTM sequence evaluation population is not proven by persisted metadata")  # Skip approximate sequence reconstruction.
             recovered_metrics = cached_outcome.get("metrics") if isinstance(cached_outcome, dict) else None  # Reuse a prior successful inference for this exact result.
             if recovered_metrics is None:  # Load and predict only once per exact result identity.
-                recovered_metrics = recover_metrics_from_stacking_model(row_entry, csv_path, config, None, population_cache, evaluation_df, evaluation_source_files, evaluation_attack_types, artifact_metadata_cache)  # Prefer direct row provenance, then cached exact discovery.
+                missing_metric_fields = [  # Name absent numeric metrics eligible for recovery.
+                    field for field in metric_fields  # Visit supported fields.
+                    if resolve_result_metric_float(row_entry, field) is None  # Select absent fields.
+                ]  # Finish the missing field list.
+                if not per_class_f1_value_is_valid(row_entry.get("per_class_f1_scores")):  # Include absent F1.
+                    missing_metric_fields.append("per_class_f1_scores")  # Name the recoverable structured metric.
+                recovered_metrics = recover_metrics_from_stacking_model(  # Pass logging context to one inference.
+                    row_entry, csv_path, config, None, population_cache,  # Reuse exact row and population state.
+                    evaluation_df, evaluation_source_files, evaluation_attack_types,  # Reuse loaded evaluation data.
+                    progress, missing_metric_fields, artifact_metadata_cache,  # Name current position and gaps.
+                )  # Finish the existing recovery call.
         except FileNotFoundError as exc:  # Distinguish absent exact compatible artifacts.
             outcomes["no_compatible_model"] += 1  # Count model unavailability.
             metric_cache[result_identity] = {"status": "skipped", "outcome": "no_compatible_model", "reason": str(exc)}  # Memoize deterministic absence for this process.
-            verbose_output(f"{BackgroundColors.YELLOW}[MODEL RECOVERY SKIPPED] {format_historical_model_recovery_identity(row_entry)} | Reason: {exc}{Style.RESET_ALL}", config=config)  # Emit combination-specific diagnostic.
+            verbose_output(  # Emit the existing skip reason with its position.
+                f"{BackgroundColors.YELLOW}[MODEL RECOVERY SKIPPED] {identity} | "  # Name the skip event.
+                f"Progress: {progress} | Reason: {exc}{Style.RESET_ALL}",  # Include position and reason.
+                config=config,  # Preserve configured verbosity.
+            )  # Finish the skip event.
             continue  # Leave missing fields empty.
         except ArtifactFingerprintMismatch as exc:  # Reject scientifically different predictions.
             outcomes["fingerprint_rejected"] += 1  # Count aggregate mismatches.
             metric_cache[result_identity] = {"status": "rejected", "outcome": "fingerprint_rejected", "reason": str(exc)}  # Memoize scientific rejection for this process.
-            print(f"{BackgroundColors.YELLOW}[MODEL RECOVERY REJECTED] {format_historical_model_recovery_identity(row_entry)} | Reason: {exc}{Style.RESET_ALL}")  # Emit combination-specific mandatory diagnostic.
+            print(  # Emit the existing fingerprint rejection with its position.
+                f"{BackgroundColors.YELLOW}[MODEL RECOVERY REJECTED] {identity} | "  # Name the rejection.
+                f"Progress: {progress} | Reason: {exc}{Style.RESET_ALL}"  # Include position and reason.
+            )  # Finish the rejection event.
             continue  # Preserve authoritative aggregates and empty fields.
         except RuntimeError as exc:  # Distinguish populations the metadata cannot prove.
             outcomes["evaluation_data_unavailable"] += 1  # Count exact reconstruction skips.
             metric_cache[result_identity] = {"status": "skipped", "outcome": "evaluation_data_unavailable", "reason": str(exc)}  # Memoize unreconstructible population for this process.
-            verbose_output(f"{BackgroundColors.YELLOW}[MODEL RECOVERY SKIPPED] {format_historical_model_recovery_identity(row_entry)} | Reason: {exc}{Style.RESET_ALL}", config=config)  # Emit combination-specific diagnostic.
+            verbose_output(  # Emit the existing population skip with its position.
+                f"{BackgroundColors.YELLOW}[MODEL RECOVERY SKIPPED] {identity} | "  # Name the skip event.
+                f"Progress: {progress} | Reason: {exc}{Style.RESET_ALL}",  # Include position and reason.
+                config=config,  # Preserve configured verbosity.
+            )  # Finish the skip event.
             continue  # Leave row unchanged.
         except Exception as exc:  # Treat integrity, preprocessing, or identity failures as rejection before persistence.
             outcomes["evaluation_data_unavailable"] += 1  # Count unprovable exact evaluation inputs.
             metric_cache[result_identity] = {"status": "rejected", "outcome": "evaluation_data_unavailable", "reason": str(exc)}  # Memoize deterministic integrity rejection for this process.
-            print(f"{BackgroundColors.YELLOW}[MODEL RECOVERY REJECTED] {format_historical_model_recovery_identity(row_entry)} | Reason: {exc}{Style.RESET_ALL}")  # Emit exact combination-specific reason.
+            print(  # Emit the existing integrity rejection with its position.
+                f"{BackgroundColors.YELLOW}[MODEL RECOVERY REJECTED] {identity} | "  # Name the rejection.
+                f"Progress: {progress} | Reason: {exc}{Style.RESET_ALL}"  # Include position and reason.
+            )  # Finish the rejection event.
             continue  # Leave missing fields empty.
         metric_values, model_filename = recovered_metrics  # Unpack validated metrics and artifact.
         recovered_fields = []  # Record only fields added to this historical row.
@@ -15032,6 +15082,7 @@ def backfill_saved_model_metrics(
         persist_cache_result_entry(csv_path, result_entry, cache_dict, config=config)  # Commit before next model.
         print(  # Confirm this row's primary and backup write.
             f"{BackgroundColors.GREEN}[MODEL RECOVERY CACHE PERSISTED] "  # Name the durable event.
+            f"Progress: {progress} | "  # Include the current position.
             f"{format_historical_model_recovery_identity(row_entry)}{Style.RESET_ALL}"  # Identify the experiment.
         )  # Emit the durable event.
         synchronize_historical_recovery_to_final(csv_path, result_entry, config)  # Update matching final row.
@@ -15039,10 +15090,15 @@ def backfill_saved_model_metrics(
         outcomes["recovered"] += 1  # Count one durably recovered historical row.
         print(  # Identify proven metric fields.
             f"{BackgroundColors.GREEN}[MODEL METRICS RECOVERED] "  # Name the recovery event.
+            f"Progress: {progress} | "  # Include the current position.
             f"{format_historical_model_recovery_identity(row_entry)} | "  # Identify the experiment.
             f"Fields: {', '.join(recovered_fields)}{Style.RESET_ALL}"  # Name populated fields.
         )  # Emit the recovery event.
-        verbose_output(f"{BackgroundColors.GREEN}[MODEL RECOVERY SUCCEEDED] {format_historical_model_recovery_identity(row_entry)} | Artifact: {model_filename}{Style.RESET_ALL}", config=config)  # Emit exact successful association when verbose.
+        verbose_output(  # Emit exact successful association with its position when verbose.
+            f"{BackgroundColors.GREEN}[MODEL RECOVERY SUCCEEDED] {identity} | "  # Name the completion event.
+            f"Progress: {progress} | Artifact: {model_filename}{Style.RESET_ALL}",  # Include position and artifact.
+            config=config,  # Preserve configured verbosity.
+        )  # Finish the completion event.
     return recovered_df, outcomes  # Return existing atomic-persistence input and factual counts.
 
 
