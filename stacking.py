@@ -13575,7 +13575,7 @@ def confusion_matrix_artifact_set_is_current(run_directory: Path, filename_prefi
     """
     Return whether one complete published artifact set matches exact matrix evidence.
 
-    :param run_directory: Authoritative Run-{Index} directory.
+    :param run_directory: Authoritative Run-{Index}-Confusion-Matrix directory.
     :param filename_prefix: Deterministic experiment prefix without its trailing delimiter.
     :param raw_matrix: Expected exact count matrix.
     :param normalized_matrix: Expected true-class normalized matrix.
@@ -13629,14 +13629,28 @@ def persist_per_run_confusion_matrix_counts(result_entry: dict, raw_matrix: Any,
     normalized_matrix = np.divide(integer_matrix.astype(float), supports, out=np.zeros_like(integer_matrix, dtype=float), where=supports != 0)  # Match sklearn normalize="true" including zero-support rows.
     resolved_cache_directory = cache_directory.resolve()  # Normalize the authoritative Cache_Results location.
     resolved_cache_directory.mkdir(parents=True, exist_ok=True)  # Preserve existing cache path creation behavior.
-    run_directory = resolved_cache_directory / f"Run-{run_index}"  # Build the required run-specific artifact directory.
+    legacy_directory = resolved_cache_directory / f"Run-{run_index}"  # Locate the legacy directory.
+    run_directory = resolved_cache_directory / f"Run-{run_index}-Confusion-Matrix"  # Locate the canonical directory.
     validate_output_path(str(resolved_cache_directory), str(run_directory.resolve()))  # Prevent structured run metadata from escaping Cache_Results.
-    run_directory.mkdir(parents=True, exist_ok=True)  # Create only the required per-run directory.
     filename_prefix = build_confusion_matrix_artifact_prefix(result_entry)  # Build readable complete experiment identity.
     lock_path = resolved_cache_directory / ".confusion_matrix_artifacts.lock"  # Coordinate publication across workers and program instances.
     lock_file = acquire_stacking_artifact_lock(str(lock_path), exclusive=True)  # Serialize validation and four-file publication.
     temporary_directory = None  # Track only this call's staging directory.
     try:  # Reuse exact existing artifacts or replace one incomplete set transactionally.
+        if run_directory.is_symlink():  # Reject canonical links that could redirect artifact writes.
+            raise ValueError(f"Confusion-matrix directory is a symlink: {run_directory}")  # Reject redirected writes.
+        if (  # Migrate only an unambiguous legacy directory.
+            legacy_directory.is_dir()  # Require a real legacy directory.
+            and not legacy_directory.is_symlink()  # Reject symlinked legacy paths.
+            and not run_directory.exists()  # Preserve existing canonical paths.
+        ):  # Finish the safe migration condition.
+            legacy_directory.rename(run_directory)  # Preserve all historical artifacts under the canonical name.
+            sync_cache_parent_directory(str(run_directory))  # Synchronize the directory rename where supported.
+            print(  # Log the completed legacy-directory migration.
+                f"{BackgroundColors.GREEN}[CONFUSION MATRIX MIGRATION] "  # Format the migration label.
+                f"{legacy_directory} to {run_directory}{Style.RESET_ALL}"  # Name both directories.
+            )  # Emit the migration message.
+        run_directory.mkdir(parents=True, exist_ok=True)  # Create only the canonical per-run directory when absent.
         if confusion_matrix_artifact_set_is_current(run_directory, filename_prefix, integer_matrix, normalized_matrix, safe_class_names):  # Avoid duplicate rendering and writes.
             return filename_prefix  # Return stable identity for an already complete exact set.
         temporary_directory = Path(tempfile.mkdtemp(prefix=f".{filename_prefix}.", dir=str(run_directory)))  # Stage all four files on the destination filesystem.
