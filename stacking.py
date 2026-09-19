@@ -1209,6 +1209,16 @@ def parse_cli_args():
         explainability_group.add_argument("--enable-explainability", dest="enable_explainability", action="store_true", help="Enable model explainability (overrides config)")  # Force the explainability pipeline on from the CLI.
         explainability_group.add_argument("--disable-explainability", dest="enable_explainability", action="store_false", help="Disable model explainability (overrides config)")  # Force the explainability pipeline off from the CLI.
         parser.set_defaults(enable_explainability=None)  # Preserve the YAML/default setting when neither explainability flag is provided.
+        model_recovery_group = parser.add_mutually_exclusive_group()  # Prevent contradictory recovery overrides.
+        model_recovery_group.add_argument(  # Add the explicit historical recovery enable flag.
+            "--enable-model-recovery", dest="enable_model_recovery", action="store_true",
+            help="Enable historical persisted-model recovery for missing recoverable metrics and artifacts",
+        )
+        model_recovery_group.add_argument(  # Add the explicit default recovery disable flag.
+            "--disable-model-recovery", dest="enable_model_recovery", action="store_false",
+            help="Disable historical persisted-model recovery (default)",
+        )
+        parser.set_defaults(enable_model_recovery=False)  # Disable historical model recovery unless explicitly enabled.
         parser.add_argument("--n-jobs", dest="n_jobs", type=int, default=None, help="Override evaluation.n_jobs for estimators that support parallel fitting (-1 uses all processors; 1 is memory-safe)",)
         parser.add_argument("--feature-extraction-n-jobs", dest="feature_extraction_n_jobs", type=int, default=None, help="Override evaluation.feature_extraction_n_jobs for feature extraction/transformation stages such as PCA, not classifier training (-1 uses available CPUs; 1 is memory-safe)")  # Add the independent feature extraction thread override
         parser.add_argument("--feature-set-workers", dest="feature_set_workers", type=str, default=None, help="Persistent process counts by feature set, for example full=1,ga=1,pca=1,rfe=1,extra_trees=1; only 0 or 1 is supported")  # Add the persistent feature-set process override
@@ -1313,6 +1323,7 @@ def get_default_stacking_config():
             "top_n_features_heatmap": 15,  # Number of top features to show in heatmap
             "combined_files_evaluation": True,  # Default: combined files evaluation enabled; False = separate files evaluation
             "sort_pending_by_elapsed_time": False,  # Keep pending queue ordering unchanged unless runtime sorting is enabled
+            "model_recovery": False,  # Disable historical persisted-model recovery unless explicitly enabled.
             "rerun_cached_experiments": 0,  # Keep normal cache resume behavior unless read-only cache-driven rerun mode is requested
             "max_cached_experiments": None,  # Leave cached-run creation unlimited unless rerun mode sets a cap.
             "experiment_runs": 1,  # Require one completed run per logical experiment by default
@@ -2409,8 +2420,12 @@ def migrate_cache_storage_for_reference(csv_path: str, config: Optional[dict] = 
             if not source_frames:  # Leave storage untouched when no valid source exists.
                 continue  # Move to the next run.
             merged_df = prepare_cache_dataframe(pd.concat(source_frames, ignore_index=True), config=config, expected_experiment_run=run_index)  # Merge and dedupe by canonical identity.
-            artifact_root = target_path.parent  # Resolve run cache artifact directory.
-            merged_df, recovered_count = backfill_saved_evaluation_metrics(merged_df, artifact_root)  # Recover metrics.
+            recovered_count = 0  # Keep artifact recovery absent when historical model recovery is disabled.
+            if config.get("stacking", {}).get("model_recovery", False):  # Gate artifact recovery at its boundary.
+                artifact_root = target_path.parent  # Resolve run cache artifact directory.
+                merged_df, recovered_count = backfill_saved_evaluation_metrics(  # Recover historical artifacts.
+                    merged_df, artifact_root
+                )
             if recovered_count:  # Report successful cache-row artifact recovery.
                 message = f"[ARTIFACT RECOVERY] Recovered {recovered_count} cache row(s): "  # Build message.
                 output = f"{BackgroundColors.GREEN}{message}{BackgroundColors.CYAN}"  # Add colors.
@@ -2479,11 +2494,15 @@ def migrate_final_storage_for_reference(csv_path: str, config: Optional[dict] = 
             if not source_frames:  # Leave storage untouched when no valid source exists.
                 continue  # Move to the next run.
             merged_df = normalize_final_results_dataframe(pd.concat(source_frames, ignore_index=True), config, run_index, str(target_path))  # Merge and dedupe final rows by canonical identity.
-            cache_path = get_cache_file_path(  # Resolve run-specific cache store.
-                csv_path, config=config, experiment_run=run_index, legacy=False  # Use exact result reference and run.
-            )  # Finish cache path resolution.
-            artifact_root = Path(cache_path).parent  # Resolve scientific artifact directory.
-            merged_df, recovered_count = backfill_saved_evaluation_metrics(merged_df, artifact_root)  # Recover metrics.
+            recovered_count = 0  # Keep artifact recovery absent when historical model recovery is disabled.
+            if config.get("stacking", {}).get("model_recovery", False):  # Gate artifact recovery at its boundary.
+                cache_path = get_cache_file_path(  # Resolve run-specific cache store.
+                    csv_path, config=config, experiment_run=run_index, legacy=False  # Use exact result reference and run.
+                )  # Finish cache path resolution.
+                artifact_root = Path(cache_path).parent  # Resolve scientific artifact directory.
+                merged_df, recovered_count = backfill_saved_evaluation_metrics(  # Recover historical artifacts.
+                    merged_df, artifact_root
+                )
             if recovered_count:  # Report successful final-row artifact recovery.
                 message = f"[ARTIFACT RECOVERY] Recovered {recovered_count} final row(s): "  # Build message.
                 output = f"{BackgroundColors.GREEN}{message}{BackgroundColors.CYAN}"  # Add colors.
@@ -2771,6 +2790,11 @@ def merge_configs(defaults, file_config, cli_args):
 
         if hasattr(cli_args, "enable_explainability") and cli_args.enable_explainability is not None:  # Explainability pipeline CLI override
             config.setdefault("explainability", {})["enabled"] = cli_args.enable_explainability  # Apply explainability toggle without changing method-level settings
+
+        if hasattr(cli_args, "enable_model_recovery"):  # Historical model recovery CLI state.
+            config.setdefault("stacking", {})["model_recovery"] = bool(  # Apply default-off CLI control.
+                cli_args.enable_model_recovery
+            )
 
         if hasattr(cli_args, "n_jobs") and cli_args.n_jobs is not None:  # Evaluation n_jobs CLI override
             if cli_args.n_jobs == 0:  # scikit-learn/joblib do not accept zero workers
@@ -18255,9 +18279,16 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
         reference_file = original_files_list[0] if original_files_list else "combined_files_combined"  # Get source file for feature metadata.
         combined_dataset_identity = resolve_combined_files_dataset_identity(original_files_list)  # Resolve canonical combined directory identity.
         combined_dataset_reference = combined_dataset_identity.rstrip("/")  # Use directory path text without trailing separator for path APIs.
-        if not config.get("stacking", {}).get("automl_only", False):  # Keep regular historical maintenance outside the isolated AutoML path.
-            recovery_runs = discover_cache_artifact_run_numbers(combined_dataset_reference, config=config) if rerun_cached_experiments else [get_current_experiment_run(config)]  # Restrict recovery to cache runs used by this loaded combined population.
-            recover_loaded_cache_model_metrics(combined_dataset_reference, combined_files_df, original_files_list, attack_types_list, config, recovery_runs)  # Reuse the normal combined DataFrame before planning consumes its reference.
+        model_recovery_enabled = config.get("stacking", {}).get("model_recovery", False)  # Read recovery state.
+        if model_recovery_enabled and not config.get("stacking", {}).get("automl_only", False):  # Gate recovery.
+            recovery_runs = (  # Restrict recovery to caches used by this loaded combined population.
+                discover_cache_artifact_run_numbers(combined_dataset_reference, config=config)
+                if rerun_cached_experiments else [get_current_experiment_run(config)]
+            )
+            recover_loaded_cache_model_metrics(  # Reuse normal data before planning consumes its reference.
+                combined_dataset_reference, combined_files_df, original_files_list, attack_types_list, config,
+                recovery_runs,
+            )
         source_rerun_cache = None  # Initialize absent source cache for normal execution.
         ordering_rerun_cache = None  # Initialize absent ordering cache for normal execution.
         destination_rerun_cache = None  # Initialize absent destination cache for normal execution.
@@ -21500,9 +21531,16 @@ def orchestrate_all_combinations(input_path, dataset_name=None, config=None):
             df_original, feature_names = load_and_preprocess_dataset(file, None, config=config)  # Load the original dataset once for every grid slice
             if df_original is None:  # Skip files that cannot be loaded
                 continue  # Move to the next file
-            recovery_runs = discover_cache_artifact_run_numbers(file, config=config) if rerun_cached_experiments else [get_current_experiment_run(config)]  # Restrict recovery to cache runs used by this loaded separate-file population.
-            recover_loaded_cache_model_metrics(file, df_original, [file], None, config, recovery_runs)  # Reuse the normal preprocessed DataFrame before grid evaluation.
-            if rerun_cached_experiments:  # Refresh cache views after any atomic historical maintenance.
+            model_recovery_enabled = config.get("stacking", {}).get("model_recovery", False)  # Read recovery state.
+            if model_recovery_enabled:  # Run historical model recovery only when explicitly enabled.
+                recovery_runs = (  # Restrict recovery to caches used by this loaded separate-file population.
+                    discover_cache_artifact_run_numbers(file, config=config)
+                    if rerun_cached_experiments else [get_current_experiment_run(config)]
+                )
+                recover_loaded_cache_model_metrics(  # Reuse normal data before grid evaluation.
+                    file, df_original, [file], None, config, recovery_runs
+                )
+            if rerun_cached_experiments and model_recovery_enabled:  # Refresh views after enabled maintenance.
                 source_rerun_cache, source_runs = load_cached_rerun_source_cache(file, config=config)  # Synchronize the source union without another dataset load.
                 if destination_run > 2:  # Refresh prior-run ordering metadata when that generation is active.
                     ordering_config = build_experiment_run_config(config, destination_run - 1)  # Resolve the established ordering run.
@@ -22168,6 +22206,13 @@ def log_resolved_configuration(config: dict) -> None:
         training_progress_minutes = validate_training_progress_interval_minutes(config.get("evaluation", {}).get("training_progress_interval_minutes", DEFAULT_TRAINING_PROGRESS_INTERVAL_MINUTES))  # Resolve the validated minutes-based progress interval.
         print(f"{BackgroundColors.GREEN}[INFO] Training progress interval: {BackgroundColors.CYAN}{training_progress_minutes:g} minutes{Style.RESET_ALL}")  # Log the resolved recurring progress interval once.
         print(f"{BackgroundColors.GREEN}[INFO] Auto-restart on OOM: {BackgroundColors.CYAN}{bool(config.get('stacking', {}).get('auto_restart_on_oom', True))}{Style.RESET_ALL}")  # Log OOM restart toggle state.
+        model_recovery_state = (  # Resolve exact historical recovery state.
+            "Enabled" if config.get("stacking", {}).get("model_recovery", False) else "Disabled"
+        )
+        print(  # Log final historical recovery state controlling execution.
+            f"{BackgroundColors.GREEN}[INFO] Historical model recovery: "
+            f"{BackgroundColors.CYAN}{model_recovery_state}{Style.RESET_ALL}"
+        )
         skip_rules = tuple(config.get("stacking", {}).get("compiled_skip_combinations", ()))  # Read compiled skip rules for display.
         skip_source = config.get("stacking", {}).get("skip_combinations_source", "Default")  # Read resolved skip-rule source.
         for skip_line in format_skip_rules_for_info(skip_rules, skip_source):  # Emit resolved skip-rule startup INFO lines.
@@ -22267,6 +22312,7 @@ def build_telegram_pipeline_summary(config: Optional[dict], dataset_path: Option
         only_rules = tuple(stacking_cfg.get("compiled_only_combinations", ()))  # Read compiled allowlist rules for startup notification.
         only_source = stacking_cfg.get("only_combinations_source", "Default")  # Read resolved allowlist source for startup notification.
         auto_restart_on_oom = bool(stacking_cfg.get("auto_restart_on_oom", True))  # Read OOM restart toggle for startup notification.
+        model_recovery_enabled = bool(stacking_cfg.get("model_recovery", False))  # Read recovery notification state.
         rerun_cached_experiment_count = resolve_cached_rerun_count(config)  # Read cache-driven rerun count for startup notification.
         execution_id = ensure_execution_id(config)  # Resolve the stable top-level execution identity for startup visibility.
 
@@ -22285,6 +22331,7 @@ def build_telegram_pipeline_summary(config: Optional[dict], dataset_path: Option
             f"Feature selection methods: {', '.join(feature_methods) if feature_methods else 'None'}",  # Report the configured feature-set strategies
             f"Feature-set workers: full={feature_set_workers['full']}, ga={feature_set_workers['ga']}, pca={feature_set_workers['pca']}, rfe={feature_set_workers['rfe']}, extra_trees={feature_set_workers['extra_trees']} | start method: {FEATURE_PROCESS_START_METHOD}",  # Report process isolation configuration
             f"Auto-restart on OOM: {'ON' if auto_restart_on_oom else 'OFF'}",  # Report OOM restart setting.
+            f"Historical model recovery: {'ON' if model_recovery_enabled else 'OFF'}",  # Report recovery state.
             f"Skip combinations: {len(skip_rules)} rule(s) from {skip_source}" + (f" | {', '.join(rule.canonical for rule in skip_rules)}" if skip_rules else ""),  # Report skip-rule source and normalized rules.
             f"Only combinations: {len(only_rules)} rule(s) from {only_source}" + (f" | {', '.join(rule.canonical for rule in only_rules)}" if only_rules else ""),  # Report allowlist source and normalized rules.
             f"Test data augmentation: {'ON' if test_data_augmentation else 'OFF'}",  # Report the independent augmented-test toggle
