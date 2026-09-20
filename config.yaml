@@ -196,7 +196,7 @@ telegram: # Telegram notification settings
 plotting: # Plotting defaults and sizes
   enabled: true # Enable plot generation
   filename: "training_metrics.png" # Plot filename
-  subdir: "plots" # Subdirectory under data augmentation outputs for plots
+  subdir: "Plots/metrics" # Subdirectory for training metrics plots
   figsize: [18, 10] # Figure size [width, height]
   dpi: 1000 # Image resolution
   subplot_rows: 2 # Number of subplot rows

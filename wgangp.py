@@ -821,7 +821,7 @@ def build_default_output_and_notification_config() -> Dict:
         "plotting": {  # Visualization configuration
             "enabled": True,  # Enable plot generation
             "filename": "training_metrics.png",  # Plot filename
-            "subdir": "plots",  # Subdirectory under data augmentation outputs for plots
+            "subdir": "Plots/metrics",  # Subdirectory for training metrics plots
             "figsize": [18, 10],  # Figure size [width, height]
             "dpi": 300,  # Image resolution
             "subplot_rows": 2,  # Number of subplot rows
@@ -1900,7 +1900,7 @@ def resolve_plot_save_directory(out_dir: str, config: Dict) -> Path:
     """
 
     data_aug_subdir = config.get("paths", {}).get("data_augmentation_dir", "Data_Augmentation")  # Get data augmentation base directory name from config
-    plotting_subdir = config.get("plotting", {}).get("subdir", "plots")  # Get plotting subdir from config
+    plotting_subdir = config.get("plotting", {}).get("subdir", "Plots/metrics")  # Get metrics subdir from config
     out_path = Path(out_dir)  # Convert provided out_dir to a Path object for safe operations
     if out_path.name == data_aug_subdir:  # If out_dir already ends with the data_augmentation base directory
         save_dir = out_path / plotting_subdir  # Use out_dir plus plotting subdir (avoid duplicating Data_Augmentation)
@@ -2944,24 +2944,32 @@ def load_and_restore_discriminator_state(d_checkpoint_path: Path, device: torch.
         raise FileNotFoundError(f"Discriminator checkpoint not found: {d_checkpoint_path}")  # Prevent resume with an unpaired discriminator state
 
 
-def regenerate_missing_training_plot(csv_path_obj: Path, metrics_loaded: bool, metrics_history: Dict) -> None:
+def regenerate_missing_training_plot(
+    csv_path_obj: Path,
+    metrics_loaded: bool,
+    metrics_history: Dict,
+    config: Dict,
+) -> None:
     """
     Regenerate training metrics plot from metrics history when the plot file is missing.
 
     :param csv_path_obj: Path object for the input CSV file used to derive plot filename.
     :param metrics_loaded: Whether metrics history was successfully loaded from checkpoint.
     :param metrics_history: Dictionary of tracked training metrics for plot generation.
+    :param config: Configuration dictionary used to resolve the plot directory.
     :return: None
     """
 
-    plot_dir = csv_path_obj.parent / "Data_Augmentation"  # Plot directory
+    config_paths = config.get("paths", {})  # Read paths
+    data_aug_subdir = config_paths.get("data_augmentation_dir", "Data_Augmentation")  # Read data augmentation directory
+    plot_dir = csv_path_obj.parent / data_aug_subdir  # Build plot base directory
     plot_filename = csv_path_obj.stem + "_training_metrics.png"  # Plot filename
-    plot_path = plot_dir / plot_filename  # Full plot path
+    plot_path = resolve_plot_save_directory(str(plot_dir), config) / plot_filename  # Build metrics plot path
     if not plot_path.exists():  # If plot doesn't exist
         if metrics_loaded and len(metrics_history.get("steps", [])) > 0:  # If metrics available
             print(f"{BackgroundColors.YELLOW}Training metrics plot not found, generating from metrics history...{Style.RESET_ALL}")  # Notify plot generation
             os.makedirs(plot_dir, exist_ok=True)  # Ensure directory exists
-            plot_training_metrics(metrics_history, str(plot_dir), plot_filename)  # Generate plot
+            plot_training_metrics(metrics_history, str(plot_dir), plot_filename, config)  # Generate plot
             print(f"{BackgroundColors.GREEN}✓ Generated training metrics plot: {plot_filename}{Style.RESET_ALL}")  # Confirm plot generation
         else:  # No metrics available
             print(f"{BackgroundColors.YELLOW}⚠ Warning: Training metrics plot not found and no metrics history available to generate it{Style.RESET_ALL}")  # Warn about missing plot and metrics
@@ -3002,7 +3010,12 @@ def resume_from_checkpoint(args, config: Dict, device: torch.device, G, D, opt_G
                     g_checkpoint, start_epoch = load_and_restore_generator_state(g_checkpoint_path, device, G, opt_G, scaler)  # Load and restore generator state from saved pair
                     metrics_history, step, metrics_loaded = restore_metrics_from_checkpoint_or_json(g_checkpoint, checkpoint_dir, checkpoint_prefix, metrics_history, step)  # Restore metrics from saved state or JSON fallback
                     load_and_restore_discriminator_state(d_checkpoint_path, device, D, opt_D)  # Load and restore discriminator state from saved pair
-                    regenerate_missing_training_plot(csv_path_obj, metrics_loaded, metrics_history)  # Regenerate training plot if missing
+                    regenerate_missing_training_plot(  # Regenerate plot
+                        csv_path_obj,  # Pass source path
+                        metrics_loaded,  # Pass metrics state
+                        metrics_history,  # Pass metrics data
+                        config,  # Pass configuration
+                    )  # Finish regeneration
                     print(f"{BackgroundColors.GREEN}✓ Resuming training from epoch {start_epoch} (step {step}){Style.RESET_ALL}")  # Confirm resume point
                 except Exception as e:  # If restoration fails after validation
                     print(f"{BackgroundColors.YELLOW}⚠ Failed to load checkpoint: {e}{Style.RESET_ALL}")  # Warn about load failure
@@ -3896,7 +3909,9 @@ def generate_training_plots(args, config: Dict, metrics_history: Dict, file_prog
         print(f"{file_progress_prefix} {BackgroundColors.GREEN}Generating training metrics plots...{Style.RESET_ALL}")  # Print plotting message with prefix
         if args.csv_path:  # If CSV path is provided
             csv_path_obj = Path(args.csv_path)  # Create Path object from csv_path
-            plot_dir = csv_path_obj.parent / "Data_Augmentation"  # Create Data_Augmentation subdirectory
+            config_paths = config.get("paths", {})  # Read paths
+            data_aug_subdir = config_paths.get("data_augmentation_dir", "Data_Augmentation")  # Read directory
+            plot_dir = csv_path_obj.parent / data_aug_subdir  # Create data augmentation directory
             os.makedirs(plot_dir, exist_ok=True)  # Ensure directory exists
             plot_filename = csv_path_obj.stem + "_training_metrics.png"  # Use input filename for plot
             original_out_dir = args.out_dir  # Save original out_dir
@@ -4076,7 +4091,7 @@ def generate_tsne_3d_separability_plot(
 
     :param original_features: Numpy array of original dataset feature values (rows x features).
     :param generated_features: Numpy array of generated synthetic feature values (rows x features).
-    :param out_dir: Directory under which the multi_run_plots subdirectory will be created.
+    :param out_dir: Data augmentation directory under which the separability directory is created.
     :param dataset_name: Optional dataset identifier used as the filename prefix.
     :param config: Optional configuration dictionary reserved for future extension.
     :return: None.
@@ -4129,8 +4144,8 @@ def generate_tsne_3d_separability_plot(
         ax.set_title("WGAN-GP Data Distribution (Original vs Generated) - t-SNE 3D")  # Set descriptive plot title
         ax.legend(loc="upper left")  # Render legend in upper-left corner of 3D axes
 
-        plots_dir = Path(out_dir) / "multi_run_plots"  # Build multi_run_plots path nested under the provided output directory
-        os.makedirs(str(plots_dir), exist_ok=True)  # Ensure multi_run_plots directory exists before saving
+        plots_dir = Path(out_dir) / "Plots" / "data separability"  # Build separability plot directory
+        os.makedirs(str(plots_dir), exist_ok=True)  # Create separability plot directory
 
         prefix = f"{dataset_name}_" if dataset_name else ""  # Build filename prefix from dataset name when available
         plot_path = plots_dir / f"{prefix}tsne_3d_original_vs_generated.png"  # Construct deterministic plot file path
@@ -4705,9 +4720,9 @@ def generate_generation_quality_outputs(args: Any, config: Dict, df_generated: p
         if valid_tsne_cols:  # Proceed only when comparable feature columns are available
             X_original_tsne = orig_df_tsne[valid_tsne_cols].apply(pd.to_numeric, errors="coerce").dropna().values.astype(np.float32)  # Extract numeric source feature matrix
             X_generated_tsne = df_generated[valid_tsne_cols].values.astype(np.float32)  # Extract generated feature matrix
-            out_file_parent = Path(args.out_file).parent  # Derive parent directory from output path
-            data_aug_dirname = config.get("paths", {}).get("data_augmentation_dir", "Data_Augmentation")  # Read configured augmentation directory name
-            tsne_out_dir = out_file_parent.parent if out_file_parent.name == data_aug_dirname else out_file_parent  # Route plot output beside augmentation artifacts
+            config_paths = config.get("paths", {})  # Read paths
+            data_aug_subdir = config_paths.get("data_augmentation_dir", "Data_Augmentation")  # Read directory
+            tsne_out_dir = Path(args.csv_path).parent / data_aug_subdir  # Resolve data augmentation directory
             tsne_dataset_name = Path(args.csv_path).stem  # Derive dataset name from source CSV stem
             generate_tsne_3d_separability_plot(X_original_tsne, X_generated_tsne, tsne_out_dir, dataset_name=tsne_dataset_name, config=config)  # Generate 3D t-SNE quality visualization
 
