@@ -4085,6 +4085,8 @@ def generate_tsne_3d_separability_plot(
     out_dir: Union[str, Path],
     dataset_name: Optional[str] = None,
     config: Optional[Dict] = None,
+    original_labels: Optional[np.ndarray] = None,  # Retain source class labels for detailed grouping.
+    generated_labels: Optional[np.ndarray] = None,  # Retain synthetic class labels for detailed grouping.
 ) -> None:
     """
     Generate and save a 3D t-SNE scatter plot comparing original and synthetic samples.
@@ -4094,12 +4096,33 @@ def generate_tsne_3d_separability_plot(
     :param out_dir: Data augmentation directory under which the separability directory is created.
     :param dataset_name: Optional dataset identifier used as the filename prefix.
     :param config: Optional configuration dictionary reserved for future extension.
+    :param original_labels: Optional source class labels aligned with original_features.
+    :param generated_labels: Optional synthetic class labels aligned with generated_features.
     :return: None.
     """
 
     try:
         max_samples = 5000  # Maximum samples per group to keep t-SNE tractable
         total_combined = len(original_features) + len(generated_features)  # Compute combined dataset row count
+        original_label_values = (
+            np.asarray(original_labels, dtype=str) if original_labels is not None else None
+        )  # Convert source labels for indexed grouping.
+        generated_label_values = (
+            np.asarray(generated_labels, dtype=str) if generated_labels is not None else None
+        )  # Convert synthetic labels for indexed grouping.
+
+        if original_label_values is not None and (
+            len(original_label_values) != len(original_features)
+        ):  # Require aligned source labels for valid coordinates.
+            raise ValueError(
+                "Original t-SNE label count does not match feature count"
+            )  # Reject misaligned source labels.
+        if generated_label_values is not None and (
+            len(generated_label_values) != len(generated_features)
+        ):  # Require aligned synthetic labels for valid coordinates.
+            raise ValueError(
+                "Generated t-SNE label count does not match feature count"
+            )  # Reject misaligned synthetic labels.
 
         if total_combined > 10000:  # Subsample when combined size exceeds tractability threshold
             rng = np.random.default_rng(42)  # Seed RNG for reproducible subsampling
@@ -4107,14 +4130,22 @@ def generate_tsne_3d_separability_plot(
             n_orig_sample = min(max_samples, len(original_features))  # Clamp original sample count to max_samples
             orig_idx = rng.choice(len(original_features), size=n_orig_sample, replace=False)  # Draw random indices from original pool
             orig_subset = original_features[orig_idx]  # Extract sampled original feature rows
+            original_labels_subset = (
+                original_label_values[orig_idx] if original_label_values is not None else None
+            )  # Keep source labels aligned with sampled features.
 
             n_gen_sample = min(max_samples, len(generated_features))  # Clamp generated sample count to max_samples
             gen_idx = rng.choice(len(generated_features), size=n_gen_sample, replace=False)  # Draw random indices from generated pool
             gen_subset = generated_features[gen_idx]  # Extract sampled generated feature rows
+            generated_labels_subset = (
+                generated_label_values[gen_idx] if generated_label_values is not None else None
+            )  # Keep synthetic labels aligned with sampled features.
 
         else:  # Use full arrays when combined size is within threshold
             orig_subset = original_features  # Use all original feature rows
             gen_subset = generated_features  # Use all generated feature rows
+            original_labels_subset = original_label_values  # Retain all source labels with full feature set.
+            generated_labels_subset = generated_label_values  # Retain all synthetic labels with full feature set.
 
         n_orig = len(orig_subset)  # Count original samples used for t-SNE index boundary
         combined = np.vstack([orig_subset, gen_subset]).astype(np.float32)  # Vertically stack both groups for joint t-SNE fit
@@ -4152,6 +4183,61 @@ def generate_tsne_3d_separability_plot(
 
         ensure_figure_min_4k_and_save(fig=fig, path=str(plot_path), dpi=300)  # Save plot enforcing minimum 4K pixel dimensions
         print(f"{BackgroundColors.GREEN}Saved t-SNE 3D separability plot to {BackgroundColors.CYAN}{plot_path}{Style.RESET_ALL}")  # Confirm plot saved successfully
+
+        if original_labels_subset is not None and (
+            generated_labels_subset is not None
+        ):  # Create class-aware plot when both label arrays are available.
+            detailed_fig = plt.figure(figsize=(12, 8))  # Create separate figure for provenance and class groups.
+            detailed_ax = cast(
+                Axes3D, detailed_fig.add_subplot(111, projection="3d")
+            )  # Create typed 3D axis for detailed scatter groups.
+            original_classes = np.unique(original_labels_subset)  # Identify source classes present in plotted rows.
+            generated_classes = np.unique(
+                generated_labels_subset
+            )  # Identify synthetic classes present in plotted rows.
+            detailed_group_count = (
+                len(original_classes) + len(generated_classes)
+            )  # Count provenance and class combinations for colors.
+            detailed_colors = plt.get_cmap(
+                "hsv", detailed_group_count
+            )  # Allocate distinct hues for every detailed group.
+
+            for color_index, class_label in enumerate(
+                original_classes
+            ):  # Plot each source class as an independent group.
+                class_mask = original_labels_subset == class_label  # Select embedded source rows for current class.
+                detailed_ax.scatter(
+                    orig_emb[class_mask, 0], orig_emb[class_mask, 1], zs=cast(Any, orig_emb[class_mask, 2]),
+                    c=[detailed_colors(color_index)], alpha=0.5, s=8, label=class_label,
+                )  # Plot source class coordinates with dedicated color and label.
+
+            for color_index, class_label in enumerate(
+                generated_classes, start=len(original_classes)
+            ):  # Plot each synthetic class as an independent group.
+                class_mask = generated_labels_subset == class_label  # Select embedded synthetic rows for current class.
+                detailed_ax.scatter(
+                    gen_emb[class_mask, 0], gen_emb[class_mask, 1], zs=cast(Any, gen_emb[class_mask, 2]),
+                    c=[detailed_colors(color_index)], alpha=0.5, s=8, label=f"{class_label} augmented",
+                )  # Plot synthetic class coordinates with dedicated color and provenance suffix.
+
+            detailed_ax.set_xlabel("TSNE Dimension 1")  # Label x-axis as first t-SNE dimension.
+            detailed_ax.set_ylabel("TSNE Dimension 2")  # Label y-axis as second t-SNE dimension.
+            detailed_ax.set_zlabel("TSNE Dimension 3")  # Label z-axis as third t-SNE dimension.
+            detailed_ax.set_title(
+                "WGAN-GP Data Distribution (Original vs Generated by Class) - t-SNE 3D"
+            )  # Set descriptive detailed plot title.
+            detailed_ax.legend(loc="upper left", fontsize="small", ncol=2)  # Render readable detailed group legend.
+
+            detailed_plot_path = (
+                plots_dir / f"{prefix}tsne_3d_original_vs_generated_detailed.png"
+            )  # Construct detailed plot file path.
+            ensure_figure_min_4k_and_save(
+                fig=detailed_fig, path=str(detailed_plot_path), dpi=300
+            )  # Save detailed plot enforcing minimum 4K pixel dimensions.
+            print(
+                f"{BackgroundColors.GREEN}Saved detailed t-SNE 3D separability plot to "
+                f"{BackgroundColors.CYAN}{detailed_plot_path}{Style.RESET_ALL}"
+            )  # Confirm detailed plot saved successfully.
 
     except Exception as e:
         print(f"{BackgroundColors.YELLOW}[WARNING] t-SNE 3D separability plot generation failed: {e}{Style.RESET_ALL}")  # Warn on failure and continue without aborting
@@ -4715,16 +4801,43 @@ def generate_generation_quality_outputs(args: Any, config: Dict, df_generated: p
 
     try:  # Guard quality visualization so CSV persistence remains authoritative
         orig_df_tsne = pd.read_csv(args.csv_path, low_memory=False)  # Load source CSV for t-SNE comparison
+        orig_df_tsne.columns = orig_df_tsne.columns.str.strip()  # Normalize source column names.
         valid_tsne_cols = [c for c in feature_cols if c in orig_df_tsne.columns and c in df_generated.columns]  # Retain shared generated feature columns
 
         if valid_tsne_cols:  # Proceed only when comparable feature columns are available
-            X_original_tsne = orig_df_tsne[valid_tsne_cols].apply(pd.to_numeric, errors="coerce").dropna().values.astype(np.float32)  # Extract numeric source feature matrix
+            source_label_col = (
+                args.label_col
+                if args.label_col in orig_df_tsne.columns
+                else detect_label_column(orig_df_tsne.columns, config)
+            )  # Resolve source label column using training normalization.
+            if source_label_col is None:  # Require source labels for class-aware visualization.
+                raise ValueError(
+                    "Source CSV has no label column for detailed t-SNE visualization"
+                )  # Stop invalid class-aware visualization.
+            original_numeric_tsne = orig_df_tsne[valid_tsne_cols].apply(
+                pd.to_numeric, errors="coerce"
+            ).dropna()  # Retain valid source rows for coordinates and labels.
+            X_original_tsne = original_numeric_tsne.values.astype(np.float32)  # Extract numeric source feature matrix.
+            original_labels_tsne = orig_df_tsne.loc[
+                original_numeric_tsne.index, source_label_col
+            ].astype(str).to_numpy()  # Align source labels with retained feature rows.
             X_generated_tsne = df_generated[valid_tsne_cols].values.astype(np.float32)  # Extract generated feature matrix
+            generated_labels_tsne = df_generated[args.label_col].astype(
+                str
+            ).to_numpy()  # Align synthetic labels with generated feature rows.
             config_paths = config.get("paths", {})  # Read paths
             data_aug_subdir = config_paths.get("data_augmentation_dir", "Data_Augmentation")  # Read directory
             tsne_out_dir = Path(args.csv_path).parent / data_aug_subdir  # Resolve data augmentation directory
             tsne_dataset_name = Path(args.csv_path).stem  # Derive dataset name from source CSV stem
-            generate_tsne_3d_separability_plot(X_original_tsne, X_generated_tsne, tsne_out_dir, dataset_name=tsne_dataset_name, config=config)  # Generate 3D t-SNE quality visualization
+            generate_tsne_3d_separability_plot(
+                X_original_tsne,
+                X_generated_tsne,
+                tsne_out_dir,
+                dataset_name=tsne_dataset_name,
+                config=config,
+                original_labels=original_labels_tsne,
+                generated_labels=generated_labels_tsne,
+            )  # Generate binary and class-aware 3D t-SNE visualizations.
 
     except Exception as _tsne_e:  # Continue when quality visualization fails
         print(f"{BackgroundColors.YELLOW}[WARNING] t-SNE separability plot failed: {_tsne_e}{Style.RESET_ALL}")  # Warn about t-SNE failure without aborting generation
