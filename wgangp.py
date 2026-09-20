@@ -702,10 +702,10 @@ def build_default_runtime_config() -> Dict:
             "results_suffix": "_data_augmented",  # Suffix to add to generated filenames for WGANGP
             "results_csv_columns": [  # Define the canonical WGAN-GP augmentation result schema
                 "original_file",  # Store the source dataset filename
-                "generated_file",  # Store the persisted augmented dataset path
+                "generated_file",  # Store the persisted generated dataset path
                 "original_num_samples",  # Store the source dataset row count
                 "generated_num_samples",  # Store only newly generated synthetic rows
-                "total_num_samples_after_augmentation",  # Store final output rows after concatenation
+                "total_num_samples_after_augmentation",  # Store conceptual source plus generated population
                 "generated_ratio",  # Store generated rows divided by source rows
                 "epochs",  # Store configured total training epochs
                 "batch_size",  # Store effective training batch size
@@ -3369,7 +3369,7 @@ def count_persisted_output_rows(out_file: Union[str, Path]) -> int:
 
 def validate_augmentation_sample_totals(args: Any, persisted_total_rows: int) -> None:
     """
-    Validate augmented output sample totals before result persistence.
+    Validate generated output rows before result persistence.
 
     :param args: Runtime arguments namespace carrying augmentation count attributes.
     :param persisted_total_rows: Data-row count read from the persisted augmented CSV.
@@ -3378,15 +3378,17 @@ def validate_augmentation_sample_totals(args: Any, persisted_total_rows: int) ->
 
     original_rows = int(safe_float(getattr(args, "_last_original_num_samples", 0), 0.0))  # Read source row count from args
     generated_rows = int(safe_float(getattr(args, "_last_generated_num_samples", 0), 0.0))  # Read synthetic row count from args
-    expected_total_rows = original_rows + generated_rows  # Calculate expected final augmented row count
+    conceptual_total_rows = original_rows + generated_rows  # Calculate conceptual source plus generated population
 
     if original_rows < 0 or generated_rows < 0:  # Verify row counts are non-negative
         raise ValueError("Augmentation row counts must be non-negative")  # Raise before writing an invalid result row
 
-    if persisted_total_rows != expected_total_rows:  # Verify persisted output count matches source plus synthetic rows
-        raise ValueError(f"Augmented CSV row count {persisted_total_rows} does not equal original {original_rows} plus generated {generated_rows}")  # Raise before writing an invalid result row
+    if persisted_total_rows != generated_rows:  # Verify persisted output count matches generated rows
+        raise ValueError(  # Raise error
+            f"Generated CSV row count {persisted_total_rows} does not equal generated {generated_rows}"  # Format error
+        )  # Finish error
 
-    args._last_total_num_samples_after_augmentation = int(persisted_total_rows)  # Store verified final row count on args
+    args._last_total_num_samples_after_augmentation = int(conceptual_total_rows)  # Store total
 
 
 def validate_completed_generation_row(row_runtime: Dict, results_cols_cfg: list) -> None:
@@ -3408,7 +3410,7 @@ def validate_completed_generation_row(row_runtime: Dict, results_cols_cfg: list)
 
     original_value = int(safe_float(row_runtime.get("original_num_samples"), 0.0))  # Convert source row count to integer
     generated_value = int(safe_float(row_runtime.get("generated_num_samples"), 0.0))  # Convert synthetic row count to integer
-    total_value = int(safe_float(row_runtime.get("total_num_samples_after_augmentation"), 0.0))  # Convert final output row count to integer
+    total_value = int(safe_float(row_runtime.get("total_num_samples_after_augmentation"), 0.0))  # Convert total
     ratio_value = safe_float(row_runtime.get("generated_ratio"), 0.0)  # Convert generated ratio to float
     completed_epoch_value = safe_float(row_runtime.get("epoch"), 0.0)  # Convert completed epoch to numeric value
     epoch_time_value = safe_float(row_runtime.get("epoch_time_s"), 0.0)  # Convert completed epoch duration to numeric seconds
@@ -3418,7 +3420,7 @@ def validate_completed_generation_row(row_runtime: Dict, results_cols_cfg: list)
 
     if original_value < 0 or generated_value < 0:  # Verify row counts are non-negative
         raise ValueError("Completed generation row has negative sample counts")  # Raise before any row write
-    if total_value != original_value + generated_value:  # Verify final output count equals source plus synthetic rows
+    if total_value != original_value + generated_value:  # Verify total
         raise ValueError("Completed generation row violates original plus generated sample total")  # Raise before any row write
     if original_value > 0 and abs(ratio_value - (generated_value / original_value)) > 1e-12:  # Verify generated ratio matches generated rows over source rows
         raise ValueError("Completed generation row has an inconsistent generated_ratio")  # Raise before any row write
@@ -4300,11 +4302,11 @@ def resolve_expected_sample_count(args, config: Dict) -> Optional[int]:
 
 def resolve_expected_output_row_count(args, config: Dict) -> Optional[int]:
     """
-    Resolve the expected persisted augmented dataset row count.
+    Resolve the expected persisted generated dataset row count.
 
     :param args: Parsed arguments namespace with source and generation settings.
     :param config: Configuration dictionary with generation settings.
-    :return: Expected final output row count, or None if unavailable.
+    :return: Expected generated output row count, or None if unavailable.
     """
 
     expected_generated = resolve_expected_sample_count(args, config)  # Resolve the expected synthetic row count
@@ -4312,15 +4314,7 @@ def resolve_expected_output_row_count(args, config: Dict) -> Optional[int]:
     if expected_generated is None:  # Propagate unavailable generated count
         return None  # Return unavailable output count
 
-    original_count = 0  # Initialize source row count fallback
-
-    if getattr(args, "csv_path", None):  # Use source CSV when available
-        try:  # Read source row count for final output sizing
-            original_count = len(pd.read_csv(args.csv_path, low_memory=False))  # Count source CSV rows
-        except Exception:  # Use zero when source count cannot be read
-            original_count = 0  # Preserve generated-only fallback sizing
-
-    return int(original_count) + int(expected_generated)  # Return final augmented output row count
+    return int(expected_generated)  # Return generated artifact row count
 
 
 def evaluate_existing_augmentation_file(out_path: Path, file_prefix: str, existing_count: int, expected_n: int, args) -> bool:
@@ -4675,23 +4669,19 @@ def generate_batches_and_collect_results(args, G: nn.Module, device: torch.devic
 
 def build_augmented_output_dataframe(args: Any, df_generated: pd.DataFrame) -> tuple:
     """
-    Build the persisted augmented dataset from original and generated rows.
+    Build the persisted generated dataset and retain source row metadata.
 
     :param args: Parsed arguments namespace containing csv_path.
     :param df_generated: DataFrame containing newly generated synthetic rows.
-    :return: Tuple of final output DataFrame and original source row count.
+    :return: Tuple of generated output DataFrame and original source row count.
     """
 
-    original_count = 0  # Initialize source row count for generated-only fallback
-    output_df = df_generated  # Use generated rows when no source CSV is available
+    original_count = 0  # Initialize source row count for result metadata
 
-    if getattr(args, "csv_path", None):  # Use source CSV when available
-        original_df = pd.read_csv(args.csv_path, low_memory=False)  # Load source dataset rows for final augmentation output
-        original_count = len(original_df)  # Count source dataset rows before concatenation
-        original_aligned = original_df.reindex(columns=df_generated.columns)  # Align source columns to generated output columns
-        output_df = pd.concat([original_aligned, df_generated], ignore_index=True)  # Concatenate source rows before synthetic rows
+    if getattr(args, "csv_path", None):  # Read source count when source CSV is available
+        original_count = len(pd.read_csv(args.csv_path, low_memory=False))  # Count source rows for result metadata
 
-    return output_df, original_count  # Return final augmented output and source row count
+    return df_generated, original_count  # Return generated rows and source row count
 
 
 def generate_generation_quality_outputs(args: Any, config: Dict, df_generated: pd.DataFrame, feature_cols: List[str]) -> None:
@@ -4747,7 +4737,7 @@ def postprocess_generated_arrays_to_dataframe(args, config: Dict, all_fake: List
     X_orig = scaler.inverse_transform(X_fake)  # Inverse transform features to original scale
     df_generated = pd.DataFrame(X_orig, columns=pd.Index(feature_cols))  # Create DataFrame with original feature names
     df_generated[args.label_col] = label_encoder.inverse_transform(Y_fake)  # Map integer labels back to original strings
-    output_df, original_count = build_augmented_output_dataframe(args, df_generated)  # Build final original plus synthetic output DataFrame
+    output_df, original_count = build_augmented_output_dataframe(args, df_generated)  # Build output
 
     if config.get("hardware_tracking", False):  # If enabled in config
         try:  # Guard hardware population to avoid breaking generation
@@ -4757,12 +4747,16 @@ def postprocess_generated_arrays_to_dataframe(args, config: Dict, all_fake: List
 
     args._last_original_num_samples = int(original_count)  # Store source row count for result persistence
     args._last_generated_num_samples = int(len(df_generated))  # Store synthetic row count for result persistence
-    args._last_total_num_samples_after_augmentation = int(len(output_df))  # Store final output row count for result persistence
+    args._last_total_num_samples_after_augmentation = int(original_count + len(df_generated))  # Store total
 
-    safe_log("info", f"Saving {len(output_df)} augmented rows with {n} generated samples to {args.out_file}")  # Log augmented save start at INFO level before writing
-    generate_csv_and_image(output_df, args.out_file, is_visualizable=True)  # Save final augmented CSV and generate PNG image when appropriate
-    safe_log("info", f"Successfully saved {len(output_df)} augmented rows with {n} generated samples to {args.out_file}")  # Log augmented save completion at INFO level after writing
-    print(f"{file_progress_prefix} {BackgroundColors.GREEN}Saved {BackgroundColors.CYAN}{len(output_df)}{BackgroundColors.GREEN} augmented rows ({BackgroundColors.CYAN}{len(df_generated)}{BackgroundColors.GREEN} generated) to {BackgroundColors.CYAN}{args.out_file}{Style.RESET_ALL}")  # Print completion message with prefix
+    safe_log("info", f"Saving {len(output_df)} generated rows to {args.out_file}")  # Log saving
+    generate_csv_and_image(output_df, args.out_file, is_visualizable=True)  # Save CSV
+    safe_log("info", f"Successfully saved {len(output_df)} generated rows to {args.out_file}")  # Log saved rows
+    print(  # Print saved rows
+        f"{file_progress_prefix} {BackgroundColors.GREEN}Saved {BackgroundColors.CYAN}"  # Format prefix
+        f"{len(output_df)}{BackgroundColors.GREEN} generated rows to "  # Format count
+        f"{BackgroundColors.CYAN}{args.out_file}{Style.RESET_ALL}"  # Format path
+    )  # Finish output
 
     return df_generated  # Return generated-only DataFrame for quality visualization
 
@@ -4912,7 +4906,7 @@ def collect_generation_file_metadata(args, args_ck: Dict, ckpt: Dict, n: int, ck
     except Exception:  # Reading failed
         metadata["original_num"] = metadata["original_num"] if metadata["original_num"] not in (None, "") else None  # Preserve captured source count when reading fails
     metadata["generated_num"] = int(n) if n is not None else ""  # Store newly generated synthetic rows
-    metadata["total_after_augmentation"] = getattr(args, "_last_total_num_samples_after_augmentation", "")  # Prefer verified final output row count from args
+    metadata["total_after_augmentation"] = getattr(args, "_last_total_num_samples_after_augmentation", "")  # Read total
     if metadata["total_after_augmentation"] in (None, "") and metadata["original_num"] not in (None, "") and metadata["generated_num"] not in (None, ""):  # Build final total when direct value is unavailable
         metadata["total_after_augmentation"] = int(metadata["original_num"]) + int(metadata["generated_num"])  # Store source plus synthetic row total
     metadata["generated_ratio"] = ""  # Default generated ratio
@@ -4981,7 +4975,7 @@ def build_generation_runtime_row(args, config: Dict, n: int, device: torch.devic
     row_runtime["generated_file"] = metadata["generated_file_name"]  # Generated output filename
     row_runtime["original_num_samples"] = metadata["original_num"] if metadata["original_num"] is not None else ""  # Original sample count
     row_runtime["generated_num_samples"] = metadata["generated_num"]  # Newly generated synthetic row count
-    row_runtime["total_num_samples_after_augmentation"] = metadata["total_after_augmentation"]  # Final augmented output row count
+    row_runtime["total_num_samples_after_augmentation"] = metadata["total_after_augmentation"]  # Store total
     row_runtime["generated_ratio"] = metadata["generated_ratio"]  # Generated/original ratio
     row_runtime["epoch"] = metadata["completed_epoch"]  # Completed training epoch used for generation
     row_runtime["critic_loss"] = metadata["critic_loss"]  # Last critic loss from checkpoint metrics
@@ -5084,7 +5078,7 @@ def generate(args, config: Optional[Dict] = None):
         record_sample_generation_timing(args, sample_generation_start_time)  # Record sample generation elapsed time
         testing_start_time = time.time()  # Start post-generation verification and quality-output timing
         persisted_total_rows = count_persisted_output_rows(args.out_file)  # Count actual rows persisted to augmented CSV
-        validate_augmentation_sample_totals(args, persisted_total_rows)  # Verify source, synthetic, and final output row totals
+        validate_augmentation_sample_totals(args, persisted_total_rows)  # Verify rows
         generate_generation_quality_outputs(args, config, df, feature_cols)  # Generate post-generation quality visualization outputs
         record_testing_timing(args, testing_start_time)  # Record post-generation verification and quality-output elapsed time
         generated_n = int(safe_float(getattr(args, "_last_generated_num_samples", n), n))  # Resolve actual synthetic row count for result persistence
@@ -5135,7 +5129,7 @@ def generate_from_in_memory_generator(args, config: Dict, G: nn.Module, dataset:
         record_sample_generation_timing(args, sample_generation_start_time)  # Record sample generation elapsed time
         testing_start_time = time.time()  # Start post-generation verification and quality-output timing
         persisted_total_rows = count_persisted_output_rows(args.out_file)  # Count actual rows persisted to augmented CSV
-        validate_augmentation_sample_totals(args, persisted_total_rows)  # Verify source, synthetic, and final output row totals
+        validate_augmentation_sample_totals(args, persisted_total_rows)  # Verify rows
         generate_generation_quality_outputs(args, config, df, feature_cols)  # Generate post-generation quality visualization outputs
         record_testing_timing(args, testing_start_time)  # Record post-generation verification and quality-output elapsed time
         generated_n = int(safe_float(getattr(args, "_last_generated_num_samples", n), n))  # Resolve actual synthetic row count for result persistence
@@ -5928,14 +5922,25 @@ def validate_augmentation_output(args: Any, csv_path_obj: Path, file_progress_pr
         print(f"{BackgroundColors.RED}{error_msg}{Style.RESET_ALL}")  # Print error to console in red
         send_telegram_message(TELEGRAM_BOT, error_msg)  # Send zero-row failure notification via Telegram
         sys.exit(1)  # Terminate the script due to zero-row output
-    expected_total_rows = getattr(args, "_last_total_num_samples_after_augmentation", "")  # Read expected augmented output row count from args
-    if expected_total_rows not in (None, "") and row_count != int(safe_float(expected_total_rows, 0.0)):  # Verify persisted row count matches recorded augmentation total
-        error_msg = f"[ERROR] WGAN-GP augmentation failed on {original_name} — augmented file {out_path.name} has {row_count} rows but expected {expected_total_rows}"  # Build row-mismatch error message
+    expected_generated_rows = getattr(args, "_last_generated_num_samples", "")  # Read expected rows
+    expected_generated_count = int(safe_float(expected_generated_rows, 0.0))  # Convert expected rows
+    if expected_generated_rows not in (None, "") and row_count != expected_generated_count:  # Verify rows
+        error_msg = (  # Build error
+            f"[ERROR] WGAN-GP augmentation failed on {original_name} — generated file "  # Format file
+            f"{out_path.name} has {row_count} rows but expected {expected_generated_rows}"  # Format counts
+        )  # Finish error
         print(f"{BackgroundColors.RED}{error_msg}{Style.RESET_ALL}")  # Print error to console in red
         send_telegram_message(TELEGRAM_BOT, error_msg)  # Send row-mismatch failure notification via Telegram
         sys.exit(1)  # Terminate the script due to mismatched output rows
-    print(f"{file_progress_prefix} {BackgroundColors.GREEN}[INFO] Augmented dataset successfully saved ({BackgroundColors.CYAN}{row_count}{BackgroundColors.GREEN} rows){Style.RESET_ALL}")  # Log successful validation with row count
-    send_telegram_message(TELEGRAM_BOT, f"{file_progress_prefix} [INFO] Augmented dataset successfully saved ({row_count} rows) at {out_path}")  # Send success notification via Telegram
+    print(  # Print saved dataset
+        f"{file_progress_prefix} {BackgroundColors.GREEN}[INFO] Generated dataset successfully "  # Format status
+        f"saved ({BackgroundColors.CYAN}{row_count}{BackgroundColors.GREEN} rows){Style.RESET_ALL}"  # Format count
+    )  # Finish output
+    send_telegram_message(  # Send saved dataset
+        TELEGRAM_BOT,  # Pass bot
+        f"{file_progress_prefix} [INFO] Generated dataset successfully saved ({row_count} rows) "  # Format status
+        f"at {out_path}",  # Format path
+    )  # Finish message
 
 
 def run_both_mode_for_csv(args: Any, config: Dict, csv_path_obj: Path, data_aug_dir: Path, training_label: str) -> None:
