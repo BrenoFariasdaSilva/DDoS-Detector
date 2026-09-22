@@ -13052,6 +13052,8 @@ def iterate_feature_sets_sequentially(feature_source_arrays: dict, feature_names
         yield "Full Features", feature_source_arrays["X_train_scaled"], feature_source_arrays["X_test_scaled"], feature_names, None  # Yield full-feature matrices without copying.
         if pending_mode_count > 1:  # If later feature modes need the full source matrices, spill them before materializing subset copies.
             maybe_spill_feature_source_arrays(feature_source_arrays, file, config=config)  # Replace large in-memory full matrices with disk-backed memmaps when configured.
+    elif pending_mode_count:  # Spill source matrices before first subset when full features are disabled.
+        maybe_spill_feature_source_arrays(feature_source_arrays, file, config=config)  # Spill source matrices.
 
     if explicit_features:  # Resolve explicit feature mode only when configured.
         feature_names_list = list(feature_names)  # Normalize feature names for positional lookup.
@@ -17143,8 +17145,14 @@ def evaluate_on_dataset(
         feature_sets_iter = iterate_feature_sets_sequentially(feature_source_arrays, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, extra_trees_selected_features, file, feature_sets_config, config, scaler=scaler, source_files=pca_source_files, pca_cache_context=pca_cache_context, pca_input_feature_names=pca_input_feature_names)  # Create the lazy feature-set iterator with exact PCA source, feature, scaler, and split provenance.
         for idx, (name, X_train_subset, X_test_subset, subset_feature_names_list, transformer) in enumerate(feature_sets_iter, start=1):  # Evaluate one materialized feature set at a time
             if feature_mode_name is not None and name != feature_mode_name:  # Skip feature matrices outside current canonical sequential group.
+                del X_train_subset, X_test_subset  # Release skipped yielded matrices before source spilling.
+                del subset_feature_names_list, transformer  # Release skipped yielded metadata before source spilling.
+                gc.collect()  # Reclaim skipped full matrices before next feature-set materialization.
                 continue  # Advance without evaluating an out-of-group feature set.
             if artifact_recovery_target is not None and name != artifact_recovery_target[0]:
+                del X_train_subset, X_test_subset  # Release skipped yielded matrices before source spilling.
+                del subset_feature_names_list, transformer  # Release skipped yielded metadata before source spilling.
+                gc.collect()  # Reclaim skipped full matrices before next feature-set materialization.
                 continue  # Materialize only as needed until the missing feature-set artifact is reached.
             if X_train_subset.shape[1] == 0:  # Verify if the subset is empty
                 print(
