@@ -1283,8 +1283,8 @@ def parse_cli_args():
             default=None,  # Keep normal behavior when flag is absent.
             type=validate_cached_rerun_count,  # Validate positive integer input.
             help=(  # Describe rerun count behavior.
-                "Rerun cached experiment definitions into the next cache run ordered by descending cached F1 score; "  # Explain source order.
-                "optional positive integer repeats complete additional runs"  # Explain count behavior.
+                "Ensure cached experiments have every run from 1 through requested total, "  # Describe target coverage.
+                "ordered by descending cached F1 score"  # Describe target ordering.
             ),  # Finish cached rerun help text.
         )  # Register cached rerun CLI argument.
         parser.add_argument(  # Add cached-run maximum for rerun mode.
@@ -1675,11 +1675,11 @@ def validate_experiment_runs(value: Any, source: str = "stacking.experiment_runs
 
 def validate_cached_rerun_count(value: Any, source: str = "--rerun-cached-experiments") -> int:
     """
-    Validate the requested cached rerun count.
+    Validate the requested cached rerun target run count.
 
-    :param value: Requested cached rerun count.
+    :param value: Requested cached rerun target run count.
     :param source: User-facing setting name used in validation errors.
-    :return: Validated positive rerun count.
+    :return: Validated positive target run count.
     """
 
     try:  # Parse exact integer text supplied by argparse or configuration.
@@ -1704,10 +1704,10 @@ def validate_max_cached_experiments(value: Any) -> int:
 
 def resolve_cached_rerun_count(config: Optional[dict] = None) -> int:
     """
-    Resolve the configured cached rerun count.
+    Resolve the configured cached rerun target run count.
 
     :param config: Runtime configuration dictionary.
-    :return: Zero when disabled, otherwise positive rerun count.
+    :return: Zero when disabled, otherwise positive target run count.
     """
 
     if config is None:  # Use global configuration when no configuration is supplied.
@@ -2012,35 +2012,24 @@ def discover_cache_artifact_run_numbers(csv_path: str, config: Optional[dict] = 
 
 def resolve_cached_rerun_target_runs(
     csv_paths: List[str],  # Receive cache family references.
-    requested_count: int,  # Receive requested rerun generations.
+    requested_count: int,  # Receive requested total run count.
     config: Optional[dict] = None,  # Receive runtime configuration.
     max_cached_experiments: Optional[int] = None  # Receive optional logical run cap.
 ) -> List[int]:  # Return ordered run sequence.
     """
-    Resolve cache runs that must share the canonical cached experiment union.
+    Resolve target cache run indices for canonical cached experiment coverage.
 
     :param csv_paths: Dataset file or directory identities used for cache placement.
-    :param requested_count: Requested count of complete additional rerun generations.
+    :param requested_count: Requested total run count.
     :param config: Runtime configuration dictionary.
     :param max_cached_experiments: Optional maximum logical cached run count.
     :return: Sorted run numbers to reconcile or generate.
     """
 
-    if config is None:  # Use global configuration when no configuration is supplied.
-        config = CONFIG  # Preserve established global fallback.
-    requested_last_run = validate_cached_rerun_count(requested_count) + 1  # Resolve final requested run.
-    run_numbers = set()  # Accumulate discovered and requested logical runs.
-    for csv_path in csv_paths:  # Discover existing cache family allocations.
-        for run_number in discover_cache_artifact_run_numbers(csv_path, config=config):  # Read logical runs.
-            run_numbers.add(run_number)  # Include existing historical run for reconciliation.
-    candidate_run = 1  # Start requested allocation at the source run.
-    while candidate_run <= requested_last_run:  # Add requested sequence until count or maximum stops creation.
-        cap_reached = max_cached_experiments is not None and len(run_numbers) >= max_cached_experiments  # Detect cap.
-        if cap_reached:  # Stop before creating over cap.
-            break  # Preserve existing logical runs without adding another run.
-        run_numbers.add(candidate_run)  # Add requested logical run when absent.
-        candidate_run += 1  # Move to the next requested logical run.
-    return sorted(run_numbers)  # Return deterministic reconciliation order.
+    target_run_count = validate_cached_rerun_count(requested_count)  # Resolve requested total run coverage.
+    if max_cached_experiments is not None:  # Apply the configured cached-run ceiling.
+        target_run_count = min(target_run_count, max_cached_experiments)  # Cap target runs.
+    return list(range(1, target_run_count + 1))  # Return every target run index exactly once.
 
 
 def emit_cached_rerun_limit_message(current_count: int, max_count: int) -> None:
@@ -18485,7 +18474,7 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
                 source_rerun_cache or {},  # Pass source cache rows.
                 source_tasks,  # Pass current task identities.
                 attack_types_list,  # Pass combined attack scope.
-                require_all=ordering_rerun_cache is not None,  # Require complete previous run for later ordering.
+                require_all=False,  # Allow union rows absent from the prior target run.
                 ordering_cache=ordering_rerun_cache,  # Pass previous-run ordering rows.
                 destination_cache=destination_rerun_cache  # Pass destination rows already complete.
             )  # Finish cache-driven rerun plan.
@@ -21660,7 +21649,7 @@ def orchestrate_all_combinations(input_path, dataset_name=None, config=None):
                     source_rerun_cache or {},  # Pass source cache rows.
                     source_tasks,  # Pass current task identities.
                     None,  # Pass separate-files attack scope.
-                    require_all=ordering_rerun_cache is not None,  # Require complete previous run for later ordering.
+                    require_all=False,  # Allow union rows absent from the prior target run.
                     ordering_cache=ordering_rerun_cache,  # Pass previous-run ordering rows.
                     destination_cache=destination_rerun_cache  # Pass destination rows already complete.
                 )  # Finish cache-driven rerun plan.
