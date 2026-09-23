@@ -487,6 +487,25 @@ def build_training_progress(feature_set: Optional[str], classifier_name: str, to
     return TrainingProgress(feature_set, classifier_name, calculate_execution_time, output_stream=sys.stdout, total_units=total_units, unit_label=unit_label, heartbeat=heartbeat, report_interval_seconds=interval_seconds, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio, eta_callback=eta_callback, resource_suffix_callback=resource_suffix_callback, estimated_finish_suffix_callback=format_estimated_finish_time_suffix, estimated_total_seconds=estimated_total_seconds, local_combination_index=local_combination_index, local_combination_total=local_combination_total, previous_run_duration_label=previous_run_duration_label, eta_pending_run_experiments_label=eta_pending_run_experiments_label)  # Pass required progress and combination context explicitly.
 
 
+def get_random_forest_tree_memory(model: RandomForestClassifier) -> dict:
+    """
+    Summarize retained Random Forest tree memory.
+
+    :param model: Fitted Random Forest classifier.
+    :return: Completed-tree memory summary.
+    """
+
+    completed_trees = list(getattr(model, "estimators_", []))  # Read completed public estimator objects only after each fit returns.
+    node_count = 0  # Accumulate retained fitted tree nodes.
+    tree_nbytes = 0  # Accumulate actual exposed tree-array storage.
+    for estimator in completed_trees:  # Visit each completed fitted tree.
+        tree = estimator.tree_  # Read sklearn's fitted public tree attribute.
+        node_count += int(tree.node_count)  # Accumulate actual retained nodes.
+        for array in (tree.children_left, tree.children_right, tree.feature, tree.threshold, tree.impurity, tree.n_node_samples, tree.weighted_n_node_samples, tree.value):  # Visit exposed fitted tree arrays.
+            tree_nbytes += int(np.asarray(array).nbytes)  # Sum actual array storage without copying.
+    return {"completed_trees": len(completed_trees), "node_count": node_count, "tree_nbytes": tree_nbytes}  # Return compact factual tree memory data.
+
+
 def fit_classifier_with_progress(model: Any, X_train: Any, y_train: Any, feature_set: Optional[str], classifier_name: str, config: Optional[dict] = None, fit_kwargs: Optional[dict] = None, hyperparameters_enabled: Optional[bool] = None, augmentation_ratio: Optional[float] = None, eta_callback: Optional[Callable[[str, Optional[float]], None]] = None, estimated_total_seconds: Optional[float] = None, cancellation_checker: Optional[Callable[[], bool]] = None, local_combination_index: Optional[int] = None, local_combination_total: Optional[int] = None, active_workers_callback: Optional[Callable[[], str]] = None, previous_run_duration_label: str = "unavailable", eta_pending_run_experiments_label: str = "unavailable") -> Any:  # Fit one estimator with safe progress reporting
     """
     Fit one estimator with public training-unit callbacks or heartbeat reporting.
@@ -577,6 +596,30 @@ def fit_classifier_with_progress(model: Any, X_train: Any, y_train: Any, feature
         options["monitor"] = report_gradient_stage  # Install the composed callback through sklearn's public fit API.
         with progress:  # Scope callback timing to the original blocking fit.
             return model.fit(X_train, y_train, **options)  # Execute one unchanged Gradient Boosting fit call.
+
+    if model_type is RandomForestClassifier and int(model.n_jobs or 1) == 1 and not model.warm_start and not model.oob_score:  # Grow one sequential tree per exact warm-start increment.
+        original_estimators = int(model.n_estimators)  # Preserve the configured forest size.
+        progress = build_training_progress(feature_set, classifier_name, original_estimators, "Tree", heartbeat=False, config=config, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio, eta_callback=eta_callback, estimated_total_seconds=estimated_total_seconds, local_combination_index=local_combination_index, local_combination_total=local_combination_total, active_workers_callback=active_workers_callback, previous_run_duration_label=previous_run_duration_label, eta_pending_run_experiments_label=eta_pending_run_experiments_label)  # Create factual per-tree progress reporting.
+        try:  # Restore public estimator parameters after successful or failed tree growth.
+            with progress:  # Scope tree progress to the complete forest fit.
+                for tree_count in range(1, original_estimators + 1):  # Grow deterministic sklearn tree prefixes sequentially.
+                    raise_if_cancelled()  # Honor cancellation between completed trees.
+                    model.set_params(n_estimators=tree_count, warm_start=tree_count > 1)  # Preserve sklearn's documented random-state skip for prior trees.
+                    model.fit(X_train, y_train, **options)  # Fit exactly one additional sklearn tree.
+                    tree_memory = get_random_forest_tree_memory(model)  # Measure only completed retained tree arrays.
+                    process_memory = psutil.Process(os.getpid()).memory_info()  # Read current process memory after tree retention.
+                    system_memory = psutil.virtual_memory()  # Read current system RAM state.
+                    try:  # Preserve tree fitting when platform swap statistics are unavailable.
+                        swap_memory = psutil.swap_memory()  # Read current system swap state.
+                        swap_used_label = f"{swap_memory.used / (1024 ** 3):.2f} GiB"  # Format available swap usage.
+                    except (OSError, PermissionError):  # Tolerate restricted platform memory access.
+                        swap_used_label = "unavailable"  # Report unavailable swap usage without failing training.
+                    print(f"[RANDOM FOREST] Feature Set: {format_training_feature_set(feature_set)} | Trees: {tree_memory['completed_trees']}/{original_estimators} | Nodes: {tree_memory['node_count']:,} | Tree Storage: {tree_memory['tree_nbytes'] / (1024 ** 3):.2f} GiB | RSS: {process_memory.rss / (1024 ** 3):.2f} GiB | VMS: {process_memory.vms / (1024 ** 3):.2f} GiB | RAM Available: {system_memory.available / (1024 ** 3):.2f} GiB | Swap Used: {swap_used_label}")  # Report retained-tree and process memory after each completed tree.
+                    write_memory_phase_event("random_forest_tree_completed", config=config, feature_set_name=feature_set, classifier_name=classifier_name, tree_count=tree_memory["completed_trees"], tree_total=original_estimators, cumulative_node_count=tree_memory["node_count"], retained_tree_nbytes=tree_memory["tree_nbytes"], event_outcome="completed")  # Publish tree-retention memory evidence through existing watcher.
+                    progress.report_unit(tree_count)  # Publish exact completed tree progress.
+            return model  # Return the fully fitted forest.
+        finally:  # Restore configured public parameters without discarding fitted trees.
+            model.set_params(n_estimators=original_estimators, warm_start=False)  # Preserve persisted estimator parameter identity.
 
     if model_type in (AutoencoderClassifier, FTTransformerClassifier, LSTMClassifier, ResNet18Classifier, TabularResNetClassifier):  # Use neural estimators' internal epoch callback for exact epoch progress.
         total_epochs = int(model.get_params(deep=False).get("epochs", 1))  # Read the configured neural epoch total.
@@ -13006,7 +13049,7 @@ def assemble_feature_sets(X_train_scaled, X_test_scaled, feature_names, ga_selec
         raise
 
 
-def iterate_feature_sets_sequentially(feature_source_arrays: dict, feature_names: List[Any], ga_selected_features: Any, pca_n_components: Any, rfe_selected_features: Any, extra_trees_selected_features: Any, file: str, feature_sets_config: dict, config: Optional[dict], scaler: Any = None, source_files: Optional[List[str]] = None, pca_cache_context: Optional[dict] = None, pca_input_feature_names: Optional[List[Any]] = None) -> Any:  # Yield feature matrices while carrying exact PCA cache provenance.
+def iterate_feature_sets_sequentially(feature_source_arrays: dict, feature_names: List[Any], ga_selected_features: Any, pca_n_components: Any, rfe_selected_features: Any, extra_trees_selected_features: Any, file: str, feature_sets_config: dict, config: Optional[dict], scaler: Any = None, source_files: Optional[List[str]] = None, pca_cache_context: Optional[dict] = None, pca_input_feature_names: Optional[List[Any]] = None, target_feature_mode: Optional[str] = None) -> Any:  # Yield feature matrices while carrying exact PCA cache provenance.
     """
     Yield feature-set matrices one at a time.
 
@@ -13023,6 +13066,7 @@ def iterate_feature_sets_sequentially(feature_source_arrays: dict, feature_names
     :param source_files: Ordered source files used to build this evaluation dataset.
     :param pca_cache_context: Split and experiment identity used for PCA cache validation.
     :param pca_input_feature_names: Exact ordered numeric feature names consumed by PCA.
+    :param target_feature_mode: Optional sole feature mode required by the caller.
     :return: Iterator yielding feature-set matrices, names, and fitted feature transformer.
     """
 
@@ -13045,17 +13089,22 @@ def iterate_feature_sets_sequentially(feature_source_arrays: dict, feature_names
     rfe_materialized = False  # Record whether RFE no longer depends on the full source matrices.
     pca_evaluation_arrays = None  # Track PCA memmap ownership through classifier evaluation.
     rfe_evaluation_arrays = None  # Track RFE memmap ownership through classifier evaluation.
+    ga_evaluation_arrays = None  # Track GA memmap ownership through target-only evaluation.
+    extra_trees_evaluation_arrays = None  # Track Extra Trees memmap ownership through target-only evaluation.
 
-    if use_full:  # Yield full features first to preserve baseline ordering.
+    if target_feature_mode is not None and target_feature_mode != "Full Features":  # Spill full matrices before the sole selected subset is materialized.
+        maybe_spill_feature_source_arrays(feature_source_arrays, file, config=config)  # Replace full source matrices with memmaps.
+
+    if use_full and target_feature_mode in (None, "Full Features"):  # Yield full features when the caller requires them.
         full_signature = ("features", tuple(sorted(sanitize_feature_name(feature) for feature in feature_names)))  # Build full-feature identity.
         feature_signatures.add(full_signature)  # Register full-feature identity before optional modes.
         yield "Full Features", feature_source_arrays["X_train_scaled"], feature_source_arrays["X_test_scaled"], feature_names, None  # Yield full-feature matrices without copying.
-        if pending_mode_count > 1:  # If later feature modes need the full source matrices, spill them before materializing subset copies.
+        if pending_mode_count > 1 and target_feature_mode is None:  # Spill only when later modes require the full source matrices.
             maybe_spill_feature_source_arrays(feature_source_arrays, file, config=config)  # Replace large in-memory full matrices with disk-backed memmaps when configured.
-    elif pending_mode_count:  # Spill source matrices before first subset when full features are disabled.
+    elif not use_full and pending_mode_count and target_feature_mode is None:  # Spill source matrices before unrestricted subset materialization.
         maybe_spill_feature_source_arrays(feature_source_arrays, file, config=config)  # Spill source matrices.
 
-    if explicit_features:  # Resolve explicit feature mode only when configured.
+    if explicit_features and target_feature_mode in (None, "Explicit Features"):  # Resolve explicit features only when required.
         feature_names_list = list(feature_names)  # Normalize feature names for positional lookup.
         sanitized_col_map = {sanitize_feature_name(column): column for column in feature_names_list}  # Build sanitized feature lookup.
         valid_explicit = []  # Accumulate valid explicit features in requested order.
@@ -13087,7 +13136,7 @@ def iterate_feature_sets_sequentially(feature_source_arrays: dict, feature_names
             else:  # Report duplicate explicit mode suppression.
                 print(f"{BackgroundColors.YELLOW}[WARNING] Explicit Features skipped because it is equivalent to an existing feature-set mode.{Style.RESET_ALL}")  # Log duplicate explicit mode.
 
-    if use_extra_trees:  # Resolve Extra Trees feature mode after explicit features.
+    if use_extra_trees and target_feature_mode in (None, "Extra Trees Features"):  # Resolve Extra Trees features only when required.
         X_train_extra_trees, extra_trees_actual_features = get_feature_subset(feature_source_arrays["X_train_scaled"], extra_trees_selected_features, feature_names)  # Materialize Extra Trees training subset for this mode.
         X_test_extra_trees, _ = get_feature_subset(feature_source_arrays["X_test_scaled"], extra_trees_selected_features, feature_names)  # Materialize Extra Trees test subset for this mode.
         if X_train_extra_trees is not None and X_train_extra_trees.shape[1] > 0:  # Yield Extra Trees only when at least one feature exists.
@@ -13095,8 +13144,16 @@ def iterate_feature_sets_sequentially(feature_source_arrays: dict, feature_names
             if extra_trees_signature not in feature_signatures:  # Suppress duplicate Extra Trees mode.
                 feature_signatures.add(extra_trees_signature)  # Register Extra Trees feature identity.
                 try:
+                    if target_feature_mode == "Extra Trees Features":  # Release full source before sole Extra Trees evaluation.
+                        extra_trees_evaluation_arrays = {"X_train_scaled": X_train_extra_trees, "X_test_scaled": X_test_extra_trees, "spilled_to_memmap": False}  # Transfer selected matrix ownership.
+                        maybe_spill_feature_source_arrays(extra_trees_evaluation_arrays, file, config=config)  # Spill selected matrices through existing lifecycle.
+                        X_train_extra_trees = extra_trees_evaluation_arrays["X_train_scaled"]  # Use retained Extra Trees training matrix.
+                        X_test_extra_trees = extra_trees_evaluation_arrays["X_test_scaled"]  # Use retained Extra Trees test matrix.
+                        cleanup_feature_source_arrays(feature_source_arrays, config=config)  # Close and delete full source mappings before fitting.
                     yield "Extra Trees Features", X_train_extra_trees, X_test_extra_trees, extra_trees_actual_features, None  # Yield Extra Trees feature matrices.
                 finally:
+                    cleanup_feature_source_arrays(extra_trees_evaluation_arrays, config=config)  # Close and delete selected Extra Trees spill mappings.
+                    extra_trees_evaluation_arrays = None  # Prevent repeated Extra Trees cleanup.
                     del X_train_extra_trees, X_test_extra_trees  # Release Extra Trees subset arrays after caller finishes or aborts this mode.
                     gc.collect()  # Reclaim Extra Trees subset memory before the next feature mode.
             else:  # Report duplicate Extra Trees mode suppression.
@@ -13104,7 +13161,7 @@ def iterate_feature_sets_sequentially(feature_source_arrays: dict, feature_names
                 del X_train_extra_trees, X_test_extra_trees  # Release duplicate Extra Trees subset arrays immediately.
                 gc.collect()  # Reclaim duplicate Extra Trees subset memory.
 
-    if use_ga:  # Resolve GA feature mode after Extra Trees features.
+    if use_ga and target_feature_mode in (None, "GA Features"):  # Resolve GA features only when required.
         X_train_ga, ga_actual_features = get_feature_subset(feature_source_arrays["X_train_scaled"], ga_selected_features, feature_names)  # Materialize GA training subset for this mode.
         X_test_ga, _ = get_feature_subset(feature_source_arrays["X_test_scaled"], ga_selected_features, feature_names)  # Materialize GA test subset for this mode.
         if X_train_ga is not None and X_train_ga.shape[1] > 0:  # Yield GA only when at least one feature exists.
@@ -13112,8 +13169,16 @@ def iterate_feature_sets_sequentially(feature_source_arrays: dict, feature_names
             if ga_signature not in feature_signatures:  # Suppress duplicate GA mode.
                 feature_signatures.add(ga_signature)  # Register GA feature identity.
                 try:
+                    if target_feature_mode == "GA Features":  # Release full source before sole GA evaluation.
+                        ga_evaluation_arrays = {"X_train_scaled": X_train_ga, "X_test_scaled": X_test_ga, "spilled_to_memmap": False}  # Transfer selected matrix ownership.
+                        maybe_spill_feature_source_arrays(ga_evaluation_arrays, file, config=config)  # Spill selected matrices through existing lifecycle.
+                        X_train_ga = ga_evaluation_arrays["X_train_scaled"]  # Use retained GA training matrix.
+                        X_test_ga = ga_evaluation_arrays["X_test_scaled"]  # Use retained GA test matrix.
+                        cleanup_feature_source_arrays(feature_source_arrays, config=config)  # Close and delete full source mappings before fitting.
                     yield "GA Features", X_train_ga, X_test_ga, ga_actual_features, None  # Yield GA feature matrices.
                 finally:
+                    cleanup_feature_source_arrays(ga_evaluation_arrays, config=config)  # Close and delete selected GA spill mappings.
+                    ga_evaluation_arrays = None  # Prevent repeated GA cleanup.
                     del X_train_ga, X_test_ga  # Release GA subset arrays after caller finishes or aborts this mode.
                     gc.collect()  # Reclaim GA subset memory before the next feature mode.
             else:  # Report duplicate GA mode suppression.
@@ -13121,14 +13186,14 @@ def iterate_feature_sets_sequentially(feature_source_arrays: dict, feature_names
                 del X_train_ga, X_test_ga  # Release duplicate GA subset arrays immediately.
                 gc.collect()  # Reclaim duplicate GA subset memory.
 
-    if use_pca and use_rfe:  # Materialize the final source-dependent mode before PCA releases the full matrices.
+    if use_pca and use_rfe and target_feature_mode is None:  # Materialize RFE before PCA releases shared source matrices.
         source_total_nbytes = get_array_nbytes(feature_source_arrays["X_train_scaled"]) + get_array_nbytes(feature_source_arrays["X_test_scaled"])  # Calculate the shared source footprint before selecting RFE columns.
         verbose_output(f"{BackgroundColors.GREEN}[MEMORY] Preparing RFE matrices from source train shape={feature_source_arrays['X_train_scaled'].shape}, dtype={feature_source_arrays['X_train_scaled'].dtype}; test shape={feature_source_arrays['X_test_scaled'].shape}, dtype={feature_source_arrays['X_test_scaled'].dtype}; expected size={source_total_nbytes / (1024 ** 3):.2f} GiB.{Style.RESET_ALL}", config=config)  # Log the exact staged RFE source layout once.
         X_train_rfe, rfe_actual_features = get_feature_subset(feature_source_arrays["X_train_scaled"], rfe_selected_features, feature_names)  # Stage the exact RFE training columns before releasing the source matrix.
         X_test_rfe, _ = get_feature_subset(feature_source_arrays["X_test_scaled"], rfe_selected_features, feature_names)  # Stage the exact RFE testing columns before releasing the source matrix.
         rfe_materialized = True  # Mark RFE as independent from the full source matrices.
 
-    if use_pca:  # Resolve PCA feature mode after GA to preserve sorted evaluation order.
+    if use_pca and target_feature_mode in (None, "PCA Components"):  # Resolve PCA features only when required.
         try:  # Preserve existing PCA failure tolerance.
             X_train_pca, X_test_pca, pca_transformer = apply_pca_transformation(feature_source_arrays["X_train_scaled"], feature_source_arrays["X_test_scaled"], pca_n_components, file, config=config, feature_names=pca_input_feature_names if pca_input_feature_names is not None else feature_names, scaler=scaler, source_files=source_files, cache_context=pca_cache_context)  # Materialize PCA matrices with strict source, scaling, and split provenance.
         except Exception as e:  # Skip PCA mode when transformation fails.
@@ -13158,7 +13223,7 @@ def iterate_feature_sets_sequentially(feature_source_arrays: dict, feature_names
                 del X_train_pca, X_test_pca  # Release duplicate PCA matrices immediately.
                 gc.collect()  # Reclaim duplicate PCA memory.
 
-    if use_rfe:  # Resolve RFE feature mode last to preserve sorted evaluation order.
+    if use_rfe and target_feature_mode in (None, "RFE Features"):  # Resolve RFE features only when required.
         try:  # Keep owned RFE matrices valid until every classifier and explainability consumer finishes.
             if not rfe_materialized:  # Materialize RFE normally when PCA did not require early source release.
                 source_total_nbytes = get_array_nbytes(feature_source_arrays["X_train_scaled"]) + get_array_nbytes(feature_source_arrays["X_test_scaled"])  # Calculate the source footprint before selecting RFE columns.
@@ -16270,6 +16335,9 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
             model_X_test = X_test_values  # Default non-LSTM testing matrix remains row-wise 2D.
             model_y_test = y_test  # Default non-LSTM testing labels remain row-aligned.
             sequence_metadata = None  # Store LSTM generation evidence only for sequence models.
+            if type(active_model) is RandomForestClassifier:  # Match sklearn 1.7.0 dense forest validation dtype before fitting.
+                model_X_train = np.asarray(model_X_train, dtype=np.float32, order="C")  # Materialize sklearn's required float32 training layout once.
+                model_X_test = np.asarray(model_X_test, dtype=np.float32, order="C")  # Materialize sklearn's required float32 test layout once.
             if is_lstm_classifier_name(model_name):  # Convert only LSTM inputs after split, scaling, and feature selection.
                 model_X_train, model_y_train, model_X_test, model_y_test, sequence_metadata = prepare_lstm_sequence_evaluation_inputs(active_model, X_train_values, y_train, X_test_values, y_test, train_row_metadata, test_row_metadata)  # Build verified partition-local sequence tensors.
             artifact_feature_set = f"{name} - {'Optimized Hyperparameters' if hyperparameters_enabled else 'Default Hyperparameters'}"  # Resolve HP-isolated artifact feature-set label
@@ -16376,7 +16444,7 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
 
             current_combination += 1  # Advance the global combination counter
             write_memory_phase_event("before_memory_cleanup", config=config, **phase_metadata, event_outcome="starting")  # Publish per-classifier cleanup start
-            del active_model, artifact_context, metrics, training_ram_stats  # Release fitted estimator, artifact metadata, metrics, and RAM stats before the next classifier
+            del active_model, artifact_context, metrics, training_ram_stats, model_X_train, model_X_test  # Release fitted estimator, RF float32 inputs, metadata, metrics, and RAM stats.
             gc.collect()  # Reclaim estimator-owned memory before the next atomic classifier
             write_memory_phase_event("after_memory_cleanup", config=config, **phase_metadata, event_outcome="completed")  # Publish per-classifier cleanup completion
 
@@ -16394,6 +16462,10 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
                 del X_train_values
             if "X_test_values" in locals():  # Release test array view held by this function frame
                 del X_test_values
+            if "model_X_train" in locals():  # Release classifier-specific training input after a failure.
+                del model_X_train
+            if "model_X_test" in locals():  # Release classifier-specific test input after a failure.
+                del model_X_test
             gc.collect()  # Reclaim any released estimator-owned memory before error reporting
         except Exception:
             pass  # Do not mask the primary failure
@@ -17142,7 +17214,8 @@ def evaluate_on_dataset(
         del df  # Release the original dataframe after split and scaling before classifier fitting.
         gc.collect()  # Reclaim released dataframe memory before feature-set materialization.
 
-        feature_sets_iter = iterate_feature_sets_sequentially(feature_source_arrays, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, extra_trees_selected_features, file, feature_sets_config, config, scaler=scaler, source_files=pca_source_files, pca_cache_context=pca_cache_context, pca_input_feature_names=pca_input_feature_names)  # Create the lazy feature-set iterator with exact PCA source, feature, scaler, and split provenance.
+        target_feature_mode = feature_mode_name if feature_mode_name is not None else (artifact_recovery_target[0] if artifact_recovery_target is not None else None)  # Resolve the sole feature mode required by this invocation.
+        feature_sets_iter = iterate_feature_sets_sequentially(feature_source_arrays, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, extra_trees_selected_features, file, feature_sets_config, config, scaler=scaler, source_files=pca_source_files, pca_cache_context=pca_cache_context, pca_input_feature_names=pca_input_feature_names, target_feature_mode=target_feature_mode)  # Create the lazy feature-set iterator with exact PCA source, feature, scaler, and split provenance.
         for idx, (name, X_train_subset, X_test_subset, subset_feature_names_list, transformer) in enumerate(feature_sets_iter, start=1):  # Evaluate one materialized feature set at a time
             if feature_mode_name is not None and name != feature_mode_name:  # Skip feature matrices outside current canonical sequential group.
                 del X_train_subset, X_test_subset  # Release skipped yielded matrices before source spilling.
