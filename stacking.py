@@ -11387,6 +11387,12 @@ def save_cache_result_entry(csv_path: str, result_entry: dict, config=None) -> N
                     if primary_error is not None or backup_error is not None:  # Report invalid existing artifacts without claiming successful recovery.
                         print(f"{BackgroundColors.YELLOW}Warning: Starting a new cache because no valid existing cache could be recovered. Primary error: {primary_error}. Backup error: {backup_error}.{Style.RESET_ALL}")  # Log both validation outcomes accurately.
 
+                compatible_na_dtypes = {  # Map missing row columns to populated cache dtypes.
+                    column: existing_df[column].dtype  # Retain populated cache dtype.
+                    for column in row_df.columns  # Visit canonical schema columns.
+                    if row_df[column].isna().all() and existing_df[column].notna().any()  # Select missing values.
+                }  # Complete dtype mapping.
+                row_df = row_df.astype(compatible_na_dtypes, errors="ignore")  # Align missing dtypes.
                 combined_df = row_df.copy() if existing_df.empty else pd.concat([existing_df, row_df], ignore_index=True)  # Merge the new atomic result with the latest locked authoritative snapshot.
                 combined_df = prepare_cache_dataframe(combined_df, config=config, expected_experiment_run=run_index, source_path=cache_path)  # Normalize, deduplicate, and order the complete merged cache.
                 persist_cache_dataframe_atomically(cache_path, combined_df, primary_df, backup_df, config=config, expected_experiment_run=run_index)  # Publish primary and backup through the centralized transaction path.
