@@ -2079,16 +2079,17 @@ def load_cached_rerun_source_cache(csv_path: str, config: Optional[dict] = None)
     run_numbers = discover_cache_artifact_run_numbers(csv_path, config=config)  # Discover every allocated cache run artifact.
     if not run_numbers:  # Require at least one historical source artifact.
         raise FileNotFoundError(f"No cache run artifacts found for rerun mode: {csv_path}")  # Surface missing source cache explicitly.
-    source_cache: Dict[str, dict] = {}  # Accumulate latest valid rows by production cache identity.
+    source_cache: Dict[tuple, dict] = {}  # Accumulate latest valid rows by persisted rerun identity.
     source_runs: List[int] = []  # Track runs that contributed recoverable rows.
     for run_number in run_numbers:  # Load historical runs from oldest to newest.
         run_config = build_experiment_run_config(config, run_number)  # Build run-specific config for production recovery.
         run_cache = load_cache_results(csv_path, config=run_config, notify_discovery=True)  # Recover primary and backup rows through existing cache logic.
         if not run_cache:  # Ignore allocated runs with no recoverable rows.
             continue  # Move to the next discovered run.
-        for cache_key, result_entry in run_cache.items():  # Apply this run's recovered row order.
-            source_cache.pop(cache_key, None)  # Remove older duplicate identity before storing newer metadata.
-            source_cache[cache_key] = result_entry  # Let newer valid rows supply ordering metadata for duplicate identities.
+        for result_entry in run_cache.values():  # Apply this run's recovered row order.
+            cache_identity = build_cached_rerun_identity_from_row(result_entry)  # Preserve only exact persisted rerun duplicates across runs.
+            source_cache.pop(cache_identity, None)  # Remove older duplicate identity before storing newer metadata.
+            source_cache[cache_identity] = result_entry  # Let newer valid rows supply ordering metadata for duplicate identities.
         source_runs.append(run_number)  # Record one valid contributing source run.
     if not source_cache:  # Reject rerun mode when artifacts contain no usable experiment rows.
         raise ValueError(f"No recoverable cached results found for rerun mode: {csv_path}")  # Fail before destination writes.
@@ -2159,7 +2160,7 @@ def build_cached_rerun_evaluation_plan(
 
     ordering_source_cache = source_cache if ordering_cache is None else ordering_cache  # Select F1 ordering source.
     source_order = {  # Preserve ordering-cache row order for equal F1 scores.
-        build_cache_identity_from_row(result_entry): index  # Map existing cache identity to row order.
+        build_cached_rerun_identity_from_row(result_entry): index  # Map existing rerun identity to row order.
         for index, result_entry in enumerate(ordering_source_cache.values())  # Traverse loaded cache rows in order.
     }  # Finish stable ordering map.
     task_by_combination = {  # Map generated combinations to their task descriptors.
@@ -2169,29 +2170,22 @@ def build_cached_rerun_evaluation_plan(
     rerun_records = []  # Accumulate generated combinations that exist in the source cache.
     for combination in evaluation_plan:  # Inspect combinations in generated deterministic order.
         task = task_by_combination[combination]  # Resolve the matching generated task descriptor.
-        cached_result = feature_process_cache_result(  # Require production cache identity and shape compatibility.
-            task,  # Pass generated task identity.
-            source_cache,  # Pass canonical source cache rows.
-            attack_types_combined  # Pass active attack scope.
-        )  # Finish source cache identity lookup.
+        cached_result = find_cached_rerun_result(task, source_cache)  # Resolve cached source by persisted rerun identity without shape gating.
         if cached_result is None:  # Skip generated combinations absent from the source cache.
             continue  # Move to the next generated combination.
-        if feature_process_cache_result(task, destination_cache, attack_types_combined) is not None:  # Omit destination rows already complete by configuration identity.
+        cached_identity = build_cached_rerun_identity_from_row(cached_result)  # Resolve canonical source identity before destination coverage comparison.
+        if any(build_cached_rerun_identity_from_row(result_entry) == cached_identity for result_entry in (destination_cache or {}).values()):  # Omit only destination rows already complete by persisted rerun identity.
             continue  # Move to the next generated combination.
         ordering_result: Optional[dict] = cached_result  # Default F1 metadata to the canonical source row.
         if ordering_cache is not None:  # Prefer complete prior-run F1 metadata when available.
-            ordering_result = feature_process_cache_result(  # Resolve prior row.
-                task,  # Pass generated task identity.
-                ordering_cache,  # Pass previous-run cache rows.
-                attack_types_combined  # Pass active attack scope.
-            )  # Finish previous-run cache lookup.
+            ordering_result = find_cached_rerun_result(task, ordering_cache)  # Resolve prior row by persisted rerun identity.
         if ordering_result is None:  # Require prior-run ordering to cover every canonical experiment when requested.
             if require_all:  # Stop later generations from using a partial previous run.
                 raise ValueError(  # Surface incomplete previous-run ordering data.
                     f"Cached rerun ordering source is missing required experiment: {combination}"  # Describe missing row.
                 )  # Abort before advancing to the requested destination run.
             ordering_result = cached_result  # Fall back to canonical source F1 when full coverage is not required.
-        cache_identity = build_cache_identity_from_row(ordering_result)  # Build existing resume identity.
+        cache_identity = build_cached_rerun_identity_from_row(ordering_result)  # Build persisted rerun identity.
         cached_f1 = resolve_cached_rerun_f1_score(ordering_result)  # Resolve sortable F1 metadata.
         stable_order = source_order.get(cache_identity, len(source_order))  # Preserve deterministic tie order.
         rerun_records.append(  # Store combination, cached F1, and source row order.
@@ -10900,6 +10894,52 @@ def build_cache_identity_from_row(row: Any) -> tuple:
         str(row.get("model_name", "")),
         hyperparameters_enabled,
     )  # Return the existing resume identity tuple.
+
+
+def build_cached_rerun_identity_from_row(row: Any) -> tuple:
+    """
+    Build cached rerun identity from persisted experiment columns.
+
+    :param row: Persisted cache row.
+    :return: Hashable cached rerun identity.
+    """
+
+    fields = ("execution_mode", "data_source", "augmentation_ratio", "feature_selection_enabled", "hyperparameters_enabled", "data_augmentation_enabled", "hyperparameter_mode", "feature_set", "classifier_type", "model_name", "model")  # Preserve exact persisted rerun identity columns.
+    return tuple((field, str(row.get(field, "")).strip()) for field in fields)  # Exclude run-result metadata from cached rerun identity.
+
+
+def find_cached_rerun_result(task: dict, cache_dict: Optional[dict]) -> Optional[dict]:
+    """
+    Find persisted rerun row matching one generated task.
+
+    :param task: Generated evaluation task.
+    :param cache_dict: Persisted cached rerun rows.
+    :return: Matching persisted rerun row, or None.
+    """
+
+    expected_ratio = resolve_persisted_augmentation_ratio(task["experiment_mode"], task["augmentation_ratio"])  # Normalize generated augmentation ratio to persisted form.
+    expected_mode = "Optimized Hyperparameters" if task["hyperparameters_enabled"] else "Default Hyperparameters"  # Preserve generated hyperparameter mode semantics.
+    expected_feature_selection = task["feature_set"] != "Full Features"  # Match existing persisted full-feature selection semantics.
+    expected_augmentation = task["augmentation_ratio"] is not None  # Match existing persisted augmented-testing semantics.
+    for result_entry in (cache_dict or {}).values():  # Inspect every canonical persisted rerun experiment.
+        if str(result_entry.get("execution_mode", "")) != task["execution_mode"]:  # Require execution mode identity.
+            continue  # Skip another execution mode.
+        if str(result_entry.get("data_source", "")) != task["data_source_label"]:  # Require data source identity.
+            continue  # Skip another data source.
+        if resolve_persisted_augmentation_ratio(result_entry.get("experiment_mode", "original_only"), result_entry.get("augmentation_ratio")) != expected_ratio:  # Require augmentation ratio identity.
+            continue  # Skip another augmentation ratio.
+        if resolve_boolean_value(result_entry.get("feature_selection_enabled"), False) != expected_feature_selection:  # Require feature-selection identity.
+            continue  # Skip another feature-selection mode.
+        if resolve_boolean_value(result_entry.get("hyperparameters_enabled"), False) != bool(task["hyperparameters_enabled"]):  # Require hyperparameter toggle identity.
+            continue  # Skip another hyperparameter toggle.
+        if resolve_boolean_value(result_entry.get("data_augmentation_enabled"), False) != expected_augmentation:  # Require augmentation toggle identity.
+            continue  # Skip another augmentation toggle.
+        if resolve_hyperparameter_mode_from_row(result_entry) != expected_mode:  # Require hyperparameter mode identity.
+            continue  # Skip another hyperparameter mode.
+        if str(result_entry.get("feature_set", "")) != task["feature_set"] or str(result_entry.get("model_name", "")) != task["classifier_name"]:  # Require generated feature and classifier identity.
+            continue  # Skip another feature or classifier.
+        return result_entry  # Return first canonical persisted match in stable source order.
+    return None  # Report no persisted rerun match.
 
 
 def normalize_cache_dataframe(df: pd.DataFrame, config: Optional[dict] = None, expected_experiment_run: Optional[int] = None, source_path: str = "cache dataframe") -> pd.DataFrame:
