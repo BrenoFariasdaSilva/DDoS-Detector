@@ -562,9 +562,36 @@ def safe_critical(message: str):
     except Exception:
         pass  # Ignore logging failures
 
+def get_gpu_usage_summary() -> Optional[str]:
+    """
+    Return utilization and VRAM usage for every NVIDIA GPU, when available.
+    
+    :param None
+    :return GPU utilization when available
+    """
+
+    try:
+        result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=index,utilization.gpu,memory.used,memory.total", "--format=csv,noheader,nounits"],
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=2,
+        )  # Query the NVIDIA driver directly because PyTorch does not expose device utilization.
+        if result.returncode != 0:
+            return None
+        usage = []
+        for row in result.stdout.splitlines():
+            index, utilization, memory_used, memory_total = (value.strip() for value in row.split(","))
+            usage.append(f"GPU {index}={utilization}% ({memory_used}/{memory_total} MiB)")
+        return ", ".join(usage) or None
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None  # NVIDIA tooling is optional; CPU-only and non-NVIDIA systems remain supported.
+
+
 def resource_monitor_loop(stop_event: threading.Event, config: Optional[Dict] = None):
     """
-    Background loop that periodically inspects system resource usage (RAM/CPU)
+    Background loop that periodically inspects system resource usage (RAM/CPU/GPU)
     and logs / reports when thresholds are approached or exceeded.
 
     :param stop_event: Event used to signal the loop to stop
@@ -588,10 +615,12 @@ def resource_monitor_loop(stop_event: threading.Event, config: Optional[Dict] = 
         while not stop_event.is_set():
             mem = psutil.virtual_memory().percent  # Current RAM usage percent
             cpu = psutil.cpu_percent(interval=None)  # Current CPU usage percent (non-blocking)
+            gpu_usage = get_gpu_usage_summary()  # Query GPU load and VRAM without making NVIDIA tooling mandatory
             current_timestamp = time.time()  # Capture the current timestamp for sustained duration tracking
 
             if logger:
-                safe_debug(f"Resources Monitor: Memory={mem:.1f}%, CPU={cpu:.1f}%")  # Debug log
+                gpu_suffix = f", {gpu_usage}" if gpu_usage else ""  # Omit GPU output when no NVIDIA telemetry is available
+                safe_debug(f"Resources Monitor: Memory={mem:.1f}%, CPU={cpu:.1f}%{gpu_suffix}")  # Debug log
 
             if mem >= max_ram:  # Verify memory is above the configured threshold
                 if high_usage_start_timestamp is None:  # Verify this is the first sustained breach
