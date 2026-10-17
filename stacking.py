@@ -3927,7 +3927,7 @@ def compute_common_features_across_files(processed_files_with_labels, config):
 
     common_features_list = sorted(list(common_features))  # Convert to sorted list
     verbose_output(
-        f"{BackgroundColors.GREEN}Common features list for combined files evaluation: {BackgroundColors.CYAN}{json.dumps(common_features_list, ensure_ascii=False)}{Style.RESET_ALL}",
+        f"{BackgroundColors.GREEN}Common features list for combined files evaluation - {len(common_features_list)} features: {BackgroundColors.CYAN}{json.dumps(common_features_list, ensure_ascii=False)}{Style.RESET_ALL}",
         config=config
     )  # Output the complete sorted list of common dataset features
     return common_features_list, target_col_name  # Return common features and target column name
