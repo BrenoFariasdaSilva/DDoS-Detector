@@ -237,6 +237,18 @@ def feature_columns_without_lstm_metadata(columns: Any) -> List[Any]:
     return [column for column in list(columns) if not is_lstm_metadata_column(column)]
 
 
+def assert_predictive_feature_schema(feature_names: Any, context: str, expected_width: Optional[int] = None) -> List[Any]:
+    """Reject sequence-only metadata in predictive schemas instead of silently changing trained-model identity."""
+
+    names = list(feature_names)
+    reserved = [str(name) for name in names if is_lstm_metadata_column(name)]
+    if reserved:
+        raise ValueError(f"{context}: reserved LSTM sequence metadata must not be predictive features: {reserved}")
+    if expected_width is not None and len(names) != int(expected_width):
+        raise ValueError(f"{context}: feature name count {len(names)} differs from model matrix width {expected_width}")
+    return names
+
+
 def normalize_result_feature_metadata(row: dict) -> dict:
     """Exclude reserved sequence metadata from verified classifier feature descriptions.
 
@@ -7739,6 +7751,8 @@ def build_stacking_model_artifact_context(dataset_csv_path: str, source_files: L
 
     if not source_files:  # Require original source provenance for model reuse.
         raise ValueError("Classifier artifact provenance requires original source files")
+    input_feature_names = assert_predictive_feature_schema(input_feature_names, "model artifact input feature schema")
+    model_feature_names = assert_predictive_feature_schema(model_feature_names, "model artifact predictive feature schema")
     run_index = validate_experiment_runs(experiment_run, "experiment_run")  # Validate artifact run metadata.
     source_metadata = []  # Accumulate ordered original-file metadata.
     for source_index, source_file in enumerate(source_files):
@@ -7958,6 +7972,11 @@ def export_model_and_scaler(model, scaler, dataset_name, model_name, feature_set
             raise ValueError("dataset_csv_path is required to safely export models")
         if not isinstance(artifact_context, dict) or scaler is None or label_encoder is None:
             raise ValueError("Complete classifier artifact context and fitted preprocessing are required")
+        assert_predictive_feature_schema(artifact_context["input_feature_names"], "saved classifier input schema")
+        assert_predictive_feature_schema(artifact_context["model_feature_names"], "saved classifier model schema")
+        fitted_width = getattr(model, "n_features_in_", None)
+        if fitted_width is not None and int(fitted_width) != len(artifact_context["model_feature_names"]):
+            raise ValueError(f"Refusing to save model: fitted width {fitted_width} != predictive feature names {len(artifact_context['model_feature_names'])}")
         artifact_paths = resolve_stacking_model_artifact_paths(dataset_name, str(dataset_csv_path), model_name, str(feature_set), artifact_context, config)
         artifact_lock = acquire_stacking_artifact_lock(artifact_paths["lock_path"], exclusive=True)  # Prevent concurrent loads, writes, or cleanup in this dataset directory
         cleanup_incomplete_stacking_model_transactions(artifact_paths["models_directory"], config=config)  # Recover only ownership-proven interrupted writes
@@ -11089,6 +11108,15 @@ def validate_cache_result_payload(result_entry: dict, config: Optional[dict] = N
     if config is None:  # Use global configuration when no configuration is provided.
         config = CONFIG  # Assign the global configuration reference.
 
+    raw_feature_names = result_entry.get("features_list")
+    if isinstance(raw_feature_names, str):
+        try:
+            raw_feature_names = json.loads(raw_feature_names)
+        except (ValueError, TypeError) as exc:
+            raise ValueError("New cache result has invalid serialized predictive feature list") from exc
+    if not isinstance(raw_feature_names, (list, tuple)):
+        raise ValueError("New cache result requires an ordered predictive feature list")
+    assert_predictive_feature_schema(raw_feature_names, "new cache result", expected_width=int(result_entry["n_features"]))
     flat_rows = flatten_and_serialize_results([result_entry])  # Serialize the atomic result through the production result flattener.
     if not flat_rows:  # Reject empty serialization before touching the cache file.
         raise ValueError("Cache result serialization produced no rows")  # Raise a persistence-blocking validation error.
@@ -12978,6 +13006,7 @@ def assemble_feature_sets(X_train_scaled, X_test_scaled, feature_names, ga_selec
         if feature_sets_config is None:  # If no feature sets config provided
             feature_sets_config = {}  # Use empty dict as fallback
 
+        feature_names = assert_predictive_feature_schema(feature_names, "assemble_feature_sets source", expected_width=X_train_scaled.shape[1])  # Validate source matrix before any feature selection.
         explicit_features = feature_sets_config.get("explicit_features", []) or []  # Retrieve explicit features list (empty list if not set or None)
         use_full = feature_sets_config.get("use_full", True)  # Toggle for full features strategy (default: enabled)
         use_ga = feature_sets_config.get("use_ga", True)  # Toggle for GA features strategy (default: enabled)
@@ -13143,6 +13172,7 @@ def iterate_feature_sets_sequentially(feature_source_arrays: dict, feature_names
     if feature_sets_config is None:  # Use an empty feature-set configuration when absent.
         feature_sets_config = {}  # Assign empty configuration mapping.
 
+    feature_names = assert_predictive_feature_schema(feature_names, "iterate_feature_sets_sequentially source", expected_width=feature_source_arrays["X_train_scaled"].shape[1])  # Validate source matrix before any feature selection.
     explicit_features = feature_sets_config.get("explicit_features", []) or []  # Retrieve optional explicit feature list.
     use_full = feature_sets_config.get("use_full", True)  # Resolve full-feature strategy toggle.
     use_ga = feature_sets_config.get("use_ga", True)  # Resolve GA strategy toggle.
@@ -13357,7 +13387,7 @@ def build_classifier_result_entry(model_class, file, execution_mode_str, attack_
         run_index = validate_experiment_runs(experiment_run, "experiment_run")  # Validate row-level run metadata.
         dataset_identity = resolve_canonical_dataset_identity(file, True) if execution_mode_str == "combined_files" else os.path.relpath(file)  # Resolve result-row dataset identity by execution mode.
         persisted_augmentation_ratio = resolve_persisted_augmentation_ratio(experiment_mode, augmentation_ratio)  # Resolve explicit baseline or augmented ratio metadata.
-        subset_feature_names = feature_columns_without_lstm_metadata(subset_feature_names) if int(n_features) == len(feature_columns_without_lstm_metadata(subset_feature_names)) else subset_feature_names  # Exclude metadata only when actual feature width agrees with the cleaned names.
+        subset_feature_names = assert_predictive_feature_schema(subset_feature_names, "new classifier result", expected_width=int(n_features))  # Never persist sequence-only columns in newly computed classifier results.
         serialized_hyperparameters = serialize_result_hyperparameters(model_name, hyperparams_map=hyperparams_map, effective_hyperparameters=effective_hyperparameters)  # Resolve effective estimator parameters for CSV persistence.
         runtime_fields = {column: None for column in PHASE_RUNTIME_COLUMNS}  # Initialize all phase runtime fields for legacy-safe row creation.
         runtime_fields.update(phase_runtime_fields or {})  # Overlay measured and artifact-backed runtimes when supplied.
