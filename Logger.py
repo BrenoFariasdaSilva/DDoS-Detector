@@ -135,9 +135,9 @@ class Logger:
         if message is None:  # Ignore None messages
             return  # Early exit
 
-        out = str(message)  # Convert message to string
-        if not out.endswith("\n"):  # Ensure newline termination
-            out += "\n"  # Append newline if missing
+        out = str(message)  # Preserve the exact output-stream content
+        if not out:  # Ignore empty writes without inserting line breaks
+            return  # No content to emit
 
         lock_acquired = False  # Track the process-safe log lock for exception-safe release
         try:  # Serialize file and terminal writes from every stacking process
