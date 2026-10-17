@@ -237,6 +237,38 @@ def feature_columns_without_lstm_metadata(columns: Any) -> List[Any]:
     return [column for column in list(columns) if not is_lstm_metadata_column(column)]
 
 
+def normalize_result_feature_metadata(row: dict) -> dict:
+    """Exclude reserved sequence metadata from verified classifier feature descriptions.
+
+    :param row: Existing result or cache row containing feature metadata.
+    :return: A normalized copy without modifying historical model measurements.
+    """
+
+    normalized = dict(row)  # Keep the input record unchanged.
+    for column in ("features_list", "top_features"):  # Normalize both canonical and duplicate feature metadata.
+        raw = normalized.get(column)  # Read the existing serialized or materialized feature list.
+        if not isinstance(raw, (list, tuple, str)):  # Preserve absent and unsupported legacy values.
+            continue  # Leave unrelated metadata unchanged.
+        try:  # Decode JSON feature lists without interpreting arbitrary strings as code.
+            parsed = json.loads(raw) if isinstance(raw, str) else list(raw)  # Preserve feature order.
+        except (TypeError, ValueError):  # Preserve unrecognized legacy serialization.
+            continue  # Avoid destructive reconstruction of unfamiliar feature data.
+        if not isinstance(parsed, list) or not all(isinstance(name, str) for name in parsed):  # Require a genuine ordered name list.
+            continue  # Retain unrelated serialized values unchanged.
+        features = feature_columns_without_lstm_metadata(parsed)  # Exclude only the two reserved LSTM metadata names.
+        if len(features) == len(parsed):  # Avoid rewriting unaffected historical feature fields.
+            continue  # Preserve original field representation.
+        reported_count = normalized.get("n_features")  # Read the historical measured feature count.
+        try:  # Require a trustworthy count before rewriting an existing completed result.
+            numeric_count = int(reported_count)  # Interpret the count without changing it.
+        except (ValueError, TypeError, OverflowError):  # Leave ambiguous historical rows unchanged.
+            continue  # Do not fabricate a feature count.
+        if numeric_count != len(features):  # A model may actually have consumed the metadata columns.
+            continue  # Preserve incompatible historical results for explicit investigation.
+        normalized[column] = json.dumps(features) if isinstance(raw, str) else features  # Preserve the serialized field type.
+    return normalized  # Return safely corrected metadata with metrics and counts unchanged.
+
+
 def extract_lstm_row_metadata(df: pd.DataFrame, source_file: str = "single_file") -> pd.DataFrame:
     """Return source_file and row_order metadata aligned to the supplied cleaned frame."""
 
@@ -10242,7 +10274,7 @@ def flatten_and_serialize_results(results_list):
     try:
         flat_rows = []  # Initialize list to collect flattened rows
         for res in results_list:  # Iterate over each result dictionary
-            row = dict(res)  # Create a mutable shallow copy of the result dictionary
+            row = normalize_result_feature_metadata(res)  # Exclude reserved sequence metadata only when the reported model input count agrees.
             row["experiment_run"] = parse_persisted_experiment_run_value(row.get("experiment_run", 1), "experiment_run")  # Persist explicit run metadata with legacy run 1 fallback.
             row["augmentation_ratio"] = resolve_persisted_augmentation_ratio(row.get("experiment_mode", "original_only"), row.get("augmentation_ratio", None))  # Normalize baseline ratio metadata before DataFrame construction.
             row["feature_selection_enabled"] = resolve_persisted_feature_selection_enabled(row.get("feature_set", ""), row.get("feature_selection_enabled", False))  # Normalize row-level feature-selection metadata.
@@ -11002,6 +11034,7 @@ def normalize_cache_dataframe(df: pd.DataFrame, config: Optional[dict] = None, e
         if column not in normalized_df.columns:  # Add missing canonical cache columns.
             normalized_df[column] = None  # Initialize missing canonical values with None.
 
+    normalized_df = pd.DataFrame([normalize_result_feature_metadata(row) for row in normalized_df.to_dict("records")], columns=normalized_df.columns) if not normalized_df.empty else normalized_df  # Normalize only provably matching historical feature lists before cache identity validation.
     normalized_df = normalized_df[cache_columns]  # Apply canonical cache column order and drop duplicate legacy-only fields.
 
     return normalized_df  # Return normalized cache rows.
@@ -13324,6 +13357,7 @@ def build_classifier_result_entry(model_class, file, execution_mode_str, attack_
         run_index = validate_experiment_runs(experiment_run, "experiment_run")  # Validate row-level run metadata.
         dataset_identity = resolve_canonical_dataset_identity(file, True) if execution_mode_str == "combined_files" else os.path.relpath(file)  # Resolve result-row dataset identity by execution mode.
         persisted_augmentation_ratio = resolve_persisted_augmentation_ratio(experiment_mode, augmentation_ratio)  # Resolve explicit baseline or augmented ratio metadata.
+        subset_feature_names = feature_columns_without_lstm_metadata(subset_feature_names) if int(n_features) == len(feature_columns_without_lstm_metadata(subset_feature_names)) else subset_feature_names  # Exclude metadata only when actual feature width agrees with the cleaned names.
         serialized_hyperparameters = serialize_result_hyperparameters(model_name, hyperparams_map=hyperparams_map, effective_hyperparameters=effective_hyperparameters)  # Resolve effective estimator parameters for CSV persistence.
         runtime_fields = {column: None for column in PHASE_RUNTIME_COLUMNS}  # Initialize all phase runtime fields for legacy-safe row creation.
         runtime_fields.update(phase_runtime_fields or {})  # Overlay measured and artifact-backed runtimes when supplied.
