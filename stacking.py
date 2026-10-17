@@ -5889,7 +5889,6 @@ def load_feature_selection_results(file_path, config=None):
     :param config: Configuration dictionary (uses global CONFIG if None)
     :return: Tuple (ga_selected_features, pca_n_components, rfe_selected_features, extra_trees_selected_features)
     """
-    
     try:
         if config is None:  # If no config provided
             config = CONFIG  # Use global CONFIG
@@ -5902,7 +5901,7 @@ def load_feature_selection_results(file_path, config=None):
                 config=config
             )
             verbose_output(
-                f"{BackgroundColors.GREEN}Genetic Algorithm Selected Features: {BackgroundColors.CYAN}{ga_selected_features}{Style.RESET_ALL}",
+                f"{BackgroundColors.GREEN}Genetic Algorithm Selected Features - {len(ga_selected_features)} features: {BackgroundColors.CYAN}{ga_selected_features}{Style.RESET_ALL}",
                 config=config
             )
         else:  # If GA features were not extracted
@@ -5917,7 +5916,7 @@ def load_feature_selection_results(file_path, config=None):
                 config=config
             )
             verbose_output(
-                f"{BackgroundColors.GREEN}PCA Number of Components: {BackgroundColors.CYAN}{pca_n_components}{Style.RESET_ALL}",
+                f"{BackgroundColors.GREEN}PCA Number of Components - {pca_n_components} components: {BackgroundColors.CYAN}{pca_n_components}{Style.RESET_ALL}",
                 config=config
             )
         else:  # If PCA components were not extracted
@@ -5932,7 +5931,7 @@ def load_feature_selection_results(file_path, config=None):
                 config=config
             )
             verbose_output(
-                f"{BackgroundColors.GREEN}RFE Selected Features: {BackgroundColors.CYAN}{rfe_selected_features}{Style.RESET_ALL}",
+                f"{BackgroundColors.GREEN}RFE Selected Features - {len(rfe_selected_features)} features: {BackgroundColors.CYAN}{rfe_selected_features}{Style.RESET_ALL}",
                 config=config
             )
         else:  # If RFE features were not extracted
@@ -5941,7 +5940,12 @@ def load_feature_selection_results(file_path, config=None):
             )
 
         extra_trees_selected_features = extract_extra_trees_features(file_path, config=config)  # Extract Extra Trees features
-        if not extra_trees_selected_features:  # Report disabled or absent Extra Trees feature mode
+        if extra_trees_selected_features:  # If Extra Trees features were successfully extracted
+            verbose_output(
+                f"{BackgroundColors.GREEN}Extra Trees Selected Features - {len(extra_trees_selected_features)} features: {BackgroundColors.CYAN}{extra_trees_selected_features}{Style.RESET_ALL}",
+                config=config
+            )
+        else:  # Report disabled or absent Extra Trees feature mode
             print(f"{BackgroundColors.YELLOW}Proceeding without Extra Trees features for {BackgroundColors.CYAN}{os.path.basename(str(file_path))}{Style.RESET_ALL}")  # Log Extra Trees absence
 
         return ga_selected_features, pca_n_components, rfe_selected_features, extra_trees_selected_features  # Return the extracted features
