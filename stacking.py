@@ -4508,7 +4508,7 @@ def sample_augmented_by_ratio(augmented_df, original_df, ratio, config=None):
         raise
 
 
-def sample_combined_files_by_ratio(files_list, original_sample_count, ratio, config=None):
+def sample_combined_files_by_ratio(files_list, original_sample_count, ratio, config=None, return_provenance=False):
     """
     Sample combined-file augmentation sources without retaining every source DataFrame together.
 
@@ -4544,6 +4544,7 @@ def sample_combined_files_by_ratio(files_list, original_sample_count, ratio, con
     remaining_rows = total_rows  # Track the unvisited global population for exact hypergeometric allocation
     remaining_sample = sample_rows  # Track rows still required from later sources
     sampled_parts = []  # Retain only requested rows rather than every complete source
+    provenance_parts = []  # Retain source identity and pre-concatenation row order for sequence inference.
     common_feature_list = sorted(common_features)  # Preserve established combined-file feature ordering
     for index, (file_path, row_count, target_column) in enumerate(source_metadata, start=1):  # Reload and sample one compatible source at a time
         source_sample_count = remaining_sample if index == len(source_metadata) else int(random_state.hypergeometric(row_count, remaining_rows - row_count, remaining_sample))  # Allocate an exact uniform global sample without global row storage
@@ -4563,6 +4564,8 @@ def sample_combined_files_by_ratio(files_list, original_sample_count, ratio, con
         sampled_part = sampled_source[common_feature_list].copy()  # Retain only the established common numeric schema
         sampled_part["attack_type"] = sampled_source[current_target_column].to_numpy(copy=False)  # Preserve original label values in the established final target position
         sampled_parts.append(sampled_part)  # Retain only bounded sampled rows for final assembly
+        if return_provenance:  # Keep source-local row chronology outside predictive features.
+            provenance_parts.append((np.full(len(sampled_part), index - 1, dtype=np.int64), sampled_source.index.to_numpy(dtype=np.int64, copy=True)))  # Preserve sampled order and original cleaned-row indices.
         del source_df, sampled_source, sampled_part  # Release current complete-source references before the next load
         gc.collect()  # Reclaim current-source memory while sampled parts remain
     if not sampled_parts:  # Reject an unusable ratio sample
@@ -4571,6 +4574,8 @@ def sample_combined_files_by_ratio(files_list, original_sample_count, ratio, con
     del sampled_parts  # Release sampled part containers after final assembly
     gc.collect()  # Reclaim intermediate sampled blocks before model artifact loading
     verbose_output(f"{BackgroundColors.GREEN}Sampled {BackgroundColors.CYAN}{len(sampled_df)}{BackgroundColors.GREEN} augmented rows at ratio {BackgroundColors.CYAN}{ratio}{BackgroundColors.GREEN} from {BackgroundColors.CYAN}{len(source_metadata)}{BackgroundColors.GREEN} sequential sources{Style.RESET_ALL}", config=config)  # Report bounded global sampling completion
+    if return_provenance:  # Return aligned provenance without changing the legacy sampler response.
+        return sampled_df, np.concatenate([part[0] for part in provenance_parts]), np.concatenate([part[1] for part in provenance_parts])  # Keep file identity and sampled row order aligned.
     return sampled_df  # Return the deterministic combined ratio sample
 
 
@@ -19791,13 +19796,15 @@ def load_feature_process_ratio_frame_data(process_payload: dict, ratio: float) -
     """
 
     if process_payload["execution_mode"] == "combined_files":  # Preserve combined-files augmented source assembly semantics
-        sampled_df = sample_combined_files_by_ratio(process_payload["augmentation_file_paths"], process_payload["original_sample_count"], ratio, config=process_payload["config"])  # Sample sources sequentially without constructing the complete augmented population
+        sampled_df, source_codes, row_orders = sample_combined_files_by_ratio(process_payload["augmentation_file_paths"], process_payload["original_sample_count"], ratio, config=process_payload["config"], return_provenance=True)  # Preserve source-local chronology while sampling sequentially
     else:  # Preserve separate-file augmented source loading semantics
         augmented_raw = load_augmented_dataset(process_payload["augmentation_file_paths"][0], config=process_payload["config"])  # Load the one located augmented file
         augmented_df = preprocess_dataframe(augmented_raw, remove_zero_variance=True, config=process_payload["config"]) if augmented_raw is not None else None  # Apply unchanged cleaning semantics
         if augmented_df is None:  # Reject a failed single-file augmentation load for the active required ratio
             raise RuntimeError(f"Failed to load augmented data for ratio {ratio}")  # Surface ratio-specific loading failure
         sampled_df = sample_augmented_by_ratio(augmented_df, process_payload["original_sample_count"], ratio, config=process_payload["config"])  # Preserve exact deterministic single-file ratio sampling
+        source_codes = np.zeros(len(sampled_df), dtype=np.int64)  # Encode the single augmented file as source zero.
+        row_orders = sampled_df.index.to_numpy(dtype=np.int64, copy=True)  # Preserve original cleaned-row chronology before any index reset.
         del augmented_df  # Release the complete single-file source before classifier prediction
         gc.collect()  # Reclaim the complete single-file source while retaining only sampled rows
     if sampled_df is None or sampled_df.empty:  # Reject an unusable deterministic ratio sample
@@ -19808,7 +19815,7 @@ def load_feature_process_ratio_frame_data(process_payload: dict, ratio: float) -
         raise ValueError(f"Augmented testing data is missing original feature columns: {missing_features}")  # Preserve the established schema failure
     X_raw = augmented_features[process_payload["input_feature_names"]].to_numpy(copy=False)  # Preserve exact original feature order without an unnecessary copy
     y_raw = sampled_df.iloc[:, -1].to_numpy(copy=False)  # Preserve exact sampled target values without an unnecessary copy
-    return {"ratio": ratio, "sampled_df": sampled_df, "augmented_features": augmented_features, "X_raw": X_raw, "y_raw": y_raw}  # Retain only the current ratio's required resources
+    return {"ratio": ratio, "sampled_df": sampled_df, "augmented_features": augmented_features, "X_raw": X_raw, "y_raw": y_raw, "source_codes": source_codes, "row_orders": row_orders}  # Retain aligned features, labels, and source-local row provenance
 
 
 def load_shared_feature_process_ratio_data(process_payload: dict, ratio: float) -> dict:  # Lazily create or reopen one coordinator-owned augmentation ratio memmap pair
@@ -19828,6 +19835,8 @@ def load_shared_feature_process_ratio_data(process_payload: dict, ratio: float) 
     frame_data = None  # Track a builder's transient full-source sample views for exception-safe release
     X_shared = None  # Track a reopened shared feature memmap during descriptor validation
     y_shared = None  # Track a reopened shared encoded-label memmap during descriptor validation
+    source_shared = None  # Track compact source identities for augmented sequence building.
+    order_shared = None  # Track source-local row chronology for augmented sequence building.
     try:  # Publish or reopen one complete ratio pair while holding the process-safe build lock
         descriptor = None  # Initialize the shared descriptor as unavailable
         if os.path.isfile(descriptor_path):  # Reuse a ratio already published by another feature process
@@ -19839,13 +19848,19 @@ def load_shared_feature_process_ratio_data(process_payload: dict, ratio: float) 
                 if descriptor is not None:  # Reopen only a semantically compatible descriptor
                     X_shared = open_feature_process_array(descriptor["X_raw"])  # Reopen sampled raw features read-only
                     y_shared = open_feature_process_array(descriptor["y_encoded"])  # Reopen sampled encoded labels read-only
-                    if X_shared.shape[0] != y_shared.shape[0] or X_shared.shape[1] != len(process_payload["input_feature_names"]):  # Require complete matching row and feature dimensions
+                    source_shared = open_feature_process_array(descriptor["source_codes"])  # Require persisted row provenance for every ratio.
+                    order_shared = open_feature_process_array(descriptor["row_orders"])  # Require persisted source-local chronology.
+                    if X_shared.shape[0] != y_shared.shape[0] or X_shared.shape[0] != source_shared.shape[0] or X_shared.shape[0] != order_shared.shape[0] or X_shared.shape[1] != len(process_payload["input_feature_names"]):  # Require complete matching row and feature dimensions
                         raise ValueError("Shared augmentation ratio dimensions are incompatible")  # Reject incomplete or stale backing bytes
             except Exception:  # Rebuild after an interrupted or incompatible descriptor publication
                 close_feature_source_memmap(X_shared, "augmentation_X_raw")  # Close any partially validated shared feature mapping
                 close_feature_source_memmap(y_shared, "augmentation_y_encoded")  # Close any partially validated shared label mapping
+                close_feature_source_memmap(source_shared, "augmentation_source_codes")  # Release rejected source IDs.
+                close_feature_source_memmap(order_shared, "augmentation_row_orders")  # Release rejected row chronology.
                 X_shared = None  # Clear the rejected feature mapping
                 y_shared = None  # Clear the rejected label mapping
+                source_shared = None  # Clear rejected provenance mappings.
+                order_shared = None  # Clear rejected provenance mappings.
                 descriptor = None  # Mark the ratio resource for deterministic rebuilding
                 try:  # Remove only the invalid small descriptor while preserving coordinator ownership
                     os.unlink(descriptor_path)  # Prevent another worker from reopening rejected metadata
@@ -19858,14 +19873,20 @@ def load_shared_feature_process_ratio_data(process_payload: dict, ratio: float) 
             y_encoded = np.asarray(ratio_label_encoder.transform(frame_data["y_raw"]), dtype=np.int64)  # Encode sampled labels exactly once for cross-feature reuse
             X_descriptor = persist_feature_process_array(frame_data["X_raw"], shared_directory, f"ratio_{ratio_identity}_X_raw")  # Persist the exact sampled raw features without dtype conversion
             y_descriptor = persist_feature_process_array(y_encoded, shared_directory, f"ratio_{ratio_identity}_y_encoded")  # Persist exact encoded labels as portable integer bytes
-            descriptor = {"ratio": float(ratio), "input_feature_names": list(process_payload["input_feature_names"]), "X_raw": X_descriptor, "y_encoded": y_descriptor}  # Build the complete small shared ratio descriptor
+            source_descriptor = persist_feature_process_array(frame_data["source_codes"], shared_directory, f"ratio_{ratio_identity}_source_codes")  # Persist per-row file IDs.
+            order_descriptor = persist_feature_process_array(frame_data["row_orders"], shared_directory, f"ratio_{ratio_identity}_row_orders")  # Persist per-row original chronology.
+            descriptor = {"ratio": float(ratio), "input_feature_names": list(process_payload["input_feature_names"]), "X_raw": X_descriptor, "y_encoded": y_descriptor, "source_codes": source_descriptor, "row_orders": order_descriptor}  # Publish the complete ratio and provenance descriptor
             write_stacking_pca_artifact_atomically(descriptor, descriptor_path, "json")  # Publish metadata only after both complete backing files are durable
             X_shared = open_feature_process_array(X_descriptor)  # Reopen the published sampled feature matrix read-only
             y_shared = open_feature_process_array(y_descriptor)  # Reopen the published encoded labels read-only
-        return {"ratio": ratio, "X_raw": X_shared, "y_encoded": y_shared, "shared": True}  # Return only the current ratio's shared mappings
+            source_shared = open_feature_process_array(source_descriptor)  # Reopen source codes without full source frames.
+            order_shared = open_feature_process_array(order_descriptor)  # Reopen sampled row chronology.
+        return {"ratio": ratio, "X_raw": X_shared, "y_encoded": y_shared, "source_codes": source_shared, "row_orders": order_shared, "shared": True}  # Return only the current ratio's shared mappings
     except BaseException:  # Release opened shared mappings when publication or reopening fails
         close_feature_source_memmap(X_shared, "augmentation_X_raw")  # Close the failed feature mapping without deleting coordinator backing
         close_feature_source_memmap(y_shared, "augmentation_y_encoded")  # Close the failed label mapping without deleting coordinator backing
+        close_feature_source_memmap(source_shared, "augmentation_source_codes")  # Close source metadata on failure.
+        close_feature_source_memmap(order_shared, "augmentation_row_orders")  # Close row metadata on failure.
         raise  # Preserve the original ratio-resource failure
     finally:  # Release transient builder data and the global augmentation build lock under every outcome
         cleanup_feature_process_ratio_data(frame_data)  # Drop a builder's full-source and sampled frame views immediately after safe spill
@@ -19897,6 +19918,8 @@ def cleanup_feature_process_ratio_data(ratio_data: Optional[dict]) -> None:  # R
     if ratio_data is not None:  # Clear only an active ratio mapping
         close_feature_source_memmap(ratio_data.get("X_raw"), "augmentation_X_raw")  # Close a current shared feature mapping without deleting coordinator backing
         close_feature_source_memmap(ratio_data.get("y_encoded"), "augmentation_y_encoded")  # Close a current shared label mapping without deleting coordinator backing
+        close_feature_source_memmap(ratio_data.get("source_codes"), "augmentation_source_codes")  # Close compact source provenance.
+        close_feature_source_memmap(ratio_data.get("row_orders"), "augmentation_row_orders")  # Close chronological metadata.
         ratio_data.clear()  # Drop sampled DataFrame and NumPy block views together
     gc.collect()  # Reclaim ratio-specific memory before another ratio is loaded
 
@@ -20180,6 +20203,76 @@ def ensure_feature_process_original_model_artifact(task: dict, process_payload: 
             gc.collect()  # Release trained model memory before augmented model loading.
 
 
+def predict_feature_process_augmented_lstm(task: dict, process_payload: dict, ratio_data: dict, artifact_bundle: dict, y_encoded: np.ndarray, prediction_rows: int, model_feature_indices: Optional[List[int]]) -> Tuple[np.ndarray, np.ndarray, float, float]:
+    """
+    Predict source-local chronological augmented windows in bounded batches.
+
+    :param task: Active LSTM combination and runtime cancellation identity.
+    :param process_payload: Runtime configuration and original source metadata.
+    :param ratio_data: Row-aligned augmented features, labels, file IDs, and original row orders.
+    :param artifact_bundle: Validated original-trained model, scaler, and feature transformer.
+    :param y_encoded: Encoded augmented labels aligned with ratio rows.
+    :param prediction_rows: Maximum transformed source rows retained in a single batch.
+    :param model_feature_indices: Ordered selected feature indices, or None for full/PCA features.
+    :return: Sequence-aligned labels, predictions, preprocessing seconds, and prediction seconds.
+    """
+
+    if "source_codes" not in ratio_data or "row_orders" not in ratio_data:  # Refuse unproven source group identity.
+        raise LSTMSequenceMetadataError("Augmented LSTM requires source_codes and row_orders aligned with sampled feature rows")
+    source_codes = np.asarray(ratio_data["source_codes"], dtype=np.int64)  # Read compact source identity vector.
+    row_orders = np.asarray(ratio_data["row_orders"], dtype=np.int64)  # Read original cleaned-row chronology.
+    if len(source_codes) != len(y_encoded) or len(row_orders) != len(y_encoded):  # Reject mismatched sidecar metadata.
+        raise LSTMSequenceMetadataError("Augmented LSTM source provenance is not row-aligned")
+    params = artifact_bundle["model"].get_params(deep=False)  # Match the fitted LSTM's sequence parameters.
+    sequence_length = int(params.get("sequence_length", 8))  # Read trained window width.
+    sequence_stride = int(params.get("sequence_stride", 1))  # Read trained sliding stride.
+    minimum_group_length = int(params.get("minimum_group_length", sequence_length))  # Preserve fitted group policy.
+    label_strategy = str(params.get("label_strategy", "final_timestep"))  # Preserve fitted label alignment.
+    mixed_policy = str(params.get("mixed_label_window_policy", "keep"))  # Preserve mixed-label handling.
+    if prediction_rows < sequence_length:  # Always fit at least one complete window per batch.
+        prediction_rows = sequence_length  # Bound only by the configured row cap and minimum sequence width.
+    labels_parts = []  # Accumulate only compact sequence labels.
+    prediction_parts = []  # Accumulate only compact sequence predictions.
+    preprocessing_seconds = 0.0  # Account for sequence-aware feature transformation.
+    prediction_seconds = 0.0  # Account for LSTM inference without training time.
+    for source_code in np.unique(source_codes):  # Never form windows spanning distinct augmented files.
+        positions = np.flatnonzero(source_codes == source_code)  # Select sampled rows from this exact source.
+        positions = positions[np.argsort(row_orders[positions], kind="mergesort")]  # Restore original sampled source chronology.
+        if len(positions) < max(sequence_length, minimum_group_length):  # Match the sequence builder's group threshold.
+            continue  # Exclude groups too short to support a verified window.
+        total_windows = (len(positions) - sequence_length) // sequence_stride + 1  # Compute exact source-local sliding-window count.
+        windows_per_batch = max(1, (prediction_rows - sequence_length) // sequence_stride + 1)  # Bound each batch's transformed rows.
+        for window_offset in range(0, total_windows, windows_per_batch):  # Anchor all batches to the source's stride origin.
+            if feature_process_runtime_skip_requested(task, process_payload):  # Honor active worker cancellation.
+                raise RuntimeSkipRequested("Runtime skip requested during augmented LSTM sequence inference")
+            count = min(windows_per_batch, total_windows - window_offset)  # Resolve current sequence count.
+            first_row = window_offset * sequence_stride  # Include the required overlap with earlier batches.
+            last_row = first_row + (count - 1) * sequence_stride + sequence_length  # Include the final complete window.
+            batch_positions = positions[first_row:last_row]  # Never create cross-file sequences.
+            preprocessing_started = time.perf_counter()  # Time scaling, projection, and sequence assembly.
+            scaled = np.asarray(artifact_bundle["scaler"].transform(ratio_data["X_raw"][batch_positions]))  # Scale bounded sampled rows.
+            if artifact_bundle["transformer"] is not None:  # Apply the fitted PCA projection when present.
+                transformed = np.asarray(artifact_bundle["transformer"].transform(scaled))  # Preserve the trained model's projected schema.
+            elif model_feature_indices is None:  # Full Features uses all original scaled columns.
+                transformed = scaled  # Avoid an unnecessary feature copy.
+            else:  # GA/RFE/Extra Trees use exactly the fitted feature order.
+                transformed = scaled[:, model_feature_indices]  # Select features after scaling.
+            metadata = pd.DataFrame({"source_file": np.full(len(batch_positions), int(source_code), dtype=np.int64), "row_order": row_orders[batch_positions]})  # Preserve source and chronology per sampled row.
+            windows, expected, _ = build_lstm_sequence_windows(transformed, y_encoded[batch_positions], metadata, sequence_length, sequence_stride, sequence_length, label_strategy, mixed_policy)  # Reuse the trained sequence policy.
+            preprocessing_seconds += time.perf_counter() - preprocessing_started  # Record preprocessing runtime.
+            prediction_started = time.perf_counter()  # Time only model prediction.
+            predicted = np.asarray(artifact_bundle["model"].predict(windows), dtype=np.int64).reshape(-1)  # Predict verified three-dimensional inputs.
+            prediction_seconds += time.perf_counter() - prediction_started  # Accumulate prediction time.
+            if len(predicted) != len(expected):  # Never persist misaligned metrics.
+                raise LSTMSequenceMetadataError("Augmented LSTM prediction count differs from sequence label count")
+            labels_parts.append(np.asarray(expected, dtype=np.int64))  # Retain only sequence-aligned target labels.
+            prediction_parts.append(predicted)  # Retain only sequence-aligned predictions.
+            del scaled, transformed, metadata, windows  # Release large batch allocations promptly.
+    if not labels_parts:  # Explicitly refuse absent windows rather than fabricate zero-row results.
+        raise LSTMSequenceMetadataError("Augmented LSTM produced no valid source-local sequences")
+    return np.concatenate(labels_parts), np.concatenate(prediction_parts), preprocessing_seconds, prediction_seconds  # Return only sequence-level evidence.
+
+
 def evaluate_feature_process_augmented_task(task: dict, process_payload: dict, ratio_data: dict, model_prototype: Any, cache_dict: dict, status_state: dict) -> Tuple[dict, Any, Any, Any]:  # Evaluate, persist, and retain exact labels until coordinator new-best decision.
     """
     Evaluate one augmented-testing process task through the existing loaded-model path.
@@ -20193,8 +20286,6 @@ def evaluate_feature_process_augmented_task(task: dict, process_payload: dict, r
     :return: Persisted result entry, exact true labels, predictions, and class order.
     """
 
-    if is_lstm_classifier_name(task["classifier_name"]):
-        raise LSTMSequenceMetadataError("Augmented LSTM testing is unsupported in the current persistent row-batch path: missing sequence-level augmented artifact flow with source_file and row_order metadata")
     artifact_feature_set = f"{task['feature_set']} - {'Optimized Hyperparameters' if task['hyperparameters_enabled'] else 'Default Hyperparameters'}"  # Preserve the existing original-model slot identity
     artifact_context = build_feature_process_artifact_context(task, process_payload, model_prototype)  # Build unchanged original-model provenance
     dataset_name = build_filename_safe_dataset_identity(resolve_canonical_dataset_identity(str(process_payload["file"]), True)) if process_payload["execution_mode"] == "combined_files" else os.path.basename(os.path.dirname(process_payload["file"]))  # Resolve the established model artifact directory
@@ -20208,12 +20299,15 @@ def evaluate_feature_process_augmented_task(task: dict, process_payload: dict, r
     loaded_model = artifact_bundle["model"]  # Resolve the persisted original-trained classifier
     y_augmented = np.asarray(ratio_data["y_encoded"], dtype=np.int64) if "y_encoded" in ratio_data else np.asarray(artifact_bundle["label_encoder"].transform(ratio_data["y_raw"]), dtype=np.int64)  # Reuse shared exact encoding or apply the persisted original-training label encoder
     prediction_rows = max(1, int(process_payload["config"].get("stacking", {}).get("memory_management", {}).get("process_memmap_chunk_rows", 100000)))  # Reuse the established bounded row setting for augmented transformation and prediction
-    y_predicted = np.empty(len(y_augmented), dtype=np.int64)  # Retain only compact predictions while feature matrices stay batch-bounded
+    lstm_mode = is_lstm_classifier_name(task["classifier_name"])  # Select the verified sequence-based augmented inference path.
+    y_predicted = None if lstm_mode else np.empty(len(y_augmented), dtype=np.int64)  # Do not allocate row-level predictions for sequence classifiers.
     model_feature_indices = None if task["feature_set"] in {"Full Features", "PCA Components"} else [artifact_bundle["input_feature_names"].index(feature) for feature in artifact_bundle["model_feature_names"]]  # Resolve selected columns once outside the bounded loop
     log_feature_process_combination(task, status_state, f"Bounded transformation and prediction started (Batch Rows={prediction_rows})")  # Announce the memory-bounded inference phase
     preprocessing_seconds = 0.0  # Track bounded augmented scaling and feature transformation time.
     prediction_seconds = 0.0  # Track bounded augmented model prediction time.
-    for start in range(0, len(y_augmented), prediction_rows):  # Transform and predict one bounded row batch at a time
+    if lstm_mode:  # Predict only source-local 3D sequences and align metrics to their final labels.
+        y_augmented, y_predicted, preprocessing_seconds, prediction_seconds = predict_feature_process_augmented_lstm(task, process_payload, ratio_data, artifact_bundle, y_augmented, prediction_rows, model_feature_indices)  # Preserve batch overlap and trained sequence policy.
+    for start in range(0, 0 if lstm_mode else len(y_augmented), prediction_rows):  # Keep existing unchanged row-batch evaluation for non-LSTM classifiers.
         if feature_process_runtime_skip_requested(task, process_payload):
             raise RuntimeSkipRequested(f"Runtime skip requested during augmented prediction for active {task['classifier_name']}")
         end = min(start + prediction_rows, len(y_augmented))  # Resolve the current bounded batch end
