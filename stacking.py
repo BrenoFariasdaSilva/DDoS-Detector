@@ -7949,7 +7949,7 @@ def cleanup_incomplete_stacking_model_transactions(models_directory: str, config
             print(f"{BackgroundColors.YELLOW}[WARNING] Failed to remove incomplete stacking transaction marker {temporary_marker}: {exc}{Style.RESET_ALL}")  # Keep recovery best-effort
 
 
-def export_model_and_scaler(model, scaler, dataset_name, model_name, feature_set=None, dataset_csv_path=None, config=None, artifact_context=None, label_encoder=None, transformer=None):
+def export_model_and_scaler(model, scaler, dataset_name, model_name, feature_set=None, dataset_csv_path=None, config=None, artifact_context=None, label_encoder=None, transformer=None, force_replace_incompatible=False):
     """
     Export model, scaler and metadata for stacking evaluations.
     
@@ -7963,6 +7963,7 @@ def export_model_and_scaler(model, scaler, dataset_name, model_name, feature_set
     :param artifact_context: Deterministic original-training compatibility context
     :param label_encoder: Fitted original-training label encoder
     :param transformer: Optional fitted original-training PCA transformer
+    :param force_replace_incompatible: Replace a metadata-valid artifact that failed full model loading during reconstruction.
     :return: Persisted classifier artifact path
     """
     
@@ -7984,11 +7985,12 @@ def export_model_and_scaler(model, scaler, dataset_name, model_name, feature_set
         artifact_paths = resolve_stacking_model_artifact_paths(dataset_name, str(dataset_csv_path), model_name, str(feature_set), artifact_context, config)
         artifact_lock = acquire_stacking_artifact_lock(artifact_paths["lock_path"], exclusive=True)  # Prevent concurrent loads, writes, or cleanup in this dataset directory
         cleanup_incomplete_stacking_model_transactions(artifact_paths["models_directory"], config=config)  # Recover only ownership-proven interrupted writes
-        if stacking_model_artifact_pair_is_valid(artifact_paths, artifact_context):  # Reuse an identical complete artifact instead of rewriting it
+        if not force_replace_incompatible and stacking_model_artifact_pair_is_valid(artifact_paths, artifact_context):  # Reuse validated metadata only for ordinary exports; reconstruction must replace the rejected model.
             cleanup_superseded_stacking_model_artifacts(artifact_paths, artifact_context, config=config)  # Remove temporary files for this reused full identity.
             return artifact_paths["model_path"]  # Preserve the existing artifact bytes and timestamp
         bundle = {
             "model": model,
+            "configured_model_params": artifact_context["model_params"],  # Persist the verified pre-fit estimator configuration independently of fitted estimator mutations.
             "scaler": scaler,
             "label_encoder": label_encoder,
             "transformer": transformer,
@@ -8164,7 +8166,8 @@ def load_existing_model_if_available(model_name, dataset_file, dataset_name, fea
         loaded_model = bundle.get("model")
         loaded_model_class = f"{loaded_model.__class__.__module__}.{loaded_model.__class__.__name__}"
         loaded_model_params = normalize_metadata_for_json(loaded_model.get_params(deep=True) if hasattr(loaded_model, "get_params") else {})
-        if loaded_model_class != artifact_context.get("model_class") or loaded_model_params != artifact_context.get("model_params"):
+        configured_model_params = bundle.get("configured_model_params", loaded_model_params)  # Prefer the saved pre-fit estimator identity; fitted estimators may mutate exposed parameters.
+        if loaded_model_class != artifact_context.get("model_class") or configured_model_params != artifact_context.get("model_params"):
             return None, "classifier bundle model configuration is incompatible"
         if not isinstance(bundle.get("scaler"), StandardScaler) or not isinstance(bundle.get("label_encoder"), LabelEncoder):
             return None, "classifier bundle preprocessing types are incompatible"
@@ -20147,12 +20150,14 @@ def ensure_feature_process_original_model_artifact(task: dict, process_payload: 
     artifact_context = build_feature_process_artifact_context(original_task, process_payload, model_prototype)  # Preserve original-run, feature, and hyperparameter identity.
     artifact_paths = resolve_stacking_model_artifact_paths(dataset_name, process_payload["file"], task["classifier_name"], artifact_feature_set, artifact_context, process_payload["config"])  # Resolve canonical model paths.
     with acquire_stacking_artifact_lock(artifact_paths["lock_path"] + ".rebuild.lock", exclusive=True):  # Prevent multiple ratio workers from retraining the same model concurrently.
-        if stacking_model_artifact_pair_is_valid(artifact_paths, artifact_context):  # Prefer the existing complete model pair.
-            return  # Do not refit a model that already exists and matches the original training configuration.
+        existing_bundle, rejection_reason = load_existing_model_if_available(task["classifier_name"], process_payload["file"], dataset_name, artifact_feature_set, artifact_context, config=process_payload["config"])  # Verify the entire loaded model and preprocessing, not only artifact metadata.
+        if existing_bundle is not None:  # Reuse only a fully compatible original-trained model.
+            del existing_bundle  # Release the temporary validation bundle before returning.
+            return  # Avoid retraining when prediction can safely reuse the saved classifier.
         if feature_process_runtime_skip_requested(task, process_payload):  # Honor cancellation before starting expensive reconstruction.
             raise RuntimeSkipRequested(f"Runtime skip requested before model reconstruction for {task['classifier_name']}")
-        log_feature_process_combination(task, status_state, "Original model artifact missing or incompatible; reconstructing from original training data without changing cached results")  # Clearly distinguish artifact work from a new experiment.
-        resources = prepare_feature_process_original_resources(process_payload)  # Recreate the same training split, scaled inputs, selected features, and PCA transform as an original experiment.
+        log_feature_process_combination(task, status_state, f"Original model artifact rejected ({rejection_reason}); retraining on original data without changing cached results")  # Report why original model reconstruction is required.
+        resources = prepare_feature_process_original_resources(process_payload)  # Reuse coordinator-owned original train/test memmaps and exact fitted preprocessing.
         try:
             model = clone(model_prototype)  # Never mutate the model prototype shared with other experiments.
             X_train, y_train = resources["X_train"], resources["y_train"]  # Use only the original training partition.
@@ -20163,9 +20168,11 @@ def ensure_feature_process_original_model_artifact(task: dict, process_payload: 
             fit_classifier_with_progress(model, X_train, y_train, artifact_feature_set, task["classifier_name"], config=process_payload["config"], hyperparameters_enabled=task["hyperparameters_enabled"], augmentation_ratio=None, cancellation_checker=cancellation_checker, local_combination_index=task.get("feature_local_position"), local_combination_total=task.get("feature_local_total"), active_workers_callback=lambda: format_active_workers_suffix(**build_feature_process_active_worker_status(status_state, process_payload)))  # Follow the same estimator training implementation as original evaluation.
             if cancellation_checker():  # Avoid publishing artifacts after an active skip.
                 raise RuntimeSkipRequested(f"Runtime skip requested after model reconstruction for {task['classifier_name']}")
-            exported_path = export_model_and_scaler(model, resources["scaler"], dataset_name, task["classifier_name"], feature_set=artifact_feature_set, dataset_csv_path=process_payload["file"], config=process_payload["config"], artifact_context=artifact_context, label_encoder=resources["label_encoder"], transformer=resources["transformer"])  # Save the model and fitted preprocessing, never touch result CSVs.
-            if not exported_path or not stacking_model_artifact_pair_is_valid(artifact_paths, artifact_context):  # Fail explicitly rather than predicting with unverified reconstruction.
-                raise RuntimeError(f"Reconstructed model artifact failed verification for {task['feature_set']} - {task['classifier_name']}")
+            exported_path = export_model_and_scaler(model, resources["scaler"], dataset_name, task["classifier_name"], feature_set=artifact_feature_set, dataset_csv_path=process_payload["file"], config=process_payload["config"], artifact_context=artifact_context, label_encoder=resources["label_encoder"], transformer=resources["transformer"], force_replace_incompatible=True)  # Replace a fully rejected artifact while preserving all historical result CSVs.
+            rebuilt_bundle, rebuilt_rejection = load_existing_model_if_available(task["classifier_name"], process_payload["file"], dataset_name, artifact_feature_set, artifact_context, config=process_payload["config"]) if exported_path else (None, "model export failed")  # Verify that the saved model is genuinely loadable and compatible for augmented inference.
+            if rebuilt_bundle is None:  # Do not evaluate with an unverified or incompatible newly trained model.
+                raise RuntimeError(f"Reconstructed model artifact failed verification for {task['feature_set']} - {task['classifier_name']}: {rebuilt_rejection}")
+            del rebuilt_bundle  # Release the verification model before opening augmentation data.
             log_training_phase(artifact_feature_set, task["classifier_name"], "Artifact reconstruction", "Completed", task["hyperparameters_enabled"], None)  # Report successful reconstruction separately from result recovery.
             log_feature_process_combination(task, status_state, "Original model artifact reconstruction completed; historical cached metrics preserved")  # Explain the independent recovery outcome.
         finally:
@@ -20192,8 +20199,12 @@ def evaluate_feature_process_augmented_task(task: dict, process_payload: dict, r
     artifact_context = build_feature_process_artifact_context(task, process_payload, model_prototype)  # Build unchanged original-model provenance
     dataset_name = build_filename_safe_dataset_identity(resolve_canonical_dataset_identity(str(process_payload["file"]), True)) if process_payload["execution_mode"] == "combined_files" else os.path.basename(os.path.dirname(process_payload["file"]))  # Resolve the established model artifact directory
     artifact_bundle, rejection_reason = load_existing_model_if_available(task["classifier_name"], process_payload["file"], dataset_name, artifact_feature_set, artifact_context, config=process_payload["config"])  # Load only a complete compatible original-trained model bundle
-    if artifact_bundle is None:  # Refuse augmented prediction without the required synchronized original model
-        raise RuntimeError(f"Original-trained artifact unavailable for {task['feature_set']} - {task['classifier_name']}: {rejection_reason}")  # Surface the exact missing artifact reason
+    if artifact_bundle is None:  # Recover an artifact that became incompatible after the preflight, including a concurrent replacement.
+        log_feature_process_combination(task, status_state, f"Original model load rejected ({rejection_reason}); retrying verified original-data retraining")  # Explain the recovery without recording a second original experiment.
+        ensure_feature_process_original_model_artifact(task, process_payload, model_prototype, status_state, None)  # Serialize model reconstruction and preserve the existing original metrics cache.
+        artifact_bundle, rejection_reason = load_existing_model_if_available(task["classifier_name"], process_payload["file"], dataset_name, artifact_feature_set, artifact_context, config=process_payload["config"])  # Load the replacement model through the strict production validation path.
+        if artifact_bundle is None:  # Fail only after a genuine reconstruction attempt and validation.
+            raise RuntimeError(f"Original-trained artifact unavailable after retraining for {task['feature_set']} - {task['classifier_name']}: {rejection_reason}")  # Surface the exact remaining incompatibility.
     loaded_model = artifact_bundle["model"]  # Resolve the persisted original-trained classifier
     y_augmented = np.asarray(ratio_data["y_encoded"], dtype=np.int64) if "y_encoded" in ratio_data else np.asarray(artifact_bundle["label_encoder"].transform(ratio_data["y_raw"]), dtype=np.int64)  # Reuse shared exact encoding or apply the persisted original-training label encoder
     prediction_rows = max(1, int(process_payload["config"].get("stacking", {}).get("memory_management", {}).get("process_memmap_chunk_rows", 100000)))  # Reuse the established bounded row setting for augmented transformation and prediction
@@ -21276,8 +21287,8 @@ def run_persistent_feature_set_grid(original_df: pd.DataFrame, file: str, source
     pending_augmented_exists = any(task["augmentation_ratio"] is not None for queue_tasks in pending_by_feature.values() for task in queue_tasks)  # Determine whether any child requires lazy shared augmentation data
     pca_cache_context = {"execution_mode": execution_mode_str, "data_source": "Original", "experiment_mode": "original_only", "augmentation_ratio": None, "target_column": target_column, "original_sample_count": original_sample_count, "augmented_sample_count": 0, "test_size": 0.2, "random_state": config.get("evaluation", {}).get("random_state", 42), "experiment_run": get_current_experiment_run(config), "stratified": True, "augmentation_merged_into_training_after_split": False, "attack_types": normalize_metadata_for_json(attack_types_combined)}  # Preserve the run-specific PCA split and source identity
     try:  # Keep shared resources alive until every child has exited
-        if pending_original_exists:  # Prepare shared original arrays only when at least one uncached fit requires them
-            shared_resources = create_feature_process_shared_resources(original_df, file, config)  # Split once and persist exact read-only matrices and labels
+        if pending_original_exists or pending_augmented_exists:  # Augmented evaluations may require retraining missing or incompatible original-trained models.
+            shared_resources = create_feature_process_shared_resources(original_df, file, config)  # Keep exact coordinator-owned original training split available to every reconstruction worker.
         if pending_augmented_exists:  # Allocate shared ratio backing only when at least one uncached augmented task requires it
             augmentation_shared_directory = create_feature_process_temp_directory(file, config=config)  # Create one coordinator-owned directory for lazily published ratio pairs
         process_payload["shared_resources"] = shared_resources  # Pass only paths, shapes, dtypes, and preprocessing path to children
