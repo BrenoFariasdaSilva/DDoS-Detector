@@ -49,6 +49,7 @@ import fcntl  # Provide process-safe serialization for shared detached log write
 import os  # For interacting with the filesystem
 import re  # For stripping ANSI escape sequences
 import sys  # For replacing stdout/stderr
+import threading  # For serializing partial print writes within one process
 from datetime import datetime  # Obtain timezone-aware wall-clock timestamps at record emission
 from zoneinfo import ZoneInfo  # Resolve the standard-library São Paulo timezone
 
@@ -91,13 +92,15 @@ class Logger:
         if parent and not os.path.exists(parent):  # Create parent directories if needed
             os.makedirs(parent, exist_ok=True)  # Safe creation
 
-        self.logfile = open(logfile_path, "a", encoding="utf-8")  # Keep every process descriptor append-only so stale offsets cannot overwrite records
+        self.logfile = open(logfile_path, "a+", encoding="utf-8")  # Keep every process descriptor append-only so stale offsets cannot overwrite records
         if clean:  # Reset prior run contents before concurrent writers exist
             self.logfile.seek(0)  # Position the initial coordinator descriptor for truncation
             self.logfile.truncate()  # Clear prior run contents while retaining append-only writes
         self.is_tty = sys.stdout.isatty()  # Verify if stdout is a TTY
         self.timestamp_zone = ZoneInfo(str(timestamp_timezone)) if timestamp_timezone is not None else None  # Resolve the explicit timezone once per logger instance
         self.timestamp_now = timestamp_now if timestamp_now is not None else datetime.now  # Use an injectable timezone-aware emission clock
+        self._pending = ""  # Buffer partial print messages until the terminating newline arrives
+        self._thread_lock = threading.RLock()  # Synchronize pending fragments and explicit flushes between threads
 
     def format_message(self, message):  # Prefix every non-empty physical line at emission time
         """
@@ -124,65 +127,92 @@ class Logger:
                 formatted_lines.append(f"{leading_ansi}{timestamp_prefix}{visible_line}")  # Place terminal controls before the visible timestamp without duplicating content
         return "".join(formatted_lines)  # Return one complete formatted record for locked output
 
-    def write(self, message):
+    def _emit_line(self, line):  # Write one complete log line atomically across processes
         """
-        Internal method to write messages to both terminal and log file.
+        Emit one complete physical line while enforcing at most one consecutive blank line.
 
         :param self: Instance of the Logger class.
-        :param message: The message to log.
+        :param line: One newline-terminated physical line to emit.
         """
 
-        if message is None:  # Ignore None messages
-            return  # Early exit
+        lock_acquired = False  # Track whether this call owns the interprocess file lock
+        try:  # Serialize log output and blank-line verification across all processes
+            fcntl.flock(self.logfile.fileno(), fcntl.LOCK_EX)  # Acquire the shared exclusive file lock
+            lock_acquired = True  # Record successful lock acquisition
+            self.logfile.flush()  # Ensure previously written records are visible to file-size queries
 
-        out = str(message)  # Preserve the exact output-stream content
-        if not out:  # Ignore empty writes without inserting line breaks
-            return  # No content to emit
+            if not ANSI_ESCAPE_REGEX.sub("", line).strip():  # Detect a visually empty line, including ANSI-only output
+                file_size = os.fstat(self.logfile.fileno()).st_size  # Determine the shared log's current size
+                trailing = os.pread(self.logfile.fileno(), min(file_size, 2), max(0, file_size - 2))  # Read the last two bytes without changing the append offset
+                if file_size == 0 or trailing.endswith(b"\n\n"):  # Reject leading or repeated physical blank lines
+                    return  # Preserve no more than one empty line between records
+                line = "\n"  # Normalize an accepted whitespace-only record to exactly one blank line
 
-        lock_acquired = False  # Track the process-safe log lock for exception-safe release
-        try:  # Serialize file and terminal writes from every stacking process
-            fcntl.flock(self.logfile.fileno(), fcntl.LOCK_EX)  # Acquire an exclusive advisory lock for one complete record
-            lock_acquired = True  # Record successful lock acquisition before writing
-            out = self.format_message(out)  # Sample and apply the optional timestamp at synchronized emission
-            clean_out = ANSI_ESCAPE_REGEX.sub("", out)  # Strip ANSI sequences for log file
-            self.logfile.write(clean_out)  # Write the complete cleaned record while holding the process lock
-            self.logfile.flush()  # Flush every locked record immediately
-            if sys.__stdout__ is not None:  # Mirror the same complete record to the original terminal when available
-                if self.is_tty:  # Terminal supports colors
-                    sys.__stdout__.write(out)  # Write colored message
-                    sys.__stdout__.flush()  # Flush immediately
-                else:  # Terminal does not support colors
-                    sys.__stdout__.write(clean_out)  # Write cleaned message
-                    sys.__stdout__.flush()  # Flush immediately
-        except Exception:  # Fail silently to avoid breaking user code
-            pass  # Silent fail
-        finally:  # Release the process-safe record lock after every outcome
-            if lock_acquired:  # Unlock only when this write acquired the advisory lock
-                try:  # Keep unlock failures from affecting user code
-                    fcntl.flock(self.logfile.fileno(), fcntl.LOCK_UN)  # Release the shared log file for the next process
-                except Exception:  # Fail silently during lock release
-                    pass  # Preserve logger compatibility after an unlock failure
+            output = self.format_message(line)  # Apply an optional timestamp to this complete physical line
+            clean_output = ANSI_ESCAPE_REGEX.sub("", output)  # Remove ANSI escapes from the file record
+            self.logfile.write(clean_output)  # Append the complete record under the shared process lock
+            self.logfile.flush()  # Make the record immediately visible to tail and other processes
+            if sys.__stdout__ is not None:  # Mirror the same record to the original output stream
+                if self.is_tty:  # Preserve ANSI sequences on interactive terminals
+                    sys.__stdout__.write(output)  # Emit the original formatted output
+                else:  # Remove terminal control sequences for redirected output
+                    sys.__stdout__.write(clean_output)  # Emit the cleaned formatted output
+                sys.__stdout__.flush()  # Flush the complete terminal record immediately
+        except Exception:  # Preserve the logger's existing best-effort error behavior
+            pass  # Do not interrupt the application because logging failed
+        finally:  # Release the interprocess lock on every exit path
+            if lock_acquired:  # Unlock only when the advisory lock was acquired
+                try:  # Protect application execution from unlock errors
+                    fcntl.flock(self.logfile.fileno(), fcntl.LOCK_UN)  # Release the shared log file
+                except Exception:  # Preserve the best-effort logger interface
+                    pass  # Ignore lock-release failures
 
-    def flush(self):
+    def write(self, message):  # Collect separate print fragments before emitting complete records
         """
-        Flush the log file.
+        Buffer text and write only newline-terminated physical lines atomically.
+
+        :param self: Instance of the Logger class.
+        :param message: The output fragment to log.
+        """
+
+        if message is None:  # Ignore absent messages
+            return  # Preserve the original silent handling of None
+        out = str(message)  # Convert the output fragment to a string without appending newlines
+        if not out:  # Ignore empty fragments
+            return  # Avoid unnecessary locking and output
+
+        with self._thread_lock:  # Prevent local threads from interleaving message fragments
+            self._pending += out  # Append this fragment to the current partial physical line
+            while "\n" in self._pending:  # Emit every complete line found in the buffer
+                line, self._pending = self._pending.split("\n", 1)  # Separate the first complete line and remaining fragment
+                self._emit_line(line + "\n")  # Atomically emit one complete line across processes
+
+    def flush(self):  # Finish any incomplete output and flush the log file
+        """
+        Flush the pending output fragment and underlying log file.
 
         :param self: Instance of the Logger class.
         """
 
-        try:  # Flush log file buffer
-            self.logfile.flush()  # Flush log file
-        except Exception:  # Fail silently
-            pass  # Silent fail
+        with self._thread_lock:  # Synchronize with writes to the pending buffer
+            if self._pending:  # Preserve explicit flush semantics for partial records
+                pending = self._pending  # Capture the pending partial physical line
+                self._pending = ""  # Clear the buffer before emitting the record
+                self._emit_line(pending + "\n")  # Complete the partial line atomically
+            try:  # Flush the underlying file buffer
+                self.logfile.flush()  # Flush log file
+            except Exception:  # Preserve the original best-effort behavior
+                pass  # Fail silently
 
-    def close(self):
+    def close(self):  # Flush buffered text before closing the logger
         """
         Close the log file.
 
         :param self: Instance of the Logger class.
         """
 
-        try:  # Close log file
+        try:  # Close the log file
+            self.flush()  # Emit any remaining partial physical line before closing
             self.logfile.close()  # Close log file
-        except Exception:  # Fail silently
-            pass  # Silent fail
+        except Exception:  # Preserve the original best-effort behavior
+            pass  # Fail silently
