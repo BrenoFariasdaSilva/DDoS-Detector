@@ -3851,8 +3851,8 @@ def concat_files_into_combined_files_df(processed_files_with_labels, common_feat
     attack_types_list = sorted(list(attack_types_set))  # Convert attack types set to sorted list
     write_memory_phase_event("after_combined_dataframe_creation", config=config, source_file_count=len(processed_files_with_labels), row_count=len(combined_df), feature_count=len(common_features_list), attack_scope=attack_types_list, event_outcome="created")  # Publish successful combined dataframe creation
     print(
-        f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Combined files evaluation dataset created: {BackgroundColors.CYAN}{len(combined_df)} samples, {len(common_features_list)} features, {len(attack_types_list)} classes{Style.RESET_ALL}"
-    )  # Print summary of combined dataset
+        f"{BackgroundColors.GREEN}Combined files evaluation dataset feature list: {BackgroundColors.CYAN}{json.dumps(common_features_list, ensure_ascii=False)}{Style.RESET_ALL}"
+    )  # Print all dataset features excluding target and reserved LSTM metadata
     return combined_df, attack_types_list  # Return combined dataframe and attack types list
 
 
@@ -3883,9 +3883,9 @@ def compute_common_features_across_files(processed_files_with_labels, config):
 
     common_features_list = sorted(list(common_features))  # Convert to sorted list
     verbose_output(
-        f"{BackgroundColors.GREEN}Common features for combined files evaluation: {BackgroundColors.CYAN}{len(common_features_list)} features{Style.RESET_ALL}",
+        f"{BackgroundColors.GREEN}Common features list for combined files evaluation: {BackgroundColors.CYAN}{json.dumps(common_features_list, ensure_ascii=False)}{Style.RESET_ALL}",
         config=config
-    )  # Output common features count
+    )  # Output the complete sorted list of common dataset features
     return common_features_list, target_col_name  # Return common features and target column name
 
 
@@ -18478,9 +18478,9 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
         ga_selected_features, rfe_selected_features, extra_trees_selected_features = sanitize_and_verify_feature_selections(ga_selected_features, rfe_selected_features, extra_trees_selected_features, feature_names, config=config)  # Normalize artifacts before grid counting so the denominator matches assembled feature modes
         
         verbose_output(
-            f"{BackgroundColors.GREEN}Combined files evaluation dataset features: {BackgroundColors.CYAN}{len(feature_names)} features{Style.RESET_ALL}",
+            f"{BackgroundColors.GREEN}Combined files evaluation classifier feature list: {BackgroundColors.CYAN}{json.dumps(feature_names, ensure_ascii=False)}{Style.RESET_ALL}",
             config=config
-        )  # Output feature count
+        )  # Output all classifier features excluding reserved LSTM metadata
         original_sample_count = int(len(combined_files_df))  # Preserve original row count for augmentation sampling after dataframe release.
         combined_files_df_holder = [combined_files_df]  # Transfer the original combined dataframe so later calls can consume it without caller retention.
         combined_files_df = None  # Release this frame's direct original combined dataframe reference before classifier fitting.
