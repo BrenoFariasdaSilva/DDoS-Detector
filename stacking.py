@@ -19535,23 +19535,15 @@ def partition_feature_process_tasks(tasks: List[dict], cache_dict: dict, process
     """
 
     basic_cached = {task["global_id"]: feature_process_cache_result(task, cache_dict, process_payload["attack_types_combined"]) for task in tasks}  # Classify every result row by complete identity and shape
-    required_artifact_slots = {(task["feature_set"], task["hyperparameters_enabled"], task["classifier_name"]) for task in tasks if task["augmentation_ratio"] is not None and basic_cached[task["global_id"]] is None}  # Identify original model slots needed by pending augmented tests
-    cached_results = {}  # Accumulate fully valid cache rows by global ID
-    pending_by_feature = {name: [] for name in process_payload["feature_mode_names"]}  # Create one ordered queue per active feature set
-    for task in tasks:  # Preserve authoritative global and feature-local ordering during classification
-        cached_result = basic_cached[task["global_id"]]  # Read the shape-compatible cache candidate
-        artifact_slot = (task["feature_set"], task["hyperparameters_enabled"], task["classifier_name"])  # Resolve this task's original-trained model slot
-        task["execution_mode"] = process_payload["execution_mode"]  # Store the unchanged execution mode in the matrix-free descriptor
-        if task["augmentation_ratio"] is None and artifact_slot in required_artifact_slots:  # Require an exact model pair when a pending augmented task needs it
-            task["requires_model_artifact"] = True  # Record the final pre-fit artifact validation requirement
-        if cached_result is not None and task.get("requires_model_artifact", False):  # Validate a cached original result together with its required model pair
-            prototype = model_maps[task["hyperparameters_enabled"]][task["classifier_name"]]  # Resolve the small coordinator estimator prototype
-            if not feature_process_model_artifact_valid(task, process_payload, prototype):  # Treat incomplete result-plus-model recovery as pending
-                cached_result = None  # Queue artifact recovery through the ordinary scientific evaluation path
-        if cached_result is not None:  # Register a fully valid cached combination
-            cached_results[task["global_id"]] = cached_result  # Preserve the exact recovered row under its original global ID
-        else:  # Queue only combinations that remain pending after cache and artifact validation
-            pending_by_feature[task["feature_set"]].append(task)  # Preserve feature-local order without matrices or estimators
+    cached_results = {}  # Cache result validity does not depend on retaining a previously fitted model artifact.
+    pending_by_feature = {name: [] for name in process_payload["feature_mode_names"]}  # Create one ordered queue per active feature set.
+    for task in tasks:  # Preserve authoritative global and feature-local ordering during classification.
+        cached_result = basic_cached[task["global_id"]]  # Validate cached measurements independently of model availability.
+        task["execution_mode"] = process_payload["execution_mode"]  # Preserve the task's complete cache identity.
+        if cached_result is not None:  # Reuse valid original and augmented measurements without model-artifact requirements.
+            cached_results[task["global_id"]] = cached_result  # Retain the original result row without modification.
+        else:  # Queue only experiments with missing or incompatible cached result rows.
+            pending_by_feature[task["feature_set"]].append(task)  # Preserve feature-local task ordering.
     sort_pending_feature_process_tasks_by_elapsed_time(pending_by_feature, cache_dict, process_payload)  # Optionally reorder only pending feature queues before queue positions are assigned
     for queue_tasks in pending_by_feature.values():  # Annotate each dynamic feature-local pending queue after complete cache classification
         for pending_position, task in enumerate(queue_tasks, start=1):  # Preserve exact one-based pending queue order
@@ -20145,6 +20137,42 @@ def evaluate_feature_process_original_task(task: dict, process_payload: dict, re
     return result_entry, model_y_test, exact_predictions, label_classes  # Return local evidence without copying it through multiprocessing transport.
 
 
+def ensure_feature_process_original_model_artifact(task: dict, process_payload: dict, model_prototype: Any, status_state: dict, status_queue: Any) -> None:
+    """Rebuild only a missing original-trained model for augmented inference; never rewrite cached metrics."""
+
+    original_task = dict(task)  # Reuse the exact original-training identity, not augmented testing ratio metadata.
+    original_task["augmentation_ratio"] = None  # An augmented test must not change the original model's provenance.
+    artifact_feature_set = f"{task['feature_set']} - {'Optimized Hyperparameters' if task['hyperparameters_enabled'] else 'Default Hyperparameters'}"  # Use the original export slot.
+    dataset_name = build_filename_safe_dataset_identity(resolve_canonical_dataset_identity(str(process_payload["file"]), True)) if process_payload["execution_mode"] == "combined_files" else os.path.basename(os.path.dirname(process_payload["file"]))  # Match the ordinary original-data export directory.
+    artifact_context = build_feature_process_artifact_context(original_task, process_payload, model_prototype)  # Preserve original-run, feature, and hyperparameter identity.
+    artifact_paths = resolve_stacking_model_artifact_paths(dataset_name, process_payload["file"], task["classifier_name"], artifact_feature_set, artifact_context, process_payload["config"])  # Resolve canonical model paths.
+    with acquire_stacking_artifact_lock(artifact_paths["lock_path"] + ".rebuild.lock", exclusive=True):  # Prevent multiple ratio workers from retraining the same model concurrently.
+        if stacking_model_artifact_pair_is_valid(artifact_paths, artifact_context):  # Prefer the existing complete model pair.
+            return  # Do not refit a model that already exists and matches the original training configuration.
+        if feature_process_runtime_skip_requested(task, process_payload):  # Honor cancellation before starting expensive reconstruction.
+            raise RuntimeSkipRequested(f"Runtime skip requested before model reconstruction for {task['classifier_name']}")
+        log_feature_process_combination(task, status_state, "Original model artifact missing or incompatible; reconstructing from original training data without changing cached results")  # Clearly distinguish artifact work from a new experiment.
+        resources = prepare_feature_process_original_resources(process_payload)  # Recreate the same training split, scaled inputs, selected features, and PCA transform as an original experiment.
+        try:
+            model = clone(model_prototype)  # Never mutate the model prototype shared with other experiments.
+            X_train, y_train = resources["X_train"], resources["y_train"]  # Use only the original training partition.
+            if is_lstm_classifier_name(task["classifier_name"]):  # Preserve original source-local chronological sequence preparation.
+                X_train, y_train, _, _, _ = prepare_lstm_sequence_evaluation_inputs(model, resources["X_train"], resources["y_train"], resources["X_test"], resources["y_test"], resources.get("train_row_metadata"), resources.get("test_row_metadata"))
+            cancellation_checker = lambda: feature_process_runtime_skip_requested(task, process_payload)  # Reuse the existing safe training cancellation boundaries.
+            log_training_phase(artifact_feature_set, task["classifier_name"], "Artifact reconstruction", "Started", task["hyperparameters_enabled"], None)  # Report a fit without counting a second original experiment.
+            fit_classifier_with_progress(model, X_train, y_train, artifact_feature_set, task["classifier_name"], config=process_payload["config"], hyperparameters_enabled=task["hyperparameters_enabled"], augmentation_ratio=None, cancellation_checker=cancellation_checker, local_combination_index=task.get("feature_local_position"), local_combination_total=task.get("feature_local_total"), active_workers_callback=lambda: format_active_workers_suffix(**build_feature_process_active_worker_status(status_state, process_payload)))  # Follow the same estimator training implementation as original evaluation.
+            if cancellation_checker():  # Avoid publishing artifacts after an active skip.
+                raise RuntimeSkipRequested(f"Runtime skip requested after model reconstruction for {task['classifier_name']}")
+            exported_path = export_model_and_scaler(model, resources["scaler"], dataset_name, task["classifier_name"], feature_set=artifact_feature_set, dataset_csv_path=process_payload["file"], config=process_payload["config"], artifact_context=artifact_context, label_encoder=resources["label_encoder"], transformer=resources["transformer"])  # Save the model and fitted preprocessing, never touch result CSVs.
+            if not exported_path or not stacking_model_artifact_pair_is_valid(artifact_paths, artifact_context):  # Fail explicitly rather than predicting with unverified reconstruction.
+                raise RuntimeError(f"Reconstructed model artifact failed verification for {task['feature_set']} - {task['classifier_name']}")
+            log_training_phase(artifact_feature_set, task["classifier_name"], "Artifact reconstruction", "Completed", task["hyperparameters_enabled"], None)  # Report successful reconstruction separately from result recovery.
+            log_feature_process_combination(task, status_state, "Original model artifact reconstruction completed; historical cached metrics preserved")  # Explain the independent recovery outcome.
+        finally:
+            cleanup_feature_process_original_resources(resources)  # Always release temporary feature memmaps, even on failed fitting.
+            gc.collect()  # Release trained model memory before augmented model loading.
+
+
 def evaluate_feature_process_augmented_task(task: dict, process_payload: dict, ratio_data: dict, model_prototype: Any, cache_dict: dict, status_state: dict) -> Tuple[dict, Any, Any, Any]:  # Evaluate, persist, and retain exact labels until coordinator new-best decision.
     """
     Evaluate one augmented-testing process task through the existing loaded-model path.
@@ -20225,9 +20253,6 @@ def reload_feature_process_task_cache(task: dict, process_payload: dict, model_p
 
     latest_cache = load_cache_results(process_payload["cache_ref_file"], config=process_payload["config"], notify_discovery=False)  # Reload through the process-safe production recovery path
     cached_result = feature_process_cache_result(task, latest_cache, process_payload["attack_types_combined"])  # Require exact shape and feature identity after concurrent updates
-    if cached_result is not None and task.get("requires_model_artifact", False):  # Revalidate a model pair needed by pending augmented work
-        if not feature_process_model_artifact_valid(task, process_payload, model_prototype):  # Reject a result-only recovery with an incomplete required model pair
-            cached_result = None  # Continue through artifact recovery computation
     return cached_result, latest_cache  # Return the final cache decision and current cache snapshot
 
 
@@ -20593,6 +20618,10 @@ def process_feature_process_task(task: dict, process_payload: dict, model_maps: 
                 log_feature_process_combination(task, status_state, "Original memmap data loading completed")  # Confirm exact required original resources are ready
             evaluation_output = evaluate_feature_process_original_task(task, process_payload, resource_state["original_resources"], model_prototype, resource_state["cache_dict"], status_state, status_queue)  # Fit, predict, calculate metrics, and retain exact artifact evidence locally.
         else:  # Load only the exact augmentation ratio required by this pending task
+            if resource_state["original_resources"] is not None:  # Release large original feature matrices before any artifact-only rebuild to prevent duplicate worker mappings.
+                cleanup_feature_process_original_resources(resource_state["original_resources"])  # Close previously opened feature sources before an independent reconstruction.
+                resource_state["original_resources"] = None  # Prevent stale references to released training resources.
+            ensure_feature_process_original_model_artifact(task, process_payload, model_prototype, status_state, status_queue)  # Independently reconstruct a missing original model; never invalidate or overwrite cached original metrics.
             if resource_state["original_resources"] is not None:  # Release large original feature matrices before augmented-only prediction
                 cleanup_feature_process_original_resources(resource_state["original_resources"])  # Close worker mappings and delete only worker-owned feature files
                 resource_state["original_resources"] = None  # Clear released original resources
