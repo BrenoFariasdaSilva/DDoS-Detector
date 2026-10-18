@@ -16122,6 +16122,7 @@ def send_feature_process_result_notification(task: dict, result_entry: dict, eve
     if event == "computed":  # Restore the historical fresh-completion wording
         combination_header = build_telegram_combination_header(task["feature_set"], task["classifier_name"], task["augmentation_ratio"], task["hyperparameters_enabled"], include_model=False, experiment_run=task["experiment_run"])  # Reuse the established sequential combination formatter without trailing classifier
         telegram_msg = f"Finished combination {global_id}/{int(dynamic_total)}: {task['classifier_name']} - {combination_header} with weighted F1: {resolve_result_metric_float(result_entry, 'weighted_f1_score')} in {calculate_execution_time(0, result_entry.get('elapsed_time_s', 0))}"  # Use authoritative weighted F1 with legacy read fallback.
+        telegram_msg += str(result_entry.get("comparison_suffix") or "")  # Add measured comparison only when matching cached baselines exist.
     else:  # Preserve the established sequential cache-recovery semantics
         _, telegram_msg = build_cached_telegram_result_messages(result_entry, task["feature_set"], task["classifier_name"], task["augmentation_ratio"], task["hyperparameters_enabled"], task["execution_mode"])  # Reuse the existing cache message construction
     try:  # Isolate Telegram transport from completed scientific work
@@ -16161,6 +16162,7 @@ def handle_feature_process_result_notification(status: dict, tasks_by_global_id:
         task = tasks_by_global_id.get(global_id)  # Resolve the event through the authoritative dynamic plan
         if task is None or task.get("feature_set") != feature_set_name:  # Reject unknown or cross-feature result events
             return True  # Mark malformed notification event as deterministically handled
+        notification_result["comparison_suffix"] = str(status.get("comparison_suffix") or "")  # Attach ephemeral comparison text for Telegram only.
         send_feature_process_result_notification(task, notification_result, status.get("event"), dynamic_total, notified_global_ids, new_best_decision)  # Send result and publish authoritative comparison outcome.
         return True  # Report completion-event handling regardless of Telegram delivery outcome
     finally:  # Release the exact feature worker after its notification event is handled
@@ -20450,7 +20452,8 @@ def publish_feature_process_result_event(task: dict, process_payload: dict, resu
     """
 
     notification_result = build_feature_process_notification_result(result_entry)  # Copy only scalar persisted fields needed by Telegram
-    status_queue.put({"status": "progress", "feature_set": process_payload["feature_set"], "global_id": task["global_id"], "event": event, "notification_result": notification_result, "pid": os.getpid()})  # Publish completion only after persistence and terminal status transition
+    comparison_suffix = format_metric_comparison_suffix(resolve_result_metric_float(result_entry, "weighted_f1_score"), result_entry.get("elapsed_time_s"), ACTIVE_METRIC_COMPARISON_BASELINES)  # Resolve exact persisted baselines without changing them.
+    status_queue.put({"status": "progress", "feature_set": process_payload["feature_set"], "global_id": task["global_id"], "event": event, "notification_result": notification_result, "comparison_suffix": comparison_suffix, "pid": os.getpid()})  # Publish completion only after persistence and terminal status transition
 
 
 def build_feature_process_task_status_fields(task: Optional[dict]) -> dict:  # Copy authoritative task fields for lifecycle events.
