@@ -218,6 +218,9 @@ HISTORICAL_EVALUATION_SPLITS: dict = {}  # Reuse lightweight historical test ind
 HISTORICAL_MODEL_ARTIFACT_METADATA: dict = {}  # Reuse dataset-local model metadata discovered after relevant cache rows are loaded.
 HISTORICAL_MODEL_PROVENANCE_ATTEMPTS: set = set()  # Prevent repeated metadata-only recovery attempts for the same loaded historical result.
 
+# Scoped to one persistent feature-worker process: cache rows are read only, never rewritten for reporting.
+ACTIVE_METRIC_COMPARISON_BASELINES = None
+
 class RuntimeSkipRequested(Exception):
     """Raised inside a worker when a Telegram skip wins before persistence."""
 
@@ -8334,6 +8337,7 @@ def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, 
         if evaluation_mode is None:  # If still not resolved
             evaluation_mode = "SeparateFiles"  # Default to SeparateFiles when unknown
         msg = f"{BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}: Mode {BackgroundColors.CYAN}{evaluation_mode}{BackgroundColors.GREEN} | Weighted F1-Score {BackgroundColors.CYAN}{f1}{BackgroundColors.GREEN} | Macro F1-Score: {BackgroundColors.CYAN}{macro_f1}{BackgroundColors.GREEN} | Accuracy: {BackgroundColors.CYAN}{acc}{BackgroundColors.GREEN} | Weighted Precision: {BackgroundColors.CYAN}{prec}{BackgroundColors.GREEN} | Weighted Recall: {BackgroundColors.CYAN}{rec}{BackgroundColors.GREEN} | FPR: {BackgroundColors.CYAN}{fpr}{BackgroundColors.GREEN} | FNR: {BackgroundColors.CYAN}{fnr}{BackgroundColors.GREEN} | Training Time: {BackgroundColors.CYAN}{int(train_seconds)}s{BackgroundColors.GREEN} | Execution Time: {BackgroundColors.CYAN}{int(exec_seconds)}s{BackgroundColors.GREEN} | Total Time: {BackgroundColors.CYAN}{human_time}{BackgroundColors.GREEN} ({BackgroundColors.CYAN}{int(total_seconds)}s{BackgroundColors.GREEN}){Style.RESET_ALL}"  # Report explicit averaging semantics.
+        msg = f"{msg}{format_metric_comparison_suffix(f1, elapsed_time, ACTIVE_METRIC_COMPARISON_BASELINES)}"  # Show like-for-like historical comparisons when cached baselines exist.
         print(msg)  # Print the summary message to console
         notification_origin = "[COMPUTED] Model fitted and evaluated in this run" if fit_model else "[LOADED MODEL] Persisted model evaluated without fitting in this run"  # Distinguish fitting from persisted-model evaluation
         notification_label = notification_context or feature_set or model_name  # Preserve the most specific available evaluation identity
@@ -13501,6 +13505,61 @@ def build_cached_telegram_result_messages(cached_result, feature_set_name, model
     cached_msg = f"{BackgroundColors.CYAN}{model_name}{BackgroundColors.GREEN}: Mode {BackgroundColors.CYAN}{evaluation_mode}{BackgroundColors.GREEN} | Weighted F1-Score {BackgroundColors.CYAN}{format_result_value(f1)}{BackgroundColors.GREEN} | Macro F1-Score: {BackgroundColors.CYAN}{format_result_value(macro_f1)}{BackgroundColors.GREEN} | Accuracy: {BackgroundColors.CYAN}{acc}{BackgroundColors.GREEN} | Weighted Precision: {BackgroundColors.CYAN}{format_result_value(prec)}{BackgroundColors.GREEN} | Weighted Recall: {BackgroundColors.CYAN}{format_result_value(rec)}{BackgroundColors.GREEN} | FPR: {BackgroundColors.CYAN}{fpr}{BackgroundColors.GREEN} | FNR: {BackgroundColors.CYAN}{fnr}{BackgroundColors.GREEN} | Training Time: {BackgroundColors.CYAN}{cached_elapsed}s{BackgroundColors.GREEN} | Execution Time: {BackgroundColors.CYAN}{cached_elapsed}s{BackgroundColors.GREEN} | Total Time: {BackgroundColors.CYAN}{cached_human_time}{BackgroundColors.GREEN} ({BackgroundColors.CYAN}{cached_elapsed}s{BackgroundColors.GREEN}){Style.RESET_ALL}"  # Report explicit averaging semantics for recovered results.
     telegram_msg = f"[CACHE] Recovered saved result without fit, prediction, or metric recomputation | {combination_header}\n{cached_msg}"  # Preserve the existing cache notification wording
     return cached_msg, telegram_msg  # Return identical console and Telegram representations
+
+
+def find_metric_comparison_baselines(task: dict, cache_dict: dict) -> list:
+    """Find exact-run comparison rows, preferring the same-hyperparameter original test and default-parameter test."""
+    if not isinstance(cache_dict, dict):
+        return []
+    ratio = task.get("augmentation_ratio")
+    hp = bool(task.get("hyperparameters_enabled"))
+    candidates = []
+    if ratio is not None:
+        candidates.append(("Original test", None, hp))
+    if hp:
+        candidates.append(("Default hyperparameters", ratio, False))
+    matches = []
+    for label, target_ratio, target_hp in candidates:
+        for entry in cache_dict.values():
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("experiment_run") != task.get("experiment_run") or entry.get("feature_set") != task.get("feature_set") or entry.get("model_name") != task.get("classifier_name"):
+                continue
+            if str(entry.get("dataset")) != str(task.get("dataset")) or str(entry.get("execution_mode")) != str(task.get("execution_mode")):
+                continue
+            if (entry.get("hyperparameter_mode") == "Optimized Hyperparameters") != target_hp:
+                continue
+            actual_ratio = resolve_persisted_augmentation_ratio(entry.get("experiment_mode"), entry.get("augmentation_ratio"))
+            expected_ratio = resolve_persisted_augmentation_ratio("original_only" if target_ratio is None else "original_training_augmented_testing", target_ratio)
+            if actual_ratio != expected_ratio:
+                continue
+            f1 = resolve_result_metric_float(entry, "weighted_f1_score")
+            try:
+                seconds = float(entry.get("elapsed_time_s"))
+            except (TypeError, ValueError):
+                seconds = float("nan")
+            if f1 is None or not math.isfinite(seconds) or seconds < 0:
+                continue
+            matches.append((label, f1, seconds))
+            break
+    return matches
+
+
+def format_metric_comparison_suffix(f1: Any, seconds: Any, baselines: Any) -> str:
+    """Format signed weighted-F1 and elapsed-time differences without substituting missing measurements."""
+    try:
+        current_f1, current_time = float(f1), float(seconds)
+    except (TypeError, ValueError):
+        return ""
+    if not (math.isfinite(current_f1) and math.isfinite(current_time)):
+        return ""
+    comparisons = []
+    for label, baseline_f1, baseline_time in baselines or []:
+        delta_time = current_time - baseline_time
+        sign = "+" if delta_time >= 0 else "-"
+        duration = calculate_execution_time(0, abs(delta_time))
+        comparisons.append(f"vs {label}: Weighted F1: {current_f1 - baseline_f1:+.6f} / Execution Time: {sign}{duration}")
+    return f" ({'; '.join(comparisons)})" if comparisons else ""
 
 
 def resolve_result_metric_float(result_entry: dict, metric_name: str) -> Optional[float]:
@@ -20685,6 +20744,7 @@ def process_feature_process_task(task: dict, process_payload: dict, model_maps: 
         task_finished = True  # Prevent failure accounting after an intentional skip
         status_queue.put({"status": "progress", "feature_set": process_payload["feature_set"], "global_id": task["global_id"], "event": "skipped", "pid": os.getpid(), **build_feature_process_task_status_fields(task)})  # Publish terminal skip without result metadata
         return  # No cache, metrics, fit, prediction, or artifact persistence for skipped work
+    global ACTIVE_METRIC_COMPARISON_BASELINES  # One persistent feature worker handles one task at a time.
     try:  # Keep exact reservation through final cache validation, computation, and durable persistence
         combination_lock = acquire_feature_process_combination_lock(task, process_payload)  # Block only duplicate computation of this exact cache identity
         model_prototype = model_maps[task["hyperparameters_enabled"]][task["classifier_name"]]  # Resolve the process-local estimator prototype
@@ -20706,6 +20766,7 @@ def process_feature_process_task(task: dict, process_payload: dict, model_maps: 
             log_feature_process_combination(task, status_state, "Cache recovery completed; fit and data loading skipped")  # Report truthful recovery and skip behavior
             publish_feature_process_result_event(task, process_payload, cached_result, "cached", status_queue)  # Preserve established cache notification semantics before leaving this combination
             return  # Release the reservation and move directly to the next feature-local task
+        ACTIVE_METRIC_COMPARISON_BASELINES = find_metric_comparison_baselines(task, resource_state["cache_dict"])  # Snapshot comparison rows before fitting or inference.
         if task["augmentation_ratio"] is None:  # Load only original resources required for a pending fit
             publish_feature_process_training_start_event(task, process_payload, status_queue, status_state)  # Publish one non-cached original-data start event before data loading or fit begins.
             await_feature_process_notification_acknowledgement(task, process_payload)  # Let the coordinator send or isolate failure before expensive fitting starts.
@@ -20783,6 +20844,7 @@ def process_feature_process_task(task: dict, process_payload: dict, model_maps: 
             log_feature_process_combination(task, status_state, f"Combination failed: {error}")  # Persist exact failure status before worker termination
         raise  # Preserve original task exception and traceback
     finally:  # Release this exact combination for another coordinator after every outcome
+        ACTIVE_METRIC_COMPARISON_BASELINES = None  # Never leak comparison state into a later feature-local task.
         if combination_lock is not None:  # Close only a successfully acquired reservation descriptor
             combination_lock.close()  # Release exact-combination reservation after every outcome
 
