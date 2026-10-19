@@ -45,8 +45,11 @@ if __name__ in {"__main__", "__mp_main__"}:
         pass
 
 
-import fcntl  # Provide process-safe serialization for shared detached log writes
 import os  # For interacting with the filesystem
+if os.name == "nt":
+    import msvcrt  # Windows byte-range locks
+else:
+    import fcntl  # Unix advisory file locks
 import re  # For stripping ANSI escape sequences
 import sys  # For replacing stdout/stderr
 import threading  # For serializing partial print writes within one process
@@ -96,6 +99,12 @@ class Logger:
         if clean:  # Reset prior run contents before concurrent writers exist
             self.logfile.seek(0)  # Position the initial coordinator descriptor for truncation
             self.logfile.truncate()  # Clear prior run contents while retaining append-only writes
+        self._lockfile = None  # Keep a dedicated stable lock file on Windows
+        if os.name == "nt":
+            self._lockfile = open(f"{logfile_path}.lock", "a+b")
+            if os.fstat(self._lockfile.fileno()).st_size == 0:
+                self._lockfile.write(b"\0")
+                self._lockfile.flush()
         self.is_tty = sys.stdout.isatty()  # Verify if stdout is a TTY
         self.timestamp_zone = ZoneInfo(str(timestamp_timezone)) if timestamp_timezone is not None else None  # Resolve the explicit timezone once per logger instance
         self.timestamp_now = timestamp_now if timestamp_now is not None else datetime.now  # Use an injectable timezone-aware emission clock
@@ -137,13 +146,19 @@ class Logger:
 
         lock_acquired = False  # Track whether this call owns the interprocess file lock
         try:  # Serialize log output and blank-line verification across all processes
-            fcntl.flock(self.logfile.fileno(), fcntl.LOCK_EX)  # Acquire the shared exclusive file lock
+            if os.name == "nt":
+                self._lockfile.seek(0)
+                msvcrt.locking(self._lockfile.fileno(), msvcrt.LK_LOCK, 1)
+            else:
+                fcntl.flock(self.logfile.fileno(), fcntl.LOCK_EX)
             lock_acquired = True  # Record successful lock acquisition
             self.logfile.flush()  # Ensure previously written records are visible to file-size queries
 
             if not ANSI_ESCAPE_REGEX.sub("", line).strip():  # Detect a visually empty line, including ANSI-only output
                 file_size = os.fstat(self.logfile.fileno()).st_size  # Determine the shared log's current size
-                trailing = os.pread(self.logfile.fileno(), min(file_size, 2), max(0, file_size - 2))  # Read the last two bytes without changing the append offset
+                with open(self.logfile_path, "rb") as reader:
+                    reader.seek(max(0, file_size - 2))
+                    trailing = reader.read(2)
                 if file_size == 0 or trailing.endswith(b"\n\n"):  # Reject leading or repeated physical blank lines
                     return  # Preserve no more than one empty line between records
                 line = "\n"  # Normalize an accepted whitespace-only record to exactly one blank line
@@ -163,7 +178,11 @@ class Logger:
         finally:  # Release the interprocess lock on every exit path
             if lock_acquired:  # Unlock only when the advisory lock was acquired
                 try:  # Protect application execution from unlock errors
-                    fcntl.flock(self.logfile.fileno(), fcntl.LOCK_UN)  # Release the shared log file
+                    if os.name == "nt":
+                        self._lockfile.seek(0)
+                        msvcrt.locking(self._lockfile.fileno(), msvcrt.LK_UNLCK, 1)
+                    else:
+                        fcntl.flock(self.logfile.fileno(), fcntl.LOCK_UN)
                 except Exception:  # Preserve the best-effort logger interface
                     pass  # Ignore lock-release failures
 
@@ -214,5 +233,7 @@ class Logger:
         try:  # Close the log file
             self.flush()  # Emit any remaining partial physical line before closing
             self.logfile.close()  # Close log file
+            if self._lockfile is not None:
+                self._lockfile.close()
         except Exception:  # Preserve the original best-effort behavior
             pass  # Fail silently
