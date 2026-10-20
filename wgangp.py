@@ -33,7 +33,6 @@ TODOs:
     - Implement learning rate scheduling for better convergence
     - Add support for different activation functions
     - Extend feature importance analysis for generated data
-    - Add data quality metrics (statistical distance, mode coverage)
     - Implement multi-GPU training support
 
 Dependencies:
@@ -776,6 +775,74 @@ def build_default_runtime_config() -> Dict:
     }  # End runtime configuration dictionary
 
 
+def assess_generated_flow_quality(args: Any, config: Dict, generated: pd.DataFrame) -> None:
+    """
+    Measure class-specific fidelity and mode-collapse indicators for generated network flows.
+
+    :param args: Runtime arguments with source and output paths.
+    :param config: Active configuration containing quality settings.
+    :param generated: Synthetic rows to evaluate before persistence.
+    :return: None.
+    """
+
+    settings = config.get("quality", {})  # Read opt-in diagnostic bounds.
+    if not settings.get("enabled", True):  # Respect explicit diagnostic disablement.
+        return  # Preserve the existing generation behavior when disabled.
+
+    label = args.label_col  # Resolve the exact output label column.
+    numeric_columns = [col for col in generated.select_dtypes(include=[np.number]).columns if col != label]  # Restrict comparisons to shared numeric features.
+    sample_limit = max(16, int(settings.get("sample_rows_per_class", 512)))  # Bound diagnostic sample memory per class.
+    random_seed = int(getattr(args, "seed", 42))  # Reuse the experiment's deterministic seed.
+    rng = np.random.default_rng(random_seed)  # Keep diagnostic sampling reproducible.
+    reports = []  # Accumulate measurements for each generated class.
+    source_samples = {}  # Store bounded class-conditional original training data samples.
+
+    if getattr(args, "csv_path", None):  # Read original rows only when a matching CSV source exists.
+        required_columns = numeric_columns + [label]  # Read only the generated schema and target column.
+        for chunk in pd.read_csv(args.csv_path, usecols=lambda col: col.strip() in required_columns, chunksize=8192, low_memory=False):  # Stream original rows without materializing the full source CSV.
+            chunk.columns = chunk.columns.str.strip()  # Align source column naming with generator preprocessing.
+            if label not in chunk.columns:  # Require an authoritative source label.
+                raise ValueError(f"Quality source is missing label column: {label}")  # Stop invalid class diagnostics.
+            for class_label, group in chunk.groupby(label, sort=False):  # Compare class distributions independently.
+                current = source_samples.setdefault(str(class_label), [])  # Create the per-class bounded collection.
+                if len(current) >= sample_limit:  # Keep the source sample bounded.
+                    continue  # Skip unnecessary rows for a filled class.
+                available = sample_limit - len(current)  # Calculate remaining per-class capacity.
+                current.extend(group[numeric_columns].head(available).to_numpy(dtype=np.float32, copy=True))  # Retain finite-sized original feature vectors.
+            if source_samples and all(len(values) >= sample_limit for values in source_samples.values()) and len(source_samples) >= generated[label].nunique():  # Finish after capturing requested classes.
+                break  # Avoid rereading the rest of very large files.
+
+    for class_label, group in generated.groupby(label, sort=False):  # Process each generated attack class separately.
+        sample = group.sample(n=min(sample_limit, len(group)), random_state=random_seed)  # Bound synthetic metrics deterministically.
+        sample_values = sample[numeric_columns].to_numpy(dtype=np.float64, copy=True)  # Extract finite-width synthetic feature matrix.
+        finite = np.isfinite(sample_values).all(axis=1)  # Exclude nonfinite rows from diagnostics.
+        reference = np.asarray(source_samples.get(str(class_label), []), dtype=np.float64)  # Load class-matched original reference rows.
+        record = {"class": str(class_label), "generated_rows": int(len(group)), "generated_sample_rows": int(len(sample))}  # Initialize class diagnostics.
+        if len(reference) and sample_values.size and reference.shape[1] == sample_values.shape[1]:  # Require comparable nonempty feature matrices.
+            valid_ref = reference[np.isfinite(reference).all(axis=1)]  # Exclude invalid reference samples.
+            valid_gen = sample_values[finite]  # Exclude invalid generated rows from fidelity diagnostics.
+            if len(valid_ref) and len(valid_gen):  # Compare compatible finite classes only.
+                center = np.mean(valid_ref, axis=0)  # Compute original class center.
+                scale = np.maximum(np.std(valid_ref, axis=0), 1e-6)  # Prevent division by zero for constant features.
+                normalized_real = (valid_ref - center) / scale  # Standardize reference distances using original class only.
+                normalized_gen = (valid_gen - center) / scale  # Standardize generated distances on the same basis.
+                mean_shift = float(np.mean(np.abs(np.mean(normalized_gen, axis=0) - np.mean(normalized_real, axis=0))))  # Quantify average standardized feature-mean mismatch.
+                variance_ratio = float(np.mean(np.std(normalized_gen, axis=0) < 0.1 * np.maximum(np.std(normalized_real, axis=0), 1e-6)))  # Estimate feature-wise collapse relative to original variance.
+                near_dup = int(pd.DataFrame(np.round(normalized_gen, 4)).duplicated().sum())  # Count near-identical synthetic records at fixed precision.
+                from sklearn.neighbors import NearestNeighbors  # Use the existing scikit-learn dependency for nearest original rows.
+                neighbors = NearestNeighbors(n_neighbors=1, algorithm="auto").fit(normalized_real)  # Fit nearest-neighbor lookup on bounded original samples.
+                nearest = neighbors.kneighbors(normalized_gen, return_distance=True)[0].reshape(-1)  # Measure proximity to reference flow vectors.
+                record.update({"mean_shift_standardized": mean_shift, "low_variance_feature_fraction": variance_ratio, "synthetic_near_duplicate_fraction": near_dup / len(valid_gen), "reference_nearest_distance_median": float(np.median(nearest)), "reference_near_match_fraction": float(np.mean(nearest < 0.05))})  # Save sampled class-fidelity, collapse and memorization indicators.
+        reports.append(record)  # Append this class's measurements.
+
+    report_path = Path(args.out_file).with_suffix(".quality.json")  # Write a report beside the generated CSV.
+    report_path.parent.mkdir(parents=True, exist_ok=True)  # Ensure the report directory exists.
+    report = {"sampling_note": "Diagnostics use bounded class samples and are screening indicators, not proof of quality or privacy", "sample_rows_per_class": sample_limit, "classes": reports}  # Document limitations alongside the statistics.
+    with report_path.open("w", encoding="utf-8") as handle:  # Persist diagnostics before enforcing failures.
+        json.dump(report, handle, indent=2, allow_nan=False)  # Reject nonfinite JSON metrics rather than silently serializing them.
+    print(f"[QUALITY] Saved per-class synthetic diagnostics: {report_path}")  # Surface actionable report location.
+
+
 def build_default_training_and_model_config() -> Dict:
     """
     Build the default training and model architecture configuration sections.
@@ -827,6 +894,7 @@ def build_default_training_and_model_config() -> Dict:
             "small_class_threshold": 100,  # Threshold for small class detection
             "small_class_min_samples": 10,  # Minimum samples for small classes
         },
+        "quality": {"enabled": True, "sample_rows_per_class": 512},  # Configure bounded quality diagnostics.
         "dataloader": {  # DataLoader configuration
             "num_workers": 8,  # Number of workers for data loading
             "pin_memory": True,  # Use pinned memory for faster GPU transfer
@@ -4894,6 +4962,7 @@ def postprocess_generated_arrays_to_dataframe(args, config: Dict, all_fake: List
     X_orig = scaler.inverse_transform(X_fake)  # Inverse transform features to original scale
     df_generated = pd.DataFrame(X_orig, columns=pd.Index(feature_cols))  # Create DataFrame with original feature names
     df_generated[args.label_col] = label_encoder.inverse_transform(Y_fake)  # Map integer labels back to original strings
+    assess_generated_flow_quality(args, config, df_generated)  # Measure fidelity, diversity, memorization and domain-constraint violations before output persistence.
     output_df, original_count = build_augmented_output_dataframe(args, df_generated)  # Build output
 
     if config.get("hardware_tracking", False):  # If enabled in config
