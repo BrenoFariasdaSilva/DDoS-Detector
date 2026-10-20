@@ -777,7 +777,7 @@ def build_default_runtime_config() -> Dict:
 
 def assess_generated_flow_quality(args: Any, config: Dict, generated: pd.DataFrame) -> None:
     """
-    Measure class-specific fidelity and mode-collapse indicators for generated network flows.
+    Measure class-specific fidelity and reject known-invalid generated network flows.
 
     :param args: Runtime arguments with source and output paths.
     :param config: Active configuration containing quality settings.
@@ -785,7 +785,7 @@ def assess_generated_flow_quality(args: Any, config: Dict, generated: pd.DataFra
     :return: None.
     """
 
-    settings = config.get("quality", {})  # Read opt-in diagnostic bounds.
+    settings = config.get("quality", {})  # Read opt-in diagnostic bounds and constraint policy.
     if not settings.get("enabled", True):  # Respect explicit diagnostic disablement.
         return  # Preserve the existing generation behavior when disabled.
 
@@ -795,6 +795,7 @@ def assess_generated_flow_quality(args: Any, config: Dict, generated: pd.DataFra
     random_seed = int(getattr(args, "seed", 42))  # Reuse the experiment's deterministic seed.
     rng = np.random.default_rng(random_seed)  # Keep diagnostic sampling reproducible.
     reports = []  # Accumulate measurements for each generated class.
+    invalid_total = 0  # Accumulate invalid generated flow rows.
     source_samples = {}  # Store bounded class-conditional original training data samples.
 
     if getattr(args, "csv_path", None):  # Read original rows only when a matching CSV source exists.
@@ -815,9 +816,32 @@ def assess_generated_flow_quality(args: Any, config: Dict, generated: pd.DataFra
     for class_label, group in generated.groupby(label, sort=False):  # Process each generated attack class separately.
         sample = group.sample(n=min(sample_limit, len(group)), random_state=random_seed)  # Bound synthetic metrics deterministically.
         sample_values = sample[numeric_columns].to_numpy(dtype=np.float64, copy=True)  # Extract finite-width synthetic feature matrix.
-        finite = np.isfinite(sample_values).all(axis=1)  # Exclude nonfinite rows from diagnostics.
+        finite = np.isfinite(sample_values).all(axis=1)  # Count invalid numeric values without silent replacement.
+        constraints = ~finite  # Begin the invalid-row mask using nonfinite values.
+        violations = {}  # Record named domain-constraint failures.
+        for column in numeric_columns:  # Apply only constraints supported by CIC flow feature semantics.
+            values = pd.to_numeric(group[column], errors="coerce").to_numpy(dtype=np.float64, copy=False)  # Inspect generated values in bounded column views.
+            name = str(column).lower().strip()  # Normalize standard CIC flow feature names.
+            bounded_port = name in {"source port", "destination port"}  # Detect 16-bit transport port features.
+            bounded_protocol = name == "protocol"  # Detect the numeric IP protocol identifier.
+            binary_field = name in {"inbound", "fwd psh flags", "bwd psh flags", "fwd urg flags", "bwd urg flags"}  # Identify explicitly binary CIC flow features.
+            discrete_count = ("flag count" in name or name in {"total fwd packets", "total backward packets", "subflow fwd packets", "subflow bwd packets", "act_data_pkt_fwd", "min_seg_size_forward"})  # Require integral packet and flag counts.
+            is_count = ("count" in name or "packets" in name or "bytes" in name or "length" in name or "duration" in name or "iat" in name or "flag" in name or "size" in name or "/s" in name) and not name.startswith("init_win_bytes")  # Recognize intrinsically nonnegative flow quantities.
+            invalid = ~np.isfinite(values) | ((values < 0) if is_count or bounded_port or bounded_protocol or binary_field else False)  # Reject nonfinite and negative physical quantities.
+            if bounded_port:  # Require valid transport-port range and discrete values.
+                invalid |= (values > 65535) | (values != np.rint(values))  # Disallow impossible port numbers.
+            if bounded_protocol:  # Require the unsigned eight-bit IP protocol code.
+                invalid |= (values > 255) | (values != np.rint(values))  # Reject out-of-range or nonintegral protocol codes.
+            if binary_field:  # Require supported binary flag and inbound indicators.
+                invalid |= (values != 0) & (values != 1)  # Reject fractional or unsupported binary values.
+            if discrete_count:  # Preserve integral semantics for packet counts and flag counters.
+                invalid |= values != np.rint(values)  # Reject fractional discrete counts.
+            count = int(np.count_nonzero(invalid))  # Count invalid rows for this feature.
+            if count:  # Retain only actual violations in the report.
+                violations[str(column)] = count  # Store the class-specific constraint count.
+        invalid_total += sum(violations.values())  # Accumulate conservative invalid-value violations.
         reference = np.asarray(source_samples.get(str(class_label), []), dtype=np.float64)  # Load class-matched original reference rows.
-        record = {"class": str(class_label), "generated_rows": int(len(group)), "generated_sample_rows": int(len(sample))}  # Initialize class diagnostics.
+        record = {"class": str(class_label), "generated_rows": int(len(group)), "generated_sample_rows": int(len(sample)), "violations": violations}  # Initialize class diagnostics.
         if len(reference) and sample_values.size and reference.shape[1] == sample_values.shape[1]:  # Require comparable nonempty feature matrices.
             valid_ref = reference[np.isfinite(reference).all(axis=1)]  # Exclude invalid reference samples.
             valid_gen = sample_values[finite]  # Exclude invalid generated rows from fidelity diagnostics.
@@ -837,10 +861,13 @@ def assess_generated_flow_quality(args: Any, config: Dict, generated: pd.DataFra
 
     report_path = Path(args.out_file).with_suffix(".quality.json")  # Write a report beside the generated CSV.
     report_path.parent.mkdir(parents=True, exist_ok=True)  # Ensure the report directory exists.
-    report = {"sampling_note": "Diagnostics use bounded class samples and are screening indicators, not proof of quality or privacy", "sample_rows_per_class": sample_limit, "classes": reports}  # Document limitations alongside the statistics.
+    report = {"sampling_note": "Diagnostics use bounded class samples and are screening indicators, not proof of quality or privacy", "sample_rows_per_class": sample_limit, "classes": reports, "invalid_feature_values": invalid_total}  # Document limitations alongside the statistics.
     with report_path.open("w", encoding="utf-8") as handle:  # Persist diagnostics before enforcing failures.
         json.dump(report, handle, indent=2, allow_nan=False)  # Reject nonfinite JSON metrics rather than silently serializing them.
-    print(f"[QUALITY] Saved per-class synthetic diagnostics: {report_path}")  # Surface actionable report location.
+    print(f"[QUALITY] Saved per-class synthetic diagnostics: {report_path} | Invalid feature values: {invalid_total}")  # Surface actionable report location.
+
+    if invalid_total and settings.get("reject_invalid", True):  # Enforce physical flow validity when requested.
+        raise ValueError(f"Rejected synthetic output containing {invalid_total} invalid flow feature values; review {report_path}")  # Do not silently clip or save invalid flow rows.
 
 
 def build_default_training_and_model_config() -> Dict:
@@ -894,7 +921,7 @@ def build_default_training_and_model_config() -> Dict:
             "small_class_threshold": 100,  # Threshold for small class detection
             "small_class_min_samples": 10,  # Minimum samples for small classes
         },
-        "quality": {"enabled": True, "sample_rows_per_class": 512},  # Configure bounded quality diagnostics.
+        "quality": {"enabled": True, "sample_rows_per_class": 512, "reject_invalid": True},  # Configure bounded quality diagnostics and fail-closed constraint enforcement.
         "dataloader": {  # DataLoader configuration
             "num_workers": 8,  # Number of workers for data loading
             "pin_memory": True,  # Use pinned memory for faster GPU transfer
