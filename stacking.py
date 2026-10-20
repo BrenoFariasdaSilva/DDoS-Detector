@@ -4511,6 +4511,40 @@ def sample_augmented_by_ratio(augmented_df, original_df, ratio, config=None):
         raise
 
 
+def select_synthetic_training_samples(augmented_df: pd.DataFrame, original_train_labels: np.ndarray, label_encoder: LabelEncoder, ratio: float, config: Optional[dict] = None) -> pd.DataFrame:
+    """Select deterministic synthetic training rows independently for every original training class.
+
+    :param augmented_df: Cleaned synthetic samples with the positional target column.
+    :param original_train_labels: Encoded labels from the fixed original training partition.
+    :param label_encoder: Encoder fitted only on original training labels.
+    :param ratio: Requested synthetic-to-original-training ratio per class.
+    :param config: Runtime configuration dictionary.
+    :return: Selected synthetic rows in deterministic class and sample order.
+    """
+
+    if config is None:  # Use the established global configuration fallback.
+        config = CONFIG  # Preserve configured deterministic seeds.
+    if augmented_df is None or augmented_df.empty:  # Reject absent synthetic training data explicitly.
+        raise ValueError("Synthetic training data is empty")  # Prevent silent zero-ratio training.
+    if ratio not in (0.25, 0.50, 0.75, 1.00):  # Restrict experiments to configured scientific ratios.
+        raise ValueError(f"Unsupported training augmentation ratio: {ratio}")  # Preserve unambiguous ratio identities.
+    target_column = augmented_df.columns[-1]  # Preserve the repository positional target convention.
+    seed = int(config.get("evaluation", {}).get("random_state", 42))  # Resolve the active reproducible experiment seed.
+    selected_frames = []  # Retain only required per-class synthetic rows.
+    encoded_labels = np.asarray(original_train_labels, dtype=np.int64)  # Normalize original training labels without modifying them.
+    for class_index in np.unique(encoded_labels):  # Select every original training class independently.
+        class_label = label_encoder.inverse_transform(np.asarray([class_index], dtype=np.int64))[0]  # Recover the synthetic-file label value.
+        original_count = int(np.count_nonzero(encoded_labels == class_index))  # Measure only fixed original training rows.
+        requested_count = int(round(original_count * float(ratio)))  # Calculate the required per-class synthetic count.
+        candidates = augmented_df.loc[augmented_df[target_column] == class_label]  # Restrict candidates to the matching original class.
+        if len(candidates) < requested_count:  # Refuse insufficient provenance rather than replacing or fabricating samples.
+            raise ValueError(f"Insufficient synthetic rows for class {class_label!r}: requested {requested_count}, available {len(candidates)}")  # Surface the exact scientific shortfall.
+        class_seed = seed + int(class_index) + int(round(float(ratio) * 1000))  # Derive stable independent class sampling.
+        selected_frames.append(candidates.sample(n=requested_count, replace=False, random_state=class_seed))  # Select without replacement for this class.
+    selected = pd.concat(selected_frames, axis=0, ignore_index=True)  # Assemble only selected synthetic training rows.
+    return selected  # Return class-balanced deterministic training augmentation.
+
+
 def sample_combined_files_by_ratio(files_list, original_sample_count, ratio, config=None, return_provenance=False):
     """
     Sample combined-file augmentation sources without retaining every source DataFrame together.
@@ -10261,7 +10295,7 @@ def resolve_persisted_data_augmentation_enabled(experiment_mode: Any, augmentati
     if normalized_mode == "original_only":  # Detect baseline rows explicitly.
         return False  # Baseline rows do not use generated data.
 
-    if normalized_mode in ("original_plus_augmented", "original_training_augmented_testing"):  # Detect legacy training augmentation and current augmented testing rows.
+    if normalized_mode in ("original_plus_augmented", "original_training_augmented_testing", "original_training_augmented_training"):  # Detect legacy and current augmentation rows.
         return True  # Augmented rows use generated data.
 
     resolved_ratio = resolve_persisted_augmentation_ratio(experiment_mode, augmentation_ratio)  # Resolve ratio for legacy rows without explicit mode.
@@ -16512,7 +16546,7 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
                 model_X_test = np.asarray(model_X_test, dtype=np.float32, order="C")  # Materialize sklearn's required float32 test layout once.
             if is_lstm_classifier_name(model_name):  # Convert only LSTM inputs after split, scaling, and feature selection.
                 model_X_train, model_y_train, model_X_test, model_y_test, sequence_metadata = prepare_lstm_sequence_evaluation_inputs(active_model, X_train_values, y_train, X_test_values, y_test, train_row_metadata, test_row_metadata)  # Build verified partition-local sequence tensors.
-            artifact_feature_set = f"{name} - {'Optimized Hyperparameters' if hyperparameters_enabled else 'Default Hyperparameters'}"  # Resolve HP-isolated artifact feature-set label
+            artifact_feature_set = f"{name} - {'Optimized Hyperparameters' if hyperparameters_enabled else 'Default Hyperparameters'}" + (f" - TrainAugmented@{int(augmentation_ratio * 100)}%" if experiment_mode == "original_training_augmented_training" and augmentation_ratio is not None else "")  # Isolate augmented-training model artifacts by exact ratio.
             dataset_name = build_filename_safe_dataset_identity(resolve_canonical_dataset_identity(str(file), True)) if execution_mode_str == "combined_files" else os.path.basename(os.path.dirname(file))  # Resolve model export dataset folder by execution mode.
             artifact_context = build_stacking_model_artifact_context(file, source_files, execution_mode_str, attack_types_combined, target_column, model_name, active_model, artifact_feature_set, input_feature_names, subset_feature_names, list(label_encoder.classes_), transformer, hyperparameters_enabled, get_current_experiment_run(config), config.get("evaluation", {}).get("random_state", 42))  # Build run-specific original-training artifact identity.
             combination_header = build_telegram_combination_header(name, model_name, augmentation_ratio, hyperparameters_enabled, experiment_run=get_current_experiment_run(config))  # Build full progress label for this classifier
@@ -16789,7 +16823,7 @@ def run_stacking_evaluation_for_feature_set(name, stacking_model, X_train_df, y_
         write_memory_phase_event("after_cache_persist", config=config, **phase_metadata, event_outcome="persisted")  # Publish stacking cache persistence completion
 
         dataset_name = build_filename_safe_dataset_identity(resolve_canonical_dataset_identity(str(file), True)) if execution_mode_str == "combined_files" else os.path.basename(os.path.dirname(file))  # Resolve stacking export dataset folder by execution mode.
-        artifact_feature_set = f"{name} - {'Optimized Hyperparameters' if hyperparameters_enabled else 'Default Hyperparameters'}"  # Keep stacking artifacts isolated by HP mode
+        artifact_feature_set = f"{name} - {'Optimized Hyperparameters' if hyperparameters_enabled else 'Default Hyperparameters'}" + (f" - TrainAugmented@{int(augmentation_ratio * 100)}%" if experiment_mode == "original_training_augmented_training" and augmentation_ratio is not None else "")  # Isolate augmented-training stacking artifacts by exact ratio.
         artifact_context = build_stacking_model_artifact_context(file, source_files, execution_mode_str, attack_types_combined, target_column, "StackingClassifier", active_stacking_model, artifact_feature_set, input_feature_names, subset_feature_names, list(label_encoder.classes_), transformer, hyperparameters_enabled, get_current_experiment_run(config), config.get("evaluation", {}).get("random_state", 42))  # Build run-specific original-training artifact identity.
         log_training_phase(name, "StackingClassifier", "Model export", "Started", hyperparameters_enabled, augmentation_ratio)  # Mark contextual fitted stacking export separately from cache persistence.
         exported_model_path = export_model_and_scaler(active_stacking_model, scaler, dataset_name, "StackingClassifier", feature_set=artifact_feature_set, dataset_csv_path=file, config=config, artifact_context=artifact_context, label_encoder=label_encoder, transformer=transformer)  # Atomically persist fitted stacking and preprocessing.
@@ -17140,7 +17174,8 @@ def evaluate_on_dataset(
     augmentation_ratio=None,
     execution_mode_str="separate_files",
     attack_types_combined=None,
-    df_augmented_for_testing=None,
+    df_augmented_for_training=None,
+    df_augmented_for_testing=None,  # Preserve legacy callers while migrating their methodology.
     config=None,
     cache_ref_file=None,
     hyperparameters_enabled=None,
@@ -17152,7 +17187,7 @@ def evaluate_on_dataset(
     planned_classifier_names=None,  # Restrict sequential skip-filtered groups to exact eligible classifiers.
 ):
     """
-    Train on original data or evaluate persisted original-trained models on augmented data.
+    Train on fixed original data, optionally augmented only after the original split.
     :param file: Path to the dataset file
     :param df: DataFrame with the original dataset (used for test set)
     :param feature_names: List of feature column names
@@ -17161,14 +17196,14 @@ def evaluate_on_dataset(
     :param rfe_selected_features: RFE selected features
     :param extra_trees_selected_features: Extra Trees selected features
     :param base_models: Dictionary of base models to evaluate
-    :param data_source_label: Label for the original or augmented testing source
+    :param data_source_label: Label for the original or augmented training source
     :param hyperparams_map: Dictionary mapping model names to hyperparameter dicts
     :param experiment_id: Unique experiment identifier for traceability
-    :param experiment_mode: Experiment mode string ('original_only' or 'original_training_augmented_testing')
+    :param experiment_mode: Experiment mode string ('original_only' or 'original_training_augmented_training')
     :param augmentation_ratio: Augmentation ratio float (e.g., 0.50) or None for original-only
     :param execution_mode_str: Execution mode string ('separate_files' or 'combined_files')
     :param attack_types_combined: List of attack types for combined files evaluation or None for separate files evaluation
-    :param df_augmented_for_testing: Optional sampled augmented DataFrame used only for persisted-model testing
+    :param df_augmented_for_training: Optional synthetic DataFrame used only after original split creation
     :param config: Configuration dictionary (uses global CONFIG if None)
     :param cache_ref_file: Override file path to use when computing the cache file location (required when file is 'combined_files_combined')
     :param hyperparameters_enabled: Explicit hyperparameter mode flag for progress labels and result flow
@@ -17187,6 +17222,11 @@ def evaluate_on_dataset(
 
         if hyperparameters_enabled is None:  # If caller did not provide an explicit HP mode flag
             hyperparameters_enabled = bool(hyperparams_map)  # Preserve legacy inference for older callers
+        if experiment_mode == "original_training_augmented_testing":  # Migrate legacy orchestration onto train-time augmentation.
+            experiment_mode = "original_training_augmented_training"  # Prevent old augmented-testing cache identities from matching.
+            data_source_label = str(data_source_label).replace("Augmented@", "TrainingAugmented@")  # Correct persisted source wording.
+        if df_augmented_for_training is None and df_augmented_for_testing is not None:  # Accept existing caller data during migration.
+            df_augmented_for_training = df_augmented_for_testing  # Route legacy synthetic input to fixed-split training augmentation.
 
         planned_classifier_names = list(planned_classifier_names) if planned_classifier_names is not None else None  # Normalize optional group classifier filter.
         if config.get("stacking", {}).get("stacking_only", False):  # Enforce stacking-only semantics for direct and legacy evaluation callers.
@@ -17229,17 +17269,17 @@ def evaluate_on_dataset(
             pca_source_files = []  # Disable persistent PCA reuse when source provenance cannot be proven.
         pca_cache_context = {  # Record the exact split and data-variant semantics that determine PCA fitting input.
             "execution_mode": str(execution_mode_str),  # Store separate-file or combined-file execution semantics.
-            "data_source": "Original",  # PCA is always fitted for the original-data training identity.
-            "experiment_mode": "original_only",  # PCA never receives augmented samples.
-            "augmentation_ratio": None,  # Exclude evaluation-only augmentation ratios from fitted preprocessing identity.
+            "data_source": data_source_label,  # Preserve baseline or train-augmentation source identity.
+            "experiment_mode": experiment_mode,  # Isolate PCA artifacts by training methodology.
+            "augmentation_ratio": augmentation_ratio,  # Preserve exact train-augmentation ratio when active.
             "target_column": target_column_name,  # Store the positional target column identity.
             "original_sample_count": original_sample_count,  # Store the original population size before splitting.
-            "augmented_sample_count": 0,  # Record that fitted preprocessing receives no augmented samples.
+            "augmented_sample_count": 0 if experiment_mode == "original_only" else None,  # Preserve baseline PCA identity and fill train augmentation count later.
             "test_size": 0.2,  # Store the fixed split ratio used by prepare_evaluation_data_splits.
             "random_state": config.get("evaluation", {}).get("random_state", 42),  # Store the active split seed used by prepare_evaluation_data_splits.
             "experiment_run": get_current_experiment_run(config),  # Store the active run for fitted preprocessing isolation.
             "stratified": True,  # Store the stratified split semantics used by scale_and_split.
-            "augmentation_merged_into_training_after_split": False,  # Record original-only fitted preprocessing semantics.
+            "augmentation_merged_into_training_after_split": experiment_mode == "original_training_augmented_training",  # Record split-local train augmentation semantics.
             "attack_types": normalize_metadata_for_json(attack_types_combined),  # Store combined-mode label scope when available.
         }  # Complete the split and evaluation identity payload.
 
@@ -17291,15 +17331,15 @@ def evaluate_on_dataset(
             all_results = {}
             current_combination = grid_progress["current_combination"]
 
-        if experiment_mode == "original_training_augmented_testing":
-            if df_augmented_for_testing is None or augmentation_ratio is None:
+        if experiment_mode == "legacy_original_training_augmented_testing":
+            if df_augmented_for_training is None or augmentation_ratio is None:
                 raise ValueError("Augmented testing requires sampled augmented data and an augmentation ratio")
-            augmented_features = df_augmented_for_testing.iloc[:, :-1].select_dtypes(include=np.number)
+            augmented_features = df_augmented_for_training.iloc[:, :-1].select_dtypes(include=np.number)
             missing_augmented_features = [feature for feature in pca_input_feature_names if feature not in augmented_features.columns]
             if missing_augmented_features:
                 raise ValueError(f"Augmented testing data is missing original feature columns: {missing_augmented_features}")
             X_augmented_original_schema = augmented_features[pca_input_feature_names].to_numpy(copy=False)
-            y_augmented_raw = df_augmented_for_testing.iloc[:, -1].to_numpy(copy=False)
+            y_augmented_raw = df_augmented_for_training.iloc[:, -1].to_numpy(copy=False)
             expected_label_classes = np.unique(df.iloc[:, -1].to_numpy(copy=False)).tolist()
             original_train_count = int(original_sample_count - math.ceil(original_sample_count * 0.2))
             feature_lookup = {sanitize_feature_name(feature): str(feature) for feature in pca_input_feature_names}
@@ -17369,7 +17409,7 @@ def evaluate_on_dataset(
                 progress_bar.close()
             else:
                 grid_progress["current_combination"] = current_combination
-            del X_augmented_original_schema, y_augmented_raw, augmented_features, df_augmented_for_testing
+            del X_augmented_original_schema, y_augmented_raw, augmented_features, df_augmented_for_training
             gc.collect()
             return all_results
 
@@ -17381,6 +17421,23 @@ def evaluate_on_dataset(
             return {}  # Return empty dictionary
 
         X_train_scaled, X_test_scaled, y_train, y_test, scaler, label_encoder, train_row_metadata, test_row_metadata = data_splits  # Unpack original-only splits, preprocessing, and row provenance.
+        if experiment_mode == "original_training_augmented_training":  # Add synthetic rows only after original split and preprocessing fit.
+            if df_augmented_for_training is None or augmentation_ratio is None:  # Require explicit synthetic source and ratio.
+                raise ValueError("Training augmentation requires synthetic data and an augmentation ratio")  # Reject incomplete train-time augmentation setup.
+            selected_synthetic = select_synthetic_training_samples(df_augmented_for_training, y_train, label_encoder, augmentation_ratio, config=config)  # Select exact per-class synthetic rows from fixed training counts.
+            synthetic_features = selected_synthetic.iloc[:, :-1].select_dtypes(include=np.number)  # Preserve numeric feature preprocessing convention.
+            missing_synthetic_features = [feature for feature in pca_input_feature_names if feature not in synthetic_features.columns]  # Validate original feature schema before transformation.
+            if missing_synthetic_features:  # Reject incompatible synthetic samples before fitting any classifier.
+                raise ValueError(f"Synthetic training data is missing original feature columns: {missing_synthetic_features}")  # Preserve strict schema identity.
+            X_synthetic_scaled = np.asarray(scaler.transform(synthetic_features[pca_input_feature_names].to_numpy(copy=False)))  # Transform synthetic rows with scaler fitted only on original training data.
+            y_synthetic = np.asarray(label_encoder.transform(selected_synthetic.iloc[:, -1].to_numpy(copy=False)), dtype=np.int64)  # Encode synthetic labels with original-training encoder.
+            synthetic_metadata = pd.DataFrame({"source_file": ["synthetic_training"] * len(y_synthetic), "row_order": np.arange(len(y_synthetic), dtype=np.int64)})  # Preserve source boundary for LSTM windows.
+            X_train_scaled = np.concatenate((X_train_scaled, X_synthetic_scaled), axis=0)  # Combine original and selected synthetic training features only.
+            y_train = np.concatenate((y_train, y_synthetic), axis=0)  # Combine original and selected synthetic training labels only.
+            train_row_metadata = pd.concat((train_row_metadata, synthetic_metadata), ignore_index=True)  # Preserve row-aligned LSTM metadata after training augmentation.
+            pca_cache_context["augmented_sample_count"] = int(len(y_synthetic))  # Record actual selected synthetic training rows for PCA identity.
+            del selected_synthetic, synthetic_features, X_synthetic_scaled, y_synthetic, synthetic_metadata  # Release ratio-local synthetic allocations before feature evaluation.
+            gc.collect()  # Reclaim synthetic selection memory before classifier fitting.
         feature_source_arrays = {"X_train_scaled": X_train_scaled, "X_test_scaled": X_test_scaled, "spilled_to_memmap": False}  # Transfer full source matrices into a mutable lifecycle holder.
         del data_splits, X_train_scaled, X_test_scaled  # Remove duplicate local references so the holder can truly release or spill the full matrices.
         del df  # Release the original dataframe after split and scaling before classifier fitting.
@@ -17965,11 +18022,11 @@ def generate_ratio_comparison_report(results_original, all_ratio_results, config
                 comparison_results.append(
                     build_comparison_result_entry(
                         orig_result, feature_set, classifier_type, model_name,
-                        f"Augmented@{ratio_pct}%", ratio_metrics, improvements,
+                        f"TrainingAugmented@{ratio_pct}%", ratio_metrics, improvements,
                         n_features_override=ratio_result.get("n_features"),
                         n_samples_train_override=ratio_result.get("n_samples_train"),
                         n_samples_test_override=ratio_result.get("n_samples_test"),
-                        experiment_id=ratio_experiment_id, experiment_mode="original_training_augmented_testing",
+                        experiment_id=ratio_experiment_id, experiment_mode="original_training_augmented_training",
                         augmentation_ratio=ratio,
                     )
                 )  # Add ratio experiment entry with improvements to comparison results
@@ -18055,12 +18112,12 @@ def run_single_ratio_experiment(file, df_original_cleaned, df_augmented_cleaned,
             config = CONFIG  # Use global CONFIG
 
         ratio_pct = int(ratio * 100)  # Convert float ratio to integer percentage for display
-        experiment_id = generate_experiment_id(file, "original_training_augmented_testing", ratio)  # Generate unique experiment ID for this ratio
+        experiment_id = generate_experiment_id(file, "original_training_augmented_training", ratio)  # Generate unique experiment ID for this ratio
 
         print(
-            f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}[{ratio_idx}/{total_ratios}] Evaluating persisted original-trained models on Augmented@{ratio_pct}%{Style.RESET_ALL}"
+            f"\n{BackgroundColors.BOLD}{BackgroundColors.CYAN}[{ratio_idx}/{total_ratios}] Training new models with Augmented@{ratio_pct}% samples{Style.RESET_ALL}"
         )  # Print progress indicator for current ratio experiment
-        df_sampled = sample_augmented_by_ratio(df_augmented_cleaned, df_original_cleaned, ratio, config=config)  # Sample augmented rows at the current ratio
+        df_sampled = df_augmented_cleaned  # Defer deterministic per-class sampling until fixed original training counts exist.
 
         if df_sampled is None or df_sampled.empty:  # If sampling returned no valid data
             print(
@@ -18068,24 +18125,24 @@ def run_single_ratio_experiment(file, df_original_cleaned, df_augmented_cleaned,
             )  # Print warning about sampling failure
             return None  # Signal caller to skip this ratio
 
-        data_source_label = f"Augmented@{ratio_pct}%"  # Build descriptive augmented-testing label for CSV traceability
+        data_source_label = f"TrainingAugmented@{ratio_pct}%"  # Build descriptive augmented-training label for CSV traceability
 
         print(
-            f"{BackgroundColors.GREEN}Sampled augmented test dataset: {BackgroundColors.CYAN}{len(df_sampled)} samples at {ratio_pct}% ratio{Style.RESET_ALL}"
-        )  # Print sampled dataset size for transparency
+            f"{BackgroundColors.GREEN}Selecting synthetic training rows per original training class at {BackgroundColors.CYAN}{ratio_pct}%{Style.RESET_ALL}"
+        )  # Print train-time augmentation methodology.
 
         generate_augmentation_tsne_visualization(
-            file, df_original_cleaned, df_sampled, ratio, "original_training_augmented_testing", config=config
-        )  # Generate t-SNE visualization for this augmentation ratio
+            file, df_original_cleaned, df_sampled, ratio, "original_training_augmented_training", config=config
+        )  # Generate t-SNE visualization for this training augmentation ratio.
 
         results_ratio = evaluate_on_dataset(
             file, df_original_cleaned, feature_names, ga_selected_features, pca_n_components,
             rfe_selected_features, base_models, data_source_label=data_source_label,
             hyperparams_map=hp_params_map, experiment_id=experiment_id,
-            experiment_mode="original_training_augmented_testing", augmentation_ratio=ratio,
+            experiment_mode="original_training_augmented_training", augmentation_ratio=ratio,
             execution_mode_str="separate_files", attack_types_combined=None,
-            df_augmented_for_testing=df_sampled, config=config, extra_trees_selected_features=extra_trees_selected_features,
-        )  # Evaluate persisted original-trained classifiers on augmented samples only.
+            df_augmented_for_training=df_sampled, config=config, extra_trees_selected_features=extra_trees_selected_features,
+        )  # Train new classifiers on augmented training data and evaluate fixed original test data.
 
         del df_sampled  # Release sampled augmented data to free memory after evaluation
         gc.collect()  # Force garbage collection to reclaim memory from sampled data
