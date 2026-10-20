@@ -4545,6 +4545,34 @@ def select_synthetic_training_samples(augmented_df: pd.DataFrame, original_train
     return selected  # Return class-balanced deterministic training augmentation.
 
 
+def select_synthetic_training_indices(synthetic_labels: Any, original_train_labels: Any, ratio: float, config: Optional[dict] = None) -> np.ndarray:
+    """Select deterministic synthetic row positions independently for every original training class.
+
+    :param synthetic_labels: Encoded synthetic labels aligned with candidate rows.
+    :param original_train_labels: Encoded labels from the fixed original training partition.
+    :param ratio: Requested synthetic-to-original-training ratio per class.
+    :param config: Runtime configuration dictionary.
+    :return: Ordered synthetic row positions selected without replacement.
+    """
+
+    if config is None:  # Use the established global configuration fallback.
+        config = CONFIG  # Preserve configured deterministic seeds.
+    if ratio not in (0.25, 0.50, 0.75, 1.00):  # Restrict experiments to configured scientific ratios.
+        raise ValueError(f"Unsupported training augmentation ratio: {ratio}")  # Preserve unambiguous ratio identities.
+    original_labels = np.asarray(original_train_labels, dtype=np.int64).reshape(-1)  # Normalize fixed training labels without copying feature data.
+    candidate_labels = np.asarray(synthetic_labels, dtype=np.int64).reshape(-1)  # Normalize synthetic labels without copying feature data.
+    seed = int(config.get("evaluation", {}).get("random_state", 42))  # Resolve active reproducible experiment seed.
+    selected_positions = []  # Retain only bounded per-class index vectors.
+    for class_index in np.unique(original_labels):  # Select every original training class independently.
+        requested_count = int(round(int(np.count_nonzero(original_labels == class_index)) * float(ratio)))  # Derive required synthetic count from fixed training rows.
+        candidate_positions = np.flatnonzero(candidate_labels == class_index)  # Locate synthetic candidates for exact class.
+        if len(candidate_positions) < requested_count:  # Reject insufficient source data without replacement sampling.
+            raise ValueError(f"Insufficient synthetic rows for encoded class {int(class_index)}: requested {requested_count}, available {len(candidate_positions)}")  # Surface exact scientific shortfall.
+        generator = np.random.default_rng(seed + int(class_index) + int(round(float(ratio) * 1000)))  # Derive deterministic independent class generator.
+        selected_positions.append(np.sort(generator.choice(candidate_positions, size=requested_count, replace=False)))  # Select and order class rows without replacement.
+    return np.concatenate(selected_positions).astype(np.int64, copy=False)  # Return deterministic class-grouped source positions.
+
+
 def sample_combined_files_by_ratio(files_list, original_sample_count, ratio, config=None, return_provenance=False):
     """
     Sample combined-file augmentation sources without retaining every source DataFrame together.
@@ -13500,7 +13528,7 @@ def build_telegram_combination_header(name, model_name, augmentation_ratio=None,
     
     feature_label = "PCA" if name == "PCA Components" else name  # Normalize PCA wording for compact progress labels
     hyperparameter_label = "Optimized Hyperparameters" if hyperparameters_enabled else "Default Hyperparameters"  # Build explicit HP mode label
-    augmentation_label = f"Augmented Test Ratio = {augmentation_ratio:.2f}" if augmentation_ratio is not None else "Original Test Data"  # Build the isolated testing-mode label.
+    augmentation_label = f"Training Augmentation Ratio = {augmentation_ratio:.2f}" if augmentation_ratio is not None else "Original Training Data"  # Build the active training-mode label.
     parts = [feature_label, hyperparameter_label, augmentation_label]  # Build configuration label in the expected order
     if experiment_run is not None:  # Add run context only when the caller provides it.
         parts.insert(0, f"Run {parse_persisted_experiment_run_value(experiment_run, 'experiment_run')}")  # Prefix the visible run index.
@@ -16927,11 +16955,12 @@ def print_dataset_evaluation_header(data_source_label, evaluation_plan, executio
             if stable_global_id not in recovered_global_ids:  # Print only combinations recovered by cache classification in this block.
                 continue  # Move to the next planned combination.
             hyperparameter_label = "Optimized Hyperparameters" if hyperparameters_enabled else "Default Hyperparameters"  # Resolve the active hyperparameter label
-            augmentation_label = f"{augmentation_ratio * 100:g}%" if augmentation_ratio is not None else "None"  # Resolve the augmented-test ratio.
-            testing_data_label = "Augmented Data" if augmentation_ratio is not None else "Original Data"  # Resolve the isolated testing source.
+            augmentation_label = f"{augmentation_ratio * 100:g}%" if augmentation_ratio is not None else "None"  # Resolve train augmentation ratio.
+            training_data_label = "Original plus selected synthetic data" if augmentation_ratio is not None else "Original Data"  # Resolve active training source.
+            testing_data_label = "Original held-out Data"  # Preserve identical testing source across ratios.
             if stable_global_id == min(recovered_global_ids):  # Print the block heading immediately before the first recovered combination.
                 print(f"Recovered combinations from cache: {len(recovered_global_ids)}/{total_combinations}\n")  # Print recovered count before cached plan rows.
-            print(f"[Global ID {stable_global_id}/{canonical_total}] Feature Set: {feature_set} | Classifier: {classifier} | Hyperparameters: {hyperparameter_label} | Augmented Test Ratio: {augmentation_label} | Training Data: Original Data | Testing Data: {testing_data_label}")  # Print one complete ordered combination identity.
+            print(f"[Global ID {stable_global_id}/{canonical_total}] Feature Set: {feature_set} | Classifier: {classifier} | Hyperparameters: {hyperparameter_label} | Training Augmentation Ratio: {augmentation_label} | Training Data: {training_data_label} | Testing Data: {testing_data_label}")  # Print one complete ordered combination identity.
         if not recovered_global_ids:  # Keep the recovered block visible for empty or absent caches.
             print(f"Recovered combinations from cache: 0/{total_combinations}")  # Report no cache recoveries explicitly.
         print()  # Separate recovered and pending plan blocks.
@@ -16952,9 +16981,9 @@ def print_dataset_evaluation_header(data_source_label, evaluation_plan, executio
             *skip_lines,
             f"Eligible feature sets: {', '.join(feature_sets)}",
             f"Hyperparameters: {', '.join(hyperparameter_modes)}",
-            "Training data: Original Data",
-            "Testing data: Original Data and ratio-selected Augmented Data",
-            f"Augmented test ratios: {', '.join(augmentation_modes)}",
+            "Training data: Original data plus per-class synthetic rows for active ratios",
+            "Testing data: Fixed original held-out partition",
+            f"Training augmentation ratios: {', '.join(augmentation_modes)}",
             f"Eligible classifiers: {', '.join(classifiers)}",
             "Detailed ordered plan written to the application log.",
         ])  # Build one condensed Telegram summary from the ordered runtime plan
@@ -18350,25 +18379,25 @@ def run_combined_files_augmentation_ratio_experiment(reference_file, combined_fi
             )  # Print warning about sampling failure
             return None  # Signal caller to skip this ratio
 
-        data_source_label = f"Augmented@{ratio_pct}%_CombinedFiles"  # Build data source label for result traceability
-        experiment_id = generate_experiment_id(reference_file, "combined_files_original_training_augmented_testing", ratio)  # Generate unique experiment ID for this run
+        data_source_label = f"TrainingAugmented@{ratio_pct}%_CombinedFiles"  # Build data source label for result traceability.
+        experiment_id = generate_experiment_id(reference_file, "combined_files_original_training_augmented_training", ratio)  # Generate unique experiment ID for this run.
 
-        print(
-            f"{BackgroundColors.GREEN}Sampled augmented test dataset: {BackgroundColors.CYAN}{len(df_sampled)} samples at {ratio_pct}% ratio{Style.RESET_ALL}"
-        )  # Print sampled dataset size for transparency
+        print(  # Report the synthetic training candidate cardinality.
+            f"{BackgroundColors.GREEN}Sampled synthetic training dataset: {BackgroundColors.CYAN}{len(df_sampled)} samples at {ratio_pct}% ratio{Style.RESET_ALL}"
+        )  # Print sampled synthetic training candidate size for transparency.
 
         generate_augmentation_tsne_visualization(
-            reference_file, combined_files_df, df_sampled, ratio, "original_training_augmented_testing", config=config
+            reference_file, combined_files_df, df_sampled, ratio, "original_training_augmented_training", config=config
         )  # Generate t-SNE visualization comparing original and augmented distributions
 
         results_ratio = evaluate_on_dataset(
             reference_file, combined_files_df, feature_names, ga_selected_features, pca_n_components,
             rfe_selected_features, base_models, data_source_label=data_source_label,
             hyperparams_map=hp_params_map, experiment_id=experiment_id,
-            experiment_mode="original_training_augmented_testing", augmentation_ratio=ratio,
+            experiment_mode="original_training_augmented_training", augmentation_ratio=ratio,
             execution_mode_str="combined_files", attack_types_combined=attack_types_list,
-            df_augmented_for_testing=df_sampled, config=config, extra_trees_selected_features=extra_trees_selected_features,
-        )  # Evaluate persisted original-trained classifiers on augmented samples only.
+            df_augmented_for_training=df_sampled, config=config, extra_trees_selected_features=extra_trees_selected_features,
+        )  # Train fresh classifiers with synthetic rows and evaluate fixed original held-out rows.
 
         return results_ratio  # Return evaluation results for this ratio
     except Exception as e:
@@ -18762,7 +18791,7 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
         all_grid_results = []  # Accumulate every result row for a single consolidated export
         all_comparison_results = []  # Accumulate augmentation comparisons across both HP modes
         orchestration_cache = load_cache_results(combined_dataset_reference, config=config, notify_discovery=False)  # Recover cache identities before any sequential augmentation load.
-        fully_cached_ratios = {ratio for ratio in augmentation_ratios if all(build_resume_cache_key("combined_files", f"Augmented@{int(ratio * 100)}%_CombinedFiles", "original_training_augmented_testing", ratio, attack_types_list, feature_set, classifier, hyperparameters_enabled) in orchestration_cache for feature_set, hyperparameters_enabled, planned_ratio, classifier in evaluation_plan if planned_ratio == ratio)}  # Identify ratio groups requiring no augmented contents.
+        fully_cached_ratios = {ratio for ratio in augmentation_ratios if all(build_resume_cache_key("combined_files", f"TrainingAugmented@{int(ratio * 100)}%_CombinedFiles", "original_training_augmented_training", ratio, attack_types_list, feature_set, classifier, hyperparameters_enabled) in orchestration_cache for feature_set, hyperparameters_enabled, planned_ratio, classifier in evaluation_plan if planned_ratio == ratio)}  # Identify ratio groups requiring no synthetic source loading.
         if all(name in feature_metadata_by_name for name in feature_mode_names):  # Use cache-aware grouping only for feature modes with compact descriptors.
             tasks = build_feature_process_plan(evaluation_plan, feature_metadata_by_name, original_sample_count, combined_dataset_reference, "combined_files", get_current_experiment_run(config), skip_summary["global_ids"], skip_summary["canonical_total"])  # Reuse authoritative global IDs and expected original-data shapes for plan reporting
             cached_results, pending_by_feature = partition_evaluation_plan_by_cache(tasks, orchestration_cache, feature_mode_names, attack_types_list)  # Reuse existing cache matching before plan reporting
@@ -18788,7 +18817,7 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
                         current_combination = grid_progress["current_combination"]  # Read next canonical global progress index.
                         classifiers = [item[3] for item in evaluation_plan if item[0] == feature_mode_name and item[1] == hyperparameters_enabled and item[2] == augmentation_ratio]  # Preserve classifier order from canonical plan.
                         for classifier_name in classifiers:  # Recover every cached classifier in current canonical group.
-                            recovered, current_combination = recover_cached_individual_classifier_result(orchestration_cache, "combined_files", f"Augmented@{int(augmentation_ratio * 100)}%_CombinedFiles", "original_training_augmented_testing", augmentation_ratio, attack_types_list, feature_mode_name, classifier_name, cached_group_results, current_combination, total_steps, grid_progress["progress_bar"], hyperparameters_enabled=hyperparameters_enabled)  # Reuse production cache recovery, progress, and notification flow.
+                            recovered, current_combination = recover_cached_individual_classifier_result(orchestration_cache, "combined_files", f"TrainingAugmented@{int(augmentation_ratio * 100)}%_CombinedFiles", "original_training_augmented_training", augmentation_ratio, attack_types_list, feature_mode_name, classifier_name, cached_group_results, current_combination, total_steps, grid_progress["progress_bar"], hyperparameters_enabled=hyperparameters_enabled)  # Reuse production cache recovery, progress, and notification flow.
                             if not recovered:  # Reject cache drift after complete-ratio preflight.
                                 raise RuntimeError(f"Fully cached ratio {augmentation_ratio} lost combination {feature_mode_name} / {classifier_name}")  # Preserve cache and plan consistency.
                         grid_progress["current_combination"] = current_combination  # Advance shared progress after cached group recovery.
@@ -18816,7 +18845,7 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
                         del df_sampled  # Release current ratio sample.
                         gc.collect()  # Reclaim skipped ratio data.
                         continue  # Advance to next canonical slice.
-                    results_ratio = evaluate_on_dataset(combined_dataset_reference, ratio_original_df, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, group_models, data_source_label=f"Augmented@{int(augmentation_ratio * 100)}%_CombinedFiles", hyperparams_map=hp_params_map, experiment_id=generate_experiment_id(combined_dataset_reference, "combined_files_original_training_augmented_testing", augmentation_ratio), experiment_mode="original_training_augmented_testing", augmentation_ratio=augmentation_ratio, execution_mode_str="combined_files", attack_types_combined=attack_types_list, df_augmented_for_testing=df_sampled, config=config, hyperparameters_enabled=hyperparameters_enabled, grid_progress=grid_progress, source_files=original_files_list, feature_mode_name=feature_mode_name, extra_trees_selected_features=extra_trees_selected_features, planned_classifier_names=planned_classifier_names)  # Evaluate current canonical feature group while reusing ratio sample.
+                    results_ratio = evaluate_on_dataset(combined_dataset_reference, ratio_original_df, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, group_models, data_source_label=f"TrainingAugmented@{int(augmentation_ratio * 100)}%_CombinedFiles", hyperparams_map=hp_params_map, experiment_id=generate_experiment_id(combined_dataset_reference, "combined_files_original_training_augmented_training", augmentation_ratio), experiment_mode="original_training_augmented_training", augmentation_ratio=augmentation_ratio, execution_mode_str="combined_files", attack_types_combined=attack_types_list, df_augmented_for_training=df_sampled, config=config, hyperparameters_enabled=hyperparameters_enabled, grid_progress=grid_progress, source_files=original_files_list, feature_mode_name=feature_mode_name, extra_trees_selected_features=extra_trees_selected_features, planned_classifier_names=planned_classifier_names)  # Train current canonical feature group with synthetic rows and fixed original test data.
                     ratio_results_list = list(results_ratio.values())  # Convert current ratio results for annotation and export.
                     annotate_results_with_combination_flags(ratio_results_list, methods_cfg.get("feature_selection", True), hyperparameters_enabled, True)  # Mark active grid dimensions.
                     all_grid_results.extend(ratio_results_list)  # Preserve canonical augmented result order.
@@ -19151,20 +19180,20 @@ def build_feature_process_plan(evaluation_plan: List[Tuple[str, bool, Optional[f
     for global_index, (feature_set_name, hyperparameters_enabled, augmentation_ratio, classifier_name) in enumerate(evaluation_plan, start=1):  # Preserve every original global combination ID
         stable_global_index = int(stable_global_ids.get((feature_set_name, hyperparameters_enabled, augmentation_ratio, classifier_name), global_index))  # Preserve original ID when skip filtering supplied it.
         feature_positions[feature_set_name] += 1  # Advance this feature set's local ordering
-        experiment_mode = "original_only" if augmentation_ratio is None else "original_training_augmented_testing"  # Resolve unchanged training and testing semantics
+        experiment_mode = "original_only" if augmentation_ratio is None else "original_training_augmented_training"  # Resolve baseline or train-time augmentation semantics.
         if augmentation_ratio is None:  # Build the established original-data label and sample count
             data_source_label = "Original Combined Files" if execution_mode_str == "combined_files" else "Original"  # Preserve the existing baseline data-source identity
             expected_test_count = expected_original_test_count  # Use the deterministic original split test count
-        else:  # Build the established augmented-testing label and capped sample count
+        else:  # Build the train-augmentation label and fixed original test count.
             ratio_percent = int(float(augmentation_ratio) * 100)  # Convert the active ratio to its existing label percentage
-            data_source_label = f"Augmented@{ratio_percent}%_CombinedFiles" if execution_mode_str == "combined_files" else f"Augmented@{ratio_percent}%"  # Preserve the existing augmented data-source identity
-            expected_test_count = None  # Defer augmented cardinality until this uncached ratio is loaded by its worker
+            data_source_label = f"TrainingAugmented@{ratio_percent}%_CombinedFiles" if execution_mode_str == "combined_files" else f"TrainingAugmented@{ratio_percent}%"  # Preserve train-time augmentation identity.
+            expected_test_count = expected_original_test_count  # Keep exact held-out original test cardinality across ratios.
         experiment_key = (bool(hyperparameters_enabled), augmentation_ratio)  # Identify one existing HP and testing-mode slice
         if experiment_key not in experiment_ids:  # Generate the slice experiment ID once
-            identity_mode = "combined_files_original_only" if execution_mode_str == "combined_files" and augmentation_ratio is None else ("combined_files_original_training_augmented_testing" if execution_mode_str == "combined_files" else experiment_mode)  # Preserve the established experiment-ID mode text
+            identity_mode = "combined_files_original_only" if execution_mode_str == "combined_files" and augmentation_ratio is None else ("combined_files_original_training_augmented_training" if execution_mode_str == "combined_files" else experiment_mode)  # Preserve distinct baseline and train-augmentation experiment identities.
             experiment_ids[experiment_key] = generate_experiment_id(file, identity_mode, augmentation_ratio)  # Generate the existing traceability identity
         descriptor = feature_metadata[feature_set_name]  # Resolve small feature metadata for this combination
-        tasks.append({"feature_set": feature_set_name, "worker_key": resolve_feature_set_worker_key(feature_set_name), "global_id": stable_global_index, "canonical_total": stable_canonical_total, "total_combinations": len(evaluation_plan), "feature_local_position": feature_positions[feature_set_name], "feature_local_total": feature_totals[feature_set_name], "hyperparameters_enabled": bool(hyperparameters_enabled), "augmentation_ratio": augmentation_ratio, "classifier_name": classifier_name, "experiment_mode": experiment_mode, "data_source_label": data_source_label, "experiment_id": experiment_ids[experiment_key], "experiment_run": run_index, "execution_mode": execution_mode_str, "dataset": file, "expected_n_features": descriptor["feature_count"], "expected_feature_names": list(descriptor["feature_names"]), "expected_n_samples_train": expected_train_count, "expected_n_samples_test": expected_test_count, "requires_model_artifact": False})  # Store one matrix-free task descriptor
+        tasks.append({"feature_set": feature_set_name, "worker_key": resolve_feature_set_worker_key(feature_set_name), "global_id": stable_global_index, "canonical_total": stable_canonical_total, "total_combinations": len(evaluation_plan), "feature_local_position": feature_positions[feature_set_name], "feature_local_total": feature_totals[feature_set_name], "hyperparameters_enabled": bool(hyperparameters_enabled), "augmentation_ratio": augmentation_ratio, "classifier_name": classifier_name, "experiment_mode": experiment_mode, "data_source_label": data_source_label, "experiment_id": experiment_ids[experiment_key], "experiment_run": run_index, "execution_mode": execution_mode_str, "dataset": file, "expected_n_features": descriptor["feature_count"], "expected_feature_names": list(descriptor["feature_names"]), "expected_n_samples_train": expected_train_count if augmentation_ratio is None else None, "expected_n_samples_test": expected_test_count, "requires_model_artifact": False})  # Defer augmented train count until exact per-class selection occurs.
     return tasks  # Return the complete authoritative task sequence
 
 
@@ -19178,6 +19207,8 @@ def feature_process_cache_result(task: dict, cache_dict: Optional[dict], attack_
     :return: Compatible cached result dictionary, or None.
     """
 
+    if task.get("experiment_mode") == "original_training_augmented_training":  # Require a fresh fit until cache rows carry complete split and synthetic provenance.
+        return None  # Prevent incomplete historical cache metadata from authorizing augmented-training reuse.
     if not cache_dict:  # Return a cache miss when no recovered entries exist
         return None  # Signal that this task remains pending
     resume_key = build_resume_cache_key(task["execution_mode"], task["data_source_label"], task["experiment_mode"], task["augmentation_ratio"], attack_types_combined, task["feature_set"], task["classifier_name"], task["hyperparameters_enabled"])  # Build the unchanged complete cache identity
@@ -19609,7 +19640,12 @@ def build_feature_process_artifact_context(task: dict, process_payload: dict, mo
 
     transformer = PCA(n_components=int(task["expected_n_features"])) if task["feature_set"] == "PCA Components" else None  # Build the equivalent configured PCA identity when required
     artifact_feature_set = f"{task['feature_set']} - {'Optimized Hyperparameters' if task['hyperparameters_enabled'] else 'Default Hyperparameters'}"  # Preserve the existing model slot identity
-    return build_stacking_model_artifact_context(process_payload["file"], process_payload["source_files"], process_payload["execution_mode"], process_payload["attack_types_combined"], process_payload["target_column"], task["classifier_name"], model_prototype, artifact_feature_set, process_payload["input_feature_names"], task["expected_feature_names"], process_payload["label_classes"], transformer, task["hyperparameters_enabled"], task["experiment_run"], process_payload["config"].get("evaluation", {}).get("random_state", 42))  # Reuse the run-specific deterministic artifact identity builder
+    context = build_stacking_model_artifact_context(process_payload["file"], process_payload["source_files"], process_payload["execution_mode"], process_payload["attack_types_combined"], process_payload["target_column"], task["classifier_name"], model_prototype, artifact_feature_set, process_payload["input_feature_names"], task["expected_feature_names"], process_payload["label_classes"], transformer, task["hyperparameters_enabled"], task["experiment_run"], process_payload["config"].get("evaluation", {}).get("random_state", 42))  # Build existing deterministic baseline identity.
+    if task["augmentation_ratio"] is not None:  # Extend only train-augmentation artifacts without invalidating baseline artifacts.
+        source_paths = [str(Path(path).expanduser().resolve()) for path in process_payload["augmentation_file_paths"]]  # Preserve exact configured synthetic sources.
+        source_stats = [{"path": path, "size": int(Path(path).stat().st_size), "mtime_ns": int(Path(path).stat().st_mtime_ns)} for path in source_paths]  # Preserve synthetic source provenance without loading source contents.
+        context.update({"artifact_type": "stacking_augmented_training_classifier", "training_data": "original_training_plus_synthetic", "experiment_mode": "original_training_augmented_training", "augmentation_ratio": float(task["augmentation_ratio"]), "synthetic_source_files": source_stats, "original_split_identity": process_payload.get("original_split_identity")})  # Require exact train augmentation and split provenance for reuse.
+    return context  # Return baseline or augmented-training artifact identity.
 
 
 def feature_process_model_artifact_valid(task: dict, process_payload: dict, model_prototype: Any) -> bool:  # Validate a required original-trained model pair without loading it
@@ -19796,7 +19832,12 @@ def create_feature_process_shared_resources(original_df: pd.DataFrame, file: str
         source_lookup = {name: index for index, name in enumerate(source_names.tolist())}  # Build stable source IDs for both partitions.
         train_source_codes = np.asarray([source_lookup[value] for value in train_row_metadata["source_file"].astype(str)], dtype=np.int64)  # Encode train source IDs without storing objects.
         test_source_codes = np.asarray([source_lookup[value] for value in test_row_metadata["source_file"].astype(str)], dtype=np.int64)  # Encode test source IDs without storing objects.
+        split_hasher = hashlib.sha256()  # Build exact original partition identity from row provenance.
+        for split_values in (train_source_codes, train_row_metadata["row_order"].to_numpy(dtype=np.int64), test_source_codes, test_row_metadata["row_order"].to_numpy(dtype=np.int64)):  # Include every original train and held-out test row identity.
+            split_hasher.update(np.ascontiguousarray(split_values).view(np.uint8))  # Hash row identities without serializing full feature matrices.
+        original_split_identity = split_hasher.hexdigest()  # Preserve deterministic proof of fixed original partitions.
         descriptors = {"X_train_scaled": persist_feature_process_array(X_train_scaled, temp_dir, "X_train_scaled"), "X_test_scaled": persist_feature_process_array(X_test_scaled, temp_dir, "X_test_scaled"), "y_train": persist_feature_process_array(y_train, temp_dir, "y_train"), "y_test": persist_feature_process_array(y_test, temp_dir, "y_test"), "train_source_file": persist_feature_process_array(np.asarray(train_source_codes, dtype=np.int64), temp_dir, "train_source_file"), "test_source_file": persist_feature_process_array(test_source_codes, temp_dir, "test_source_file"), "train_row_order": persist_feature_process_array(pd.to_numeric(train_row_metadata["row_order"], errors="raise").to_numpy(dtype=np.int64), temp_dir, "train_row_order"), "test_row_order": persist_feature_process_array(pd.to_numeric(test_row_metadata["row_order"], errors="raise").to_numpy(dtype=np.int64), temp_dir, "test_row_order")}  # Persist exact matrices, labels, and LSTM provenance as read-only reopenable files
+        descriptors["original_split_identity"] = original_split_identity  # Persist fixed original partition identity without storing rows in payload.
         preprocessing_path = os.path.join(temp_dir, "preprocessing.joblib")  # Resolve the small fitted preprocessing bundle path
         write_stacking_pca_artifact_atomically({"scaler": scaler, "label_encoder": label_encoder}, preprocessing_path, "joblib")  # Persist fitted preprocessing without any full matrices
         descriptors["preprocessing_path"] = preprocessing_path  # Add only the small bundle path to the cross-process payload
@@ -19926,11 +19967,11 @@ def load_feature_process_ratio_frame_data(process_payload: dict, ratio: float) -
         del augmented_df  # Release the complete single-file source before classifier prediction
         gc.collect()  # Reclaim the complete single-file source while retaining only sampled rows
     if sampled_df is None or sampled_df.empty:  # Reject an unusable deterministic ratio sample
-        raise RuntimeError(f"Augmentation ratio {ratio} produced no testing rows")  # Surface ratio-specific sample failure
+        raise RuntimeError(f"Training augmentation ratio {ratio} produced no synthetic candidate rows")  # Surface ratio-specific synthetic sample failure.
     augmented_features = sampled_df.iloc[:, :-1].select_dtypes(include=np.number)  # Preserve the established positional target and numeric feature selection
     missing_features = [feature for feature in process_payload["input_feature_names"] if feature not in augmented_features.columns]  # Identify incompatible augmented schemas
     if missing_features:  # Reject augmented data missing any original model input feature
-        raise ValueError(f"Augmented testing data is missing original feature columns: {missing_features}")  # Preserve the established schema failure
+        raise ValueError(f"Synthetic training data is missing original feature columns: {missing_features}")  # Preserve the established schema failure.
     X_raw = augmented_features[process_payload["input_feature_names"]].to_numpy(copy=False)  # Preserve exact original feature order without an unnecessary copy
     y_raw = sampled_df.iloc[:, -1].to_numpy(copy=False)  # Preserve exact sampled target values without an unnecessary copy
     return {"ratio": ratio, "sampled_df": sampled_df, "augmented_features": augmented_features, "X_raw": X_raw, "y_raw": y_raw, "source_codes": source_codes, "row_orders": row_orders}  # Retain aligned features, labels, and source-local row provenance
@@ -20040,6 +20081,74 @@ def cleanup_feature_process_ratio_data(ratio_data: Optional[dict]) -> None:  # R
         close_feature_source_memmap(ratio_data.get("row_orders"), "augmentation_row_orders")  # Close chronological metadata.
         ratio_data.clear()  # Drop sampled DataFrame and NumPy block views together
     gc.collect()  # Reclaim ratio-specific memory before another ratio is loaded
+
+
+def build_feature_process_augmented_training_data(task: dict, process_payload: dict, resources: dict, ratio_data: dict) -> dict:
+    """Materialize one feature-worker augmented training partition without modifying original test data.
+
+    :param task: Active train-augmentation task descriptor.
+    :param process_payload: Shared worker configuration and feature metadata.
+    :param resources: Original split feature resources for one feature worker.
+    :param ratio_data: Synthetic source features and encoded labels for one ratio.
+    :return: Worker-owned training arrays, LSTM metadata, and cleanup directory.
+    """
+
+    selected_positions = select_synthetic_training_indices(ratio_data["y_encoded"], resources["y_train"], float(task["augmentation_ratio"]), config=process_payload["config"])  # Select exact synthetic rows from original train class counts.
+    train_rows = int(resources["X_train"].shape[0])  # Preserve original training row count.
+    synthetic_rows = int(len(selected_positions))  # Record selected synthetic training row count.
+    feature_count = int(resources["X_train"].shape[1])  # Preserve active feature representation width.
+    temp_dir = create_feature_process_temp_directory(process_payload["file"], config=process_payload["config"])  # Create worker-owned backing for combined training arrays.
+    X_path = os.path.join(temp_dir, "X_train_augmented.dat")  # Resolve worker-owned combined feature backing path.
+    y_path = os.path.join(temp_dir, "y_train_augmented.dat")  # Resolve worker-owned combined label backing path.
+    X_output = np.memmap(X_path, dtype=resources["X_train"].dtype, mode="w+", shape=(train_rows + synthetic_rows, feature_count), order="C")  # Allocate disk-backed combined training features.
+    y_output = np.memmap(y_path, dtype=resources["y_train"].dtype, mode="w+", shape=(train_rows + synthetic_rows,), order="C")  # Allocate disk-backed combined training labels.
+    chunk_rows = max(1, int(process_payload["config"].get("stacking", {}).get("memory_management", {}).get("process_memmap_chunk_rows", 100000)))  # Preserve configured bounded copy size.
+    try:  # Release partial mappings and backing on any materialization failure.
+        for start in range(0, train_rows, chunk_rows):  # Copy original train rows in bounded slices.
+            end = min(start + chunk_rows, train_rows)  # Resolve bounded original slice end.
+            X_output[start:end] = resources["X_train"][start:end]  # Preserve original feature values and ordering.
+            y_output[start:end] = resources["y_train"][start:end]  # Preserve original training labels.
+        model_indices = process_payload["feature_metadata"].get("indices")  # Resolve selected original columns when feature mode is not full or PCA.
+        for output_start in range(0, synthetic_rows, chunk_rows):  # Transform selected synthetic rows in bounded slices.
+            output_end = min(output_start + chunk_rows, synthetic_rows)  # Resolve bounded synthetic slice end.
+            positions = selected_positions[output_start:output_end]  # Resolve current synthetic source positions.
+            scaled = np.asarray(resources["scaler"].transform(ratio_data["X_raw"][positions]))  # Apply scaler fitted only on original training data.
+            if resources["transformer"] is not None:  # Apply PCA fitted only from permitted training data.
+                transformed = np.asarray(resources["transformer"].transform(scaled))  # Preserve active PCA feature schema.
+            elif model_indices is None:  # Reuse all scaled columns for full features.
+                transformed = scaled  # Avoid unnecessary feature copy.
+            else:  # Select exact configured feature columns after scaling.
+                transformed = scaled[:, model_indices]  # Preserve active selected-feature schema.
+            X_output[train_rows + output_start:train_rows + output_end] = transformed  # Persist bounded synthetic training features.
+            y_output[train_rows + output_start:train_rows + output_end] = ratio_data["y_encoded"][positions]  # Persist aligned synthetic labels.
+            del scaled, transformed  # Release bounded transformation arrays before next slice.
+        X_output.flush()  # Publish complete combined training features before fitting.
+        y_output.flush()  # Publish complete combined training labels before fitting.
+        train_metadata = None  # Preserve LSTM provenance only when classifier needs sequences.
+        if is_lstm_classifier_name(task["classifier_name"]):  # Build source-local chronological metadata for augmented LSTM training.
+            source_values = np.asarray(ratio_data.get("source_codes", np.zeros(synthetic_rows, dtype=np.int64)))[selected_positions]  # Preserve synthetic source boundaries.
+            order_values = np.asarray(ratio_data.get("row_orders", np.arange(len(ratio_data["y_encoded"]), dtype=np.int64)))[selected_positions]  # Preserve synthetic source chronology.
+            synthetic_metadata = pd.DataFrame({"source_file": [f"synthetic_{value}" for value in source_values], "row_order": order_values})  # Prevent windows crossing original and synthetic sources.
+            train_metadata = pd.concat((resources["train_row_metadata"], synthetic_metadata), ignore_index=True)  # Align LSTM metadata with combined training rows.
+        return {"X_train": X_output, "y_train": y_output, "train_metadata": train_metadata, "temp_dir": temp_dir, "synthetic_rows": synthetic_rows}  # Return worker-owned combined training resources.
+    except Exception:  # Remove partial worker-owned mappings before propagating failure.
+        cleanup_feature_process_directory(temp_dir, arrays=[X_output, y_output])  # Release exact partial augmented training backing.
+        raise  # Preserve materialization failure.
+
+
+def cleanup_feature_process_augmented_training_data(training_data: Optional[dict]) -> None:
+    """Release one worker-owned augmented training partition.
+
+    :param training_data: Combined training resources returned by augmentation materialization.
+    :return: None.
+    """
+
+    if not training_data:  # Treat absent materialization as an idempotent cleanup.
+        return  # Avoid filesystem work when no augmented data exists.
+    arrays = [training_data.get("X_train"), training_data.get("y_train")]  # Collect only worker-owned mappings.
+    temp_dir = training_data.get("temp_dir")  # Resolve exact worker-owned directory.
+    training_data.clear()  # Drop metadata and mappings before directory deletion.
+    cleanup_feature_process_directory(temp_dir, arrays=arrays)  # Close mappings and delete exact augmented backing.
 
 
 def create_feature_process_status(process_context: Any, tasks: List[dict], pending_by_feature: dict) -> dict:  # Create synchronized global and feature-local runtime counters
@@ -20225,9 +20334,9 @@ def log_feature_process_combination(task: dict, status_state: dict, message: str
         return  # Keep normal output focused on active ETA, completion, cache, and failure records.
     ratio_label = "None" if task["augmentation_ratio"] is None else f"{float(task['augmentation_ratio']):.2f}"  # Format the active augmentation ratio
     hp_label = "Optimized Hyperparameters" if task["hyperparameters_enabled"] else "Default Hyperparameters"  # Resolve the active hyperparameter mode
-    testing_label = "Original" if task["augmentation_ratio"] is None else "Augmented"  # Resolve the active testing mode
+    testing_label = "Original held-out"  # Preserve held-out original testing semantics for every experiment.
     prefix = format_feature_process_progress(task, status_state)  # Build complete dynamic status and process identity
-    print(f"{prefix} Run={task['experiment_run']} | Feature Set={task['feature_set']} | Classifier={task['classifier_name']} | Hyperparameters={hp_label} | Testing={testing_label} | Augmentation Ratio={ratio_label} | {message}")  # Write one complete durable process record
+    print(f"{prefix} Run={task['experiment_run']} | Feature Set={task['feature_set']} | Classifier={task['classifier_name']} | Hyperparameters={hp_label} | Testing={testing_label} | Training Augmentation Ratio={ratio_label} | {message}")  # Write one complete durable process record
     sys.stdout.flush()  # Flush every lifecycle record for detached SSH observability
 
 
@@ -20279,6 +20388,55 @@ def evaluate_feature_process_original_task(task: dict, process_payload: dict, re
     del active_model, artifact_context, training_ram_stats, phase_metadata  # Release fitted model and combination-specific metadata while retaining artifact evidence.
     gc.collect()  # Reclaim estimator, predictions, probabilities, and metric temporaries before the next task
     return result_entry, model_y_test, exact_predictions, label_classes  # Return local evidence without copying it through multiprocessing transport.
+
+
+def evaluate_feature_process_augmented_training_task(task: dict, process_payload: dict, resources: dict, ratio_data: dict, model_prototype: Any, cache_dict: dict, status_state: dict, status_queue: Any) -> Tuple[dict, Any, Any, Any]:
+    """Fit one ratio-specific classifier on augmented training rows and fixed original test rows.
+
+    :param task: Active train-augmentation task descriptor.
+    :param process_payload: Shared worker configuration and provenance.
+    :param resources: Original split feature and preprocessing resources.
+    :param ratio_data: Current synthetic ratio source data.
+    :param model_prototype: Unfitted process-local classifier prototype.
+    :param cache_dict: Worker-local cache mapping for atomic persistence.
+    :param status_state: Shared worker lifecycle state.
+    :param status_queue: Coordinator notification queue.
+    :return: Persisted result, original test labels, predictions, and label classes.
+    """
+
+    training_data = build_feature_process_augmented_training_data(task, process_payload, resources, ratio_data)  # Build bounded combined training arrays without altering original test resources.
+    active_model = None  # Reserve the ratio-specific estimator reference for unconditional cleanup.
+    try:  # Release ratio-specific model and memmaps on every outcome.
+        active_model = clone(model_prototype)  # Isolate fitted state to this ratio-specific model.
+        model_X_train = training_data["X_train"]  # Use original plus selected synthetic training features.
+        model_y_train = training_data["y_train"]  # Use aligned original plus selected synthetic labels.
+        model_X_test = resources["X_test"]  # Preserve unchanged original held-out test features.
+        model_y_test = resources["y_test"]  # Preserve unchanged original held-out test labels.
+        raw_training_rows = len(model_y_train)  # Preserve row-level training cardinality before optional sequence windowing.
+        raw_test_rows = len(model_y_test)  # Preserve row-level held-out cardinality before optional sequence windowing.
+        if is_lstm_classifier_name(task["classifier_name"]):  # Build source-local windows independently inside each partition.
+            model_X_train, model_y_train, model_X_test, model_y_test, _ = prepare_lstm_sequence_evaluation_inputs(active_model, training_data["X_train"], training_data["y_train"], resources["X_test"], resources["y_test"], training_data["train_metadata"], resources.get("test_row_metadata"))  # Prevent synthetic and original sequences crossing source boundaries.
+        artifact_feature_set = f"{task['feature_set']} - {'Optimized Hyperparameters' if task['hyperparameters_enabled'] else 'Default Hyperparameters'} - TrainAugmented@{int(float(task['augmentation_ratio']) * 100)}%"  # Isolate ratio-trained artifact paths.
+        artifact_context = build_feature_process_artifact_context(task, process_payload, active_model)  # Require exact split, source, model, and ratio provenance.
+        dataset_name = build_filename_safe_dataset_identity(resolve_canonical_dataset_identity(str(process_payload["file"]), True)) if process_payload["execution_mode"] == "combined_files" else os.path.basename(os.path.dirname(process_payload["file"]))  # Resolve existing dataset artifact directory.
+        training_ram_stats: dict = {}  # Retain bounded training resource measurements.
+        cancellation_checker = lambda: feature_process_runtime_skip_requested(task, process_payload)  # Honor cancellation at existing safe boundaries.
+        eta_callback = lambda eta_label, eta_seconds: publish_feature_process_training_eta_event(task, process_payload, status_queue, eta_label, eta_seconds, status_state)  # Preserve worker ETA notifications.
+        log_feature_process_combination(task, status_state, f"Train augmentation selected {training_data['synthetic_rows']} synthetic rows; fit started")  # Report actual synthetic training cardinality.
+        metrics = evaluate_individual_classifier(active_model, task["classifier_name"], model_X_train, model_y_train, model_X_test, model_y_test, process_payload["file"], resources["scaler"], task["expected_feature_names"], artifact_feature_set, config=process_payload["config"], training_ram_stats=training_ram_stats, fit_model=True, notification_context=build_telegram_combination_header(task["feature_set"], task["classifier_name"], task["augmentation_ratio"], task["hyperparameters_enabled"], experiment_run=task["experiment_run"]), hyperparameters_enabled=task["hyperparameters_enabled"], augmentation_ratio=task["augmentation_ratio"], training_eta_callback=eta_callback, cancellation_checker=cancellation_checker, local_combination_index=task.get("feature_local_position"), local_combination_total=task.get("feature_local_total"), active_workers_callback=lambda: format_active_workers_suffix(**build_feature_process_active_worker_status(status_state, process_payload)), class_labels=resources["label_encoder"].classes_)  # Fit fresh ratio model and evaluate only fixed original test data.
+        if cancellation_checker():  # Avoid result publication after accepted active cancellation.
+            raise RuntimeSkipRequested(f"Runtime skip requested before augmented-training persistence for {task['classifier_name']}")  # Preserve existing cancellation semantics.
+        phase_runtime_fields = build_runtime_phase_fields(process_payload["config"], task["feature_set"], task["classifier_name"], task["hyperparameters_enabled"], process_payload.get("preprocessing_time_s"), training_ram_stats)  # Preserve phase timing persistence.
+        result_entry = build_classifier_result_entry(active_model.__class__.__name__, process_payload["file"], process_payload["execution_mode"], process_payload["attack_types_combined"], task["feature_set"], "Individual", task["classifier_name"], task["data_source_label"], task["experiment_id"], task["experiment_mode"], task["augmentation_ratio"], task["expected_n_features"], raw_training_rows, raw_test_rows, metrics, task["expected_feature_names"], hyperparams_map=process_payload["optimized_params"] if task["hyperparameters_enabled"] else {}, hyperparameters_enabled=task["hyperparameters_enabled"], effective_hyperparameters=serialize_effective_estimator_parameters(active_model), experiment_run=task["experiment_run"], phase_runtime_fields=phase_runtime_fields)  # Persist actual original-plus-synthetic rows and fixed original held-out rows.
+        persist_cache_result_entry(process_payload["cache_ref_file"], result_entry, cache_dict, config=process_payload["config"])  # Persist ratio-specific metric result atomically.
+        exported_path = export_model_and_scaler(active_model, resources["scaler"], dataset_name, task["classifier_name"], feature_set=artifact_feature_set, dataset_csv_path=process_payload["file"], config=process_payload["config"], artifact_context=artifact_context, label_encoder=resources["label_encoder"], transformer=resources["transformer"])  # Persist fresh compatible ratio-trained artifact atomically.
+        persist_exported_model_filename(process_payload["cache_ref_file"], result_entry, cache_dict, exported_path, config=process_payload["config"])  # Persist exported artifact reference atomically.
+        return result_entry, model_y_test, metrics[7], resources["label_encoder"].classes_  # Return original test evidence for coordinator artifact reporting.
+    finally:  # Release ratio-specific resources after result persistence or failure.
+        if active_model is not None:  # Release the fitted estimator when clone construction completed.
+            del active_model  # Release ratio-specific fitted model.
+        cleanup_feature_process_augmented_training_data(training_data)  # Release worker-owned combined training memmaps.
+        gc.collect()  # Reclaim model and metric temporaries before next worker task.
 
 
 def ensure_feature_process_original_model_artifact(task: dict, process_payload: dict, model_prototype: Any, status_state: dict, status_queue: Any) -> None:
@@ -20843,18 +21001,15 @@ def process_feature_process_task(task: dict, process_payload: dict, model_maps: 
                 resource_state["original_resources"] = prepare_feature_process_original_resources(process_payload)  # Open shared sources and build only this feature set's matrices
                 log_feature_process_combination(task, status_state, "Original memmap data loading completed")  # Confirm exact required original resources are ready
             evaluation_output = evaluate_feature_process_original_task(task, process_payload, resource_state["original_resources"], model_prototype, resource_state["cache_dict"], status_state, status_queue)  # Fit, predict, calculate metrics, and retain exact artifact evidence locally.
-        else:  # Load only the exact augmentation ratio required by this pending task
+        else:  # Fit a distinct model on the exact augmentation ratio and fixed original test partition.
             publish_feature_process_training_start_event(task, process_payload, status_queue, status_state)  # Notify Telegram that uncached augmented evaluation has started.
             await_feature_process_notification_acknowledgement(task, process_payload)  # Serialize start delivery without blocking indefinitely on Telegram.
             if feature_process_runtime_skip_requested(task, process_payload):
                 raise RuntimeSkipRequested(f"Runtime skip requested before augmented evaluation for active {task['classifier_name']}")
-            if resource_state["original_resources"] is not None:  # Release large original feature matrices before any artifact-only rebuild to prevent duplicate worker mappings.
-                cleanup_feature_process_original_resources(resource_state["original_resources"])  # Close previously opened feature sources before an independent reconstruction.
-                resource_state["original_resources"] = None  # Prevent stale references to released training resources.
-            ensure_feature_process_original_model_artifact(task, process_payload, model_prototype, status_state, status_queue)  # Independently reconstruct a missing original model; never invalidate or overwrite cached original metrics.
-            if resource_state["original_resources"] is not None:  # Release large original feature matrices before augmented-only prediction
-                cleanup_feature_process_original_resources(resource_state["original_resources"])  # Close worker mappings and delete only worker-owned feature files
-                resource_state["original_resources"] = None  # Clear released original resources
+            if resource_state["original_resources"] is None:  # Retain original split resources for augmented training and fixed test evaluation.
+                log_feature_process_combination(task, status_state, "Original memmap data loading started")  # Report required original split reopening.
+                resource_state["original_resources"] = prepare_feature_process_original_resources(process_payload)  # Materialize active feature representation from shared original split.
+                log_feature_process_combination(task, status_state, "Original memmap data loading completed")  # Report original split readiness.
             if resource_state["active_ratio"] != task["augmentation_ratio"]:  # Replace the previous ratio instead of caching multiple ratios
                 previous_ratio_active = resource_state["ratio_data"] is not None  # Record whether a previous ratio requires explicit closure
                 if previous_ratio_active:  # Log closure only when a previous ratio is active
@@ -20867,10 +21022,10 @@ def process_feature_process_task(task: dict, process_payload: dict, model_maps: 
                 log_feature_process_combination(task, status_state, "Augmentation ratio data loading started")  # Announce exact current-ratio loading
                 resource_state["ratio_data"] = load_feature_process_ratio_data(process_payload, float(task["augmentation_ratio"]))  # Load and sample only this required ratio
                 resource_state["active_ratio"] = task["augmentation_ratio"]  # Record the one active reusable ratio
-            ratio_row_count = len(resource_state["ratio_data"]["y_encoded"] if "y_encoded" in resource_state["ratio_data"] else resource_state["ratio_data"]["y_raw"])  # Resolve current-ratio sample cardinality only after required loading
-            task["expected_n_samples_test"] = ratio_row_count  # Record actual lazy sample count for result metadata without pre-execution scanning
-            log_feature_process_combination(task, status_state, f"Augmentation ratio data loading completed with {ratio_row_count} rows")  # Confirm exact current-ratio sample size
-            evaluation_output = evaluate_feature_process_augmented_task(task, process_payload, resource_state["ratio_data"], model_prototype, resource_state["cache_dict"], status_state)  # Predict, calculate metrics, and retain exact artifact evidence locally.
+            original_test_rows = int(resource_state["original_resources"]["y_test"].shape[0])  # Resolve invariant held-out original test cardinality.
+            task["expected_n_samples_test"] = original_test_rows  # Require cache rows to retain original held-out test count.
+            log_feature_process_combination(task, status_state, f"Training augmentation source loaded; original held-out test rows={original_test_rows}")  # Report fixed evaluation partition evidence.
+            evaluation_output = evaluate_feature_process_augmented_training_task(task, process_payload, resource_state["original_resources"], resource_state["ratio_data"], model_prototype, resource_state["cache_dict"], status_state, status_queue)  # Fit fresh ratio model and evaluate only original held-out test rows.
         if isinstance(evaluation_output, tuple) and len(evaluation_output) == 4:  # Accept production evaluator output containing local artifact evidence.
             result_entry, artifact_y_true, artifact_y_pred, artifact_label_classes = evaluation_output  # Unpack without copying large evaluation vectors across processes.
         else:  # Preserve focused tests and alternate evaluator targets returning only a result row.
@@ -21512,6 +21667,7 @@ def run_persistent_feature_set_grid(original_df: pd.DataFrame, file: str, source
         if pending_augmented_exists:  # Allocate shared ratio backing only when at least one uncached augmented task requires it
             augmentation_shared_directory = create_feature_process_temp_directory(file, config=config)  # Create one coordinator-owned directory for lazily published ratio pairs
         process_payload["shared_resources"] = shared_resources  # Pass only paths, shapes, dtypes, and preprocessing path to children
+        process_payload["original_split_identity"] = shared_resources.get("original_split_identity") if isinstance(shared_resources, dict) else None  # Pass exact row-proven split identity to artifact validation.
         process_payload["preprocessing_time_s"] = shared_resources.get("preprocessing_time_s") if isinstance(shared_resources, dict) else None  # Pass measured preprocessing seconds to worker result rows.
         process_payload["augmentation_shared_directory"] = augmentation_shared_directory  # Pass only the coordinator-owned lazy ratio directory path to children
         process_payload["pca_cache_context"] = pca_cache_context  # Pass only small PCA provenance metadata
@@ -21774,19 +21930,19 @@ def execute_combined_files_augmentation(files_to_process, combined_df, attack_ty
                     if df_sampled is None:  # If sampling failed
                         print(f"{BackgroundColors.YELLOW}Sampling failed for ratio {ratio} in combo {suffix}. Skipping ratio.{Style.RESET_ALL}")  # Warn
                         continue  # Next ratio
-                    try:  # Evaluate one augmented-only testing ratio.
+                    try:  # Train one ratio-specific model and evaluate original held-out data.
                         res = evaluate_on_dataset(
                             combined_dataset_reference, combined_df, feature_names, ga_sel, pca_n, rfe_sel, base_models,  # Use directory identity for legacy augmented evaluation.
-                            data_source_label=f"Augmented@{int(ratio*100)}%_CombinedFiles",
+                            data_source_label=f"TrainingAugmented@{int(ratio*100)}%_CombinedFiles",
                             hyperparams_map=hp_params_map if hyperparameters_enabled else {},
-                            experiment_id=generate_experiment_id(combined_dataset_reference, "combined_files_original_training_augmented_testing", ratio),  # Build legacy augmented-testing experiment identity from combined directory.
-                            experiment_mode="original_training_augmented_testing", augmentation_ratio=ratio,
+                            experiment_id=generate_experiment_id(combined_dataset_reference, "combined_files_original_training_augmented_training", ratio),  # Build train-augmentation experiment identity from combined directory.
+                            experiment_mode="original_training_augmented_training", augmentation_ratio=ratio,
                             execution_mode_str="combined_files", attack_types_combined=attack_types,
-                            df_augmented_for_testing=df_sampled,
+                            df_augmented_for_training=df_sampled,
                             cache_ref_file=combined_dataset_reference, config=config, hyperparameters_enabled=hyperparameters_enabled,  # Use directory identity for cache resume.
                             source_files=list(files_to_process),  # Preserve only original training-source provenance.
                             extra_trees_selected_features=extra_trees_sel,  # Preserve Extra Trees feature order for legacy augmented evaluation.
-                        )  # Evaluate persisted original-trained models on augmented samples.
+                        )  # Train fresh models with synthetic rows and fixed original test data.
                     except Exception as e:  # If evaluation failed
                         print(f"{BackgroundColors.YELLOW}Augmented evaluation failed for ratio {ratio} combo {suffix}: {e}{Style.RESET_ALL}")  # Warn
                         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send exception
@@ -22055,7 +22211,7 @@ def orchestrate_all_combinations(input_path, dataset_name=None, config=None):
             all_grid_results = []  # Accumulate every grid result for one consolidated export
             all_comparison_results = []  # Accumulate augmentation comparisons across both HP modes
             orchestration_cache = load_cache_results(file, config=config, notify_discovery=False)  # Recover cache identities before any sequential augmentation load.
-            fully_cached_ratios = {ratio for ratio in augmentation_ratios if all(build_resume_cache_key("separate_files", f"Augmented@{int(ratio * 100)}%", "original_training_augmented_testing", ratio, None, feature_set, classifier, hyperparameters_enabled) in orchestration_cache for feature_set, hyperparameters_enabled, planned_ratio, classifier in evaluation_plan if planned_ratio == ratio)}  # Identify ratio groups requiring no augmented contents.
+            fully_cached_ratios = {ratio for ratio in augmentation_ratios if all(build_resume_cache_key("separate_files", f"TrainingAugmented@{int(ratio * 100)}%", "original_training_augmented_training", ratio, None, feature_set, classifier, hyperparameters_enabled) in orchestration_cache for feature_set, hyperparameters_enabled, planned_ratio, classifier in evaluation_plan if planned_ratio == ratio)}  # Identify ratio groups requiring no synthetic source loading.
             if all(name in feature_metadata_by_name for name in feature_mode_names):  # Use cache-aware grouping only for feature modes with compact descriptors.
                 tasks = build_feature_process_plan(evaluation_plan, feature_metadata_by_name, len(df_original), file, "separate_files", get_current_experiment_run(config), skip_summary["global_ids"], skip_summary["canonical_total"])  # Reuse authoritative global IDs and expected original-data shapes for plan reporting
                 cached_results, pending_by_feature = partition_evaluation_plan_by_cache(tasks, orchestration_cache, feature_mode_names, None)  # Reuse existing cache matching before plan reporting
@@ -22089,7 +22245,7 @@ def orchestrate_all_combinations(input_path, dataset_name=None, config=None):
                     current_combination = grid_progress["current_combination"]  # Read next canonical global progress index.
                     classifiers = [item[3] for item in evaluation_plan if item[0] == feature_mode_name and item[1] == hyperparameters_enabled and item[2] == augmentation_ratio]  # Preserve classifier order from canonical plan.
                     for classifier_name in classifiers:  # Recover every cached classifier in current canonical group.
-                        recovered, current_combination = recover_cached_individual_classifier_result(orchestration_cache, "separate_files", f"Augmented@{int(augmentation_ratio * 100)}%", "original_training_augmented_testing", augmentation_ratio, None, feature_mode_name, classifier_name, cached_group_results, current_combination, total_steps, grid_progress["progress_bar"], hyperparameters_enabled=hyperparameters_enabled)  # Reuse production cache recovery, progress, and notification flow.
+                        recovered, current_combination = recover_cached_individual_classifier_result(orchestration_cache, "separate_files", f"TrainingAugmented@{int(augmentation_ratio * 100)}%", "original_training_augmented_training", augmentation_ratio, None, feature_mode_name, classifier_name, cached_group_results, current_combination, total_steps, grid_progress["progress_bar"], hyperparameters_enabled=hyperparameters_enabled)  # Reuse production cache recovery, progress, and notification flow.
                         if not recovered:  # Reject cache drift after complete-ratio preflight.
                             raise RuntimeError(f"Fully cached ratio {augmentation_ratio} lost combination {feature_mode_name} / {classifier_name}")  # Preserve cache and plan consistency.
                     grid_progress["current_combination"] = current_combination  # Advance shared progress after cached group recovery.
@@ -22113,7 +22269,7 @@ def orchestrate_all_combinations(input_path, dataset_name=None, config=None):
                     active_ratio = augmentation_ratio  # Record reusable current ratio identity.
                 if df_sampled is None or df_sampled.empty:  # Skip ratios producing no augmented test rows.
                     continue  # Advance to next canonical slice.
-                results_ratio = evaluate_on_dataset(file, df_original, feature_names, ga_sel, pca_n, rfe_sel, group_models, data_source_label=f"Augmented@{int(augmentation_ratio * 100)}%", hyperparams_map=hp_params_map, experiment_id=generate_experiment_id(file, "original_training_augmented_testing", augmentation_ratio), experiment_mode="original_training_augmented_testing", augmentation_ratio=augmentation_ratio, execution_mode_str="separate_files", attack_types_combined=None, df_augmented_for_testing=df_sampled, config=config, hyperparameters_enabled=hyperparameters_enabled, grid_progress=grid_progress, feature_mode_name=feature_mode_name, extra_trees_selected_features=extra_trees_sel, planned_classifier_names=planned_classifier_names)  # Evaluate current canonical feature group while reusing ratio sample.
+                results_ratio = evaluate_on_dataset(file, df_original, feature_names, ga_sel, pca_n, rfe_sel, group_models, data_source_label=f"TrainingAugmented@{int(augmentation_ratio * 100)}%", hyperparams_map=hp_params_map, experiment_id=generate_experiment_id(file, "original_training_augmented_training", augmentation_ratio), experiment_mode="original_training_augmented_training", augmentation_ratio=augmentation_ratio, execution_mode_str="separate_files", attack_types_combined=None, df_augmented_for_training=df_sampled, config=config, hyperparameters_enabled=hyperparameters_enabled, grid_progress=grid_progress, feature_mode_name=feature_mode_name, extra_trees_selected_features=extra_trees_sel, planned_classifier_names=planned_classifier_names)  # Train current canonical feature group with synthetic rows and fixed original test data.
                 ratio_list = list(results_ratio.values())  # Convert current ratio results for annotation and export.
                 annotate_results_with_combination_flags(ratio_list, fs_toggle, hyperparameters_enabled, True)  # Mark active grid dimensions.
                 all_grid_results.extend(ratio_list)  # Preserve canonical augmented row order.
