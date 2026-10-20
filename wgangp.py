@@ -60,6 +60,7 @@ if __name__ in {"__main__", "__mp_main__"}:
 import argparse  # For CLI argument parsing
 import atexit  # For playing a sound when the program finishes
 import csv  # For writing per-directory results CSV
+import hashlib  # Compute stable experiment fingerprints and sample hashes
 import dataframe_image as dfi  # For exporting DataFrame to PNG images
 import datetime  # For tracking execution time
 import json  # For saving/loading metrics history
@@ -773,6 +774,39 @@ def build_default_runtime_config() -> Dict:
             },
         },
     }  # End runtime configuration dictionary
+
+
+def build_wgangp_provenance(args: Any) -> Dict:
+    """
+    Describe source identity and generator training settings without reading large source files.
+
+    :param args: Effective generator and training arguments.
+    :return: Canonical source and model configuration plus its SHA-256 fingerprint.
+    """
+
+    source = Path(args.csv_path).resolve() if getattr(args, "csv_path", None) else None  # Resolve source without hashing tens of gigabytes.
+    source_stat = source.stat() if source is not None else None  # Require an existing source for provenance.
+    fields = ("seed", "label_col", "feature_cols", "batch_size", "critic_steps", "lr", "beta1", "beta2", "lambda_gp", "latent_dim", "g_hidden", "d_hidden", "embed_dim", "n_resblocks", "g_leaky_relu_alpha", "d_leaky_relu_alpha", "use_amp")  # Identify settings that affect learned weights.
+    settings = {name: getattr(args, name, None) for name in fields}  # Snapshot resolved model and optimization settings.
+    identity = {"source_path": str(source) if source else None, "source_size": source_stat.st_size if source_stat else None, "source_mtime_ns": source_stat.st_mtime_ns if source_stat else None, "settings": settings}  # Record source metadata and effective hyperparameters.
+    digest = hashlib.sha256(json.dumps(identity, sort_keys=True, default=str).encode("utf-8")).hexdigest()  # Produce a stable comparable identity.
+
+    return {"identity": identity, "sha256": digest}  # Return provenance for checkpoints and output sidecars.
+
+
+def verify_wgangp_provenance(saved: Any, args: Any, context: str) -> None:
+    """
+    Reject missing or incompatible generator provenance before restoring model state.
+
+    :param saved: Provenance record stored with the checkpoint.
+    :param args: Effective execution arguments.
+    :param context: Human-readable artifact description.
+    :return: None.
+    """
+
+    expected = build_wgangp_provenance(args)  # Resolve current source and configuration fingerprint.
+    if not isinstance(saved, dict) or saved.get("sha256") != expected["sha256"]:  # Reject legacy or mismatched checkpoint configurations.
+        raise ValueError(f"{context} provenance does not match the current source/configuration; use --from_scratch with a fresh output or restore the original configuration")  # Prevent invalid model reuse.
 
 
 def assess_generated_flow_quality(args: Any, config: Dict, generated: pd.DataFrame) -> None:
@@ -2286,6 +2320,7 @@ def select_finite_saved_pair(checkpoint_files: List[Path], checkpoint_dir: Path,
                 raise FileNotFoundError(f"Discriminator checkpoint not found: {d_candidate_path}")  # Preserve precise missing-pair diagnostic
             g_candidate = torch.load(g_candidate_path, map_location="cpu", weights_only=False)  # Load generator candidate on CPU for validation
             d_candidate = torch.load(d_candidate_path, map_location="cpu", weights_only=False)  # Load discriminator candidate on CPU for validation
+            verify_wgangp_provenance(g_candidate.get("provenance"), args, str(g_candidate_path))  # Reject mismatched source or training hyperparameters before restore.
             require_finite_saved_state(g_candidate["state_dict"], "parameters", args, epoch_num, "saved_generator")  # Reject invalid generator parameters
             require_finite_saved_state(d_candidate["state_dict"], "parameters", args, epoch_num, "saved_discriminator")  # Reject invalid discriminator parameters
             if "opt_G_state" in g_candidate:  # Validate available generator optimizer state
@@ -3779,6 +3814,7 @@ def build_generator_checkpoint_payload(G, opt_G, scaler, dataset, epoch: int, me
         "class_distribution": class_distribution,  # Save class distribution for percentage-based generation
         "metrics_history": metrics_history,  # Save metrics history for resume
         "args": vars(args),  # Save training arguments
+        "provenance": build_wgangp_provenance(args),  # Bind saved weights to source identity and training configuration.
     }  # End generator checkpoint dictionary
     if scaler is not None:  # If using AMP
         g_checkpoint["scaler_state"] = scaler.state_dict()  # Save scaler state
@@ -4672,6 +4708,7 @@ def normalize_args_and_load_checkpoint(args, config: Dict) -> tuple:
     args._generation_epoch = int(ckpt.get("epoch", 0))  # Store checkpoint epoch for generation diagnostics
     if not getattr(args, "csv_path", None) and isinstance(args_ck, dict) and args_ck.get("csv_path"):  # Recover source CSV path from saved training arguments
         args.csv_path = args_ck.get("csv_path")  # Store recovered source CSV path on live args
+    verify_wgangp_provenance(ckpt.get("provenance"), args, str(args.checkpoint))  # Reject mismatched checkpoint source and configuration before generation.
     scaler = ckpt.get("scaler", None)  # Try to get scaler from checkpoint
     label_encoder = ckpt.get("label_encoder", None)  # Try to get label encoder from checkpoint
     feature_cols = ckpt.get("feature_cols", None)  # Try to get feature column names from checkpoint
@@ -5004,6 +5041,8 @@ def postprocess_generated_arrays_to_dataframe(args, config: Dict, all_fake: List
 
     safe_log("info", f"Saving {len(output_df)} generated rows to {args.out_file}")  # Log saving
     generate_csv_and_image(output_df, args.out_file, is_visualizable=True)  # Save CSV
+    with Path(args.out_file).with_suffix(".provenance.json").open("w", encoding="utf-8") as provenance_file:  # Record which training source and hyperparameters produced the output.
+        json.dump(build_wgangp_provenance(args), provenance_file, indent=2)  # Write the canonical generator provenance alongside the CSV.
     safe_log("info", f"Successfully saved {len(output_df)} generated rows to {args.out_file}")  # Log saved rows
     print(  # Print saved rows
         f"{file_progress_prefix} {BackgroundColors.GREEN}Saved {BackgroundColors.CYAN}"  # Format prefix
@@ -6101,14 +6140,20 @@ def skip_both_mode_when_augmented_output_sufficient(args: Any, config: Dict, csv
     safe_log("info", message)  # Persist sufficiency evidence through existing logger.
     send_telegram_message(TELEGRAM_BOT, message)  # Notify sufficiency evidence through existing Telegram path.
 
-    if existing_rows >= int(required_rows):  # Skip only when existing output has at least the requested final row count.
+    provenance_file = out_path.with_suffix(".provenance.json")  # Locate the persisted output provenance manifest.
+    try:  # Verify the source identity and hyperparameters associated with the existing synthetic CSV.
+        existing_provenance = json.loads(provenance_file.read_text(encoding="utf-8"))  # Read the output manifest when present.
+        provenance_valid = existing_provenance.get("sha256") == build_wgangp_provenance(args)["sha256"]  # Match the current training configuration exactly.
+    except (OSError, ValueError, TypeError, AttributeError):  # Treat missing or malformed output manifests as unverified.
+        provenance_valid = False  # Require regeneration for unverifiable existing outputs.
+    if existing_rows >= int(required_rows) and provenance_valid:  # Skip only verified existing samples with the requested size.
         skip_message = f"{file_progress_prefix} [INFO] Skipping WGAN-GP training and generation for {csv_path_obj.name}: existing augmented output already satisfies requested size."  # Build skip notification.
         print(f"{BackgroundColors.GREEN}{skip_message}{Style.RESET_ALL}")  # Log skip before returning to directory loop.
         safe_log("info", skip_message)  # Persist skip through existing logger.
         send_telegram_message(TELEGRAM_BOT, skip_message)  # Notify skip through existing Telegram path.
         return True  # Skip both training and generation for this file only.
 
-    return False  # Proceed through normal training and generation for missing capacity.
+    return False  # Proceed through normal training and generation for missing capacity or incompatible provenance.
 
 
 def resolve_checkpoint_after_training(args: Any, config: Dict, csv_path_obj: Path, data_aug_dir: Path) -> Optional[Path]:
