@@ -8093,7 +8093,7 @@ def export_model_and_scaler(model, scaler, dataset_name, model_name, feature_set
             print(f"{BackgroundColors.YELLOW}[WARNING] Failed to remove completed stacking artifact transaction marker {transaction_path}: {cleanup_exc}{Style.RESET_ALL}")  # Preserve the valid pair and allow the next locked run to retry
         cleanup_superseded_stacking_model_artifacts(artifact_paths, artifact_context, config=config)  # Remove temporary files without deleting distinct valid identities.
         relative_model = os.path.relpath(artifact_paths["model_path"], artifact_paths["stacking_output_dir"])
-        verbose_output(f"{BackgroundColors.GREEN}Exported original-trained classifier and fitted preprocessing to {BackgroundColors.CYAN}{relative_model}{Style.RESET_ALL}", config=config)
+        verbose_output(f"{BackgroundColors.GREEN}Exported classifier and fitted preprocessing to {BackgroundColors.CYAN}{relative_model}{Style.RESET_ALL}", config=config)
         return artifact_paths["model_path"]
     except Exception as e:
         if artifact_lock is not None and artifact_paths is not None:  # Recover this handled write failure while the exclusive lock is still held
@@ -13587,12 +13587,12 @@ def find_metric_comparison_baselines(task: dict, cache_dict: dict) -> list:
                 continue
             if entry.get("experiment_run") != task.get("experiment_run") or entry.get("feature_set") != task.get("feature_set") or entry.get("model_name") != task.get("classifier_name"):
                 continue
-            if str(entry.get("dataset")) != str(task.get("dataset")) or str(entry.get("execution_mode")) != str(task.get("execution_mode")):
+            if os.path.normpath(str(entry.get("dataset"))) != os.path.normpath(str(task.get("dataset"))) or str(entry.get("execution_mode")) != str(task.get("execution_mode")):  # Normalize equivalent dataset directory paths before comparing baseline identities.
                 continue
             if (entry.get("hyperparameter_mode") == "Optimized Hyperparameters") != target_hp:
                 continue
             actual_ratio = resolve_persisted_augmentation_ratio(entry.get("experiment_mode"), entry.get("augmentation_ratio"))
-            expected_ratio = resolve_persisted_augmentation_ratio("original_only" if target_ratio is None else "original_training_augmented_testing", target_ratio)
+            expected_ratio = resolve_persisted_augmentation_ratio("original_only" if target_ratio is None else "original_training_augmented_training", target_ratio)
             if actual_ratio != expected_ratio:
                 continue
             f1 = resolve_result_metric_float(entry, "weighted_f1_score")
@@ -20668,6 +20668,8 @@ def publish_feature_process_result_event(task: dict, process_payload: dict, resu
 
     notification_result = build_feature_process_notification_result(result_entry)  # Copy only scalar persisted fields needed by Telegram
     comparison_suffix = format_metric_comparison_suffix(resolve_result_metric_float(result_entry, "weighted_f1_score"), result_entry.get("elapsed_time_s"), ACTIVE_METRIC_COMPARISON_BASELINES)  # Resolve exact persisted baselines without changing them.
+    if comparison_suffix:  # Report the same verified baseline differences in the local log and Telegram.
+        print(f"[METRIC COMPARISON] Feature Set: {task['feature_set']} | Classifier: {task['classifier_name']} | Run: {task['experiment_run']} | Training Augmentation Ratio: {task['augmentation_ratio']}{comparison_suffix}")  # Emit persisted weighted-F1 and elapsed-time differences for the matching configuration.
     status_queue.put({"status": "progress", "feature_set": process_payload["feature_set"], "global_id": task["global_id"], "event": event, "notification_result": notification_result, "comparison_suffix": comparison_suffix, "pid": os.getpid()})  # Publish completion only after persistence and terminal status transition
 
 
@@ -22977,10 +22979,10 @@ def main(config=None):
 
         if test_data_augmentation:  # If data augmentation testing is enabled
             print(
-                f"{BackgroundColors.BOLD}{BackgroundColors.YELLOW}Data Augmentation Testing: {BackgroundColors.CYAN}ENABLED{Style.RESET_ALL}"
+                f"{BackgroundColors.BOLD}{BackgroundColors.YELLOW}Training Data Augmentation: {BackgroundColors.CYAN}ENABLED{Style.RESET_ALL}"
             )  # Print augmentation enabled message
             print(
-                f"{BackgroundColors.GREEN}Will train on Original and evaluate Original vs Augmented tests at ratios: {BackgroundColors.CYAN}{[f'{int(r*100)}%' for r in augmentation_ratios]}{Style.RESET_ALL}\n"
+                f"{BackgroundColors.GREEN}Will compare original-only training against synthetic-augmented training on the same original held-out test at ratios: {BackgroundColors.CYAN}{[f'{int(r*100)}%' for r in augmentation_ratios]}{Style.RESET_ALL}\n"
             )  # Print augmentation ratios to be evaluated
 
         start_time = datetime.datetime.now()  # Get the start time of the program
