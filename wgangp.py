@@ -2068,7 +2068,9 @@ def calculate_generated_count_from_ratio(original_count: int, ratio: float) -> i
     if original_count_int == 0:  # Return zero when no source rows exist
         return 0  # Preserve the empty-source invariant
 
-    return max(1, int(math.floor(original_count_int * ratio_float)))  # Preserve existing floor semantics for ratio requests
+    if not 0.0 <= ratio_float <= 1.0:  # Preserve percentage-mode semantics.
+        raise ValueError("Percentage generation ratios must be within [0.0, 1.0]")  # Refuse unsupported ratios.
+    return int(math.floor(original_count_int * ratio_float))  # Allocate the requested share without inventing samples for zero ratios.
 
 
 def distribute_generated_counts_by_ratio(class_distribution: Dict, total_preprocessed: int, target_n: int, small_class_threshold: int, small_class_min_samples: int) -> Dict:  # Allocate exact synthetic counts by class
@@ -4700,16 +4702,12 @@ def compute_expected_samples_for_percentage(percent: float, args, config: Option
         if class_dist is None:  # If still undetermined
             return None  # Cannot compute expected value safely
 
-        total_preprocessed = int(sum(class_dist.values()))  # Compute preprocessed total for original size estimation
-        original_dataset_size = total_preprocessed  # Default to preprocessed total when CSV unavailable
-
-        if getattr(args, "csv_path", None):  # If CSV path is available on args
-            try:
-                original_dataset_size = len(pd.read_csv(args.csv_path, low_memory=False))  # Read original CSV row count for exact multiplier basis
-            except Exception:
-                original_dataset_size = total_preprocessed  # Fallback to preprocessed total on CSV read failure
-
-        return calculate_generated_count_from_ratio(original_dataset_size, percent)  # Return deterministic generated rows for the requested ratio
+        if getattr(args, "label", None) is not None:  # Respect an explicitly requested class during expected-count planning.
+            requested_label = int(args.label)  # Normalize selected class identity.
+            if requested_label not in class_dist:  # Reject a missing selected class.
+                return None  # Avoid accepting an unrelated output as complete.
+            return calculate_generated_count_from_ratio(int(class_dist[requested_label]), percent)  # Use only the selected preprocessed class.
+        return sum(calculate_generated_count_from_ratio(int(count), percent) for count in class_dist.values())  # Match the production per-class allocation exactly.
 
     except Exception as e:
         print(str(e))
@@ -5014,31 +5012,17 @@ def compute_generation_counts_and_labels(args, config: Dict, class_distribution:
                 "Percentage-based generation requires class_distribution in checkpoint or --csv_path to calculate it."
             )  # Raise error when class distribution missing
 
-        total_preprocessed = int(sum(class_distribution.values()))  # Compute preprocessed total for proportional distribution
-        original_dataset_size = total_preprocessed  # Default to preprocessed total as fallback when CSV unavailable
-
-        if getattr(args, "csv_path", None):  # If CSV path is available on args
-            try:
-                original_dataset_size = len(pd.read_csv(args.csv_path, low_memory=False))  # Read original CSV row count for exact multiplier basis
-            except Exception:
-                original_dataset_size = total_preprocessed  # Fallback to preprocessed total on CSV read failure
-
-        target_n = calculate_generated_count_from_ratio(original_dataset_size, args.n_samples)  # Resolve synthetic row target with shared ratio semantics
-
-        print(f"{BackgroundColors.CYAN}Generating {args.n_samples*100:.1f}% of original dataset ({target_n} of {original_dataset_size} samples, min {small_class_min_samples} samples for small classes){Style.RESET_ALL}")  # Print generation percentage summary
-
-        if args.label is not None:  # If specific label requested
-            if args.label not in class_distribution:  # Verify label exists in distribution
-                raise ValueError(f"Label {args.label} not found in training data class distribution")  # Raise error for unknown label
-            n_per_class = {args.label: target_n}  # Assign all target samples to the requested class
-        else:  # Generate for all classes proportionally
-            n_per_class = distribute_generated_counts_by_ratio(  # Allocate per-class counts with an exact target sum
-                class_distribution,  # Source class counts used for proportional allocation
-                total_preprocessed,  # Preprocessed denominator used by the existing class-balance policy
-                target_n,  # Exact synthetic row target requested by ratio semantics
-                small_class_threshold,  # Configured source-count threshold for small-class floors
-                small_class_min_samples,  # Configured small-class floor applied only when feasible
-            )  # Finish exact per-class allocation
+        total_preprocessed = int(sum(class_distribution.values()))  # Define the actual usable source population after GAN preprocessing.
+        args._last_original_preprocessed_num_samples = total_preprocessed  # Persist the correct source denominator for generated_ratio and output metadata.
+        if args.label is not None:  # Keep percentage generation class-specific when one class is selected.
+            if args.label not in class_distribution:  # Verify the requested encoded class exists.
+                raise ValueError(f"Label {args.label} not found in training data class distribution")  # Refuse missing conditioning labels.
+            selected_counts = {args.label: class_distribution[args.label]}  # Restrict the source denominator to the chosen class.
+        else:  # Generate the requested ratio independently for every available class.
+            selected_counts = class_distribution  # Preserve the generator checkpoint's class distribution.
+        n_per_class = {label: calculate_generated_count_from_ratio(int(count), args.n_samples) for label, count in selected_counts.items()}  # Apply the requested ratio to each preprocessed class independently.
+        target_n = sum(n_per_class.values())  # Resolve exact total after deterministic per-class rounding.
+        print(f"{BackgroundColors.CYAN}Generating {args.n_samples*100:.1f}% per original preprocessed class ({target_n} of {sum(int(count) for count in selected_counts.values())} usable source rows){Style.RESET_ALL}")  # Report per-class rather than raw-file ratio semantics.
 
         labels = []  # List to build label array
         for label, count in n_per_class.items():  # For each class
@@ -5123,10 +5107,10 @@ def build_augmented_output_dataframe(args: Any, df_generated: pd.DataFrame) -> t
     :return: Tuple of generated output DataFrame and original source row count.
     """
 
-    original_count = 0  # Initialize source row count for result metadata
-
-    if getattr(args, "csv_path", None):  # Read source count when source CSV is available
-        original_count = len(pd.read_csv(args.csv_path, low_memory=False))  # Count source rows for result metadata
+    original_count = getattr(args, "_last_original_preprocessed_num_samples", None)  # Prefer the exact usable original population supporting per-class ratios.
+    if original_count is None and getattr(args, "csv_path", None):  # Retain the legacy raw-count fallback for absolute-count generation.
+        original_count = len(pd.read_csv(args.csv_path, low_memory=False))  # Count raw source rows only when preprocessed counts are unavailable.
+    original_count = int(original_count or 0)  # Normalize sample count for result metadata.
 
     return df_generated, original_count  # Return generated rows and source row count
 
@@ -6333,7 +6317,7 @@ def skip_both_mode_when_augmented_output_sufficient(args: Any, config: Dict, csv
         provenance_valid = existing_provenance.get("sha256") == build_wgangp_provenance(args)["sha256"]  # Match the current training configuration exactly.
     except (OSError, ValueError, TypeError, AttributeError):  # Treat missing or malformed output manifests as unverified.
         provenance_valid = False  # Require regeneration for unverifiable existing outputs.
-    if existing_rows >= int(required_rows) and provenance_valid:  # Skip only verified existing samples with the requested size.
+    if existing_rows == int(required_rows) and provenance_valid:  # Skip only matching output size and verified source/model configuration.
         skip_message = f"{file_progress_prefix} [INFO] Skipping WGAN-GP training and generation for {csv_path_obj.name}: existing augmented output already satisfies requested size."  # Build skip notification.
         print(f"{BackgroundColors.GREEN}{skip_message}{Style.RESET_ALL}")  # Log skip before returning to directory loop.
         safe_log("info", skip_message)  # Persist skip through existing logger.
