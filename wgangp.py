@@ -144,6 +144,7 @@ logger = None  # Will be initialized in initialize_logger()
 
 RESOURCE_MONITOR_STOP_EVENT = None  # Event to signal watcher to stop
 RESOURCE_MONITOR_THREAD = None  # Background thread running the watcher
+RESOURCE_MONITOR_LATEST_SUFFIX = " | System RAM: N/A | Process RAM: N/A | CPU: N/A | GPU Usage: N/A | GPU VRAM: N/A"  # Immutable cached telemetry read without I/O by the training progress loop.
 
 
 # Classes Definitions:
@@ -875,12 +876,10 @@ def safe_critical(message: str):
     except Exception:
         pass  # Ignore logging failures
 
-def get_gpu_usage_summary() -> Optional[str]:
-    """
-    Return utilization and VRAM usage for every NVIDIA GPU, when available.
-    
-    :param None
-    :return GPU utilization when available
+def get_gpu_telemetry() -> List[tuple]:
+    """Read per-device NVIDIA utilization and VRAM from one bounded nvidia-smi call.
+
+    :return: GPU index, utilization percent, used MiB and total MiB tuples; empty if unavailable.
     """
 
     try:
@@ -890,16 +889,60 @@ def get_gpu_usage_summary() -> Optional[str]:
             check=False,
             text=True,
             timeout=2,
-        )  # Query the NVIDIA driver directly because PyTorch does not expose device utilization.
+        )  # Run only from the background resource monitor, never per training batch.
         if result.returncode != 0:
-            return None
-        usage = []
+            return []
+        devices = []
         for row in result.stdout.splitlines():
-            index, utilization, memory_used, memory_total = (value.strip() for value in row.split(","))
-            usage.append(f"GPU {index}={utilization}% ({memory_used}/{memory_total} MiB)")
-        return ", ".join(usage) or None
-    except (OSError, subprocess.SubprocessError, ValueError):
-        return None  # NVIDIA tooling is optional; CPU-only and non-NVIDIA systems remain supported.
+            fields = [field.strip() for field in row.split(",")]
+            if len(fields) != 4:
+                continue  # Ignore incomplete driver rows without affecting model training.
+            try:
+                index, utilization, used_mib, total_mib = (int(field) for field in fields)
+            except ValueError:
+                continue  # Ignore N/A or unsupported NVIDIA telemetry fields.
+            if index >= 0 and 0 <= utilization <= 100 and 0 <= used_mib <= total_mib and total_mib > 0:
+                devices.append((index, utilization, used_mib, total_mib))
+        return sorted(devices)
+    except (OSError, subprocess.SubprocessError):
+        return []  # No NVIDIA driver or executable on this host.
+
+
+def get_gpu_usage_summary() -> Optional[str]:
+    """Preserve the existing human-readable GPU monitor summary interface."""
+
+    devices = get_gpu_telemetry()
+    if not devices:
+        return None
+    return ", ".join(f"GPU {index}={utilization}% ({used}/{total} MiB)" for index, utilization, used, total in devices)
+
+
+def format_training_resource_suffix(memory: Any, cpu_percent: Any, process_rss: Optional[int], devices: List[tuple], process_cpu_percent: Optional[float] = None) -> str:
+    """Format one sampled host/process/GPU snapshot for the tqdm description.
+
+    Telemetry describes whole-system CPU/RAM, this process's RSS, and each NVIDIA GPU.
+    It does not attribute device utilization to a particular WGAN-GP process.
+    """
+
+    if memory is None:
+        ram_label = "N/A"
+    else:
+        ram_label = f"{(memory.total - memory.available) / (1024 ** 3):.1f}/{memory.total / (1024 ** 3):.1f} GiB ({memory.percent:.1f}%)"
+    process_label = f"{process_rss / (1024 ** 3):.2f} GiB" if process_rss is not None else "N/A"
+    cpu_label = f"{float(cpu_percent):.1f}%" if cpu_percent is not None else "N/A"
+    process_cpu_label = f"{float(process_cpu_percent):.1f}%" if process_cpu_percent is not None else "N/A"
+    if devices:
+        gpu_label = ", ".join(f"GPU {index}: {utilization}%" for index, utilization, _, _ in devices)
+        vram_label = ", ".join(f"GPU {index}: {used}/{total} MiB ({100 * used / total:.1f}%)" for index, _, used, total in devices)
+    else:
+        gpu_label, vram_label = "N/A", "N/A"
+    return f" | System RAM: {ram_label} | Process RAM: {process_label} | CPU: {cpu_label} | Process CPU: {process_cpu_label} | GPU Usage: {gpu_label} | GPU VRAM: {vram_label}"
+
+
+def get_cached_training_resource_suffix() -> str:
+    """Return the monitor's latest immutable preformatted snapshot without blocking training."""
+
+    return RESOURCE_MONITOR_LATEST_SUFFIX
 
 
 def resource_monitor_loop(stop_event: threading.Event, config: Optional[Dict] = None):
@@ -925,10 +968,21 @@ def resource_monitor_loop(stop_event: threading.Event, config: Optional[Dict] = 
         high_usage_start_timestamp = None  # Timestamp when sustained high memory usage begins
         current_sustained_duration_seconds = 0.0  # Current sustained high-memory duration in seconds
 
+        process = psutil.Process(os.getpid())  # Observe only this coordinator's resident memory; do not sum shared child memory.
+        process.cpu_percent(interval=None)  # Prime psutil's non-blocking per-process CPU counter.
         while not stop_event.is_set():
-            mem = psutil.virtual_memory().percent  # Current RAM usage percent
-            cpu = psutil.cpu_percent(interval=None)  # Current CPU usage percent (non-blocking)
-            gpu_usage = get_gpu_usage_summary()  # Query GPU load and VRAM without making NVIDIA tooling mandatory
+            global RESOURCE_MONITOR_LATEST_SUFFIX  # Publish one immutable formatted resource snapshot for tqdm.
+            virtual_memory = psutil.virtual_memory()  # Read available and total host memory together.
+            mem = virtual_memory.percent  # Preserve the existing watchdog threshold semantics.
+            cpu = psutil.cpu_percent(interval=None)  # Current whole-system CPU usage; no sampling delay.
+            devices = get_gpu_telemetry()  # Query all GPU utilizations and VRAM once per monitor interval.
+            gpu_usage = ", ".join(f"GPU {i}={util}% ({used}/{total} MiB)" for i, util, used, total in devices) or None  # Preserve debug reporting.
+            try:
+                process_rss = process.memory_info().rss  # Record the coordinator's physical resident memory.
+                process_cpu = process.cpu_percent(interval=None)  # Non-blocking utilization since the previous monitor sample.
+            except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
+                process_rss, process_cpu = None, None  # Resource reporting must not interrupt training.
+            RESOURCE_MONITOR_LATEST_SUFFIX = format_training_resource_suffix(virtual_memory, cpu, process_rss, devices, process_cpu)  # Atomic string replacement; no per-batch polling.
             current_timestamp = time.time()  # Capture the current timestamp for sustained duration tracking
 
             if logger:
@@ -3805,7 +3859,7 @@ def run_batch_training_loop(G, D, opt_G, opt_D, scaler, device: torch.device, ar
             + f"{BackgroundColors.GREEN}loss_G: {_cached_g_loss:.4f}{Style.RESET_ALL} | "  # Generator loss from cached value
             + f"gp: {_cached_gp:.4f} | "  # Gradient penalty from cached value
             + f"D(real): {_cached_d_real:.4f} | "  # Average critic score on real from cached value
-            + f"D(fake): {_cached_d_fake:.4f}{finish_suffix}"  # Average critic score on fake from cached value and finish timestamp
+            + f"D(fake): {_cached_d_fake:.4f}{get_cached_training_resource_suffix()}{finish_suffix}"  # Append cached CPU/RAM/GPU telemetry before the unchanged finish timestamp.
         )
 
         step += 1  # Increment global step counter
