@@ -78,6 +78,7 @@ import subprocess  # For running small system commands to query hardware
 import sys  # For system-specific parameters and functions
 import telegram_bot as telegram_module  # For setting Telegram prefix and device info
 import threading  # For background resource watcher thread
+import tempfile  # For uniquely named, atomically committed results CSV updates
 import time  # For elapsed time tracking
 import torch  # PyTorch core
 import torch.nn as nn  # Neural network modules
@@ -86,6 +87,10 @@ import traceback  # For printing tracebacks on exceptions
 import yaml  # For loading configuration files
 from colorama import Style  # For coloring the terminal
 from contextlib import nullcontext  # For null context manager
+try:
+    import fcntl  # Serialize same-directory results updates across Linux processes.
+except ImportError:
+    fcntl = None  # Atomic replacement still works when POSIX advisory locks are unavailable.
 from Logger import Logger  # For logging output to both terminal and file
 from mpl_toolkits.mplot3d import Axes3D  # For 3D projection type annotation and axis method resolution
 from pathlib import Path  # For handling file paths
@@ -4167,7 +4172,9 @@ def validate_completed_generation_row(row_runtime: Dict, results_cols_cfg: list)
     :return: None.
     """
 
-    required_fields = ["original_num_samples", "generated_num_samples", "total_num_samples_after_augmentation", "generated_ratio", "epoch", "epoch_time_s", "training_time_s", "generated_time_s", "testing_time_s", "hardware"]  # Define required completed-result fields
+    # Resuming a completed checkpoint performs no new epoch; epoch_time_s is then
+    # legitimately unknown, and should be blank rather than blocking persistence.
+    required_fields = ["original_file", "generated_file", "original_num_samples", "generated_num_samples", "total_num_samples_after_augmentation", "generated_ratio", "epoch", "generated_time_s", "testing_time_s"]
     missing_schema = [field for field in required_fields if field not in results_cols_cfg]  # Find required fields absent from schema
     if missing_schema:  # Verify required fields are present in configured schema
         raise ValueError(f"Results CSV schema is missing required fields: {missing_schema}")  # Raise before any row write
@@ -4193,58 +4200,98 @@ def validate_completed_generation_row(row_runtime: Dict, results_cols_cfg: list)
         raise ValueError("Completed generation row has an inconsistent generated_ratio")  # Raise before any row write
     if completed_epoch_value <= 0.0:  # Verify completed epoch count is positive
         raise ValueError("Completed generation row has no completed epoch")  # Raise before any row write
-    if epoch_time_value <= 0.0:  # Verify completed epoch duration is positive
-        raise ValueError("Completed generation row has no completed epoch duration")  # Raise before any row write
+    if row_runtime.get("epoch_time_s") not in (None, "") and epoch_time_value < 0.0:
+        raise ValueError("Completed generation row has a negative epoch duration")
     if missing_metrics:  # Verify all WGAN-GP metrics are present when any final metric is present
         raise ValueError(f"Completed generation row is missing WGAN-GP metric values: {missing_metrics}")  # Raise before any row write
 
 
 def update_results_csv_row(results_csv_path: Path, ordered_row: list, results_cols_cfg: list, original_file: str) -> None:
+    """Atomically insert or replace exactly one successful generation result per source CSV.
+
+    Existing records for other sources are preserved. Duplicate entries for the
+    current source are collapsed, including historical entries containing the
+    source's path instead of its basename. Results are committed after every
+    successful file rather than at the end of a multi-file execution.
+
+    An incompatible existing header is an error, never grounds for silently
+    discarding historical results. A temporary file and an optional POSIX lock
+    protect the destination from interrupted and concurrent writes.
     """
-    Load existing results CSV, replace rows for original_file, and save atomically.
+    results_csv_path = Path(results_csv_path)
+    if not isinstance(results_cols_cfg, list) or not results_cols_cfg or len(set(results_cols_cfg)) != len(results_cols_cfg):
+        raise ValueError("Results CSV schema must have unique, nonempty columns")
+    if "original_file" not in results_cols_cfg:
+        raise ValueError("Results CSV schema must include original_file for deduplication")
+    if len(ordered_row) != len(results_cols_cfg):
+        raise ValueError(f"Results row has {len(ordered_row)} fields but schema has {len(results_cols_cfg)}")
 
-    :param results_csv_path: Absolute path to the results CSV file.
-    :param ordered_row: Ordered list of values aligned to results_cols_cfg schema.
-    :param results_cols_cfg: List of column names defining the CSV schema.
-    :param original_file: Filename used to deduplicate rows matched against the original_file column.
-    :return: None
-    """
+    def source_key(value: Any) -> str:
+        return str(value or "").strip().replace("\\", "/").rstrip("/").split("/")[-1]
 
-    try:
-        if len(ordered_row) != len(results_cols_cfg):  # Verify row width matches the configured schema width
-            raise ValueError(f"Results row has {len(ordered_row)} fields but schema has {len(results_cols_cfg)} fields")  # Raise before writing a malformed row
-        if all(value is None or str(value).strip() == "" for value in ordered_row):  # Prevent all-empty result rows from being written
-            raise ValueError("Results row is empty after runtime serialization")  # Raise before writing an all-empty row
-        os.makedirs(results_csv_path.parent, exist_ok=True)  # Ensure parent directory exists before any read or write
-        existing_rows: list = []  # Accumulate rows not belonging to current original_file
-        original_file_idx = results_cols_cfg.index("original_file") if "original_file" in results_cols_cfg else -1  # Locate original_file column index once for efficiency
-        if results_csv_path.exists() and results_csv_path.stat().st_size > 0:  # Load existing rows only when file is non-empty
-            with open(results_csv_path, "r", newline="", encoding="utf-8") as rf:  # Open existing CSV for reading
-                reader = csv.reader(rf)  # Create CSV reader for row iteration
-                all_rows = list(reader)  # Read all rows into memory for in-place filtering
-            data_rows = all_rows[1:] if (all_rows and all_rows[0] == results_cols_cfg) else all_rows  # Skip header row when schema matches, else treat entire file as data
-            for row in data_rows:  # Iterate over retained data rows
-                if not row or all(str(cell).strip() == "" for cell in row):  # Skip physical blank rows and all-empty CSV records
-                    continue  # Do not include empty rows in retained set
-                if row == results_cols_cfg:  # Skip duplicated header rows found in the data area
-                    continue  # Do not preserve repeated schema rows as data
-                if len(row) != len(results_cols_cfg):  # Skip retained rows that do not align with current schema width
-                    print(f"{BackgroundColors.YELLOW}Warning: dropping malformed results CSV row with {len(row)} fields; expected {len(results_cols_cfg)}.{Style.RESET_ALL}")  # Warn about malformed retained row
-                    continue  # Do not preserve malformed rows in rewritten results
-                row_original_file = row[original_file_idx] if original_file_idx >= 0 and original_file_idx < len(row) else ""  # Extract original_file value safely using precomputed index
-                if row_original_file != original_file:  # Retain rows belonging to different original files only
-                    existing_rows.append(row)  # Preserve unrelated rows without modification
-        temporary_results_path = results_csv_path.with_suffix(f"{results_csv_path.suffix}.tmp")  # Stage complete replacement beside the destination
-        with open(temporary_results_path, "w", newline="", encoding="utf-8") as wf:  # Open temporary file for failure-safe full rewrite
-            writer = csv.writer(wf)  # Create CSV writer for full rewrite operation
-            writer.writerow(results_cols_cfg)  # Write schema header row first to preserve column order
-            for row in existing_rows:  # Write all retained rows for other original files
-                writer.writerow(row)  # Persist each retained row in original order
-            writer.writerow(ordered_row)  # Append deduplicated row for current original_file as last entry
-        os.replace(temporary_results_path, results_csv_path)  # Atomically publish complete CSV without exposing partial unrelated rows
-    except Exception as _ue:  # On any failure, warn without interrupting training
-        print(f"{BackgroundColors.YELLOW}Warning: could not update results CSV {results_csv_path}: {_ue}{Style.RESET_ALL}")  # Warn about CSV update failure
+    key = source_key(original_file)
+    if not key or key.lower() == "original_file":
+        raise ValueError("Cannot upsert results without a valid original source filename")
+    row_mapping = dict(zip(results_cols_cfg, ordered_row))
+    if source_key(row_mapping.get("original_file")) != key:
+        raise ValueError("Results row's original_file differs from the requested source")
+    if not row_mapping.get("generated_file"):
+        raise ValueError("Results row has no generated output filename")
 
+    results_csv_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = results_csv_path.with_name(results_csv_path.name + ".lock")
+    temp_name = None
+    # Persistent separate lock inode avoids invalidating the lock after os.replace.
+    with open(lock_path, "a+b") as lock_file:
+        if fcntl is not None:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            retained: list = []
+            if results_csv_path.exists() and results_csv_path.stat().st_size:
+                with open(results_csv_path, "r", newline="", encoding="utf-8-sig") as source_file:
+                    reader = csv.DictReader(source_file)
+                    existing_columns = reader.fieldnames
+                    if (not existing_columns or len(set(existing_columns)) != len(existing_columns)
+                            or set(existing_columns) != set(results_cols_cfg)):
+                        raise ValueError(
+                            f"Existing results CSV has a different schema: {existing_columns!r}; "
+                            "preserving the file rather than overwriting historical entries"
+                        )
+                    for old in reader:
+                        if None in old:  # Overflow columns indicate malformed rows.
+                            raise ValueError("Malformed historical results row has unexpected extra fields")
+                        if not any(str(value or "").strip() for value in old.values()):
+                            continue
+                        if all(old.get(column) == column for column in results_cols_cfg):
+                            continue  # Ignore historical repeated header rows.
+                        if source_key(old.get("original_file")) != key:
+                            retained.append([old[column] for column in results_cols_cfg])
+            # Write and fsync a unique same-directory temporary file before replacing.
+            with tempfile.NamedTemporaryFile(
+                mode="w", newline="", encoding="utf-8", dir=results_csv_path.parent,
+                prefix=results_csv_path.name + ".", suffix=".tmp", delete=False
+            ) as destination:
+                temp_name = destination.name
+                writer = csv.writer(destination)
+                writer.writerow(results_cols_cfg)
+                writer.writerows(retained)
+                writer.writerow(ordered_row)
+                destination.flush()
+                os.fsync(destination.fileno())
+            if results_csv_path.exists():
+                # Preserve an existing results file's permissions across replacement.
+                import stat
+                os.chmod(temp_name, stat.S_IMODE(results_csv_path.stat().st_mode))
+            os.replace(temp_name, results_csv_path)
+            temp_name = None
+        finally:
+            if temp_name is not None:
+                try:
+                    os.unlink(temp_name)
+                except FileNotFoundError:
+                    pass
+            if fcntl is not None:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 def extract_optimizer_learning_rates(opt_G, opt_D, args) -> tuple:
     """
@@ -5771,16 +5818,22 @@ def collect_generation_file_metadata(args, args_ck: Dict, ckpt: Dict, n: int, ck
         else:  # No path available
             metadata["original_file_name"] = ""  # Default to empty when no path available
     metadata["generated_file_name"] = str(Path(args.out_file)) if getattr(args, "out_file", None) else ""  # Generated file path
-    metadata["original_num"] = getattr(args, "_last_original_num_samples", None)  # Prefer source row count captured during output assembly
-    try:  # Attempt to count original CSV rows
-        if source_csv_path is not None:  # If source CSV path is available, read length
-            metadata["original_num"] = len(pd.read_csv(source_csv_path, low_memory=False))  # Count original CSV rows
-    except Exception:  # Reading failed
-        metadata["original_num"] = metadata["original_num"] if metadata["original_num"] not in (None, "") else None  # Preserve captured source count when reading fails
+    # Use the exact usable population saved during generation. The source CSV's
+    # raw row count may contain invalid/filtered rows and MUST NOT overwrite it.
+    metadata["original_num"] = getattr(args, "_last_original_num_samples", None)
+    if metadata["original_num"] in (None, ""):
+        metadata["original_num"] = getattr(args, "_last_original_preprocessed_num_samples", None)
+    if metadata["original_num"] in (None, ""):
+        distribution = ckpt.get("class_distribution") if isinstance(ckpt, dict) else None
+        if isinstance(distribution, dict) and distribution:
+            metadata["original_num"] = sum(int(count) for count in distribution.values())
+    if metadata["original_num"] in (None, ""):
+        raise ValueError("Usable source sample count is unavailable; refusing to record an inaccurate generation result")
+    metadata["original_num"] = int(metadata["original_num"])
     metadata["generated_num"] = int(n) if n is not None else ""  # Store newly generated synthetic rows
-    metadata["total_after_augmentation"] = getattr(args, "_last_total_num_samples_after_augmentation", "")  # Read total
-    if metadata["total_after_augmentation"] in (None, "") and metadata["original_num"] not in (None, "") and metadata["generated_num"] not in (None, ""):  # Build final total when direct value is unavailable
-        metadata["total_after_augmentation"] = int(metadata["original_num"]) + int(metadata["generated_num"])  # Store source plus synthetic row total
+    # The dataset saved on disk contains generated rows only; this results field
+    # describes the conceptual total of valid original plus generated samples.
+    metadata["total_after_augmentation"] = int(metadata["original_num"]) + int(metadata["generated_num"])
     metadata["generated_ratio"] = ""  # Default generated ratio
     try:  # Attempt to compute generated ratio
         if metadata["original_num"] and metadata["original_num"] > 0:  # If original count available
@@ -5894,12 +5947,10 @@ def prepare_and_write_results_csv_row(args, config: Dict, args_ck: Dict, ckpt: D
         metadata = collect_generation_file_metadata(args, args_ck, ckpt, n, ck_csv_path)  # Collect file metadata for generation results
         row_runtime = build_generation_runtime_row(args, config, n, device, metadata)  # Build runtime metrics dictionary for CSV row
         validate_completed_generation_row(row_runtime, results_cols_cfg)  # Verify completed row fields before writing
-        try:  # Wrap open/write in try/except to avoid crashing on I/O issues
-            ordered = build_ordered_csv_row_from_runtime(row_runtime, results_cols_cfg, config)  # Build ordered CSV row from runtime values using shared function
-            original_file = row_runtime.get("original_file", "")  # Extract original filename for one-row-per-dataset replacement
-            update_results_csv_row(results_csv_path, ordered, results_cols_cfg, original_file)  # Persist one schema-aligned completed row for this dataset
-        except Exception as _we:  # On any write/open failure, warn and continue
-            print(f"{BackgroundColors.YELLOW}Warning: failed to persist generation row: {_we}{Style.RESET_ALL}")  # Warn but do not abort
+        ordered = build_ordered_csv_row_from_runtime(row_runtime, results_cols_cfg, config)
+        original_file = row_runtime.get("original_file", "")
+        update_results_csv_row(results_csv_path, ordered, results_cols_cfg, original_file)
+        print(f"[RESULTS] Updated {results_csv_path} for {original_file} ({n} generated samples)")
 
 
 def warn_on_results_csv_failure(e: Exception) -> None:
@@ -5956,11 +6007,8 @@ def generate(args, config: Optional[Dict] = None):
         generate_generation_quality_outputs(args, config, df, feature_cols)  # Generate post-generation quality visualization outputs
         record_testing_timing(args, testing_start_time)  # Record post-generation verification and quality-output elapsed time
         generated_n = int(safe_float(getattr(args, "_last_generated_num_samples", n), n))  # Resolve actual synthetic row count for result persistence
-        notify_generation_finish_via_telegram(args, generated_n, file_progress_prefix)  # Send Telegram finish notification
-        try:  # Wrap result writing in try/except to avoid breaking generation on failures
-            prepare_and_write_results_csv_row(args, config, args_ck, ckpt, generated_n, device)  # Prepare and write results CSV row
-        except Exception as e:
-            warn_on_results_csv_failure(e)  # Warn on results CSV preparation failure
+        prepare_and_write_results_csv_row(args, config, args_ck, ckpt, generated_n, device)  # Persist each generated file immediately; surface errors.
+        notify_generation_finish_via_telegram(args, generated_n, file_progress_prefix)  # Announce completion only after the results row is committed.
     except Exception as e:
         handle_generate_top_level_exception(e)  # Handle top-level exception by logging and re-raising
 
@@ -6007,17 +6055,14 @@ def generate_from_in_memory_generator(args, config: Dict, G: nn.Module, dataset:
         generate_generation_quality_outputs(args, config, df, feature_cols)  # Generate post-generation quality visualization outputs
         record_testing_timing(args, testing_start_time)  # Record post-generation verification and quality-output elapsed time
         generated_n = int(safe_float(getattr(args, "_last_generated_num_samples", n), n))  # Resolve actual synthetic row count for result persistence
-        notify_generation_finish_via_telegram(args, generated_n, file_progress_prefix)  # Send Telegram finish notification
 
-        try:  # Wrap result writing in try/except to avoid breaking generation on failures
-            in_memory_ckpt = {  # Build minimal saved-state metadata for the in-memory generation path
-                "epoch": getattr(args, "_last_completed_epoch", ""),  # Store completed training epoch from live args
-                "metrics_history": getattr(args, "_last_metrics_history", {}),  # Store final metrics history from live training
-                "args": vars(args),  # Store live args for timing fallback values
-            }  # End in-memory saved-state metadata
-            prepare_and_write_results_csv_row(args, config, vars(args), in_memory_ckpt, generated_n, device)  # Prepare and write results CSV row
-        except Exception as e:
-            warn_on_results_csv_failure(e)  # Warn on results CSV preparation failure
+        in_memory_ckpt = {  # Metadata for generation without a disk checkpoint.
+            "epoch": getattr(args, "_last_completed_epoch", ""),
+            "metrics_history": getattr(args, "_last_metrics_history", {}),
+            "args": vars(args),
+        }
+        prepare_and_write_results_csv_row(args, config, vars(args), in_memory_ckpt, generated_n, device)
+        notify_generation_finish_via_telegram(args, generated_n, file_progress_prefix)  # Announce completion only after the results row is committed.
 
     except Exception as e:
         handle_generate_top_level_exception(e)  # Handle top-level exception by logging and re-raising
@@ -6967,6 +7012,15 @@ def setup_per_file_output(args: Any, config: Dict, file: str, results_suffix: st
     os.makedirs(samples_dir, exist_ok=True)  # Ensure augmented samples subdirectory exists before output file creation
     args.out_file = str(samples_dir / output_filename)  # Assign computed output file path to args
     args.csv_path = file  # Assign current CSV file path to args for train and generate functions
+    # One namespace is reused for every source in batch mode: never carry a
+    # previous file's sample counts, epoch duration, or metrics into this row.
+    for previous_field in ("_last_original_num_samples", "_last_original_preprocessed_num_samples",
+                           "_last_generated_num_samples", "_last_total_num_samples_after_augmentation",
+                           "_last_sample_generation_time", "_last_testing_time", "_last_epoch_time",
+                           "_last_completed_epoch", "_last_metrics_history", "_last_file_time"):
+        if hasattr(args, previous_field):
+            delattr(args, previous_field)
+    args._last_training_time = 0.0
     return csv_path_obj, data_aug_dir  # Return Path objects for mode dispatch use
 
 
