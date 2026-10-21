@@ -1114,130 +1114,144 @@ def build_quality_policy_fingerprint(config: Dict) -> str:
 
 
 def assess_generated_flow_quality(args: Any, config: Dict, generated: pd.DataFrame, scaler: Optional[Any] = None, label_encoder: Optional[Any] = None) -> None:
-    """
-    Measure class-specific fidelity and reject known-invalid generated network flows.
+    """Audit per-class joint fidelity, diversity and network constraints before output acceptance.
 
-    :param args: Runtime arguments with source and output paths.
-    :param config: Active configuration containing quality settings.
-    :param generated: Synthetic rows to evaluate before persistence.
-    :return: None.
+    :param args: Generation arguments and exact original source path.
+    :param config: Active sampling and reject-policy configuration.
+    :param generated: Original-scale generated flows to validate.
+    :param scaler: Fitted class-specific flow transformer containing source-supported joint rules.
+    :param label_encoder: Fitted label encoder aligning class strings with the transformer.
+    :return: None; reject unacceptable results before saving synthetic CSV files.
     """
 
-    settings = config.get("quality", {})  # Read opt-in diagnostic bounds and constraint policy.
+    settings = config.get("quality", {})
     if not settings.get("enabled", True):
-        raise ValueError("Quality auditing cannot be disabled when quality acceptance is mandatory")
-
-    label = args.label_col  # Resolve the exact output label column.
-    numeric_columns = [col for col in generated.select_dtypes(include=[np.number]).columns if col != label]  # Restrict comparisons to shared numeric features.
-    sample_limit = max(16, int(settings.get("sample_rows_per_class", 512)))  # Bound diagnostic sample memory per class.
-    random_seed = int(getattr(args, "seed", 42))  # Reuse the experiment's deterministic seed.
-    rng = np.random.default_rng(random_seed)  # Keep diagnostic sampling reproducible.
-    reports = []  # Accumulate measurements for each generated class.
-    invalid_total = 0  # Accumulate invalid generated flow rows.
-    source_samples = {}  # Store bounded uniformly sampled original reference rows per class.
-    source_priorities = {}  # Preserve reservoir priorities between source chunks.
-
-    if getattr(args, "csv_path", None):  # Compare generated classes against their original source distribution.
-        required_columns = numeric_columns + [label]  # Read only the features needed for comparable diagnostics.
-        for chunk in pd.read_csv(args.csv_path, usecols=lambda col: col.strip() in required_columns, chunksize=8192, low_memory=False):  # Read a bounded source chunk.
-            chunk.columns = chunk.columns.str.strip()  # Normalize original feature names.
-            if label not in chunk.columns:  # Require original class identity.
-                raise ValueError(f"Quality source is missing label column: {label}")  # Avoid cross-class diagnostics.
-            for class_label, group in chunk.groupby(label, sort=False):  # Maintain a uniform reservoir per class over the full file.
-                key = str(class_label)  # Normalize class identity for generated-label matching.
-                candidates = group[numeric_columns].to_numpy(dtype=np.float32, copy=True)  # Materialize only this bounded source chunk's class rows.
-                priorities = rng.random(len(candidates))  # Assign independent uniform reservoir priorities.
-                if key in source_samples:  # Include the previously selected rows.
-                    candidates = np.concatenate([source_samples[key], candidates])  # Combine current and new candidates in bounded memory.
-                    priorities = np.concatenate([source_priorities[key], priorities])  # Maintain aligned reservoir priorities.
-                selected = np.argpartition(priorities, min(sample_limit, len(priorities)) - 1)[:sample_limit]  # Select uniformly random original rows by minimum priorities.
-                source_samples[key] = candidates[selected]  # Retain at most sample_limit reference rows.
-                source_priorities[key] = priorities[selected]  # Retain corresponding reservoir priorities.
-
+        raise ValueError("Quality auditing cannot be disabled in the strict flow generation format")
+    label = args.label_col
+    numeric_columns = [c for c in generated.select_dtypes(include=[np.number]).columns if c != label]
+    if not numeric_columns or label not in generated or generated.empty:
+        raise ValueError("Synthetic quality evaluation requires nonempty numeric features and a class label")
+    sample_limit = max(128, int(settings.get("sample_rows_per_class", 4096)))
+    near_limit = min(sample_limit, max(128, int(settings.get("nearest_reference_rows", 1024))))
+    rng = np.random.default_rng(int(getattr(args, "seed", 42)))
+    source_samples, source_priorities = {}, {}
+    if getattr(args, "csv_path", None):
+        required_columns = numeric_columns + [label]
+        for chunk in pd.read_csv(args.csv_path, usecols=lambda col: col.strip() in required_columns, chunksize=8192, low_memory=False):
+            chunk.columns = chunk.columns.str.strip()
+            if label not in chunk.columns:
+                raise ValueError(f"Missing original label column {label} for quality evaluation")
+            for class_label, group in chunk.groupby(label, sort=False):
+                class_key = str(class_label)
+                candidates = group[numeric_columns].to_numpy(dtype=np.float32, copy=True)
+                candidates = candidates[np.isfinite(candidates).all(axis=1)]
+                if not len(candidates):
+                    continue
+                priorities = rng.random(len(candidates))
+                if class_key in source_samples:
+                    candidates = np.concatenate([source_samples[class_key], candidates])
+                    priorities = np.concatenate([source_priorities[class_key], priorities])
+                count = min(sample_limit, len(priorities))
+                selected = np.argpartition(priorities, count - 1)[:count]
+                source_samples[class_key] = candidates[selected]
+                source_priorities[class_key] = priorities[selected]
     rules_by_label = {}
     if isinstance(scaler, ClassConditionalFlowScaler) and label_encoder is not None:
-        for class_id, class_rules in scaler.derived_rules.items():
-            rules_by_label[str(label_encoder.inverse_transform([int(class_id)])[0])] = class_rules
+        for class_id, rules in scaler.derived_rules.items():
+            rules_by_label[str(label_encoder.inverse_transform([int(class_id)])[0])] = rules
+    reports = []
+    invalid_total = 0
     rejecting_classes = []
-    for class_label, group in generated.groupby(label, sort=False):  # Process each generated attack class separately.
-        sample = group.sample(n=min(sample_limit, len(group)), random_state=random_seed)  # Bound synthetic metrics deterministically.
-        sample_values = sample[numeric_columns].to_numpy(dtype=np.float64, copy=True)  # Extract finite-width synthetic feature matrix.
-        finite = np.isfinite(sample_values).all(axis=1)  # Count invalid numeric values without silent replacement.
-        constraints = ~finite  # Begin the invalid-row mask using nonfinite values.
-        violations = {}  # Record named domain-constraint failures.
-        for column in numeric_columns:  # Apply only constraints supported by CIC flow feature semantics.
-            values = pd.to_numeric(group[column], errors="coerce").to_numpy(dtype=np.float64, copy=False)  # Inspect generated values in bounded column views.
-            name = str(column).lower().strip()  # Normalize standard CIC flow feature names.
-            bounded_port = name in {"source port", "destination port"}  # Detect 16-bit transport port features.
-            bounded_protocol = name == "protocol"  # Detect the numeric IP protocol identifier.
-            binary_field = name in {"inbound", "fwd psh flags", "bwd psh flags", "fwd urg flags", "bwd urg flags"}  # Identify explicitly binary CIC flow features.
-            discrete_count = ("flag count" in name or name in {"total fwd packets", "total backward packets", "subflow fwd packets", "subflow bwd packets", "act_data_pkt_fwd", "min_seg_size_forward"})  # Require integral packet and flag counts.
-            is_count = ("count" in name or "packets" in name or "bytes" in name or "length" in name or "duration" in name or "iat" in name or "flag" in name or "size" in name or "/s" in name) and not name.startswith("init_win_bytes") and name != "min_seg_size_forward"  # Recognize intrinsically nonnegative flow quantities.
-            invalid = ~np.isfinite(values) | ((values < 0) if is_count or bounded_port or bounded_protocol or binary_field else False)  # Reject nonfinite and negative physical quantities.
-            if bounded_port:  # Require valid transport-port range and discrete values.
-                invalid |= (values > 65535) | (values != np.rint(values))  # Disallow impossible port numbers.
-            if bounded_protocol:  # Require the unsigned eight-bit IP protocol code.
-                invalid |= (values > 255) | (values != np.rint(values))  # Reject out-of-range or nonintegral protocol codes.
-            if binary_field:  # Require supported binary flag and inbound indicators.
-                invalid |= (values != 0) & (values != 1)  # Reject fractional or unsupported binary values.
-            if discrete_count:  # Preserve integral semantics for packet counts and flag counters.
-                invalid |= values != np.rint(values)  # Reject fractional discrete counts.
-            count = int(np.count_nonzero(invalid))  # Count invalid rows for this feature.
-            if count:  # Retain only actual violations in the report.
-                violations[str(column)] = count  # Store the class-specific constraint count.
-        invalid_total += sum(violations.values())  # Accumulate conservative invalid-value violations.
-        reference = np.asarray(source_samples.get(str(class_label), []), dtype=np.float64)  # Load class-matched original reference rows.
-        rules = rules_by_label.get(str(class_label), [])
-        relation_violations = flow_relationship_violation_counts(sample_values, numeric_columns, rules)
-        record = {"class": str(class_label), "generated_rows": int(len(group)), "generated_sample_rows": int(len(sample)), "violations": violations, "relationship_violations": relation_violations, "enforced_derived_relationships": [rule[-1] for rule in rules]}  # Include calibrated network relationships.
-        if len(reference) and sample_values.size and reference.shape[1] == sample_values.shape[1]:  # Require comparable nonempty feature matrices.
-            valid_ref = reference[np.isfinite(reference).all(axis=1)]  # Exclude invalid reference samples.
-            valid_gen = sample_values[finite]  # Exclude invalid generated rows from fidelity diagnostics.
-            if len(valid_ref) and len(valid_gen):  # Compare compatible finite classes only.
-                center = np.mean(valid_ref, axis=0)  # Compute original class center.
-                scale = np.maximum(np.std(valid_ref, axis=0), 1e-6)  # Prevent division by zero for constant features.
-                normalized_real = (valid_ref - center) / scale  # Standardize reference distances using original class only.
-                normalized_gen = (valid_gen - center) / scale  # Standardize generated distances on the same basis.
-                mean_shift = float(np.mean(np.abs(np.mean(normalized_gen, axis=0) - np.mean(normalized_real, axis=0))))  # Quantify average standardized feature-mean mismatch.
-                real_std = np.std(normalized_real, axis=0)  # Measure original variability before defining a collapse denominator.
-                variable = real_std > 1e-4  # Exclude genuinely constant source features from collapse detection.
-                variance_ratio = float(np.mean(np.std(normalized_gen[:, variable], axis=0) < 0.1 * real_std[variable])) if variable.any() else 0.0  # Compare only informative source features for possible mode collapse.
-                near_dup = int(pd.DataFrame(np.round(normalized_gen, 4)).duplicated().sum())  # Count near-identical synthetic records at fixed precision.
-                from sklearn.neighbors import NearestNeighbors  # Use the existing scikit-learn dependency for nearest original rows.
-                neighbors = NearestNeighbors(n_neighbors=1, algorithm="auto").fit(normalized_real)  # Fit nearest-neighbor lookup on bounded original samples.
-                nearest = neighbors.kneighbors(normalized_gen, return_distance=True)[0].reshape(-1)  # Measure proximity to reference flow vectors.
-                record.update({"mean_shift_standardized": mean_shift, "low_variance_feature_fraction": variance_ratio, "synthetic_near_duplicate_fraction": near_dup / len(valid_gen), "reference_nearest_distance_median": float(np.median(nearest)), "reference_near_match_fraction": float(np.mean(nearest < 0.05))})  # Save sampled class-fidelity, collapse and memorization indicators.
-        quality_flags = []  # Keep per-class screening warnings explicit rather than claiming guaranteed fidelity.
-        if record.get("mean_shift_standardized", 0.0) > float(settings.get("max_mean_shift", 2.0)):  # Flag large marginal-distribution deviations from original source samples.
-            quality_flags.append("large_marginal_mean_shift")  # Indicate that downstream utility may be compromised.
-        if record.get("low_variance_feature_fraction", 0.0) > float(settings.get("max_low_variance_fraction", 0.5)):  # Flag possible mode collapse across variable original features.
-            quality_flags.append("low_feature_diversity")  # Preserve a class-specific diversity warning.
-        if record.get("reference_near_match_fraction", 0.0) > float(settings.get("max_reference_near_match_fraction", 0.95)):  # Flag suspicious proximity to reference original training records.
-            quality_flags.append("possible_reference_memorization")  # Avoid claiming privacy from a bounded neighbor comparison.
-        if relation_violations:
-            quality_flags.append("invalid_joint_feature_relationships")
-        if violations:
-            quality_flags.append("invalid_individual_feature_domains")
-        if "mean_shift_standardized" not in record:
-            quality_flags.append("insufficient_reference_or_synthetic_sample")
-        record["quality_flags"] = quality_flags  # Keep class-specific screening decisions.
-        record["accepted"] = not bool(quality_flags)
-        if not record["accepted"]:
-            rejecting_classes.append(str(class_label))
-        reports.append(record)  # Append this class's measurements.
-
-    report_path = Path(args.out_file).with_suffix(".quality.json")  # Write a report beside the generated CSV.
-    report_path.parent.mkdir(parents=True, exist_ok=True)  # Ensure the report directory exists.
+    for class_label, group in generated.groupby(label, sort=False):
+        class_name = str(class_label)
+        sample = group.sample(n=min(sample_limit, len(group)), random_state=int(getattr(args, "seed", 42)))
+        sample_values = sample[numeric_columns].to_numpy(dtype=np.float64, copy=True)
+        valid_generated = sample_values[np.isfinite(sample_values).all(axis=1)]
+        reference = np.asarray(source_samples.get(class_name, []), dtype=np.float64)
+        report = {"class": class_name, "generated_rows": int(len(group)), "sampled_rows": int(len(sample)), "violations": {}, "relationship_violations": {}, "quality_flags": []}
+        for column in numeric_columns:
+            values = pd.to_numeric(group[column], errors="coerce").to_numpy(dtype=np.float64, copy=False)
+            name = str(column).strip().lower()
+            port = name in {"source port", "destination port"}
+            protocol = name == "protocol"
+            binary = name in {"inbound", "fwd psh flags", "bwd psh flags", "fwd urg flags", "bwd urg flags"}
+            integral = is_discrete_flow_feature(name) and name not in {"init_win_bytes_forward", "init_win_bytes_backward"}
+            nonnegative = ("count" in name or "packets" in name or "bytes" in name or "length" in name or "duration" in name or "iat" in name or "flag" in name or "size" in name or "/s" in name) and not name.startswith("init_win_bytes") and name != "min_seg_size_forward"
+            invalid = ~np.isfinite(values) | ((values < 0) if nonnegative or port or protocol or binary else False)
+            if port:
+                invalid |= values > 65535
+            if protocol:
+                invalid |= values > 255
+            if integral:
+                invalid |= np.abs(values - np.rint(values)) > 1e-5
+            if binary:
+                invalid |= (values != 0) & (values != 1)
+            count = int(np.count_nonzero(invalid))
+            if count:
+                report["violations"][str(column)] = count
+            invalid_total += count
+        relation_rules = rules_by_label.get(class_name, [])
+        report["enforced_derived_relationships"] = [rule[-1] for rule in relation_rules]
+        report["relationship_violations"] = flow_relationship_violation_counts(sample_values, numeric_columns, relation_rules)
+        if report["relationship_violations"]:
+            report["quality_flags"].append("invalid_joint_feature_relationships")
+        if len(reference) >= 32 and len(valid_generated) >= 32:
+            original_mean = np.mean(reference, axis=0)
+            original_std = np.std(reference, axis=0)
+            scale = np.maximum(original_std, 1e-5)
+            standardized_original = (reference - original_mean) / scale
+            standardized_synthetic = (valid_generated - original_mean) / scale
+            source_variable = np.std(standardized_original, axis=0) > 1e-4
+            observed_variation = np.std(standardized_synthetic[:, source_variable], axis=0)
+            real_variation = np.std(standardized_original[:, source_variable], axis=0)
+            mean_shift = float(np.mean(np.abs(np.mean(standardized_synthetic, axis=0))))
+            low_variance = float(np.mean(observed_variation < 0.1 * real_variation)) if len(real_variation) else 0.0
+            # Preserve the real class's natural duplicate baseline to avoid penalizing unavoidable identical flows.
+            duplicate_fraction = float(pd.DataFrame(np.round(standardized_synthetic, 4)).duplicated().mean())
+            real_duplicate_fraction = float(pd.DataFrame(np.round(standardized_original, 4)).duplicated().mean())
+            differences = []
+            valid_features = np.flatnonzero(source_variable & (np.std(standardized_synthetic, axis=0) > 1e-4))
+            if len(valid_features) >= 2:
+                real_corr = np.corrcoef(standardized_original[:, valid_features], rowvar=False)
+                fake_corr = np.corrcoef(standardized_synthetic[:, valid_features], rowvar=False)
+                triangle = np.triu_indices(len(valid_features), k=1)
+                differences = np.abs(real_corr[triangle] - fake_corr[triangle])
+            corr_shift = float(np.mean(differences)) if len(differences) else None
+            from sklearn.neighbors import NearestNeighbors
+            nearest_original = standardized_original[:near_limit]
+            model = NearestNeighbors(n_neighbors=1).fit(nearest_original)
+            distances = model.kneighbors(standardized_synthetic, return_distance=True)[0].reshape(-1)
+            near_fraction = float(np.mean(distances < 0.05))
+            report.update({"mean_shift_standardized": mean_shift, "low_variance_feature_fraction": low_variance, "synthetic_near_duplicate_fraction": duplicate_fraction, "original_near_duplicate_fraction": real_duplicate_fraction, "joint_correlation_absolute_difference_mean": corr_shift, "reference_nearest_distance_median": float(np.median(distances)), "reference_near_match_fraction": near_fraction})
+            if mean_shift > float(settings.get("max_mean_shift", 2.0)):
+                report["quality_flags"].append("large_marginal_mean_shift")
+            if low_variance > float(settings.get("max_low_variance_fraction", 0.5)):
+                report["quality_flags"].append("low_feature_diversity")
+            if duplicate_fraction > max(float(settings.get("max_near_duplicate_fraction", 0.3)), real_duplicate_fraction + 0.2):
+                report["quality_flags"].append("synthetic_mode_collapse")
+            if corr_shift is not None and corr_shift > float(settings.get("max_correlation_difference", 0.25)):
+                report["quality_flags"].append("joint_correlation_mismatch")
+            if near_fraction > float(settings.get("max_reference_near_match_fraction", 0.95)) and real_duplicate_fraction < 0.3:
+                report["quality_flags"].append("possible_training_data_memorization")
+        else:
+            report["quality_flags"].append("insufficient_reference_or_synthetic_sample")
+        if report["violations"]:
+            report["quality_flags"].append("invalid_individual_feature_domains")
+        report["accepted"] = not bool(report["quality_flags"])
+        if not report["accepted"]:
+            rejecting_classes.append(class_name)
+        reports.append(report)
+    report_path = Path(args.out_file).with_suffix(".quality.json")
+    report_path.parent.mkdir(parents=True, exist_ok=True)
     accepted = invalid_total == 0 and not rejecting_classes
-    report = {"schema_version": 3, "accepted": accepted, "quality_policy_sha256": build_quality_policy_fingerprint(config), "sampling_note": "Bounded screening indicators do not prove model fidelity", "sample_rows_per_class": sample_limit, "classes": reports, "invalid_feature_values": invalid_total, "rejected_classes": rejecting_classes}  # Durable class-level acceptance evidence.
-    with report_path.open("w", encoding="utf-8") as handle:  # Persist diagnostics before enforcing failures.
-        json.dump(report, handle, indent=2, allow_nan=False)  # Reject nonfinite JSON metrics rather than silently serializing them.
-    print(f"[QUALITY] Saved per-class synthetic diagnostics: {report_path} | Invalid feature values: {invalid_total}")  # Surface actionable report location.
-
-    if invalid_total and settings.get("reject_invalid", True):  # Enforce physical flow validity when requested.
-        raise ValueError(f"Rejected synthetic output containing {invalid_total} invalid flow feature values; review {report_path}")
+    result = {"schema_version": 3, "accepted": accepted, "quality_policy_sha256": build_quality_policy_fingerprint(config), "sampling_note": "Bounded screening statistics do not prove synthetic fidelity or downstream classifier utility", "sample_rows_per_class": sample_limit, "nearest_reference_rows": near_limit, "invalid_feature_values": invalid_total, "rejected_classes": rejecting_classes, "classes": reports}
+    with report_path.open("w", encoding="utf-8") as stream:
+        json.dump(result, stream, indent=2, allow_nan=False)
+    print(f"[QUALITY] Report: {report_path} | accepted={accepted} | invalid values={invalid_total} | flagged classes={rejecting_classes}")
+    if invalid_total and settings.get("reject_invalid", True):
+        raise ValueError(f"Rejected {invalid_total} invalid network-flow feature values; see {report_path}")
     if rejecting_classes and settings.get("reject_quality_flags", True):
-        raise ValueError(f"Rejected synthetic output with class-specific quality violations: {rejecting_classes}; review {report_path}")
+        raise ValueError(f"Rejected synthetic output with class-specific fidelity/diversity/relationship failures: {rejecting_classes}; see {report_path}")
 
 
 def build_default_training_and_model_config() -> Dict:
@@ -1291,7 +1305,7 @@ def build_default_training_and_model_config() -> Dict:
             "small_class_threshold": 100,  # Threshold for small class detection
             "small_class_min_samples": 10,  # Minimum samples for small classes
         },
-        "quality": {"enabled": True, "sample_rows_per_class": 512, "reject_invalid": True, "reject_quality_flags": True, "n_quantiles": 256, "fit_sample_rows": 20000, "class_sampling_exponent": 0.5, "plot_samples_per_class": 512, "max_mean_shift": 2.0, "max_low_variance_fraction": 0.5, "max_reference_near_match_fraction": 0.95},  # Configure bounded quality diagnostics and fail-closed constraint enforcement.
+        "quality": {"enabled": True, "sample_rows_per_class": 4096, "nearest_reference_rows": 1024, "reject_invalid": True, "reject_quality_flags": True, "n_quantiles": 256, "fit_sample_rows": 20000, "class_sampling_exponent": 0.5, "plot_samples_per_class": 512, "max_mean_shift": 2.0, "max_low_variance_fraction": 0.5, "max_correlation_difference": 0.25, "max_near_duplicate_fraction": 0.30, "max_reference_near_match_fraction": 0.95},  # Configure bounded quality diagnostics and fail-closed constraint enforcement.
         "dataloader": {  # DataLoader configuration
             "num_workers": 8,  # Number of workers for data loading
             "pin_memory": True,  # Use pinned memory for faster GPU transfer
