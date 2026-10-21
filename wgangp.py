@@ -159,7 +159,7 @@ class ClassConditionalFlowScaler:
     :return: A class-conditional invertible preprocessing object.
     """
 
-    def __init__(self, feature_cols: List[str], seed: int = 42, n_quantiles: int = 256, fit_sample_rows: int = 20000):  # Configure bounded quantile fitting.
+    def __init__(self, feature_cols: List[str], seed: int = 42, n_quantiles: int = 512, fit_sample_rows: int = 50000):  # Configure bounded quantile fitting.
         self.feature_cols = list(feature_cols)  # Preserve the exact source feature schema.
         self.seed = int(seed)  # Preserve a deterministic sample seed.
         self.n_quantiles = max(16, int(n_quantiles))  # Bound the empirical distribution resolution.
@@ -182,7 +182,27 @@ class ClassConditionalFlowScaler:
         for class_label in np.unique(labels):  # Fit each attack class independently to avoid majority-class dominance.
             indexes = np.flatnonzero(labels == class_label)  # Determine source rows for one label.
             picked = np.sort(rng.choice(indexes, size=min(len(indexes), self.fit_sample_rows), replace=False))  # Fit from a bounded uniform sample.
-            observed = np.asarray(X[picked], dtype=np.float64)  # Materialize only the selected reference rows.
+            # Include actual class-wide feature extrema so bounded fitting retains rare distribution tails.
+            minimum = np.full(X.shape[1], np.inf, dtype=np.float64)
+            maximum = np.full(X.shape[1], -np.inf, dtype=np.float64)
+            minimum_rows = np.full(X.shape[1], int(indexes[0]), dtype=np.int64)
+            maximum_rows = np.full(X.shape[1], int(indexes[0]), dtype=np.int64)
+            for position in range(0, len(indexes), 65536):
+                chunk_indices = indexes[position:position + 65536]
+                chunk = X[chunk_indices]
+                local_min = np.argmin(chunk, axis=0)
+                local_max = np.argmax(chunk, axis=0)
+                columns = np.arange(X.shape[1])
+                selected_min = chunk[local_min, columns]
+                selected_max = chunk[local_max, columns]
+                updated_min = selected_min < minimum
+                updated_max = selected_max > maximum
+                minimum[updated_min] = selected_min[updated_min]
+                maximum[updated_max] = selected_max[updated_max]
+                minimum_rows[updated_min] = chunk_indices[local_min[updated_min]]
+                maximum_rows[updated_max] = chunk_indices[local_max[updated_max]]
+            picked = np.unique(np.concatenate((picked, minimum_rows, maximum_rows)))  # Retain extrema without copying entire classes.
+            observed = np.asarray(X[picked], dtype=np.float64)  # Fit on a bounded sample augmented by class-wide extrema.
             if not np.isfinite(observed).all():  # Refuse to encode invalid original features.
                 raise ValueError(f"Nonfinite source features for label {class_label}")  # Fail before model training.
             transformer = QuantileTransformer(n_quantiles=min(self.n_quantiles, len(picked)), output_distribution="normal", subsample=None, random_state=self.seed, copy=True)  # Normalize extreme skew using empirical quantiles.
@@ -516,7 +536,7 @@ class CSVFlowDataset(Dataset):
             if not fit_scaler:  # An unfitted scaler cannot transform source data.
                 raise ValueError("Class-conditional feature preprocessing requires fitted source distributions")  # Avoid using an identity substitute.
             quality_cfg = (CONFIG or {}).get("quality", {})  # Resolve empirical preprocessing limits from active configuration.
-            self.scaler = ClassConditionalFlowScaler(feature_cols, seed=int((CONFIG or {}).get("wgangp", {}).get("seed", 42)), n_quantiles=int(quality_cfg.get("n_quantiles", 256)), fit_sample_rows=int(quality_cfg.get("fit_sample_rows", 20000)))  # Fit class-aware empirical feature distributions.
+            self.scaler = ClassConditionalFlowScaler(feature_cols, seed=int((CONFIG or {}).get("wgangp", {}).get("seed", 42)), n_quantiles=int(quality_cfg.get("n_quantiles", 512)), fit_sample_rows=int(quality_cfg.get("fit_sample_rows", 50000)))  # Fit class-aware empirical feature distributions.
             self.X = self.scaler.fit_transform(X, self.labels)  # Encode mixed continuous and categorical network features per class.
         else:  # A compatible fitted class-conditional scaler was provided.
             self.scaler = scaler  # Preserve supplied preprocessing provenance.
@@ -1081,7 +1101,7 @@ def build_wgangp_provenance(args: Any) -> Dict:
     source_stat = source.stat() if source is not None else None  # Require an existing source for provenance.
     fields = ("seed", "label_col", "feature_cols", "batch_size", "critic_steps", "lr", "beta1", "beta2", "lambda_gp", "latent_dim", "g_hidden", "d_hidden", "embed_dim", "n_resblocks", "g_leaky_relu_alpha", "d_leaky_relu_alpha", "use_amp")  # Identify settings that affect learned weights.
     settings = {name: getattr(args, name, None) for name in fields}  # Snapshot resolved model and optimization settings.
-    identity = {"source_path": str(source) if source else None, "source_size": source_stat.st_size if source_stat else None, "source_mtime_ns": source_stat.st_mtime_ns if source_stat else None, "preprocessing": "class_conditional_quantile_v3_joint_quality", "preprocessing_parameters": {key: (CONFIG or {}).get("quality", {}).get(key, default) for key, default in (("n_quantiles", 256), ("fit_sample_rows", 20000), ("class_sampling_exponent", 0.5))}, "settings": settings}  # Record source metadata and effective hyperparameters.
+    identity = {"source_path": str(source) if source else None, "source_size": source_stat.st_size if source_stat else None, "source_mtime_ns": source_stat.st_mtime_ns if source_stat else None, "preprocessing": "class_conditional_quantile_v3_joint_quality", "preprocessing_parameters": {key: (CONFIG or {}).get("quality", {}).get(key, default) for key, default in (("n_quantiles", 512), ("fit_sample_rows", 50000), ("class_sampling_exponent", 0.5))}, "settings": settings}  # Record source metadata and effective hyperparameters.
     digest = hashlib.sha256(json.dumps(identity, sort_keys=True, default=str).encode("utf-8")).hexdigest()  # Produce a stable comparable identity.
 
     return {"identity": identity, "sha256": digest}  # Return provenance for checkpoints and output sidecars.
@@ -1305,7 +1325,7 @@ def build_default_training_and_model_config() -> Dict:
             "small_class_threshold": 100,  # Threshold for small class detection
             "small_class_min_samples": 10,  # Minimum samples for small classes
         },
-        "quality": {"enabled": True, "sample_rows_per_class": 4096, "nearest_reference_rows": 1024, "reject_invalid": True, "reject_quality_flags": True, "n_quantiles": 256, "fit_sample_rows": 20000, "class_sampling_exponent": 0.5, "plot_samples_per_class": 512, "max_mean_shift": 2.0, "max_low_variance_fraction": 0.5, "max_correlation_difference": 0.25, "max_near_duplicate_fraction": 0.30, "max_reference_near_match_fraction": 0.95},  # Configure bounded quality diagnostics and fail-closed constraint enforcement.
+        "quality": {"enabled": True, "sample_rows_per_class": 4096, "nearest_reference_rows": 1024, "reject_invalid": True, "reject_quality_flags": True, "n_quantiles": 512, "fit_sample_rows": 50000, "class_sampling_exponent": 0.5, "plot_samples_per_class": 512, "max_mean_shift": 2.0, "max_low_variance_fraction": 0.5, "max_correlation_difference": 0.25, "max_near_duplicate_fraction": 0.30, "max_reference_near_match_fraction": 0.95},  # Configure bounded quality diagnostics and fail-closed constraint enforcement.
         "dataloader": {  # DataLoader configuration
             "num_workers": 8,  # Number of workers for data loading
             "pin_memory": True,  # Use pinned memory for faster GPU transfer
