@@ -44,9 +44,9 @@ Dependencies:
 
 Assumptions & Notes:
     - CSV should contain feature columns and a label column
-    - Features are automatically scaled using StandardScaler
+    - Features use class-conditional quantile preprocessing with empirical discrete decoding
     - Labels are encoded via LabelEncoder (categorical to integer)
-    - Output features are inverse-transformed to original scale
+    - Output features are inverse-transformed per class, with original discrete domains preserved
     - CUDA is used if available; use --force_cpu to disable
 """
 if __name__ in {"__main__", "__mp_main__"}:
@@ -88,10 +88,10 @@ from Logger import Logger  # For logging output to both terminal and file
 from mpl_toolkits.mplot3d import Axes3D  # For 3D projection type annotation and axis method resolution
 from pathlib import Path  # For handling file paths
 from sklearn.manifold import TSNE  # For 3D t-SNE separability visualization
-from sklearn.preprocessing import LabelEncoder, StandardScaler  # For data preprocessing
+from sklearn.preprocessing import LabelEncoder, StandardScaler, QuantileTransformer  # For mixed-type class-conditional flow preprocessing
 from telegram_bot import TelegramBot, send_exception_via_telegram, send_telegram_message, setup_global_exception_hook  # For Telegram utilities and global exception hook
 from torch import autograd  # For gradient penalty
-from torch.utils.data import DataLoader, Dataset  # Dataset and DataLoader
+from torch.utils.data import DataLoader, Dataset, Sampler  # Dataset, dataloader and bounded class-aware sampling
 from tqdm import tqdm  # For progress bar visualization
 from typing import Any, Dict, List, Optional, Union, cast  # For Any type hint and cast
 from utils.process_name import set_runtime_process_name  # Apply optional htop-visible process identities.
@@ -102,6 +102,7 @@ psutil = (
 )  # Import psutil if available, otherwise set to None
 
 SAO_PAULO_TIMEZONE_NAME = "America/Sao_Paulo"  # Use Sao Paulo timezone for ETA finish timestamps
+FLOW_PREPROCESSING_CHECKPOINT_TAG = "ConditionalQuantileV2"  # Isolate weights trained on class-conditional quantiles from legacy StandardScaler weights.
 
 # Prefer CUDA autocast when available; provide a safe fallback context manager
 try:  # Attempt to import torch.amp.autocast for mixed precision support
@@ -146,6 +147,172 @@ RESOURCE_MONITOR_THREAD = None  # Background thread running the watcher
 
 
 # Classes Definitions:
+
+
+class ClassConditionalFlowScaler:
+    """Map each class's skewed flow features into a bounded training representation.
+
+    :param feature_cols: Ordered model feature names.
+    :param seed: Reproducible bounded fitting seed.
+    :param n_quantiles: Maximum empirical quantile resolution.
+    :param fit_sample_rows: Maximum fit samples for each class.
+    :return: A class-conditional invertible preprocessing object.
+    """
+
+    def __init__(self, feature_cols: List[str], seed: int = 42, n_quantiles: int = 256, fit_sample_rows: int = 20000):  # Configure bounded quantile fitting.
+        self.feature_cols = list(feature_cols)  # Preserve the exact source feature schema.
+        self.seed = int(seed)  # Preserve a deterministic sample seed.
+        self.n_quantiles = max(16, int(n_quantiles))  # Bound the empirical distribution resolution.
+        self.fit_sample_rows = max(self.n_quantiles, int(fit_sample_rows))  # Keep fitting memory independent of total dataset size.
+        self.transformers = {}  # Hold independent class-specific marginal transformations.
+        self.discrete_support = {}  # Retain observed discrete support rather than hallucinating fractional network fields.
+        self.mean_ = np.zeros(len(self.feature_cols), dtype=np.float64)  # Retain the legacy dimension-discovery interface.
+
+    def fit_transform(self, X: np.ndarray, labels: np.ndarray) -> np.ndarray:
+        """Fit each class's marginal transform and encode its training rows.
+
+        :param X: Raw original network-flow features.
+        :param labels: Integer encoded source class labels aligned with X.
+        :return: Encoded float32 training array.
+        """
+
+        encoded = np.empty(X.shape, dtype=np.float32)  # Allocate one bounded precision result matrix.
+        rng = np.random.default_rng(self.seed)  # Keep fitted reference support deterministic.
+        for class_label in np.unique(labels):  # Fit each attack class independently to avoid majority-class dominance.
+            indexes = np.flatnonzero(labels == class_label)  # Determine source rows for one label.
+            picked = np.sort(rng.choice(indexes, size=min(len(indexes), self.fit_sample_rows), replace=False))  # Fit from a bounded uniform sample.
+            observed = np.asarray(X[picked], dtype=np.float64)  # Materialize only the selected reference rows.
+            if not np.isfinite(observed).all():  # Refuse to encode invalid original features.
+                raise ValueError(f"Nonfinite source features for label {class_label}")  # Fail before model training.
+            transformer = QuantileTransformer(n_quantiles=min(self.n_quantiles, len(picked)), output_distribution="normal", subsample=None, random_state=self.seed, copy=True)  # Normalize extreme skew using empirical quantiles.
+            transformer.fit(observed)  # Fit class-specific marginals from original source rows only.
+            self.transformers[int(class_label)] = transformer  # Persist transformation with generator checkpoints.
+            support = {}  # Collect legal categorical and integral feature values.
+            for index, column in enumerate(self.feature_cols):  # Inspect each original feature domain.
+                if is_discrete_flow_feature(column):  # Preserve discrete values actually observed for this class.
+                    support[index] = np.unique(observed[:, index])  # Reuse only recorded class-specific values.
+            self.discrete_support[int(class_label)] = support  # Store legal reconstruction support for this class.
+            for offset in range(0, len(indexes), 65536):  # Transform large datasets without large class copies.
+                block = indexes[offset:offset + 65536]  # Limit temporary transform memory.
+                encoded[block] = transformer.transform(np.asarray(X[block], dtype=np.float64)).astype(np.float32)  # Encode training rows.
+        return encoded  # Return class-conditional normal-space features.
+
+    def transform(self, X: np.ndarray, labels: np.ndarray) -> np.ndarray:
+        """Encode source-scale rows using the previously fitted class distributions.
+
+        :param X: Source-scale feature matrix.
+        :param labels: Integer class IDs aligned with the input matrix.
+        :return: Normal-space float32 features.
+        """
+
+        encoded = np.empty(X.shape, dtype=np.float32)  # Allocate the class-conditional output matrix.
+        labels = np.asarray(labels).reshape(-1)  # Flatten aligned source class labels.
+        if len(labels) != len(X):  # Validate source class alignment.
+            raise ValueError("Source class labels do not align with feature rows")  # Reject invalid inputs.
+        for class_label in np.unique(labels):  # Transform each class with its fitted original feature distribution.
+            indexes = np.flatnonzero(labels == class_label)  # Locate class-specific source rows.
+            transformer = self.transformers[int(class_label)]  # Require a previously fitted class distribution.
+            for offset in range(0, len(indexes), 65536):  # Bound intermediate memory.
+                block = indexes[offset:offset + 65536]  # Limit temporary transformation matrices.
+                encoded[block] = transformer.transform(np.asarray(X[block], dtype=np.float64)).astype(np.float32)  # Apply the fitted class marginal transform.
+        return encoded  # Return the normalized source matrix.
+
+    def inverse_transform(self, X: np.ndarray, labels: np.ndarray) -> np.ndarray:
+        """Decode synthetic rows with class-specific empirical quantiles and discrete support.
+
+        :param X: Generator output in normalized feature space.
+        :param labels: Integer generated class labels.
+        :return: Source-scale synthetic features with valid observed discrete values.
+        """
+
+        result = np.empty(X.shape, dtype=np.float32)  # Allocate source-scale output once.
+        labels = np.asarray(labels).reshape(-1)  # Normalize aligned class IDs.
+        if len(labels) != len(X):  # Reject misaligned generated labels.
+            raise ValueError("Generated labels do not align with feature rows")  # Avoid cross-class decoding.
+        for class_label in np.unique(labels):  # Decode using the corresponding class's original distribution.
+            class_id = int(class_label)  # Normalize stored integer label IDs.
+            if class_id not in self.transformers:  # Refuse unsupported synthetic class IDs.
+                raise ValueError(f"No empirical source distribution for class {class_id}")  # Avoid defaulting to another class.
+            indexes = np.flatnonzero(labels == class_label)  # Locate generated rows for this class.
+            transformer = self.transformers[class_id]  # Load the checkpoint's matching class quantile transform.
+            for offset in range(0, len(indexes), 65536):  # Bound inverse transformation allocations.
+                block = indexes[offset:offset + 65536]  # Select generated rows for a bounded batch.
+                normalized = np.asarray(X[block], dtype=np.float64)  # Read generator values in floating precision.
+                if not np.isfinite(normalized).all():  # Reject model divergence rather than hiding NaN or infinity.
+                    raise ValueError(f"Nonfinite generated features for class {class_id}")  # Abort invalid output.
+                restored = transformer.inverse_transform(np.clip(normalized, -5.2, 5.2))  # Decode class-matched quantiles within supported tails.
+                for column_index, values in self.discrete_support[class_id].items():  # Project discrete fields onto observed class-specific support.
+                    location = np.searchsorted(values, restored[:, column_index])  # Find adjacent original discrete values.
+                    high = np.minimum(location, len(values) - 1)  # Bound the high observed value index.
+                    low = np.maximum(high - 1, 0)  # Bound the low observed value index.
+                    choose_low = np.abs(restored[:, column_index] - values[low]) <= np.abs(restored[:, column_index] - values[high])  # Select the closest legal value.
+                    restored[:, column_index] = np.where(choose_low, values[low], values[high])  # Preserve class-specific integral and categorical support.
+                result[block] = restored.astype(np.float32)  # Store source-scale values without duplicating all rows.
+        return result  # Return decoded features in their original column order.
+
+
+def is_discrete_flow_feature(name: Any) -> bool:
+    """Identify CIC flow fields that must be selected from observed discrete domains.
+
+    :param name: Original flow feature column name.
+    :return: Whether the column is a discrete-valued flow field.
+    """
+
+    column = str(name).strip().lower()  # Normalize original CIC feature naming.
+    if column in {"source port", "destination port", "protocol", "inbound", "act_data_pkt_fwd", "min_seg_size_forward", "down/up ratio", "fwd psh flags", "bwd psh flags", "fwd urg flags", "bwd urg flags", "init_win_bytes_forward", "init_win_bytes_backward"}:  # Identify known integer and categorical fields.
+        return True  # Preserve empirical discrete support.
+    return "flag count" in column or column in {"total fwd packets", "total backward packets", "subflow fwd packets", "subflow bwd packets", "total length of fwd packets", "total length of bwd packets", "fwd header length", "fwd header length.1", "bwd header length"}  # Preserve count and packet-length integer semantics.
+
+
+class ClassAwareFlowSampler(Sampler[int]):
+    """Sample real flow classes less unevenly without allocating replacement index lists.
+
+    :param labels: Encoded real source labels.
+    :param seed: Reproducible class sampler seed.
+    :param exponent: Count weighting exponent, with one equal to original prevalence.
+    :return: Bounded-memory sampler exposing one epoch of source-length examples.
+    """
+
+    def __init__(self, labels: np.ndarray, seed: int = 42, exponent: float = 0.5):  # Initialize class-balanced real critic sampling.
+        self.class_indexes = {}  # Store compact source positions for every attack class.
+        self.seed = int(seed)  # Retain reproducible sampling seed.
+        self.epoch = 0  # Increment the deterministic epoch stream on every iteration.
+        self.total = len(labels)  # Preserve original epoch length for progress reporting.
+        exponent = float(exponent)  # Normalize configured class prevalence exponent.
+        if not 0.0 <= exponent <= 1.0:  # Reject invalid class-balancing policies.
+            raise ValueError("class_sampling_exponent must be between 0.0 and 1.0")  # Require an interpretable policy.
+        labels = np.asarray(labels).reshape(-1)  # Convert source labels to one-dimensional IDs.
+        for class_id in np.unique(labels):  # Preserve all original classes.
+            self.class_indexes[int(class_id)] = np.flatnonzero(labels == class_id)  # Retain original source indices for class-specific sampling.
+        self.class_ids = np.asarray(sorted(self.class_indexes), dtype=np.int64)  # Stabilize class choice ordering.
+        weights = np.asarray([len(self.class_indexes[int(class_id)]) ** exponent for class_id in self.class_ids], dtype=np.float64)  # Temper original class imbalance without forcing uniformly replicated rare classes.
+        self.class_probabilities = weights / weights.sum()  # Normalize real-class sampling probabilities.
+
+    def __len__(self) -> int:
+        """Return the original source population size.
+
+        :return: Number of sampling draws per epoch.
+        """
+
+        return self.total  # Preserve existing epoch length.
+
+    def __iter__(self):
+        """Yield source indices in bounded random batches with class-aware weighting.
+
+        :return: Iterator of valid original source-row positions.
+        """
+
+        rng = np.random.default_rng(self.seed + self.epoch)  # Use an independent reproducible RNG per epoch.
+        self.epoch += 1  # Advance the sampling stream for the next epoch.
+        for offset in range(0, self.total, 4096):  # Avoid materializing a full epoch of replacement indices.
+            count = min(4096, self.total - offset)  # Restrict temporary work to one small batch.
+            classes = rng.choice(self.class_ids, size=count, p=self.class_probabilities)  # Draw per-class real samples under the configured weighting policy.
+            positions = np.empty(count, dtype=np.int64)  # Allocate one bounded batch of source positions.
+            for class_id in np.unique(classes):  # Sample individual source rows from each selected class.
+                mask = classes == class_id  # Locate the draws for this class within the batch.
+                class_rows = self.class_indexes[int(class_id)]  # Resolve original rows for the chosen class.
+                positions[mask] = class_rows[rng.integers(0, len(class_rows), size=int(mask.sum()))]  # Draw real rows with replacement within class.
+            yield from positions.tolist()  # Stream only valid original indices to the DataLoader.
 
 
 class CSVFlowDataset(Dataset):
@@ -221,15 +388,17 @@ class CSVFlowDataset(Dataset):
 
         X = df.loc[:, feature_cols].to_numpy(dtype=np.float32, copy=False)  # Extract features and cast to float32
 
-        if scaler is None:  # If no scaler is provided
-            self.scaler = StandardScaler()  # Instantiate a default scaler
-            if fit_scaler:  # Fit scaler when requested
-                self.X = np.asarray(self.scaler.fit_transform(X), dtype=np.float32)  # Fit and transform features
-            else:  # Do not fit scaler
-                self.X = np.asarray(self.scaler.transform(X), dtype=np.float32)  # Only transform features
-        else:  # Scaler is provided
-            self.scaler = scaler  # Store provided scaler
-            self.X = np.asarray(self.scaler.transform(X), dtype=np.float32)  # Transform features with external scaler
+        if scaler is None:  # Fit class-specific marginals when the caller supplies no preprocessor.
+            if not fit_scaler:  # An unfitted scaler cannot transform source data.
+                raise ValueError("Class-conditional feature preprocessing requires fitted source distributions")  # Avoid using an identity substitute.
+            quality_cfg = (CONFIG or {}).get("quality", {})  # Resolve empirical preprocessing limits from active configuration.
+            self.scaler = ClassConditionalFlowScaler(feature_cols, seed=int((CONFIG or {}).get("wgangp", {}).get("seed", 42)), n_quantiles=int(quality_cfg.get("n_quantiles", 256)), fit_sample_rows=int(quality_cfg.get("fit_sample_rows", 20000)))  # Fit class-aware empirical feature distributions.
+            self.X = self.scaler.fit_transform(X, self.labels)  # Encode mixed continuous and categorical network features per class.
+        else:  # A compatible fitted class-conditional scaler was provided.
+            self.scaler = scaler  # Preserve supplied preprocessing provenance.
+            if not isinstance(scaler, ClassConditionalFlowScaler):  # Refuse legacy raw StandardScaler preprocessing during new training.
+                raise ValueError("Legacy StandardScaler checkpoint is incompatible with class-conditional flow preprocessing")  # Avoid mixing feature spaces.
+            self.X = np.asarray(scaler.fit_transform(X, self.labels) if fit_scaler else scaler.transform(X, self.labels), dtype=np.float32)  # Preserve source-to-normal-space transformation semantics.
 
         label_classes = getattr(self.label_encoder, "classes_", None)  # Retrieve fitted label classes from the encoder
         if label_classes is None:  # Verify the label encoder is fitted before counting classes
@@ -788,7 +957,7 @@ def build_wgangp_provenance(args: Any) -> Dict:
     source_stat = source.stat() if source is not None else None  # Require an existing source for provenance.
     fields = ("seed", "label_col", "feature_cols", "batch_size", "critic_steps", "lr", "beta1", "beta2", "lambda_gp", "latent_dim", "g_hidden", "d_hidden", "embed_dim", "n_resblocks", "g_leaky_relu_alpha", "d_leaky_relu_alpha", "use_amp")  # Identify settings that affect learned weights.
     settings = {name: getattr(args, name, None) for name in fields}  # Snapshot resolved model and optimization settings.
-    identity = {"source_path": str(source) if source else None, "source_size": source_stat.st_size if source_stat else None, "source_mtime_ns": source_stat.st_mtime_ns if source_stat else None, "settings": settings}  # Record source metadata and effective hyperparameters.
+    identity = {"source_path": str(source) if source else None, "source_size": source_stat.st_size if source_stat else None, "source_mtime_ns": source_stat.st_mtime_ns if source_stat else None, "preprocessing": "class_conditional_quantile_v2", "preprocessing_parameters": {key: (CONFIG or {}).get("quality", {}).get(key, default) for key, default in (("n_quantiles", 256), ("fit_sample_rows", 20000), ("class_sampling_exponent", 0.5))}, "settings": settings}  # Record source metadata and effective hyperparameters.
     digest = hashlib.sha256(json.dumps(identity, sort_keys=True, default=str).encode("utf-8")).hexdigest()  # Produce a stable comparable identity.
 
     return {"identity": identity, "sha256": digest}  # Return provenance for checkpoints and output sidecars.
@@ -830,22 +999,25 @@ def assess_generated_flow_quality(args: Any, config: Dict, generated: pd.DataFra
     rng = np.random.default_rng(random_seed)  # Keep diagnostic sampling reproducible.
     reports = []  # Accumulate measurements for each generated class.
     invalid_total = 0  # Accumulate invalid generated flow rows.
-    source_samples = {}  # Store bounded class-conditional original training data samples.
+    source_samples = {}  # Store bounded uniformly sampled original reference rows per class.
+    source_priorities = {}  # Preserve reservoir priorities between source chunks.
 
-    if getattr(args, "csv_path", None):  # Read original rows only when a matching CSV source exists.
-        required_columns = numeric_columns + [label]  # Read only the generated schema and target column.
-        for chunk in pd.read_csv(args.csv_path, usecols=lambda col: col.strip() in required_columns, chunksize=8192, low_memory=False):  # Stream original rows without materializing the full source CSV.
-            chunk.columns = chunk.columns.str.strip()  # Align source column naming with generator preprocessing.
-            if label not in chunk.columns:  # Require an authoritative source label.
-                raise ValueError(f"Quality source is missing label column: {label}")  # Stop invalid class diagnostics.
-            for class_label, group in chunk.groupby(label, sort=False):  # Compare class distributions independently.
-                current = source_samples.setdefault(str(class_label), [])  # Create the per-class bounded collection.
-                if len(current) >= sample_limit:  # Keep the source sample bounded.
-                    continue  # Skip unnecessary rows for a filled class.
-                available = sample_limit - len(current)  # Calculate remaining per-class capacity.
-                current.extend(group[numeric_columns].head(available).to_numpy(dtype=np.float32, copy=True))  # Retain finite-sized original feature vectors.
-            if source_samples and all(len(values) >= sample_limit for values in source_samples.values()) and len(source_samples) >= generated[label].nunique():  # Finish after capturing requested classes.
-                break  # Avoid rereading the rest of very large files.
+    if getattr(args, "csv_path", None):  # Compare generated classes against their original source distribution.
+        required_columns = numeric_columns + [label]  # Read only the features needed for comparable diagnostics.
+        for chunk in pd.read_csv(args.csv_path, usecols=lambda col: col.strip() in required_columns, chunksize=8192, low_memory=False):  # Read a bounded source chunk.
+            chunk.columns = chunk.columns.str.strip()  # Normalize original feature names.
+            if label not in chunk.columns:  # Require original class identity.
+                raise ValueError(f"Quality source is missing label column: {label}")  # Avoid cross-class diagnostics.
+            for class_label, group in chunk.groupby(label, sort=False):  # Maintain a uniform reservoir per class over the full file.
+                key = str(class_label)  # Normalize class identity for generated-label matching.
+                candidates = group[numeric_columns].to_numpy(dtype=np.float32, copy=True)  # Materialize only this bounded source chunk's class rows.
+                priorities = rng.random(len(candidates))  # Assign independent uniform reservoir priorities.
+                if key in source_samples:  # Include the previously selected rows.
+                    candidates = np.concatenate([source_samples[key], candidates])  # Combine current and new candidates in bounded memory.
+                    priorities = np.concatenate([source_priorities[key], priorities])  # Maintain aligned reservoir priorities.
+                selected = np.argpartition(priorities, min(sample_limit, len(priorities)) - 1)[:sample_limit]  # Select uniformly random original rows by minimum priorities.
+                source_samples[key] = candidates[selected]  # Retain at most sample_limit reference rows.
+                source_priorities[key] = priorities[selected]  # Retain corresponding reservoir priorities.
 
     for class_label, group in generated.groupby(label, sort=False):  # Process each generated attack class separately.
         sample = group.sample(n=min(sample_limit, len(group)), random_state=random_seed)  # Bound synthetic metrics deterministically.
@@ -860,7 +1032,7 @@ def assess_generated_flow_quality(args: Any, config: Dict, generated: pd.DataFra
             bounded_protocol = name == "protocol"  # Detect the numeric IP protocol identifier.
             binary_field = name in {"inbound", "fwd psh flags", "bwd psh flags", "fwd urg flags", "bwd urg flags"}  # Identify explicitly binary CIC flow features.
             discrete_count = ("flag count" in name or name in {"total fwd packets", "total backward packets", "subflow fwd packets", "subflow bwd packets", "act_data_pkt_fwd", "min_seg_size_forward"})  # Require integral packet and flag counts.
-            is_count = ("count" in name or "packets" in name or "bytes" in name or "length" in name or "duration" in name or "iat" in name or "flag" in name or "size" in name or "/s" in name) and not name.startswith("init_win_bytes")  # Recognize intrinsically nonnegative flow quantities.
+            is_count = ("count" in name or "packets" in name or "bytes" in name or "length" in name or "duration" in name or "iat" in name or "flag" in name or "size" in name or "/s" in name) and not name.startswith("init_win_bytes") and name != "min_seg_size_forward"  # Recognize intrinsically nonnegative flow quantities.
             invalid = ~np.isfinite(values) | ((values < 0) if is_count or bounded_port or bounded_protocol or binary_field else False)  # Reject nonfinite and negative physical quantities.
             if bounded_port:  # Require valid transport-port range and discrete values.
                 invalid |= (values > 65535) | (values != np.rint(values))  # Disallow impossible port numbers.
@@ -885,12 +1057,22 @@ def assess_generated_flow_quality(args: Any, config: Dict, generated: pd.DataFra
                 normalized_real = (valid_ref - center) / scale  # Standardize reference distances using original class only.
                 normalized_gen = (valid_gen - center) / scale  # Standardize generated distances on the same basis.
                 mean_shift = float(np.mean(np.abs(np.mean(normalized_gen, axis=0) - np.mean(normalized_real, axis=0))))  # Quantify average standardized feature-mean mismatch.
-                variance_ratio = float(np.mean(np.std(normalized_gen, axis=0) < 0.1 * np.maximum(np.std(normalized_real, axis=0), 1e-6)))  # Estimate feature-wise collapse relative to original variance.
+                real_std = np.std(normalized_real, axis=0)  # Measure original variability before defining a collapse denominator.
+                variable = real_std > 1e-4  # Exclude genuinely constant source features from collapse detection.
+                variance_ratio = float(np.mean(np.std(normalized_gen[:, variable], axis=0) < 0.1 * real_std[variable])) if variable.any() else 0.0  # Compare only informative source features for possible mode collapse.
                 near_dup = int(pd.DataFrame(np.round(normalized_gen, 4)).duplicated().sum())  # Count near-identical synthetic records at fixed precision.
                 from sklearn.neighbors import NearestNeighbors  # Use the existing scikit-learn dependency for nearest original rows.
                 neighbors = NearestNeighbors(n_neighbors=1, algorithm="auto").fit(normalized_real)  # Fit nearest-neighbor lookup on bounded original samples.
                 nearest = neighbors.kneighbors(normalized_gen, return_distance=True)[0].reshape(-1)  # Measure proximity to reference flow vectors.
                 record.update({"mean_shift_standardized": mean_shift, "low_variance_feature_fraction": variance_ratio, "synthetic_near_duplicate_fraction": near_dup / len(valid_gen), "reference_nearest_distance_median": float(np.median(nearest)), "reference_near_match_fraction": float(np.mean(nearest < 0.05))})  # Save sampled class-fidelity, collapse and memorization indicators.
+        quality_flags = []  # Keep per-class screening warnings explicit rather than claiming guaranteed fidelity.
+        if record.get("mean_shift_standardized", 0.0) > 2.0:  # Flag large marginal-distribution deviations from original source samples.
+            quality_flags.append("large_marginal_mean_shift")  # Indicate that downstream utility may be compromised.
+        if record.get("low_variance_feature_fraction", 0.0) > 0.5:  # Flag possible mode collapse across variable original features.
+            quality_flags.append("low_feature_diversity")  # Preserve a class-specific diversity warning.
+        if record.get("reference_near_match_fraction", 0.0) > 0.1:  # Flag suspicious proximity to reference original training records.
+            quality_flags.append("possible_reference_memorization")  # Avoid claiming privacy from a bounded neighbor comparison.
+        record["quality_flags"] = quality_flags  # Persist actionable warnings independently for each class.
         reports.append(record)  # Append this class's measurements.
 
     report_path = Path(args.out_file).with_suffix(".quality.json")  # Write a report beside the generated CSV.
@@ -955,7 +1137,7 @@ def build_default_training_and_model_config() -> Dict:
             "small_class_threshold": 100,  # Threshold for small class detection
             "small_class_min_samples": 10,  # Minimum samples for small classes
         },
-        "quality": {"enabled": True, "sample_rows_per_class": 512, "reject_invalid": True},  # Configure bounded quality diagnostics and fail-closed constraint enforcement.
+        "quality": {"enabled": True, "sample_rows_per_class": 512, "reject_invalid": True, "n_quantiles": 256, "fit_sample_rows": 20000, "class_sampling_exponent": 0.5, "plot_samples_per_class": 512},  # Configure bounded quality diagnostics and fail-closed constraint enforcement.
         "dataloader": {  # DataLoader configuration
             "num_workers": 8,  # Number of workers for data loading
             "pin_memory": True,  # Use pinned memory for faster GPU transfer
@@ -2897,10 +3079,13 @@ def create_dataset_and_dataloader(args, config: Dict, device: torch.device) -> t
     persistent_workers = config.get("dataloader", {}).get("persistent_workers", True) if num_workers > 0 else False  # Get persistent_workers from config
     prefetch_factor = int(config.get("dataloader", {}).get("prefetch_factor", 2)) if num_workers > 0 else None  # Get prefetch_factor from config and cast to int
 
+    class_sampler = ClassAwareFlowSampler(dataset.labels, seed=int(getattr(args, "seed", 42)), exponent=float(config.get("quality", {}).get("class_sampling_exponent", 0.5)))  # Improve real-class exposure for imbalanced attack data.
+    print(f"[TRAINING] Real class sampler: prevalence exponent={config.get('quality', {}).get('class_sampling_exponent', 0.5)} | Classes={len(class_sampler.class_ids)}")  # Record sampling strategy for reproducibility.
     dataloader = DataLoader(
         dataset,  # Dataset object to load data from
         batch_size=args.batch_size,  # Batch size for training
-        shuffle=True,  # Shuffle data each epoch for better training
+        sampler=class_sampler,  # Sample real rows by tempered class frequencies without materializing complete epoch indexes.
+        shuffle=False,  # Avoid combining a shuffle sampler with the explicit class sampler.
         drop_last=True,  # Drop last incomplete batch for consistent batch sizes
         num_workers=num_workers,  # Number of subprocesses for data loading
         pin_memory=pin_memory,  # Faster CPU->GPU transfer
@@ -3156,7 +3341,7 @@ def resume_from_checkpoint(args, config: Dict, device: torch.device, G, D, opt_G
 
     if not args.from_scratch and args.csv_path:  # If not forcing from scratch and CSV path provided
         csv_path_obj = Path(args.csv_path)  # Create Path object from csv_path
-        checkpoint_dir = csv_path_obj.parent / "Data_Augmentation" / "Checkpoints"  # Expected checkpoint directory
+        checkpoint_dir = csv_path_obj.parent / "Data_Augmentation" / "Checkpoints" / FLOW_PREPROCESSING_CHECKPOINT_TAG  # Resume only compatible class-conditional preprocessing checkpoints.
         checkpoint_prefix = csv_path_obj.stem  # Expected filename prefix
 
         if checkpoint_dir.exists():  # If checkpoint directory exists
@@ -3747,7 +3932,7 @@ def resolve_checkpoint_dir_and_prefix(args, config: Dict, epoch: int) -> tuple:
     :return: Tuple of (checkpoint_dir, checkpoint_prefix, skip_checkpoint).
     """
 
-    checkpoint_dir = Path(args.out_dir) / "Checkpoints"  # Default checkpoint directory
+    checkpoint_dir = Path(args.out_dir) / "Checkpoints" / FLOW_PREPROCESSING_CHECKPOINT_TAG  # Default versioned checkpoint directory
     checkpoint_prefix = "model"  # Default prefix for checkpoint files
     skip_checkpoint = False  # Initialize skip flag to False
     if (epoch + 1) % args.save_every == 0 or epoch == args.epochs - 1:  # Save checkpoints periodically
@@ -3762,7 +3947,7 @@ def resolve_checkpoint_dir_and_prefix(args, config: Dict, epoch: int) -> tuple:
         if not skip_checkpoint:  # Only proceed when disk space is sufficient for checkpoint saving
             if args.csv_path:  # If CSV path is provided
                 csv_path_obj = Path(args.csv_path)  # Create Path object from csv_path
-                checkpoint_dir = csv_path_obj.parent / "Data_Augmentation" / "Checkpoints"  # Create Checkpoints subdirectory
+                checkpoint_dir = csv_path_obj.parent / "Data_Augmentation" / "Checkpoints" / FLOW_PREPROCESSING_CHECKPOINT_TAG  # Persist weights separately from historical preprocessing checkpoints.
                 try:  # Guard directory creation against disk-full and other I/O errors
                     os.makedirs(checkpoint_dir, exist_ok=True)  # Ensure directory exists
                 except OSError as _ose_dir:  # Catch filesystem errors including disk full during makedirs
@@ -3773,7 +3958,7 @@ def resolve_checkpoint_dir_and_prefix(args, config: Dict, epoch: int) -> tuple:
                     skip_checkpoint = True  # Mark checkpoint as skipped due to directory creation failure
                 checkpoint_prefix = csv_path_obj.stem  # Use input filename as prefix
             else:  # No CSV path, use default out_dir
-                checkpoint_dir = Path(args.out_dir) / "Checkpoints"  # Create Checkpoints subdirectory in out_dir
+                checkpoint_dir = Path(args.out_dir) / "Checkpoints" / FLOW_PREPROCESSING_CHECKPOINT_TAG  # Create a versioned checkpoint directory in out_dir
                 try:  # Guard directory creation against disk-full and other I/O errors
                     os.makedirs(checkpoint_dir, exist_ok=True)  # Ensure directory exists
                 except OSError as _ose_dir:  # Catch filesystem errors including disk full during makedirs
@@ -4604,11 +4789,7 @@ def evaluate_existing_augmentation_file(out_path: Path, file_prefix: str, existi
         send_telegram_message(TELEGRAM_BOT, forced_message)  # Notify forced regeneration through existing Telegram flow
         return True  # Preserve existing output until replacement generation is ready
     send_telegram_message(TELEGRAM_BOT, f"{file_prefix} Existing {out_path.name} has {existing_count} output rows but requires {expected_n}; removing and regenerating.")  # Notify mismatch via Telegram
-    try:  # Attempt to delete existing file before regeneration
-        out_path.unlink()  # Delete existing file
-    except Exception:  # Ignore deletion errors
-        pass  # Continue regardless of deletion failure
-    return True  # Proceed with generation
+    return True  # Regenerate without deleting the prior output before validation succeeds.
 
 
 def verify_data_augmentation_file(args, config: Optional[Dict] = None) -> bool:
@@ -4639,6 +4820,18 @@ def verify_data_augmentation_file(args, config: Optional[Dict] = None) -> bool:
         if not out_path.exists():  # If file does not exist
             return True  # Proceed with generation
 
+        existing_manifest_path = out_path.with_suffix(".provenance.json")  # Resolve the exact source and preprocessing identity beside the existing CSV.
+        existing_quality_path = out_path.with_suffix(".quality.json")  # Resolve the quality diagnostics produced by the matching generation run.
+        try:  # Require source, preprocessing and quality provenance before trusting an existing output.
+            existing_manifest = json.loads(existing_manifest_path.read_text(encoding="utf-8"))  # Read the persisted output's training identity.
+            existing_quality = json.loads(existing_quality_path.read_text(encoding="utf-8"))  # Read class-specific output validation evidence.
+            verified_output = existing_manifest.get("sha256") == build_wgangp_provenance(args)["sha256"] and int(existing_quality.get("invalid_feature_values", -1)) == 0  # Match the current configuration and a successful domain-constraint audit.
+        except (OSError, ValueError, TypeError, AttributeError):  # Treat absent or malformed historical artifacts as unverified.
+            verified_output = False  # Never skip regeneration based on count alone.
+        if not verified_output:  # Reject incompatible historical artifacts while preserving their bytes until a successful replacement.
+            print(f"[QUALITY] Existing augmented CSV is unverified for current preprocessing; regenerating {out_path.name}")  # Explain the safe regeneration decision.
+            return True  # Regenerate from a matching trained generator rather than accepting old output.
+
         expected_n = resolve_expected_output_row_count(args, config)  # Resolve expected final output row count from configuration
 
         if expected_n is None:  # If expected size cannot be determined
@@ -4646,11 +4839,7 @@ def verify_data_augmentation_file(args, config: Optional[Dict] = None) -> bool:
                 TELEGRAM_BOT,
                 f"{file_prefix} Unable to verify existing augmented file {out_path.name}: expected output rows undeterminable — regenerating.",
             )
-            try:
-                out_path.unlink()  # Attempt to remove problematic file
-            except Exception:
-                pass
-            return True  # Proceed safely
+            return True  # Preserve existing bytes until validated replacement is ready.
 
         try:
             existing_count = len(pd.read_csv(out_path, low_memory=False))  # Count rows safely
@@ -4662,11 +4851,7 @@ def verify_data_augmentation_file(args, config: Optional[Dict] = None) -> bool:
                 TELEGRAM_BOT,
                 f"{file_prefix} Existing augmented file {out_path.name} unreadable — regenerating.",
             )
-            try:
-                out_path.unlink()  # Attempt deletion
-            except Exception:
-                pass
-            return True  # Proceed
+            return True  # Preserve prior output until a replacement passes quality validation.
 
         return evaluate_existing_augmentation_file(out_path, file_prefix, existing_count, expected_n, args)  # Evaluate whether to regenerate or skip based on count comparison
 
@@ -4960,45 +5145,45 @@ def generate_generation_quality_outputs(args: Any, config: Dict, df_generated: p
     if not getattr(args, "csv_path", None):  # Skip quality output when no source CSV path is available
         return  # Return without creating file-based quality plots
 
-    try:  # Guard quality visualization so CSV persistence remains authoritative
-        orig_df_tsne = pd.read_csv(args.csv_path, low_memory=False)  # Load source CSV for t-SNE comparison
-        orig_df_tsne.columns = orig_df_tsne.columns.str.strip()  # Normalize source column names.
-        valid_tsne_cols = [c for c in feature_cols if c in orig_df_tsne.columns and c in df_generated.columns]  # Retain shared generated feature columns
-
-        if valid_tsne_cols:  # Proceed only when comparable feature columns are available
-            source_label_col = (
-                args.label_col
-                if args.label_col in orig_df_tsne.columns
-                else detect_label_column(orig_df_tsne.columns, config)
-            )  # Resolve source label column using training normalization.
-            if source_label_col is None:  # Require source labels for class-aware visualization.
-                raise ValueError(
-                    "Source CSV has no label column for detailed t-SNE visualization"
-                )  # Stop invalid class-aware visualization.
-            original_numeric_tsne = orig_df_tsne[valid_tsne_cols].apply(
-                pd.to_numeric, errors="coerce"
-            ).dropna()  # Retain valid source rows for coordinates and labels.
-            X_original_tsne = original_numeric_tsne.values.astype(np.float32)  # Extract numeric source feature matrix.
-            original_labels_tsne = orig_df_tsne.loc[
-                original_numeric_tsne.index, source_label_col
-            ].astype(str).to_numpy()  # Align source labels with retained feature rows.
-            X_generated_tsne = df_generated[valid_tsne_cols].values.astype(np.float32)  # Extract generated feature matrix
-            generated_labels_tsne = df_generated[args.label_col].astype(
-                str
-            ).to_numpy()  # Align synthetic labels with generated feature rows.
-            config_paths = config.get("paths", {})  # Read paths
-            data_aug_subdir = config_paths.get("data_augmentation_dir", "Data_Augmentation")  # Read directory
-            tsne_out_dir = Path(args.csv_path).parent / data_aug_subdir  # Resolve data augmentation directory
-            tsne_dataset_name = Path(args.csv_path).stem  # Derive dataset name from source CSV stem
-            generate_tsne_3d_separability_plot(
-                X_original_tsne,
-                X_generated_tsne,
-                tsne_out_dir,
-                dataset_name=tsne_dataset_name,
-                config=config,
-                original_labels=original_labels_tsne,
-                generated_labels=generated_labels_tsne,
-            )  # Generate binary and class-aware 3D t-SNE visualizations.
+    try:  # Bound source and synthetic plot inputs independently of the full CSV population.
+        sample_limit = max(32, int(config.get("quality", {}).get("plot_samples_per_class", 512)))  # Configure a representative bounded plotting sample per class.
+        label = args.label_col  # Resolve the class label used by this generator.
+        rng = np.random.default_rng(int(getattr(args, "seed", 42)) + 1)  # Keep plot sampling reproducible without reusing quality reservoirs.
+        sample_values = {}  # Accumulate sampled original features by class.
+        sample_priorities = {}  # Retain uniform sampling priorities across source chunks.
+        columns = list(feature_cols) + [label]  # Read only original labels and model features.
+        for chunk in pd.read_csv(args.csv_path, usecols=lambda value: value.strip() in columns, chunksize=8192, low_memory=False):  # Stream original source data without loading the entire CSV.
+            chunk.columns = chunk.columns.str.strip()  # Normalize column names like the training preprocessor.
+            if label not in chunk.columns:  # Require aligned original attack labels.
+                raise ValueError(f"t-SNE source is missing label column: {label}")  # Stop mislabelled visualizations.
+            for class_name, group in chunk.groupby(label, sort=False):  # Uniformly sample each real class over the complete source file.
+                key = str(class_name)  # Preserve the exact displayed class identity.
+                values = group[feature_cols].to_numpy(dtype=np.float32, copy=True)  # Materialize only one bounded source chunk.
+                ranks = rng.random(len(values))  # Assign uniformly distributed sampling priorities.
+                if key in sample_values:  # Combine with previously selected real examples.
+                    values = np.concatenate([sample_values[key], values])  # Keep at most one chunk plus the reservoir in memory.
+                    ranks = np.concatenate([sample_priorities[key], ranks])  # Preserve aligned sampling keys.
+                selected = np.argpartition(ranks, min(sample_limit, len(ranks)) - 1)[:sample_limit]  # Select a uniform bounded reservoir.
+                sample_values[key] = values[selected]  # Retain one bounded original sample per class.
+                sample_priorities[key] = ranks[selected]  # Retain matching reservoir priorities.
+        original_matrices = []  # Collect bounded source class matrices for plotting.
+        original_classes = []  # Collect aligned original class identities.
+        for class_name, values in sample_values.items():  # Assemble sampled original data with class labels.
+            finite = np.isfinite(values).all(axis=1)  # Match generation preprocessing's finite-row requirement.
+            original_matrices.append(values[finite])  # Exclude invalid source values without changing generated CSVs.
+            original_classes.extend([class_name] * int(finite.sum()))  # Keep labels aligned with the selected original rows.
+        X_original_tsne = np.concatenate(original_matrices).astype(np.float32)  # Materialize only bounded original plot rows.
+        generated_matrices = []  # Collect bounded synthetic samples independently by class.
+        generated_classes = []  # Track aligned synthetic attack labels.
+        for class_name, group in df_generated.groupby(label, sort=False):  # Keep minority attacks represented in t-SNE.
+            sample = group.sample(n=min(sample_limit, len(group)), random_state=int(getattr(args, "seed", 42)))  # Sample generated rows reproducibly by class.
+            generated_matrices.append(sample[feature_cols].to_numpy(dtype=np.float32, copy=True))  # Retain bounded generated plot features.
+            generated_classes.extend([str(class_name)] * len(sample))  # Preserve attack labels aligned with synthetic rows.
+        X_generated_tsne = np.concatenate(generated_matrices).astype(np.float32)  # Materialize bounded synthetic plot rows.
+        config_paths = config.get("paths", {})  # Resolve existing output-directory configuration.
+        data_aug_subdir = config_paths.get("data_augmentation_dir", "Data_Augmentation")  # Preserve existing plot destination structure.
+        tsne_out_dir = Path(args.csv_path).parent / data_aug_subdir  # Store plots beside the dataset's augmentation artifacts.
+        generate_tsne_3d_separability_plot(X_original_tsne, X_generated_tsne, tsne_out_dir, dataset_name=Path(args.csv_path).stem, config=config, original_labels=np.asarray(original_classes), generated_labels=np.asarray(generated_classes))  # Render original-versus-synthetic 3D plots using bounded aligned class samples.
 
     except Exception as _tsne_e:  # Continue when quality visualization fails
         print(f"{BackgroundColors.YELLOW}[WARNING] t-SNE separability plot failed: {_tsne_e}{Style.RESET_ALL}")  # Warn about t-SNE failure without aborting generation
@@ -5023,7 +5208,9 @@ def postprocess_generated_arrays_to_dataframe(args, config: Dict, all_fake: List
 
     X_fake = np.vstack(all_fake) if isinstance(all_fake, list) else all_fake  # Stack batches if list or use pre-allocated array directly
     Y_fake = np.concatenate(all_labels) if isinstance(all_labels, list) else all_labels  # Concatenate if list or use array directly
-    X_orig = scaler.inverse_transform(X_fake)  # Inverse transform features to original scale
+    if not isinstance(scaler, ClassConditionalFlowScaler):  # Require a checkpoint created for the validated mixed-type representation.
+        raise ValueError("Generator checkpoint uses an incompatible legacy preprocessing representation; retrain with --from_scratch")  # Never use a raw StandardScaler to decode quantile-space generator output.
+    X_orig = scaler.inverse_transform(X_fake, Y_fake)  # Decode with independent original class marginals and observed discrete support.
     df_generated = pd.DataFrame(X_orig, columns=pd.Index(feature_cols))  # Create DataFrame with original feature names
     df_generated[args.label_col] = label_encoder.inverse_transform(Y_fake)  # Map integer labels back to original strings
     assess_generated_flow_quality(args, config, df_generated)  # Measure fidelity, diversity, memorization and domain-constraint violations before output persistence.
@@ -5833,7 +6020,7 @@ def dispatch_wgangp_execution_mode(args, final_config: Dict) -> None:
                     samples_dir = data_aug_dir / final_config.get("paths", {}).get("data_augmentation_sample_dir", "Samples")  # Build augmented samples subdirectory path inside data augmentation directory
                     os.makedirs(samples_dir, exist_ok=True)  # Ensure augmented samples subdirectory exists before output file assignment
                     args.out_file = str(samples_dir / output_filename)  # Assign resolved output file path to args for generation
-                checkpoint_dir = data_aug_dir / final_config.get("paths", {}).get("checkpoint_subdir", "Checkpoints")  # Construct checkpoint directory path under Data_Augmentation
+                checkpoint_dir = data_aug_dir / final_config.get("paths", {}).get("checkpoint_subdir", "Checkpoints") / FLOW_PREPROCESSING_CHECKPOINT_TAG  # Discover only class-conditional generator checkpoints.
                 checkpoint_path = checkpoint_dir / f"{csv_path_obj.stem}_generator_epoch{args.epochs}.pt"  # Construct expected final-epoch checkpoint filename
                 if not checkpoint_path.exists():  # Find latest if specific epoch not found
                     checkpoints = list(checkpoint_dir.glob(f"{csv_path_obj.stem}_generator_epoch*.pt"))  # Discover all matching generator checkpoints in directory
@@ -6109,7 +6296,7 @@ def skip_both_mode_when_augmented_output_sufficient(args: Any, config: Dict, csv
     out_path = Path(getattr(args, "out_file", ""))  # Resolve the existing output path using configured per-file output logic.
     force_regenerate = bool(getattr(args, "force_regenerate_samples", False))  # Resolve the effective force-regeneration value once for this file.
     requested_ratio = safe_float(getattr(args, "n_samples", config.get("generation", {}).get("n_samples", 1.0)), config.get("generation", {}).get("n_samples", 1.0))  # Resolve the effective requested generation ratio or absolute count.
-    required_rows = resolve_expected_output_row_count(args, config)  # Reuse production final augmented row-count calculation.
+    required_rows = None if not out_path.exists() or force_regenerate else resolve_expected_output_row_count(args, config)  # Avoid loading large source datasets for nonexistent or forcibly replaced outputs.
     original_rows = "unavailable"  # Initialize source row count for logging when source read fails.
 
     try:  # Read source row count for skip evidence only.
@@ -6169,7 +6356,7 @@ def resolve_checkpoint_after_training(args: Any, config: Dict, csv_path_obj: Pat
 
     checkpoint_prefix = csv_path_obj.stem  # Derive checkpoint filename prefix from input CSV stem
     checkpoint_subdir = config.get("paths", {}).get("checkpoint_subdir", "Checkpoints")  # Read configured checkpoint subdirectory name
-    checkpoint_dir = data_aug_dir / checkpoint_subdir  # Build checkpoint directory path under Data_Augmentation
+    checkpoint_dir = data_aug_dir / checkpoint_subdir / FLOW_PREPROCESSING_CHECKPOINT_TAG  # Keep checkpoint discovery in the versioned preprocessing namespace.
     checkpoint_path = checkpoint_dir / f"{checkpoint_prefix}_generator_epoch{args.epochs}.pt"  # Construct expected final-epoch checkpoint filename
     
     if not checkpoint_path.exists():  # Fall back to latest checkpoint when specific epoch file is absent
