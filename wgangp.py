@@ -1102,7 +1102,18 @@ def verify_wgangp_provenance(saved: Any, args: Any, context: str) -> None:
         raise ValueError(f"{context} provenance does not match the current source/configuration; use --from_scratch with a fresh output or restore the original configuration")  # Prevent invalid model reuse.
 
 
-def assess_generated_flow_quality(args: Any, config: Dict, generated: pd.DataFrame) -> None:
+def build_quality_policy_fingerprint(config: Dict) -> str:
+    """Fingerprint quality thresholds independently of generator training hyperparameters.
+
+    :param config: Runtime configuration with quality acceptance settings.
+    :return: Stable SHA-256 identity for quality acceptance and cached-output reuse.
+    """
+
+    policy = {key: value for key, value in config.get("quality", {}).items() if key not in {"n_quantiles", "fit_sample_rows", "class_sampling_exponent", "plot_samples_per_class"}}
+    return hashlib.sha256(json.dumps(policy, sort_keys=True, default=str).encode("utf-8")).hexdigest()
+
+
+def assess_generated_flow_quality(args: Any, config: Dict, generated: pd.DataFrame, scaler: Optional[Any] = None, label_encoder: Optional[Any] = None) -> None:
     """
     Measure class-specific fidelity and reject known-invalid generated network flows.
 
@@ -1113,8 +1124,8 @@ def assess_generated_flow_quality(args: Any, config: Dict, generated: pd.DataFra
     """
 
     settings = config.get("quality", {})  # Read opt-in diagnostic bounds and constraint policy.
-    if not settings.get("enabled", True):  # Respect explicit diagnostic disablement.
-        return  # Preserve the existing generation behavior when disabled.
+    if not settings.get("enabled", True):
+        raise ValueError("Quality auditing cannot be disabled when quality acceptance is mandatory")
 
     label = args.label_col  # Resolve the exact output label column.
     numeric_columns = [col for col in generated.select_dtypes(include=[np.number]).columns if col != label]  # Restrict comparisons to shared numeric features.
@@ -1143,6 +1154,11 @@ def assess_generated_flow_quality(args: Any, config: Dict, generated: pd.DataFra
                 source_samples[key] = candidates[selected]  # Retain at most sample_limit reference rows.
                 source_priorities[key] = priorities[selected]  # Retain corresponding reservoir priorities.
 
+    rules_by_label = {}
+    if isinstance(scaler, ClassConditionalFlowScaler) and label_encoder is not None:
+        for class_id, class_rules in scaler.derived_rules.items():
+            rules_by_label[str(label_encoder.inverse_transform([int(class_id)])[0])] = class_rules
+    rejecting_classes = []
     for class_label, group in generated.groupby(label, sort=False):  # Process each generated attack class separately.
         sample = group.sample(n=min(sample_limit, len(group)), random_state=random_seed)  # Bound synthetic metrics deterministically.
         sample_values = sample[numeric_columns].to_numpy(dtype=np.float64, copy=True)  # Extract finite-width synthetic feature matrix.
@@ -1171,7 +1187,9 @@ def assess_generated_flow_quality(args: Any, config: Dict, generated: pd.DataFra
                 violations[str(column)] = count  # Store the class-specific constraint count.
         invalid_total += sum(violations.values())  # Accumulate conservative invalid-value violations.
         reference = np.asarray(source_samples.get(str(class_label), []), dtype=np.float64)  # Load class-matched original reference rows.
-        record = {"class": str(class_label), "generated_rows": int(len(group)), "generated_sample_rows": int(len(sample)), "violations": violations}  # Initialize class diagnostics.
+        rules = rules_by_label.get(str(class_label), [])
+        relation_violations = flow_relationship_violation_counts(sample_values, numeric_columns, rules)
+        record = {"class": str(class_label), "generated_rows": int(len(group)), "generated_sample_rows": int(len(sample)), "violations": violations, "relationship_violations": relation_violations, "enforced_derived_relationships": [rule[-1] for rule in rules]}  # Include calibrated network relationships.
         if len(reference) and sample_values.size and reference.shape[1] == sample_values.shape[1]:  # Require comparable nonempty feature matrices.
             valid_ref = reference[np.isfinite(reference).all(axis=1)]  # Exclude invalid reference samples.
             valid_gen = sample_values[finite]  # Exclude invalid generated rows from fidelity diagnostics.
@@ -1190,24 +1208,36 @@ def assess_generated_flow_quality(args: Any, config: Dict, generated: pd.DataFra
                 nearest = neighbors.kneighbors(normalized_gen, return_distance=True)[0].reshape(-1)  # Measure proximity to reference flow vectors.
                 record.update({"mean_shift_standardized": mean_shift, "low_variance_feature_fraction": variance_ratio, "synthetic_near_duplicate_fraction": near_dup / len(valid_gen), "reference_nearest_distance_median": float(np.median(nearest)), "reference_near_match_fraction": float(np.mean(nearest < 0.05))})  # Save sampled class-fidelity, collapse and memorization indicators.
         quality_flags = []  # Keep per-class screening warnings explicit rather than claiming guaranteed fidelity.
-        if record.get("mean_shift_standardized", 0.0) > 2.0:  # Flag large marginal-distribution deviations from original source samples.
+        if record.get("mean_shift_standardized", 0.0) > float(settings.get("max_mean_shift", 2.0)):  # Flag large marginal-distribution deviations from original source samples.
             quality_flags.append("large_marginal_mean_shift")  # Indicate that downstream utility may be compromised.
-        if record.get("low_variance_feature_fraction", 0.0) > 0.5:  # Flag possible mode collapse across variable original features.
+        if record.get("low_variance_feature_fraction", 0.0) > float(settings.get("max_low_variance_fraction", 0.5)):  # Flag possible mode collapse across variable original features.
             quality_flags.append("low_feature_diversity")  # Preserve a class-specific diversity warning.
-        if record.get("reference_near_match_fraction", 0.0) > 0.1:  # Flag suspicious proximity to reference original training records.
+        if record.get("reference_near_match_fraction", 0.0) > float(settings.get("max_reference_near_match_fraction", 0.95)):  # Flag suspicious proximity to reference original training records.
             quality_flags.append("possible_reference_memorization")  # Avoid claiming privacy from a bounded neighbor comparison.
-        record["quality_flags"] = quality_flags  # Persist actionable warnings independently for each class.
+        if relation_violations:
+            quality_flags.append("invalid_joint_feature_relationships")
+        if violations:
+            quality_flags.append("invalid_individual_feature_domains")
+        if "mean_shift_standardized" not in record:
+            quality_flags.append("insufficient_reference_or_synthetic_sample")
+        record["quality_flags"] = quality_flags  # Keep class-specific screening decisions.
+        record["accepted"] = not bool(quality_flags)
+        if not record["accepted"]:
+            rejecting_classes.append(str(class_label))
         reports.append(record)  # Append this class's measurements.
 
     report_path = Path(args.out_file).with_suffix(".quality.json")  # Write a report beside the generated CSV.
     report_path.parent.mkdir(parents=True, exist_ok=True)  # Ensure the report directory exists.
-    report = {"sampling_note": "Diagnostics use bounded class samples and are screening indicators, not proof of quality or privacy", "sample_rows_per_class": sample_limit, "classes": reports, "invalid_feature_values": invalid_total}  # Document limitations alongside the statistics.
+    accepted = invalid_total == 0 and not rejecting_classes
+    report = {"schema_version": 3, "accepted": accepted, "quality_policy_sha256": build_quality_policy_fingerprint(config), "sampling_note": "Bounded screening indicators do not prove model fidelity", "sample_rows_per_class": sample_limit, "classes": reports, "invalid_feature_values": invalid_total, "rejected_classes": rejecting_classes}  # Durable class-level acceptance evidence.
     with report_path.open("w", encoding="utf-8") as handle:  # Persist diagnostics before enforcing failures.
         json.dump(report, handle, indent=2, allow_nan=False)  # Reject nonfinite JSON metrics rather than silently serializing them.
     print(f"[QUALITY] Saved per-class synthetic diagnostics: {report_path} | Invalid feature values: {invalid_total}")  # Surface actionable report location.
 
     if invalid_total and settings.get("reject_invalid", True):  # Enforce physical flow validity when requested.
-        raise ValueError(f"Rejected synthetic output containing {invalid_total} invalid flow feature values; review {report_path}")  # Do not silently clip or save invalid flow rows.
+        raise ValueError(f"Rejected synthetic output containing {invalid_total} invalid flow feature values; review {report_path}")
+    if rejecting_classes and settings.get("reject_quality_flags", True):
+        raise ValueError(f"Rejected synthetic output with class-specific quality violations: {rejecting_classes}; review {report_path}")
 
 
 def build_default_training_and_model_config() -> Dict:
@@ -1261,7 +1291,7 @@ def build_default_training_and_model_config() -> Dict:
             "small_class_threshold": 100,  # Threshold for small class detection
             "small_class_min_samples": 10,  # Minimum samples for small classes
         },
-        "quality": {"enabled": True, "sample_rows_per_class": 512, "reject_invalid": True, "n_quantiles": 256, "fit_sample_rows": 20000, "class_sampling_exponent": 0.5, "plot_samples_per_class": 512},  # Configure bounded quality diagnostics and fail-closed constraint enforcement.
+        "quality": {"enabled": True, "sample_rows_per_class": 512, "reject_invalid": True, "reject_quality_flags": True, "n_quantiles": 256, "fit_sample_rows": 20000, "class_sampling_exponent": 0.5, "plot_samples_per_class": 512, "max_mean_shift": 2.0, "max_low_variance_fraction": 0.5, "max_reference_near_match_fraction": 0.95},  # Configure bounded quality diagnostics and fail-closed constraint enforcement.
         "dataloader": {  # DataLoader configuration
             "num_workers": 8,  # Number of workers for data loading
             "pin_memory": True,  # Use pinned memory for faster GPU transfer
@@ -4947,7 +4977,7 @@ def verify_data_augmentation_file(args, config: Optional[Dict] = None) -> bool:
         try:  # Require source, preprocessing and quality provenance before trusting an existing output.
             existing_manifest = json.loads(existing_manifest_path.read_text(encoding="utf-8"))  # Read the persisted output's training identity.
             existing_quality = json.loads(existing_quality_path.read_text(encoding="utf-8"))  # Read class-specific output validation evidence.
-            verified_output = existing_manifest.get("sha256") == build_wgangp_provenance(args)["sha256"] and int(existing_quality.get("invalid_feature_values", -1)) == 0  # Match the current configuration and a successful domain-constraint audit.
+            verified_output = existing_manifest.get("sha256") == build_wgangp_provenance(args)["sha256"] and existing_quality.get("schema_version") == 3 and existing_quality.get("accepted") is True and existing_quality.get("quality_policy_sha256") == build_quality_policy_fingerprint(config)  # Require a passed class-quality acceptance report.
         except (OSError, ValueError, TypeError, AttributeError):  # Treat absent or malformed historical artifacts as unverified.
             verified_output = False  # Never skip regeneration based on count alone.
         if not verified_output:  # Reject incompatible historical artifacts while preserving their bytes until a successful replacement.
@@ -5321,7 +5351,7 @@ def postprocess_generated_arrays_to_dataframe(args, config: Dict, all_fake: List
     X_orig = scaler.inverse_transform(X_fake, Y_fake)  # Decode with independent original class marginals and observed discrete support.
     df_generated = pd.DataFrame(X_orig, columns=pd.Index(feature_cols))  # Create DataFrame with original feature names
     df_generated[args.label_col] = label_encoder.inverse_transform(Y_fake)  # Map integer labels back to original strings
-    assess_generated_flow_quality(args, config, df_generated)  # Measure fidelity, diversity, memorization and domain-constraint violations before output persistence.
+    assess_generated_flow_quality(args, config, df_generated, scaler=scaler, label_encoder=label_encoder)  # Enforce class-specific quality acceptance before saving.
     output_df, original_count = build_augmented_output_dataframe(args, df_generated)  # Build output
 
     if config.get("hardware_tracking", False):  # If enabled in config
@@ -6438,7 +6468,9 @@ def skip_both_mode_when_augmented_output_sufficient(args: Any, config: Dict, csv
     provenance_file = out_path.with_suffix(".provenance.json")  # Locate the persisted output provenance manifest.
     try:  # Verify the source identity and hyperparameters associated with the existing synthetic CSV.
         existing_provenance = json.loads(provenance_file.read_text(encoding="utf-8"))  # Read the output manifest when present.
-        provenance_valid = existing_provenance.get("sha256") == build_wgangp_provenance(args)["sha256"]  # Match the current training configuration exactly.
+        quality_path = out_path.with_suffix(".quality.json")
+        quality = json.loads(quality_path.read_text(encoding="utf-8"))
+        provenance_valid = existing_provenance.get("sha256") == build_wgangp_provenance(args)["sha256"] and quality.get("schema_version") == 3 and quality.get("accepted") is True and quality.get("quality_policy_sha256") == build_quality_policy_fingerprint(config)  # Reuse only validated prior output.
     except (OSError, ValueError, TypeError, AttributeError):  # Treat missing or malformed output manifests as unverified.
         provenance_valid = False  # Require regeneration for unverifiable existing outputs.
     if existing_rows == int(required_rows) and provenance_valid:  # Skip only matching output size and verified source/model configuration.
