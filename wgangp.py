@@ -44,7 +44,7 @@ Dependencies:
 
 Assumptions & Notes:
     - CSV should contain feature columns and a label column
-    - Features use class-conditional quantile preprocessing with empirical discrete decoding
+    - Features use class-conditional quantiles and empirically calibrated flow relationships
     - Labels are encoded via LabelEncoder (categorical to integer)
     - Output features are inverse-transformed per class, with original discrete domains preserved
     - CUDA is used if available; use --force_cpu to disable
@@ -102,7 +102,7 @@ psutil = (
 )  # Import psutil if available, otherwise set to None
 
 SAO_PAULO_TIMEZONE_NAME = "America/Sao_Paulo"  # Use Sao Paulo timezone for ETA finish timestamps
-FLOW_PREPROCESSING_CHECKPOINT_TAG = "ConditionalQuantileV2"  # Isolate weights trained on class-conditional quantiles from legacy StandardScaler weights.
+FLOW_PREPROCESSING_CHECKPOINT_TAG = "ConditionalQuantileV3"  # Isolate weights trained on class-conditional quantiles from legacy StandardScaler weights.
 
 # Prefer CUDA autocast when available; provide a safe fallback context manager
 try:  # Attempt to import torch.amp.autocast for mixed precision support
@@ -166,6 +166,7 @@ class ClassConditionalFlowScaler:
         self.fit_sample_rows = max(self.n_quantiles, int(fit_sample_rows))  # Keep fitting memory independent of total dataset size.
         self.transformers = {}  # Hold independent class-specific marginal transformations.
         self.discrete_support = {}  # Retain observed discrete support rather than hallucinating fractional network fields.
+        self.derived_rules = {}  # Record source-calibrated flow relationships by label.
         self.mean_ = np.zeros(len(self.feature_cols), dtype=np.float64)  # Retain the legacy dimension-discovery interface.
 
     def fit_transform(self, X: np.ndarray, labels: np.ndarray) -> np.ndarray:
@@ -192,6 +193,7 @@ class ClassConditionalFlowScaler:
                 if is_discrete_flow_feature(column):  # Preserve discrete values actually observed for this class.
                     support[index] = np.unique(observed[:, index])  # Reuse only recorded class-specific values.
             self.discrete_support[int(class_label)] = support  # Store legal reconstruction support for this class.
+            self.derived_rules[int(class_label)] = calibrate_flow_relationships(observed, self.feature_cols)  # Calibrate relations on source class rows only.
             for offset in range(0, len(indexes), 65536):  # Transform large datasets without large class copies.
                 block = indexes[offset:offset + 65536]  # Limit temporary transform memory.
                 encoded[block] = transformer.transform(np.asarray(X[block], dtype=np.float64)).astype(np.float32)  # Encode training rows.
@@ -247,6 +249,7 @@ class ClassConditionalFlowScaler:
                     low = np.maximum(high - 1, 0)  # Bound the low observed value index.
                     choose_low = np.abs(restored[:, column_index] - values[low]) <= np.abs(restored[:, column_index] - values[high])  # Select the closest legal value.
                     restored[:, column_index] = np.where(choose_low, values[low], values[high])  # Preserve class-specific integral and categorical support.
+                restored = apply_calibrated_flow_relationships(restored, self.feature_cols, self.derived_rules.get(class_id, []))  # Restore source-supported derived relationships.
                 result[block] = restored.astype(np.float32)  # Store source-scale values without duplicating all rows.
         return result  # Return decoded features in their original column order.
 
@@ -262,6 +265,127 @@ def is_discrete_flow_feature(name: Any) -> bool:
     if column in {"source port", "destination port", "protocol", "inbound", "act_data_pkt_fwd", "min_seg_size_forward", "down/up ratio", "fwd psh flags", "bwd psh flags", "fwd urg flags", "bwd urg flags", "init_win_bytes_forward", "init_win_bytes_backward"}:  # Identify known integer and categorical fields.
         return True  # Preserve empirical discrete support.
     return "flag count" in column or column in {"total fwd packets", "total backward packets", "subflow fwd packets", "subflow bwd packets", "total length of fwd packets", "total length of bwd packets", "fwd header length", "fwd header length.1", "bwd header length"}  # Preserve count and packet-length integer semantics.
+
+
+def flow_relationship_candidates(feature_columns: List[str]) -> List[tuple]:
+    """Return mathematical identities that must be calibrated against the source before use.
+
+    :param feature_columns: Original ordered CIC flow feature names.
+    :return: Candidate (target, numerator, denominator, multiplier) relations.
+    """
+
+    names = {str(column).lower().strip(): index for index, column in enumerate(feature_columns)}
+    candidates = [
+        ("fwd packet length mean", "total length of fwd packets", "total fwd packets", 1.0),
+        ("bwd packet length mean", "total length of bwd packets", "total backward packets", 1.0),
+        ("flow bytes/s", ("total length of fwd packets", "total length of bwd packets"), "flow duration", 1e6),
+        ("flow packets/s", ("total fwd packets", "total backward packets"), "flow duration", 1e6),
+        ("fwd packets/s", "total fwd packets", "flow duration", 1e6),
+        ("bwd packets/s", "total backward packets", "flow duration", 1e6),
+    ]
+    results = []
+    for target, numerators, denominator, multiplier in candidates:
+        numerator_keys = numerators if isinstance(numerators, tuple) else (numerators,)
+        if target in names and denominator in names and all(key in names for key in numerator_keys):
+            results.append((names[target], tuple(names[key] for key in numerator_keys), names[denominator], multiplier, target))
+    return results
+
+
+def predict_flow_relationship(features: np.ndarray, rule: tuple) -> tuple:
+    """Evaluate a candidate relationship only for positive denominators and finite inputs.
+
+    :param features: Unscaled source or synthetic numerical feature matrix.
+    :param rule: Calibrated relationship definition.
+    :return: Predicted derived values and applicability mask.
+    """
+
+    target, numerators, denominator, multiplier, _ = rule
+    denominator_values = features[:, denominator]
+    numerator_values = np.zeros(len(features), dtype=np.float64)
+    for index in numerators:
+        numerator_values += features[:, index]
+    valid = (np.isfinite(denominator_values) & (denominator_values > 0) & np.isfinite(numerator_values))
+    predicted = np.zeros(len(features), dtype=np.float64)
+    np.divide(numerator_values * multiplier, denominator_values, out=predicted, where=valid)
+    valid &= np.isfinite(predicted) & (predicted >= 0)
+    return predicted, valid
+
+
+def calibrate_flow_relationships(original: np.ndarray, feature_columns: List[str]) -> List[tuple]:
+    """Learn which identities hold for the actual CICDDoS extraction schema.
+
+    :param original: Unmodified original class rows selected for fitting.
+    :param feature_columns: Source feature names.
+    :return: Source-supported relations, without arbitrary cross-feature repair.
+    """
+
+    accepted = []
+    for rule in flow_relationship_candidates(feature_columns):
+        predicted, valid = predict_flow_relationship(original, rule)
+        if int(valid.sum()) < max(20, int(len(original) * 0.01)):
+            continue
+        observed = original[valid, rule[0]]
+        error = np.abs(predicted[valid] - observed) / np.maximum(np.maximum(np.abs(predicted[valid]), np.abs(observed)), 1e-6)
+        if np.mean(error <= 0.05) >= 0.98:  # Require empirical 98% support before reconstructing derived values.
+            accepted.append(rule)
+    names = {str(column).strip().lower(): index for index, column in enumerate(feature_columns)}
+    for prefix in ("fwd packet length", "bwd packet length", "packet length", "flow iat", "fwd iat", "bwd iat", "active", "idle"):
+        keys = [f"{prefix} {suffix}" for suffix in ("min", "mean", "max")]
+        if all(key in names for key in keys):
+            low, middle, high = (original[:, names[key]] for key in keys)
+            valid = np.isfinite(low) & np.isfinite(middle) & np.isfinite(high)
+            if int(valid.sum()) >= max(20, int(len(original) * 0.01)) and np.mean((low[valid] <= middle[valid] + 1e-5) & (middle[valid] <= high[valid] + 1e-5)) >= 0.98:
+                accepted.append((names[keys[1]], (names[keys[0]], names[keys[2]]), -1, 0.0, f"bounds:{prefix}"))
+    return accepted
+
+
+def apply_calibrated_flow_relationships(generated: np.ndarray, feature_columns: List[str], rules: List[tuple]) -> np.ndarray:
+    """Reconstruct verified derived flow fields from their joint parent features.
+
+    :param generated: Source-scale synthesized flow matrix.
+    :param feature_columns: Column names retained for consistent interfaces.
+    :param rules: Relations validated on original training-only class rows.
+    :return: Synthetics with calibrated derived quantities made coherent.
+    """
+
+    for rule in rules:
+        if str(rule[-1]).startswith("bounds:"):
+            mean = generated[:, rule[0]]
+            low_index, high_index = rule[1]
+            generated[:, low_index] = np.minimum(generated[:, low_index], mean)
+            generated[:, high_index] = np.maximum(generated[:, high_index], mean)
+        else:
+            predicted, valid = predict_flow_relationship(generated, rule)
+            generated[valid, rule[0]] = predicted[valid]
+    return generated
+
+
+def flow_relationship_violation_counts(generated: np.ndarray, columns: List[str], rules: List[tuple]) -> Dict[str, int]:
+    """Identify inter-feature relationships violated by generated rows.
+
+    :param generated: Source-scale class records.
+    :param columns: Ordered CIC flow feature names.
+    :param rules: Empirically supported flow relations for this class.
+    :return: Per-relationship violation counts.
+    """
+
+    violations = {}
+    for rule in rules:
+        if str(rule[-1]).startswith("bounds:"):
+            mean = generated[:, rule[0]]
+            low, high = (generated[:, index] for index in rule[1])
+            count = int(np.count_nonzero((low > mean + 1e-5) | (mean > high + 1e-5)))
+            if count:
+                violations[rule[-1]] = count
+            continue
+        predicted, valid = predict_flow_relationship(generated, rule)
+        actual = generated[:, rule[0]]
+        errors = np.zeros(len(generated), dtype=np.float64)
+        errors[valid] = np.abs(predicted[valid] - actual[valid]) / np.maximum(np.maximum(np.abs(predicted[valid]), np.abs(actual[valid])), 1e-6)
+        count = int(np.count_nonzero(valid & (errors > 0.05)))
+        if count:
+            violations[rule[-1]] = count
+    return violations
 
 
 class ClassAwareFlowSampler(Sampler[int]):
@@ -957,7 +1081,7 @@ def build_wgangp_provenance(args: Any) -> Dict:
     source_stat = source.stat() if source is not None else None  # Require an existing source for provenance.
     fields = ("seed", "label_col", "feature_cols", "batch_size", "critic_steps", "lr", "beta1", "beta2", "lambda_gp", "latent_dim", "g_hidden", "d_hidden", "embed_dim", "n_resblocks", "g_leaky_relu_alpha", "d_leaky_relu_alpha", "use_amp")  # Identify settings that affect learned weights.
     settings = {name: getattr(args, name, None) for name in fields}  # Snapshot resolved model and optimization settings.
-    identity = {"source_path": str(source) if source else None, "source_size": source_stat.st_size if source_stat else None, "source_mtime_ns": source_stat.st_mtime_ns if source_stat else None, "preprocessing": "class_conditional_quantile_v2", "preprocessing_parameters": {key: (CONFIG or {}).get("quality", {}).get(key, default) for key, default in (("n_quantiles", 256), ("fit_sample_rows", 20000), ("class_sampling_exponent", 0.5))}, "settings": settings}  # Record source metadata and effective hyperparameters.
+    identity = {"source_path": str(source) if source else None, "source_size": source_stat.st_size if source_stat else None, "source_mtime_ns": source_stat.st_mtime_ns if source_stat else None, "preprocessing": "class_conditional_quantile_v3_joint_quality", "preprocessing_parameters": {key: (CONFIG or {}).get("quality", {}).get(key, default) for key, default in (("n_quantiles", 256), ("fit_sample_rows", 20000), ("class_sampling_exponent", 0.5))}, "settings": settings}  # Record source metadata and effective hyperparameters.
     digest = hashlib.sha256(json.dumps(identity, sort_keys=True, default=str).encode("utf-8")).hexdigest()  # Produce a stable comparable identity.
 
     return {"identity": identity, "sha256": digest}  # Return provenance for checkpoints and output sidecars.
@@ -3484,7 +3608,7 @@ def execute_discriminator_training_steps(G, D, opt_D, scaler, real_x, labels, de
     return loss_D, gp, d_real_score, d_fake_score  # Return discriminator training results
 
 
-def execute_generator_training_step(G, D, opt_G, scaler, device: torch.device, args, n_classes: int, epoch: int, step: int) -> torch.Tensor:
+def execute_generator_training_step(G, D, opt_G, scaler, device: torch.device, args, n_classes: int, epoch: int, step: int, real_labels: Optional[torch.Tensor] = None) -> torch.Tensor:
     """
     Execute a single generator training step.
 
@@ -3504,7 +3628,7 @@ def execute_generator_training_step(G, D, opt_G, scaler, device: torch.device, a
     require_finite_optimizer_state(opt_G, "generator_optimizer", args, epoch + 1, step + 1)  # Reject invalid generator optimizer state before backward execution
     with autocast(device.type, enabled=bool(getattr(args, "use_amp", False))):  # Enable resolved BF16 AMP for generator training
         z = torch.randn(args.batch_size, args.latent_dim, device=device)  # Sample noise for generator step
-        gen_labels = torch.randint(0, n_classes, (args.batch_size,), device=device)  # Sample labels for generator
+        gen_labels = real_labels if real_labels is not None else torch.randint(0, n_classes, (args.batch_size,), device=device)  # Align conditioning with real critic classes
         fake_x = G(z, gen_labels)  # Generate fake samples with generator
     require_finite_tensor(fake_x, "generated_samples", args, epoch + 1, step + 1, "generator")  # Reject invalid generated samples before loss calculation
     with autocast(device.type, enabled=False):  # Keep critic scoring in FP32 during generator training
@@ -3596,7 +3720,7 @@ def run_batch_training_loop(G, D, opt_G, opt_D, scaler, device: torch.device, ar
         require_finite_tensor(real_x, "real_samples", args, epoch + 1, step + 1, "input")  # Reject invalid input samples before model execution
 
         loss_D, gp, d_real_score, d_fake_score = execute_discriminator_training_steps(G, D, opt_D, scaler, real_x, labels, device, args, config, n_classes, epoch, step)  # Execute discriminator training steps with gradient penalty
-        g_loss = execute_generator_training_step(G, D, opt_G, scaler, device, args, n_classes, epoch, step)  # Execute single generator training step
+        g_loss = execute_generator_training_step(G, D, opt_G, scaler, device, args, n_classes, epoch, step, real_labels=labels)  # Match actual critic label frequencies
 
         if step % args.log_interval == 0:  # Extract scalar metrics only at log interval to avoid per-batch CUDA synchronization
             _cached_loss_D, _cached_g_loss, _cached_gp, _cached_d_real, _cached_d_fake = record_training_step_metrics(step, args, metrics_history, loss_D, g_loss, gp, d_real_score, d_fake_score)  # Record metrics and cache scalar values
