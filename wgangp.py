@@ -211,8 +211,12 @@ class ClassConditionalFlowScaler:
             self.transformers[int(class_label)] = transformer  # Persist transformation with generator checkpoints.
             support = {}  # Collect legal categorical and integral feature values.
             for index, column in enumerate(self.feature_cols):  # Inspect each original feature domain.
-                if is_discrete_flow_feature(column):  # Preserve discrete values actually observed for this class.
-                    support[index] = np.unique(observed[:, index])  # Reuse only recorded class-specific values.
+                if is_discrete_flow_feature(column):  # Preserve only physically admissible values from this class.
+                    observed_values = np.unique(observed[:, index])  # Include the empirical source support without inventing new header lengths or ports.
+                    legal_values = observed_values[~flow_feature_invalid_mask(column, observed_values)]  # Use exactly the same validity rules as final quality auditing.
+                    if not len(legal_values):  # Never invent an unobserved replacement such as zero.
+                        raise ValueError(f"No domain-valid source support for discrete feature {column!r} in class {int(class_label)}; inspect and clean the original CSV")
+                    support[index] = legal_values  # A newly trained checkpoint cannot encode invalid discrete reconstruction values.
             self.discrete_support[int(class_label)] = support  # Store legal reconstruction support for this class.
             self.derived_rules[int(class_label)] = calibrate_flow_relationships(observed, self.feature_cols)  # Calibrate relations on source class rows only.
             for offset in range(0, len(indexes), 65536):  # Transform large datasets without large class copies.
@@ -264,12 +268,27 @@ class ClassConditionalFlowScaler:
                 if not np.isfinite(normalized).all():  # Reject model divergence rather than hiding NaN or infinity.
                     raise ValueError(f"Nonfinite generated features for class {class_id}")  # Abort invalid output.
                 restored = transformer.inverse_transform(np.clip(normalized, -5.2, 5.2))  # Decode class-matched quantiles within supported tails.
-                for column_index, values in self.discrete_support[class_id].items():  # Project discrete fields onto observed class-specific support.
-                    location = np.searchsorted(values, restored[:, column_index])  # Find adjacent original discrete values.
-                    high = np.minimum(location, len(values) - 1)  # Bound the high observed value index.
-                    low = np.maximum(high - 1, 0)  # Bound the low observed value index.
+                for column_index, observed_values in self.discrete_support[class_id].items():  # Project only onto domain-valid values seen in the same original class.
+                    column_name = self.feature_cols[column_index]  # Resolve the feature's semantic constraints before reconstructing it.
+                    values = np.asarray(observed_values, dtype=np.float64)  # Support old V3 checkpoint scalers that stored invalid original discrete values.
+                    legal_values = values[~flow_feature_invalid_mask(column_name, values)]  # Never select a negative header length, invalid port or unsupported binary flag.
+                    if not len(legal_values):  # An empty legal support cannot be safely repaired by arbitrary constants.
+                        raise ValueError(f"No domain-valid observed support for {column_name!r} in class {class_id}; retrain after correcting the original CSV")
+                    if len(legal_values) != len(values):  # Report legacy source corruption once per class/feature, rather than silently discarding it.
+                        reported = getattr(self, "_reported_invalid_support", None)  # Old pickled V3 scalers may lack the tracking attribute.
+                        if reported is None:
+                            reported = set()
+                            self._reported_invalid_support = reported
+                        report_key = (class_id, column_index)
+                        if report_key not in reported:
+                            safe_warning(f"[QUALITY] Class {class_id}, feature {column_name!r}: excluded {len(values) - len(legal_values)} domain-invalid source support values before synthetic reconstruction")
+                            reported.add(report_key)
+                    values = np.unique(legal_values)  # Ensure a sorted legal class-conditional support for nearest-value lookup.
+                    location = np.searchsorted(values, restored[:, column_index])  # Find adjacent observed *legal* values.
+                    high = np.minimum(location, len(values) - 1)  # Bound the high legal value index.
+                    low = np.maximum(high - 1, 0)  # Bound the low legal value index.
                     choose_low = np.abs(restored[:, column_index] - values[low]) <= np.abs(restored[:, column_index] - values[high])  # Select the closest legal value.
-                    restored[:, column_index] = np.where(choose_low, values[low], values[high])  # Preserve class-specific integral and categorical support.
+                    restored[:, column_index] = np.where(choose_low, values[low], values[high])  # Never synthesize out-of-domain discrete fields.
                 restored = apply_calibrated_flow_relationships(restored, self.feature_cols, self.derived_rules.get(class_id, []))  # Restore source-supported derived relationships.
                 result[block] = restored.astype(np.float32)  # Store source-scale values without duplicating all rows.
         return result  # Return decoded features in their original column order.
@@ -407,6 +426,36 @@ def flow_relationship_violation_counts(generated: np.ndarray, columns: List[str]
         if count:
             violations[rule[-1]] = count
     return violations
+
+
+def flow_feature_invalid_mask(name: Any, values: Any) -> np.ndarray:
+    """Return the exact CIC flow-domain violations used by both decoding and quality validation.
+
+    The header-length fields must be nonnegative even when a source CSV or old
+    V3 checkpoint contains negative CICFlowMeter artifacts. Discrete decoding may
+    select only domain-valid values actually observed for the corresponding class.
+    Signed init-window byte sentinels remain intentionally permitted.
+    """
+
+    feature = str(name).strip().lower()
+    numbers = np.asarray(values, dtype=np.float64)
+    invalid = ~np.isfinite(numbers)
+    port = feature in {"source port", "destination port"}
+    protocol = feature == "protocol"
+    binary = feature in {"inbound", "fwd psh flags", "bwd psh flags", "fwd urg flags", "bwd urg flags"}
+    integral = is_discrete_flow_feature(feature) and feature not in {"init_win_bytes_forward", "init_win_bytes_backward"}
+    nonnegative = ("count" in feature or "packets" in feature or "bytes" in feature or "length" in feature or "duration" in feature or "iat" in feature or "flag" in feature or "size" in feature or "/s" in feature) and not feature.startswith("init_win_bytes") and feature != "min_seg_size_forward"
+    if nonnegative or port or protocol or binary:
+        invalid |= numbers < 0
+    if port:
+        invalid |= numbers > 65535
+    if protocol:
+        invalid |= numbers > 255
+    if integral:
+        invalid |= np.abs(numbers - np.rint(numbers)) > 1e-5
+    if binary:
+        invalid |= (numbers != 0) & (numbers != 1)
+    return invalid
 
 
 class ClassAwareFlowSampler(Sampler[int]):
@@ -1245,21 +1294,7 @@ def assess_generated_flow_quality(args: Any, config: Dict, generated: pd.DataFra
         report = {"class": class_name, "generated_rows": int(len(group)), "sampled_rows": int(len(sample)), "violations": {}, "relationship_violations": {}, "quality_flags": []}
         for column in numeric_columns:
             values = pd.to_numeric(group[column], errors="coerce").to_numpy(dtype=np.float64, copy=False)
-            name = str(column).strip().lower()
-            port = name in {"source port", "destination port"}
-            protocol = name == "protocol"
-            binary = name in {"inbound", "fwd psh flags", "bwd psh flags", "fwd urg flags", "bwd urg flags"}
-            integral = is_discrete_flow_feature(name) and name not in {"init_win_bytes_forward", "init_win_bytes_backward"}
-            nonnegative = ("count" in name or "packets" in name or "bytes" in name or "length" in name or "duration" in name or "iat" in name or "flag" in name or "size" in name or "/s" in name) and not name.startswith("init_win_bytes") and name != "min_seg_size_forward"
-            invalid = ~np.isfinite(values) | ((values < 0) if nonnegative or port or protocol or binary else False)
-            if port:
-                invalid |= values > 65535
-            if protocol:
-                invalid |= values > 255
-            if integral:
-                invalid |= np.abs(values - np.rint(values)) > 1e-5
-            if binary:
-                invalid |= (values != 0) & (values != 1)
+            invalid = flow_feature_invalid_mask(column, values)  # Enforce the identical domain used by class-conditional decoding.
             count = int(np.count_nonzero(invalid))
             if count:
                 report["violations"][str(column)] = count
