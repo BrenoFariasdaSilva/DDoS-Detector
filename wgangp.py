@@ -71,6 +71,7 @@ import os  # For running a command in the terminal
 import pandas as pd  # For CSV handling
 import platform  # For getting the operating system name
 import random  # For reproducibility
+import re  # Identify CSV-generated index features during preprocessing
 import shutil  # For disk space queries when psutil is unavailable
 import signal  # For sending signals to this process when critical
 import subprocess  # For running small system commands to query hardware
@@ -80,6 +81,7 @@ import threading  # For background resource watcher thread
 import time  # For elapsed time tracking
 import torch  # PyTorch core
 import torch.nn as nn  # Neural network modules
+import torch.nn.functional as F  # Straight-through Gumbel-Softmax for categorical flow attributes
 import traceback  # For printing tracebacks on exceptions
 import yaml  # For loading configuration files
 from colorama import Style  # For coloring the terminal
@@ -102,7 +104,7 @@ psutil = (
 )  # Import psutil if available, otherwise set to None
 
 SAO_PAULO_TIMEZONE_NAME = "America/Sao_Paulo"  # Use Sao Paulo timezone for ETA finish timestamps
-FLOW_PREPROCESSING_CHECKPOINT_TAG = "ConditionalQuantileV3"  # Isolate weights trained on class-conditional quantiles from legacy StandardScaler weights.
+FLOW_PREPROCESSING_CHECKPOINT_TAG = "ConditionalMixedStructuralV4"  # Incompatible mixed-type, structural feature-space representation; preserve all V3 checkpoints.
 
 # Prefer CUDA autocast when available; provide a safe fallback context manager
 try:  # Attempt to import torch.amp.autocast for mixed precision support
@@ -168,130 +170,193 @@ class ClassConditionalFlowScaler:
         self.transformers = {}  # Hold independent class-specific marginal transformations.
         self.discrete_support = {}  # Retain observed discrete support rather than hallucinating fractional network fields.
         self.derived_rules = {}  # Record source-calibrated flow relationships by label.
+        self.structural_rules = []  # Source-supported identities valid in every class; never predict these columns independently.
+        self.structural_targets = set()  # Full-CSV column indexes rebuilt after generation.
+        self.numeric_indices = []  # Model output continuous feature indexes in the original schema.
+        self.categorical_indices = []  # Small-domain original feature indexes modeled with one-hot groups.
+        self.categorical_values = {}  # Observed legal values for every categorical output group.
+        self.categorical_class_masks = []  # Which categories have actually appeared in each original class.
+        self.categorical_groups = []  # Model-output [start, end) offsets consumed by Gumbel-Softmax.
+        self.model_feature_dim = None  # Encoded, structurally reduced mixed-type model width.
         self.mean_ = np.zeros(len(self.feature_cols), dtype=np.float64)  # Retain the legacy dimension-discovery interface.
 
+    def _build_model_schema(self, X: np.ndarray, labels: np.ndarray) -> None:
+        """Select globally supported identities and small categorical domains from training data."""
+        class_ids = sorted(int(value) for value in np.unique(labels))
+        # A target can be structurally removed only when all source classes support the same identity.
+        per_class = [{rule[-1]: rule for rule in self.derived_rules[class_id] if not str(rule[-1]).startswith("bounds:")}
+                     for class_id in class_ids]
+        common = set.intersection(*(set(rules) for rules in per_class)) if per_class else set()
+        self.structural_rules = [rule for rule in per_class[0].values()
+                                 if rule[-1] in common and (rule[2] < 0 or np.all(X[:, rule[2]] > 0))] if per_class else []
+        # For zero-duration/zero-denominator flows, keep the derived target trainable instead of filling its value with a fabricated median.
+        self.structural_targets = {int(rule[0]) for rule in self.structural_rules}
+        # The class-aware decoder still checks and applies every source-supported relationship.
+        categorical_candidates = {"protocol", "inbound", "fwd psh flags", "bwd psh flags", "fwd urg flags", "bwd urg flags", "down/up ratio"}
+        self.categorical_values = {}
+        self.categorical_indices = []
+        for index, column in enumerate(self.feature_cols):
+            if index in self.structural_targets or column.strip().lower() not in categorical_candidates:
+                continue
+            # Accumulate exact support in bounded chunks; never remap rare *real* categories to another category.
+            seen = set()
+            for start in range(0, len(X), 65536):
+                values = np.unique(X[start:start + 65536, index])
+                seen.update(float(value) for value in values if np.isfinite(value))
+                if len(seen) > 32:
+                    break
+            if not 2 <= len(seen) <= 32:
+                continue  # Constant fields or high-cardinality integers retain normal numeric representation.
+            support = np.asarray(sorted(seen), dtype=np.float64)
+            if np.any(flow_feature_invalid_mask(column, support)):
+                raise ValueError(f"Source categorical feature {column!r} has invalid support after preprocessing")
+            self.categorical_indices.append(index)
+            self.categorical_values[index] = support
+        self.numeric_indices = [i for i in range(len(self.feature_cols))
+                                if i not in self.structural_targets and i not in self.categorical_values]
+        offset = len(self.numeric_indices)
+        self.categorical_groups = []
+        for index in self.categorical_indices:
+            count = len(self.categorical_values[index])
+            self.categorical_groups.append((offset, offset + count))
+            offset += count
+        self.model_feature_dim = offset
+        # Record per-class categorical support so the generator cannot invent unseen protocol/flag combinations.
+        self.categorical_class_masks = []
+        for index in self.categorical_indices:
+            support = self.categorical_values[index]
+            mask = np.zeros((max(class_ids) + 1, len(support)), dtype=bool)
+            for class_id in class_ids:
+                indexes = np.flatnonzero(labels == class_id)
+                observed = set()
+                for start in range(0, len(indexes), 65536):
+                    observed.update(float(v) for v in np.unique(X[indexes[start:start+65536], index]))
+                mask[class_id] = np.isin(support, list(observed))
+                if not mask[class_id].any():
+                    raise ValueError(f"No observed {self.feature_cols[index]!r} category for class {class_id}")
+            self.categorical_class_masks.append(mask)
+        if not offset:
+            raise ValueError("No trainable features remain after structural feature selection")
+        print(f"[V4] Original features={len(self.feature_cols)} | modeled numeric={len(self.numeric_indices)} | "
+              f"categorical groups={len(self.categorical_groups)} | structural derived={len(self.structural_targets)} | model width={offset}")
+
+    def _encode_block(self, normalized: np.ndarray, original: np.ndarray, destination: np.ndarray) -> None:
+        """Pack model numeric values and exact real categorical one-hot groups."""
+        if self.numeric_indices:
+            destination[:, :len(self.numeric_indices)] = normalized[:, self.numeric_indices]
+        for index, (start, stop) in zip(self.categorical_indices, self.categorical_groups):
+            support = self.categorical_values[index]
+            positions = np.searchsorted(support, np.asarray(original[:, index], dtype=np.float64))
+            bounded = np.minimum(positions, len(support) - 1)
+            if np.any((positions >= len(support)) | (support[bounded] != original[:, index])):
+                raise ValueError(f"Unknown training category in {self.feature_cols[index]!r}; refusing to alter real records")
+            destination[np.arange(len(destination)), start + bounded] = 1.0
+
     def fit_transform(self, X: np.ndarray, labels: np.ndarray) -> np.ndarray:
-        """Fit each class's marginal transform and encode its training rows.
-
-        :param X: Raw original network-flow features.
-        :param labels: Integer encoded source class labels aligned with X.
-        :return: Encoded float32 training array.
-        """
-
-        encoded = np.empty(X.shape, dtype=np.float32)  # Allocate one bounded precision result matrix.
-        rng = np.random.default_rng(self.seed)  # Keep fitted reference support deterministic.
-        for class_label in np.unique(labels):  # Fit each attack class independently to avoid majority-class dominance.
-            indexes = np.flatnonzero(labels == class_label)  # Determine source rows for one label.
-            picked = np.sort(rng.choice(indexes, size=min(len(indexes), self.fit_sample_rows), replace=False))  # Fit from a bounded uniform sample.
-            # Include actual class-wide feature extrema so bounded fitting retains rare distribution tails.
-            minimum = np.full(X.shape[1], np.inf, dtype=np.float64)
-            maximum = np.full(X.shape[1], -np.inf, dtype=np.float64)
+        """Fit source-class marginal scalers and encode only independent mixed-type model features."""
+        labels = np.asarray(labels).reshape(-1)
+        if len(labels) != len(X):
+            raise ValueError("Feature and label arrays have different lengths")
+        rng = np.random.default_rng(self.seed)
+        self.transformers, self.discrete_support, self.derived_rules = {}, {}, {}
+        for class_label in np.unique(labels):
+            indexes = np.flatnonzero(labels == class_label)
+            picked = np.sort(rng.choice(indexes, size=min(len(indexes), self.fit_sample_rows), replace=False))
+            minimum, maximum = np.full(X.shape[1], np.inf), np.full(X.shape[1], -np.inf)
             minimum_rows = np.full(X.shape[1], int(indexes[0]), dtype=np.int64)
             maximum_rows = np.full(X.shape[1], int(indexes[0]), dtype=np.int64)
-            for position in range(0, len(indexes), 65536):
-                chunk_indices = indexes[position:position + 65536]
-                chunk = X[chunk_indices]
-                local_min = np.argmin(chunk, axis=0)
-                local_max = np.argmax(chunk, axis=0)
-                columns = np.arange(X.shape[1])
-                selected_min = chunk[local_min, columns]
-                selected_max = chunk[local_max, columns]
-                updated_min = selected_min < minimum
-                updated_max = selected_max > maximum
-                minimum[updated_min] = selected_min[updated_min]
-                maximum[updated_max] = selected_max[updated_max]
-                minimum_rows[updated_min] = chunk_indices[local_min[updated_min]]
-                maximum_rows[updated_max] = chunk_indices[local_max[updated_max]]
-            picked = np.unique(np.concatenate((picked, minimum_rows, maximum_rows)))  # Retain extrema without copying entire classes.
-            observed = np.asarray(X[picked], dtype=np.float64)  # Fit on a bounded sample augmented by class-wide extrema.
-            if not np.isfinite(observed).all():  # Refuse to encode invalid original features.
-                raise ValueError(f"Nonfinite source features for label {class_label}")  # Fail before model training.
-            transformer = QuantileTransformer(n_quantiles=min(self.n_quantiles, len(picked)), output_distribution="normal", subsample=None, random_state=self.seed, copy=True)  # Normalize extreme skew using empirical quantiles.
-            transformer.fit(observed)  # Fit class-specific marginals from original source rows only.
-            self.transformers[int(class_label)] = transformer  # Persist transformation with generator checkpoints.
-            support = {}  # Collect legal categorical and integral feature values.
-            for index, column in enumerate(self.feature_cols):  # Inspect each original feature domain.
-                if is_discrete_flow_feature(column):  # Preserve only physically admissible values from this class.
-                    observed_values = np.unique(observed[:, index])  # Include the empirical source support without inventing new header lengths or ports.
-                    legal_values = observed_values[~flow_feature_invalid_mask(column, observed_values)]  # Use exactly the same validity rules as final quality auditing.
-                    if not len(legal_values):  # Never invent an unobserved replacement such as zero.
-                        raise ValueError(f"No domain-valid source support for discrete feature {column!r} in class {int(class_label)}; inspect and clean the original CSV")
-                    support[index] = legal_values  # A newly trained checkpoint cannot encode invalid discrete reconstruction values.
-            self.discrete_support[int(class_label)] = support  # Store legal reconstruction support for this class.
-            self.derived_rules[int(class_label)] = calibrate_flow_relationships(observed, self.feature_cols)  # Calibrate relations on source class rows only.
-            for offset in range(0, len(indexes), 65536):  # Transform large datasets without large class copies.
-                block = indexes[offset:offset + 65536]  # Limit temporary transform memory.
-                encoded[block] = transformer.transform(np.asarray(X[block], dtype=np.float64)).astype(np.float32)  # Encode training rows.
-        return encoded  # Return class-conditional normal-space features.
+            columns = np.arange(X.shape[1])
+            for pos in range(0, len(indexes), 65536):
+                chunk_indices = indexes[pos:pos + 65536]
+                chunk = np.asarray(X[chunk_indices], dtype=np.float64)
+                local_min, local_max = np.argmin(chunk, axis=0), np.argmax(chunk, axis=0)
+                selected_min, selected_max = chunk[local_min, columns], chunk[local_max, columns]
+                new_min, new_max = selected_min < minimum, selected_max > maximum
+                minimum[new_min], maximum[new_max] = selected_min[new_min], selected_max[new_max]
+                minimum_rows[new_min] = chunk_indices[local_min[new_min]]
+                maximum_rows[new_max] = chunk_indices[local_max[new_max]]
+            picked = np.unique(np.concatenate((picked, minimum_rows, maximum_rows)))
+            observed = np.asarray(X[picked], dtype=np.float64)
+            if not np.isfinite(observed).all():
+                raise ValueError(f"Nonfinite source features for label {class_label}")
+            transformer = QuantileTransformer(n_quantiles=min(self.n_quantiles, len(picked)),
+                                              output_distribution="normal", subsample=None,
+                                              random_state=self.seed, copy=True)
+            transformer.fit(observed)
+            class_id = int(class_label)
+            self.transformers[class_id] = transformer
+            support = {}
+            for idx, column in enumerate(self.feature_cols):
+                if is_discrete_flow_feature(column):
+                    values = np.unique(observed[:, idx])
+                    legal = values[~flow_feature_invalid_mask(column, values)]
+                    if len(legal) == 0:
+                        raise ValueError(f"No domain-valid source support for {column!r} class {class_id}")
+                    support[idx] = legal
+            self.discrete_support[class_id] = support
+            self.derived_rules[class_id] = calibrate_flow_relationships(observed, self.feature_cols)
+        self._build_model_schema(X, labels)
+        return self.transform(X, labels)
 
     def transform(self, X: np.ndarray, labels: np.ndarray) -> np.ndarray:
-        """Encode source-scale rows using the previously fitted class distributions.
-
-        :param X: Source-scale feature matrix.
-        :param labels: Integer class IDs aligned with the input matrix.
-        :return: Normal-space float32 features.
-        """
-
-        encoded = np.empty(X.shape, dtype=np.float32)  # Allocate the class-conditional output matrix.
-        labels = np.asarray(labels).reshape(-1)  # Flatten aligned source class labels.
-        if len(labels) != len(X):  # Validate source class alignment.
-            raise ValueError("Source class labels do not align with feature rows")  # Reject invalid inputs.
-        for class_label in np.unique(labels):  # Transform each class with its fitted original feature distribution.
-            indexes = np.flatnonzero(labels == class_label)  # Locate class-specific source rows.
-            transformer = self.transformers[int(class_label)]  # Require a previously fitted class distribution.
-            for offset in range(0, len(indexes), 65536):  # Bound intermediate memory.
-                block = indexes[offset:offset + 65536]  # Limit temporary transformation matrices.
-                encoded[block] = transformer.transform(np.asarray(X[block], dtype=np.float64)).astype(np.float32)  # Apply the fitted class marginal transform.
-        return encoded  # Return the normalized source matrix.
+        """Encode each class in bounded chunks using the fixed mixed/structural model schema."""
+        labels = np.asarray(labels).reshape(-1)
+        if len(labels) != len(X) or self.model_feature_dim is None:
+            raise ValueError("Unfitted mixed model representation or mismatched labels")
+        encoded = np.zeros((len(X), self.model_feature_dim), dtype=np.float32)
+        for class_label in np.unique(labels):
+            indices = np.flatnonzero(labels == class_label)
+            transformer = self.transformers[int(class_label)]
+            for pos in range(0, len(indices), 65536):
+                block = indices[pos:pos + 65536]
+                raw = np.asarray(X[block], dtype=np.float64)
+                normalized = transformer.transform(raw).astype(np.float32)
+                packed = np.zeros((len(block), self.model_feature_dim), dtype=np.float32)
+                self._encode_block(normalized, raw, packed)
+                encoded[block] = packed
+        return encoded
 
     def inverse_transform(self, X: np.ndarray, labels: np.ndarray) -> np.ndarray:
-        """Decode synthetic rows with class-specific empirical quantiles and discrete support.
-
-        :param X: Generator output in normalized feature space.
-        :param labels: Integer generated class labels.
-        :return: Source-scale synthetic features with valid observed discrete values.
-        """
-
-        result = np.empty(X.shape, dtype=np.float32)  # Allocate source-scale output once.
-        labels = np.asarray(labels).reshape(-1)  # Normalize aligned class IDs.
-        if len(labels) != len(X):  # Reject misaligned generated labels.
-            raise ValueError("Generated labels do not align with feature rows")  # Avoid cross-class decoding.
-        for class_label in np.unique(labels):  # Decode using the corresponding class's original distribution.
-            class_id = int(class_label)  # Normalize stored integer label IDs.
-            if class_id not in self.transformers:  # Refuse unsupported synthetic class IDs.
-                raise ValueError(f"No empirical source distribution for class {class_id}")  # Avoid defaulting to another class.
-            indexes = np.flatnonzero(labels == class_label)  # Locate generated rows for this class.
-            transformer = self.transformers[class_id]  # Load the checkpoint's matching class quantile transform.
-            for offset in range(0, len(indexes), 65536):  # Bound inverse transformation allocations.
-                block = indexes[offset:offset + 65536]  # Select generated rows for a bounded batch.
-                normalized = np.asarray(X[block], dtype=np.float64)  # Read generator values in floating precision.
-                if not np.isfinite(normalized).all():  # Reject model divergence rather than hiding NaN or infinity.
-                    raise ValueError(f"Nonfinite generated features for class {class_id}")  # Abort invalid output.
-                restored = transformer.inverse_transform(np.clip(normalized, -5.2, 5.2))  # Decode class-matched quantiles within supported tails.
-                for column_index, observed_values in self.discrete_support[class_id].items():  # Project only onto domain-valid values seen in the same original class.
-                    column_name = self.feature_cols[column_index]  # Resolve the feature's semantic constraints before reconstructing it.
-                    values = np.asarray(observed_values, dtype=np.float64)  # Support old V3 checkpoint scalers that stored invalid original discrete values.
-                    legal_values = values[~flow_feature_invalid_mask(column_name, values)]  # Never select a negative header length, invalid port or unsupported binary flag.
-                    if not len(legal_values):  # An empty legal support cannot be safely repaired by arbitrary constants.
-                        raise ValueError(f"No domain-valid observed support for {column_name!r} in class {class_id}; retrain after correcting the original CSV")
-                    if len(legal_values) != len(values):  # Report legacy source corruption once per class/feature, rather than silently discarding it.
-                        reported = getattr(self, "_reported_invalid_support", None)  # Old pickled V3 scalers may lack the tracking attribute.
-                        if reported is None:
-                            reported = set()
-                            self._reported_invalid_support = reported
-                        report_key = (class_id, column_index)
-                        if report_key not in reported:
-                            safe_warning(f"[QUALITY] Class {class_id}, feature {column_name!r}: excluded {len(values) - len(legal_values)} domain-invalid source support values before synthetic reconstruction")
-                            reported.add(report_key)
-                    values = np.unique(legal_values)  # Ensure a sorted legal class-conditional support for nearest-value lookup.
-                    location = np.searchsorted(values, restored[:, column_index])  # Find adjacent observed *legal* values.
-                    high = np.minimum(location, len(values) - 1)  # Bound the high legal value index.
-                    low = np.maximum(high - 1, 0)  # Bound the low legal value index.
-                    choose_low = np.abs(restored[:, column_index] - values[low]) <= np.abs(restored[:, column_index] - values[high])  # Select the closest legal value.
-                    restored[:, column_index] = np.where(choose_low, values[low], values[high])  # Never synthesize out-of-domain discrete fields.
-                restored = apply_calibrated_flow_relationships(restored, self.feature_cols, self.derived_rules.get(class_id, []))  # Restore source-supported derived relationships.
-                result[block] = restored.astype(np.float32)  # Store source-scale values without duplicating all rows.
-        return result  # Return decoded features in their original column order.
+        """Recover original CSV schema, exact categorical categories and derived relationships."""
+        labels = np.asarray(labels).reshape(-1)
+        if len(labels) != len(X) or X.shape[1] != self.model_feature_dim:
+            raise ValueError("Generated representation does not match the V4 model schema")
+        result = np.empty((len(X), len(self.feature_cols)), dtype=np.float32)
+        for class_label in np.unique(labels):
+            class_id = int(class_label)
+            if class_id not in self.transformers:
+                raise ValueError(f"Unknown generated class {class_id}")
+            indices = np.flatnonzero(labels == class_label)
+            transformer = self.transformers[class_id]
+            for pos in range(0, len(indices), 65536):
+                block = indices[pos:pos + 65536]
+                mixed = np.asarray(X[block], dtype=np.float64)
+                if not np.isfinite(mixed).all():
+                    raise ValueError(f"Nonfinite generated features for class {class_id}")
+                # Unmodeled structural/categorical dimensions are placeholders, replaced below.
+                full_normalized = np.zeros((len(block), len(self.feature_cols)), dtype=np.float64)
+                full_normalized[:, self.numeric_indices] = np.clip(mixed[:, :len(self.numeric_indices)], -5.2, 5.2)
+                restored = transformer.inverse_transform(full_normalized)
+                for idx, (start, stop) in zip(self.categorical_indices, self.categorical_groups):
+                    categories = self.categorical_values[idx]
+                    restored[:, idx] = categories[np.argmax(mixed[:, start:stop], axis=1)]
+                for idx, observed_values in self.discrete_support[class_id].items():
+                    if idx in self.structural_targets or idx in self.categorical_values:
+                        continue
+                    column = self.feature_cols[idx]
+                    values = np.asarray(observed_values, dtype=np.float64)
+                    values = np.unique(values[~flow_feature_invalid_mask(column, values)])
+                    if len(values) == 0:
+                        raise ValueError(f"No domain-valid source support for {column!r} in class {class_id}")
+                    locations = np.searchsorted(values, restored[:, idx])
+                    high = np.minimum(locations, len(values) - 1)
+                    low = np.maximum(high - 1, 0)
+                    restored[:, idx] = np.where(np.abs(restored[:, idx] - values[low]) <=
+                                                np.abs(restored[:, idx] - values[high]), values[low], values[high])
+                # Globally supported identities are reconstituted from the sampled parent attributes.
+                restored = apply_calibrated_flow_relationships(restored, self.feature_cols, self.derived_rules.get(class_id, []))
+                result[block] = restored.astype(np.float32)
+        return result
 
 
 def is_discrete_flow_feature(name: Any) -> bool:
@@ -322,12 +387,17 @@ def flow_relationship_candidates(feature_columns: List[str]) -> List[tuple]:
         ("flow packets/s", ("total fwd packets", "total backward packets"), "flow duration", 1e6),
         ("fwd packets/s", "total fwd packets", "flow duration", 1e6),
         ("bwd packets/s", "total backward packets", "flow duration", 1e6),
+        ("avg fwd segment size", "fwd packet length mean", None, 1.0),
+        ("avg bwd segment size", "bwd packet length mean", None, 1.0),
+        ("packet length variance", "packet length std", "__square__", 1.0),
+        ("fwd header length.1", "fwd header length", None, 1.0),
     ]
     results = []
     for target, numerators, denominator, multiplier in candidates:
         numerator_keys = numerators if isinstance(numerators, tuple) else (numerators,)
-        if target in names and denominator in names and all(key in names for key in numerator_keys):
-            results.append((names[target], tuple(names[key] for key in numerator_keys), names[denominator], multiplier, target))
+        if target in names and all(key in names for key in numerator_keys) and (denominator is None or denominator == "__square__" or denominator in names):
+            den_idx = -2 if denominator is None else (-3 if denominator == "__square__" else names[denominator])
+            results.append((names[target], tuple(names[key] for key in numerator_keys), den_idx, multiplier, target))
     return results
 
 
@@ -340,6 +410,12 @@ def predict_flow_relationship(features: np.ndarray, rule: tuple) -> tuple:
     """
 
     target, numerators, denominator, multiplier, _ = rule
+    if denominator in (-2, -3):
+        source = np.asarray(features[:, numerators[0]], dtype=np.float64)
+        predicted = source if denominator == -2 else source ** 2
+        predicted = np.asarray(predicted, dtype=np.float64) * multiplier
+        valid = np.isfinite(predicted) & (predicted >= 0)
+        return predicted, valid
     denominator_values = features[:, denominator]
     numerator_values = np.zeros(len(features), dtype=np.float64)
     for index in numerators:
@@ -446,6 +522,8 @@ def flow_feature_invalid_mask(name: Any, values: Any) -> np.ndarray:
     integral = is_discrete_flow_feature(feature) and feature not in {"init_win_bytes_forward", "init_win_bytes_backward"}
     nonnegative = ("count" in feature or "packets" in feature or "bytes" in feature or "length" in feature or "duration" in feature or "iat" in feature or "flag" in feature or "size" in feature or "/s" in feature) and not feature.startswith("init_win_bytes") and feature != "min_seg_size_forward"
     if nonnegative or port or protocol or binary:
+        invalid |= numbers < 0
+    if feature == "down/up ratio":
         invalid |= numbers < 0
     if port:
         invalid |= numbers > 65535
@@ -675,6 +753,8 @@ class Generator(nn.Module):
         embed_dim: int = 32,
         n_resblocks: int = 3,
         leaky_relu_alpha: float = 0.2,
+        categorical_groups: Optional[List[tuple]] = None,
+        categorical_class_masks: Optional[List[np.ndarray]] = None,
     ):
         """
         Initialize conditional generator that maps (z, y) -> feature vector.
@@ -696,6 +776,15 @@ class Generator(nn.Module):
 
         self.latent_dim = latent_dim  # Store latent input size
         self.feature_dim = feature_dim  # Store output size
+        self.categorical_groups = tuple((int(start), int(end)) for start, end in (categorical_groups or []))
+        for start, end in self.categorical_groups:
+            if not 0 <= start < end <= feature_dim:
+                raise ValueError("Categorical group outside the generator output feature dimension")
+        for group_id, ((start, stop), allowed) in enumerate(zip(self.categorical_groups, categorical_class_masks or [])):
+            mask = torch.as_tensor(allowed, dtype=torch.bool)
+            if mask.shape != (n_classes, stop-start) or not bool(mask.any(dim=1).all()):
+                raise ValueError("Invalid per-class categorical support for generator")
+            self.register_buffer(f"categorical_allowed_{group_id}", mask)
         self.n_classes = n_classes  # Store number of classes
         self.embed = nn.Embedding(n_classes, embed_dim)  # Create label embedding table
 
@@ -735,8 +824,28 @@ class Generator(nn.Module):
             x = self.pre(x)  # Process through MLP
             for b in self.resblocks:  # Loop through residual blocks
                 x = b(x)  # Apply block
-            out = self.out(x)  # Produce final feature vector
-        return out  # Return generated sample
+            out = self.out(x)  # Produce final feature vector and categorical logits
+            if self.categorical_groups:
+                # Straight-through categorical choices match real one-hot critic inputs while retaining gradients.
+                chunks = []
+                offset = 0
+                for group_id, (start, stop) in enumerate(self.categorical_groups):
+                    if offset < start:
+                        chunks.append(out[:, offset:start])
+                    logits = out[:, start:stop]
+                    class_mask = getattr(self, f"categorical_allowed_{group_id}", None)
+                    if class_mask is not None:
+                        logits = logits.masked_fill(~class_mask[y], -1e4)  # Never draw an unseen category for that class.
+                    if self.training:
+                        choice = F.gumbel_softmax(logits.float(), tau=1.0, hard=True, dim=1).to(logits.dtype)
+                    else:
+                        choice = F.one_hot(torch.argmax(logits, dim=1), num_classes=stop-start).to(logits.dtype)
+                    chunks.append(choice)
+                    offset = stop
+                if offset < out.shape[1]:
+                    chunks.append(out[:, offset:])
+                out = torch.cat(chunks, dim=1)
+        return out  # Return mixed continuous values and exact categorical one-hot groups
 
 
 class Discriminator(nn.Module):
@@ -1204,7 +1313,7 @@ def build_wgangp_provenance(args: Any) -> Dict:
     source_stat = source.stat() if source is not None else None  # Require an existing source for provenance.
     fields = ("seed", "label_col", "feature_cols", "batch_size", "critic_steps", "lr", "beta1", "beta2", "lambda_gp", "latent_dim", "g_hidden", "d_hidden", "embed_dim", "n_resblocks", "g_leaky_relu_alpha", "d_leaky_relu_alpha", "use_amp")  # Identify settings that affect learned weights.
     settings = {name: getattr(args, name, None) for name in fields}  # Snapshot resolved model and optimization settings.
-    identity = {"source_path": str(source) if source else None, "source_size": source_stat.st_size if source_stat else None, "source_mtime_ns": source_stat.st_mtime_ns if source_stat else None, "preprocessing": "class_conditional_quantile_v3_joint_quality", "preprocessing_parameters": {key: (CONFIG or {}).get("quality", {}).get(key, default) for key, default in (("n_quantiles", 512), ("fit_sample_rows", 50000), ("class_sampling_exponent", 0.5))}, "settings": settings}  # Record source metadata and effective hyperparameters.
+    identity = {"source_path": str(source) if source else None, "source_size": source_stat.st_size if source_stat else None, "source_mtime_ns": source_stat.st_mtime_ns if source_stat else None, "preprocessing": "class_conditional_mixed_structural_v4", "preprocessing_parameters": {key: (CONFIG or {}).get("quality", {}).get(key, default) for key, default in (("n_quantiles", 512), ("fit_sample_rows", 50000), ("class_sampling_exponent", 0.5))}, "settings": settings}  # Record source metadata and effective hyperparameters.
     digest = hashlib.sha256(json.dumps(identity, sort_keys=True, default=str).encode("utf-8")).hexdigest()  # Produce a stable comparable identity.
 
     return {"identity": identity, "sha256": digest}  # Return provenance for checkpoints and output sidecars.
@@ -1267,7 +1376,10 @@ def assess_generated_flow_quality(args: Any, config: Dict, generated: pd.DataFra
             for class_label, group in chunk.groupby(label, sort=False):
                 class_key = str(class_label)
                 candidates = group[numeric_columns].to_numpy(dtype=np.float32, copy=True)
-                candidates = candidates[np.isfinite(candidates).all(axis=1)]
+                reference_valid = np.isfinite(candidates).all(axis=1)
+                for column_index, feature_name in enumerate(numeric_columns):
+                    reference_valid &= ~flow_feature_invalid_mask(feature_name, candidates[:, column_index])
+                candidates = candidates[reference_valid]
                 if not len(candidates):
                     continue
                 priorities = rng.random(len(candidates))
@@ -1682,6 +1794,12 @@ def preprocess_dataframe(df, label_col, remove_zero_variance=None, config: Optio
         labels = df[label_col].copy()  # Save labels
 
         numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()  # Get numeric column names
+        # CSV serialization artifacts and synthetic row IDs are metadata, not network-flow features.
+        index_columns = [column for column in numeric_cols if re.fullmatch(r"Unnamed:\s*\d+(?:\.\d+)*", str(column), re.IGNORECASE)
+                         or str(column).strip().lower() in {"index", "row_index", "row_id"}]
+        if index_columns:
+            print(f"[V4] Excluding CSV index/row metadata from GAN training: {index_columns}")
+            numeric_cols = [column for column in numeric_cols if column not in index_columns]
         if label_col in numeric_cols:  # If label is numeric, remove it from features
             numeric_cols.remove(label_col)  # Remove label from feature list
 
@@ -1694,13 +1812,22 @@ def preprocess_dataframe(df, label_col, remove_zero_variance=None, config: Optio
         df_numeric = df_numeric.replace([np.inf, -np.inf], np.nan)  # Replace inf with NaN
         valid_mask = ~df_numeric.isna().any(axis=1)  # Mask for rows without NaN
 
-        df_clean = df_numeric[valid_mask].copy()  # Keep only valid rows
+        # Exclude physically invalid source records before quantile fitting; do not teach the GAN corrupt flows.
+        domain_invalid = np.zeros(len(df_numeric), dtype=bool)
+        for column in numeric_cols:
+            values = pd.to_numeric(df_numeric[column], errors="coerce").to_numpy(dtype=np.float64, copy=False)
+            invalid = flow_feature_invalid_mask(column, values)
+            if np.any(invalid & valid_mask.to_numpy()):
+                print(f"[V4] Source domain violations in {column!r}: {int(np.count_nonzero(invalid & valid_mask.to_numpy()))} rows")
+            domain_invalid |= invalid
+        valid_mask &= ~domain_invalid
+        df_clean = df_numeric[valid_mask].copy()  # Keep only finite, domain-valid rows
         labels_clean = labels[valid_mask].copy()  # Keep corresponding labels
 
         rows_dropped = len(df) - len(df_clean)  # Calculate dropped rows
         if rows_dropped > 0:  # If rows were dropped
             verbose_output(
-                f"{BackgroundColors.YELLOW}Dropped {rows_dropped} rows with NaN/inf values ({rows_dropped/len(df)*100:.2f}%).{Style.RESET_ALL}"
+                f"{BackgroundColors.YELLOW}Dropped {rows_dropped} rows with NaN/inf or invalid network-flow feature values ({rows_dropped/len(df)*100:.2f}%).{Style.RESET_ALL}"
             )  # Output warning
 
         if remove_zero_variance and len(df_clean) > 0:  # If removal enabled and data remains
@@ -3337,6 +3464,8 @@ def create_dataset_and_dataloader(args, config: Dict, device: torch.device) -> t
         args.csv_path, label_col=args.label_col, feature_cols=args.feature_cols
     )  # Load dataset from CSV
 
+    args._mixed_categorical_groups = list(dataset.scaler.categorical_groups)  # Define the exact V4 output groups before model initialization.
+    args._mixed_categorical_class_masks = dataset.scaler.categorical_class_masks
     num_workers = int(config.get("dataloader", {}).get("num_workers", 8))  # Get base num_workers from config and cast to int
     num_workers_cli_override = bool(config.get("dataloader", {}).get("num_workers_cli_override", False))  # Detect explicit CLI worker precedence
     if not num_workers_cli_override:  # Auto-adjust workers only when CLI did not override them
@@ -3420,7 +3549,9 @@ def create_models_and_optimizers(args, config: Dict, device: torch.device, featu
         n_classes=n_classes,  # Number of classes for conditional generation (matches dataset)
         hidden_dims=args.g_hidden,  # List of hidden layer sizes for generator MLP
         embed_dim=args.embed_dim,  # Dimensionality of label embedding in generator
-        n_resblocks=args.n_resblocks,  # Number of residual blocks in generator architecture
+        n_resblocks=args.n_resblocks,  # Number of residual blocks in generator
+        categorical_groups=getattr(args, "_mixed_categorical_groups", []),  # V4 fixed real/fake one-hot locations
+        categorical_class_masks=getattr(args, "_mixed_categorical_class_masks", []),
         leaky_relu_alpha=g_leaky_relu_alpha,  # Use config value
     ).to(
         device
@@ -4273,6 +4404,9 @@ def build_generator_checkpoint_payload(G, opt_G, scaler, dataset, epoch: int, me
         "state_dict": (cast(Any, G).module.state_dict() if isinstance(cast(Any, G), torch.nn.DataParallel) else cast(Any, G).state_dict()),  # Save generator state dict (unwrap DataParallel.module if present)
         "opt_G_state": cast(Any, opt_G).state_dict(),  # Save generator optimizer state
         "scaler": dataset.scaler,  # Save scaler for inverse transform
+        "model_feature_dim": dataset.scaler.model_feature_dim,  # Verify mixed feature width at generation.
+        "categorical_groups": list(dataset.scaler.categorical_groups),  # Preserve categorical output layout.
+        "categorical_class_masks": dataset.scaler.categorical_class_masks,  # Preserve exact class-conditional categorical domains.
         "label_encoder": dataset.label_encoder,  # Save label encoder for mapping
         "feature_cols": dataset.feature_cols,  # Save feature column names for generation
         "class_distribution": class_distribution,  # Save class distribution for percentage-based generation
@@ -5215,6 +5349,11 @@ def determine_feature_dim_and_n_classes(args, scaler: Optional[Any], label_encod
     :return: Tuple of (feature_dim, n_classes).
     """
 
+    if isinstance(scaler, ClassConditionalFlowScaler) and scaler.model_feature_dim is not None:
+        dimension = int(scaler.model_feature_dim)
+        if args.feature_dim is not None and int(args.feature_dim) != dimension:
+            raise ValueError("Configured feature_dim conflicts with the V4 checkpoint's mixed feature width")
+        return dimension, len(label_encoder.classes_)
     if args.feature_dim is not None:  # If feature dimension is provided
         feature_dim = args.feature_dim  # Use provided feature dimension
     else:  # Try to infer feature dimension from scaler's mean_ attribute if available
@@ -5254,7 +5393,9 @@ def build_and_load_generator(args, config: Dict, ckpt: Dict, device: torch.devic
         n_classes=n_classes,  # Number of classes for conditional generation (matches dataset)
         hidden_dims=args.g_hidden,  # List of hidden layer sizes for generator MLP
         embed_dim=args.embed_dim,  # Dimensionality of label embedding in generator
-        n_resblocks=args.n_resblocks,  # Number of residual blocks in generator architecture
+        n_resblocks=args.n_resblocks,  # Number of residual blocks in generator
+        categorical_groups=getattr(args, "_mixed_categorical_groups", []),  # V4 fixed real/fake one-hot locations
+        categorical_class_masks=getattr(args, "_mixed_categorical_class_masks", []),
         leaky_relu_alpha=g_leaky_relu_alpha,  # Use config value
     ).to(
         device
@@ -5342,37 +5483,28 @@ def notify_start_of_generation(args, n: int) -> None:
 
 
 def generate_batches_and_collect_results(args, G: nn.Module, device: torch.device, labels: np.ndarray, n: int) -> tuple:
-    """
-    Generate synthetic samples in batches and collect all results.
-
-    :param args: Parsed arguments namespace with gen_batch_size and latent_dim.
-    :param G: Generator model in evaluation mode.
-    :param device: Torch device for tensor allocation.
-    :param labels: Numpy array of integer labels for generation.
-    :param n: Total number of samples to generate.
-    :return: Tuple of (all_fake, all_labels, sample_generation_start_time).
-    """
-
-    batch_size = args.gen_batch_size  # Set generation batch size
-    _gen_model = getattr(G, "module", G)  # Unwrap DataParallel if present to access feature_dim attribute
-    feat_dim = cast(Any, _gen_model.feature_dim)  # Get output feature dimensionality cast to Any to suppress type-checker attribute errors
-    feat_dim_int = int(feat_dim)  # Convert feature dimension to plain int for numpy shape allocation
-    all_fake = np.empty((int(n), feat_dim_int), dtype=np.float32)  # Pre-allocate contiguous output array to avoid list-append-then-vstack overhead
-    offset = 0  # Track write position in pre-allocated array
-    sample_generation_start_time = time.time()  # Record sample generation start timestamp
-    
-    with torch.no_grad():  # Disable gradient computation for generation
-        for i in range(0, n, batch_size):  # Loop over batches for generation
-            b = min(batch_size, n - i)  # Calculate current batch size
-            z = torch.randn(b, args.latent_dim, device=device)  # Sample noise for batch
-            y = torch.from_numpy(labels[i : i + b]).to(device, dtype=torch.long)  # Convert labels to tensor
-            fake_tensor = G(z, y)  # Generate fake samples on the selected device
-            require_finite_tensor(fake_tensor, "generated_samples", args, int(getattr(args, "_generation_epoch", getattr(args, "_last_completed_epoch", 0))), (i // batch_size) + 1, "generation")  # Reject invalid generated samples before output conversion
-            fake = fake_tensor.cpu().numpy()  # Move verified generated samples to CPU
-            all_fake[offset : offset + b] = fake  # Write batch directly into pre-allocated array slice
-            offset += b  # Advance write offset by current batch size
-    
-    return (all_fake, labels, sample_generation_start_time)  # Return pre-allocated array and original labels array
+    """Generate a fixed batch population in inference mode, restoring the previous training mode."""
+    batch_size = int(args.gen_batch_size)
+    if batch_size <= 0:
+        raise ValueError("Generation batch size must be positive")
+    base_model = getattr(G, "module", G)
+    feature_dim = int(base_model.feature_dim)
+    all_fake = np.empty((int(n), feature_dim), dtype=np.float32)
+    started = time.time()
+    previous_mode = G.training
+    try:
+        G.eval()  # Essential for stable BatchNorm inference and final one-row batches.
+        with torch.no_grad():
+            for offset in range(0, n, batch_size):
+                count = min(batch_size, n-offset)
+                z = torch.randn(count, args.latent_dim, device=device)
+                y = torch.from_numpy(labels[offset:offset+count]).to(device, dtype=torch.long)
+                fake_tensor = G(z, y)
+                require_finite_tensor(fake_tensor, "generated_samples", args, int(getattr(args, "_generation_epoch", getattr(args, "_last_completed_epoch", 0))), offset // batch_size + 1, "generation")
+                all_fake[offset:offset+count] = fake_tensor.cpu().numpy()
+    finally:
+        G.train(previous_mode)
+    return all_fake, labels, started
 
 
 def build_augmented_output_dataframe(args: Any, df_generated: pd.DataFrame) -> tuple:
@@ -5471,7 +5603,7 @@ def postprocess_generated_arrays_to_dataframe(args, config: Dict, all_fake: List
     Y_fake = np.concatenate(all_labels) if isinstance(all_labels, list) else all_labels  # Concatenate if list or use array directly
     if not isinstance(scaler, ClassConditionalFlowScaler):  # Require a checkpoint created for the validated mixed-type representation.
         raise ValueError("Generator checkpoint uses an incompatible legacy preprocessing representation; retrain with --from_scratch")  # Never use a raw StandardScaler to decode quantile-space generator output.
-    X_orig = scaler.inverse_transform(X_fake, Y_fake)  # Decode with independent original class marginals and observed discrete support.
+    X_orig = scaler.inverse_transform(X_fake, Y_fake)  # Rebuild full flow schema from independent mixed-type model features and verified identities.
     df_generated = pd.DataFrame(X_orig, columns=pd.Index(feature_cols))  # Create DataFrame with original feature names
     df_generated[args.label_col] = label_encoder.inverse_transform(Y_fake)  # Map integer labels back to original strings
     assess_generated_flow_quality(args, config, df_generated, scaler=scaler, label_encoder=label_encoder)  # Enforce class-specific quality acceptance before saving.
@@ -5810,6 +5942,8 @@ def generate(args, config: Optional[Dict] = None):
         ckpt, args_ck, scaler, label_encoder, feature_cols, class_distribution, device, file_progress_prefix = normalize_args_and_load_checkpoint(args, config)  # Normalize args, select device, and load checkpoint
         scaler, label_encoder, feature_cols, class_distribution = reconstruct_missing_preprocessing_objects(args, scaler, label_encoder, feature_cols, class_distribution)  # Reconstruct missing preprocessing objects from CSV if needed
         feature_dim, n_classes = determine_feature_dim_and_n_classes(args, scaler, label_encoder)  # Determine feature dimensionality and class count
+        args._mixed_categorical_groups = list(scaler.categorical_groups)  # Use checkpoint-saved group positions during reconstruction.
+        args._mixed_categorical_class_masks = scaler.categorical_class_masks
         G = build_and_load_generator(args, config, ckpt, device, feature_dim, n_classes)  # Build and load generator model from checkpoint
         n_per_class, labels, n = compute_generation_counts_and_labels(args, config, class_distribution, label_encoder, n_classes)  # Compute per-class counts and label array
         notify_start_of_generation(args, n)  # Send Telegram notification about generation start
