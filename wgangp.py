@@ -109,7 +109,7 @@ psutil = (
 )  # Import psutil if available, otherwise set to None
 
 SAO_PAULO_TIMEZONE_NAME = "America/Sao_Paulo"  # Use Sao Paulo timezone for ETA finish timestamps
-FLOW_PREPROCESSING_CHECKPOINT_TAG = "ConditionalMixedStructuralV5"  # V5 categorical sampling: isolate checkpoints from earlier preprocessing/training versions.
+FLOW_PREPROCESSING_CHECKPOINT_TAG = "ConditionalMixedStructuralV6"  # V6 stable reference-correlation targets; never resume incompatible V5 training checkpoints.
 
 # Prefer CUDA autocast when available; provide a safe fallback context manager
 try:  # Attempt to import torch.amp.autocast for mixed precision support
@@ -152,6 +152,7 @@ logger = None  # Will be initialized in initialize_logger()
 RESOURCE_MONITOR_STOP_EVENT = None  # Event to signal watcher to stop
 RESOURCE_MONITOR_THREAD = None  # Background thread running the watcher
 RESOURCE_MONITOR_LATEST_SUFFIX = " | System RAM: N/A | Process RAM: N/A | CPU: N/A | GPU Usage: N/A | GPU VRAM: N/A"  # Immutable cached telemetry read without I/O by the training progress loop.
+V6_REFERENCE_CORRELATIONS = {}  # Runtime-only per-file targets; exclude GPU tensors from saved checkpoint argument dictionaries.
 
 
 # Classes Definitions:
@@ -242,7 +243,7 @@ class ClassConditionalFlowScaler:
             self.categorical_class_masks.append(mask)
         if not offset:
             raise ValueError("No trainable features remain after structural feature selection")
-        print(f"[V5] Original features={len(self.feature_cols)} | modeled numeric={len(self.numeric_indices)} | "
+        print(f"[V6] Original features={len(self.feature_cols)} | modeled numeric={len(self.numeric_indices)} | "
               f"categorical groups={len(self.categorical_groups)} | structural derived={len(self.structural_targets)} | model width={offset}")
 
     def _encode_block(self, normalized: np.ndarray, original: np.ndarray, destination: np.ndarray) -> None:
@@ -325,7 +326,7 @@ class ClassConditionalFlowScaler:
         """Recover original CSV schema, exact categorical categories and derived relationships."""
         labels = np.asarray(labels).reshape(-1)
         if len(labels) != len(X) or X.shape[1] != self.model_feature_dim:
-            raise ValueError("Generated representation does not match the V5 model schema")
+            raise ValueError("Generated representation does not match the V6 model schema")
         result = np.empty((len(X), len(self.feature_cols)), dtype=np.float32)
         for class_label in np.unique(labels):
             class_id = int(class_label)
@@ -1326,8 +1327,9 @@ def build_wgangp_provenance(args: Any) -> Dict:
     fields = ("seed", "label_col", "feature_cols", "batch_size", "critic_steps", "lr", "beta1", "beta2", "lambda_gp", "latent_dim", "g_hidden", "d_hidden", "embed_dim", "n_resblocks", "g_leaky_relu_alpha", "d_leaky_relu_alpha", "use_amp")  # Identify settings that affect learned weights.
     settings = {name: getattr(args, name, None) for name in fields}  # Snapshot resolved model and optimization settings.
     settings["moment_fidelity_weight"] = float((CONFIG or {}).get("training", {}).get("moment_fidelity_weight", 0.05))  # Ensure changed loss settings invalidate checkpoints.
-    settings["correlation_fidelity_weight"] = float((CONFIG or {}).get("training", {}).get("correlation_fidelity_weight", 0.05))  # Track joint-fidelity training policy.
-    identity = {"source_path": str(source) if source else None, "source_size": source_stat.st_size if source_stat else None, "source_mtime_ns": source_stat.st_mtime_ns if source_stat else None, "preprocessing": "class_conditional_mixed_structural_v5", "preprocessing_parameters": {key: (CONFIG or {}).get("quality", {}).get(key, default) for key, default in (("n_quantiles", 512), ("fit_sample_rows", 50000), ("class_sampling_exponent", 0.5))}, "settings": settings}  # Record source metadata and effective hyperparameters.
+    settings["correlation_fidelity_weight"] = float((CONFIG or {}).get("training", {}).get("correlation_fidelity_weight", 2.0))  # Track joint-fidelity training policy.
+    settings["correlation_reference_rows_per_class"] = int((CONFIG or {}).get("training", {}).get("correlation_reference_rows_per_class", 4096))
+    identity = {"source_path": str(source) if source else None, "source_size": source_stat.st_size if source_stat else None, "source_mtime_ns": source_stat.st_mtime_ns if source_stat else None, "preprocessing": "class_conditional_mixed_structural_v6", "preprocessing_parameters": {key: (CONFIG or {}).get("quality", {}).get(key, default) for key, default in (("n_quantiles", 512), ("fit_sample_rows", 50000), ("class_sampling_exponent", 0.5))}, "settings": settings}  # Record source metadata and effective hyperparameters.
     digest = hashlib.sha256(json.dumps(identity, sort_keys=True, default=str).encode("utf-8")).hexdigest()  # Produce a stable comparable identity.
 
     return {"identity": identity, "sha256": digest}  # Return provenance for checkpoints and output sidecars.
@@ -1481,7 +1483,36 @@ def assess_generated_flow_quality(args: Any, config: Dict, generated: pd.DataFra
                 report["quality_flags"].append("low_feature_diversity")
             if duplicate_fraction > max(float(settings.get("max_near_duplicate_fraction", 0.3)), real_duplicate_fraction + 0.2):
                 report["quality_flags"].append("synthetic_mode_collapse")
-            if corr_shift is not None and corr_shift > float(settings.get("max_correlation_difference", 0.25)):
+            # A single 4k synthetic-vs-real correlation comparison is not a reliable
+            # universal hard limit for skewed CICFlowMeter traffic. Calibrate sampling
+            # variability from two disjoint REAL subsets using the same feature mask.
+            real_baseline = None
+            if len(reference) >= 128 and len(valid_features) >= 2:
+                permuted = rng.permutation(len(reference))
+                half = len(permuted) // 2
+                real_a = standardized_original[permuted[:half]][:, valid_features]
+                real_b = standardized_original[permuted[half:2 * half]][:, valid_features]
+                eligible = ((np.std(real_a, axis=0) > 1e-5) & (np.std(real_b, axis=0) > 1e-5))
+                if int(eligible.sum()) >= 2:
+                    with np.errstate(divide="ignore", invalid="ignore"):
+                        ca = np.corrcoef(real_a[:, eligible], rowvar=False)
+                        cb = np.corrcoef(real_b[:, eligible], rowvar=False)
+                    pairs = np.triu_indices(int(eligible.sum()), k=1)
+                    deltas = np.abs(ca[pairs] - cb[pairs])
+                    finite_deltas = deltas[np.isfinite(deltas)]
+                    if len(finite_deltas):
+                        real_baseline = float(np.mean(finite_deltas))
+            original_limit = float(settings.get("max_correlation_difference", 0.25))
+            margin = float(settings.get("correlation_real_baseline_margin", 0.05))
+            ceiling = float(settings.get("max_calibrated_correlation_difference", 0.40))
+            if not (np.isfinite(original_limit) and np.isfinite(margin) and np.isfinite(ceiling) and
+                    original_limit > 0 and margin >= 0 and ceiling >= original_limit):
+                raise ValueError("Invalid V6 correlation acceptance limits")
+            correlation_limit = min(ceiling, max(original_limit, (real_baseline + margin) if real_baseline is not None else original_limit))
+            report["real_to_real_correlation_difference_mean"] = real_baseline
+            report["effective_correlation_difference_limit"] = correlation_limit
+            report["raw_correlation_threshold_exceeded"] = bool(corr_shift is not None and corr_shift > original_limit)
+            if corr_shift is not None and corr_shift > correlation_limit:
                 report["quality_flags"].append("joint_correlation_mismatch")
             if (reference_near_baseline is not None and
                 near_fraction > float(settings.get("max_reference_near_match_fraction", 0.95)) and
@@ -1502,6 +1533,23 @@ def assess_generated_flow_quality(args: Any, config: Dict, generated: pd.DataFra
     with report_path.open("w", encoding="utf-8") as stream:
         json.dump(result, stream, indent=2, allow_nan=False)
     print(f"[QUALITY] Report: {report_path} | accepted={accepted} | invalid values={invalid_total} | flagged classes={rejecting_classes}")
+    must_reject = ((bool(invalid_total) and settings.get("reject_invalid", True)) or
+                   (bool(rejecting_classes) and settings.get("reject_quality_flags", True)))
+    if must_reject and settings.get("save_rejected_candidate", True):
+        # Save under a quarantine name. NEVER write rejected samples to the accepted
+        # output path or a valid-looking results/provenance record.
+        quarantine_path = Path(args.out_file).with_suffix(".rejected.csv")
+        temporary_path = quarantine_path.with_name(quarantine_path.name + ".tmp")
+        try:
+            candidate_limit = max(1, int(settings.get("rejected_candidate_max_rows", 250000)))
+            candidate = (generated if len(generated) <= candidate_limit else
+                         generated.sample(n=candidate_limit, random_state=int(getattr(args, "seed", 42)) + 619))
+            candidate.to_csv(temporary_path, index=False)
+            os.replace(temporary_path, quarantine_path)
+            print(f"[QUALITY] Rejected candidate retained for inspection ONLY: {quarantine_path} ({len(candidate)}/{len(generated)} rows)")
+        finally:
+            if temporary_path.exists():
+                temporary_path.unlink()
     if invalid_total and settings.get("reject_invalid", True):
         raise ValueError(f"Rejected {invalid_total} invalid network-flow feature values; see {report_path}")
     if rejecting_classes and settings.get("reject_quality_flags", True):
@@ -1527,8 +1575,9 @@ def build_default_training_and_model_config() -> Dict:
             "beta1": 0.5,  # Adam optimizer beta1 parameter
             "beta2": 0.9,  # Adam optimizer beta2 parameter
             "lambda_gp": 10.0,  # Gradient penalty coefficient
-            "moment_fidelity_weight": 0.05,  # V5 class-conditional mean/std regularization; 0 disables it.
-            "correlation_fidelity_weight": 0.05,  # V5 joint-feature correlation regularization; 0 disables it.
+            "moment_fidelity_weight": 0.05,  # Preserve V5 class-specific moment matching.
+            "correlation_reference_rows_per_class": 4096,  # Stable per-class real reference for correlation loss.
+            "correlation_fidelity_weight": 2.0,  # V6 stable class-reference correlation penalty; 0 disables it.
             "save_every": 5,  # Save checkpoints every N epochs
             "log_interval": 50,  # Log metrics every N steps
             "sample_batch": 16,  # Number of samples for fixed noise generation
@@ -1562,7 +1611,7 @@ def build_default_training_and_model_config() -> Dict:
             "small_class_threshold": 100,  # Threshold for small class detection
             "small_class_min_samples": 10,  # Minimum samples for small classes
         },
-        "quality": {"enabled": True, "sample_rows_per_class": 4096, "nearest_reference_rows": 1024, "reject_invalid": True, "reject_quality_flags": True, "n_quantiles": 512, "fit_sample_rows": 50000, "class_sampling_exponent": 0.5, "plot_samples_per_class": 512, "max_mean_shift": 2.0, "max_low_variance_fraction": 0.5, "max_correlation_difference": 0.25, "max_near_duplicate_fraction": 0.30, "max_reference_near_match_fraction": 0.95, "max_reference_near_match_excess": 0.25, "duplicate_audit_rows_per_class": 250000, "max_audited_duplicate_fraction": 0.10},  # Configure bounded quality diagnostics and fail-closed constraint enforcement.
+        "quality": {"enabled": True, "sample_rows_per_class": 4096, "nearest_reference_rows": 1024, "reject_invalid": True, "reject_quality_flags": True, "n_quantiles": 512, "fit_sample_rows": 50000, "class_sampling_exponent": 0.5, "plot_samples_per_class": 512, "max_mean_shift": 2.0, "max_low_variance_fraction": 0.5, "max_correlation_difference": 0.25, "correlation_real_baseline_margin": 0.05, "max_calibrated_correlation_difference": 0.40, "save_rejected_candidate": True, "rejected_candidate_max_rows": 250000, "max_near_duplicate_fraction": 0.30, "max_reference_near_match_fraction": 0.95, "max_reference_near_match_excess": 0.25, "duplicate_audit_rows_per_class": 250000, "max_audited_duplicate_fraction": 0.10},  # Configure bounded quality diagnostics and fail-closed constraint enforcement.
         "dataloader": {  # DataLoader configuration
             "num_workers": 8,  # Number of workers for data loading
             "pin_memory": True,  # Use pinned memory for faster GPU transfer
@@ -3486,6 +3535,56 @@ def normalize_args_and_setup_hardware(args: Any, config: Dict) -> tuple:
     return device, training_start_time, file_start_time, epoch_milestones, file_progress_prefix  # Return hardware setup results
 
 
+def build_class_reference_correlations(features: torch.Tensor, labels: np.ndarray, sample_limit: int = 4096, seed: int = 42) -> Dict[int, tuple]:
+    """Fit stable class-conditional correlation targets from *real* encoded training rows.
+
+    Compared with V5's volatile 100-200-row minibatch target, this fixed reservoir
+    substantially reduces noise. Sampling does not modify the original dataset.
+    Targets are computed once per file and transferred to the selected device once.
+    """
+    if sample_limit < 128:
+        raise ValueError("correlation_reference_rows_per_class must be at least 128")
+    labels = np.asarray(labels, dtype=np.int64)
+    if len(labels) != len(features):
+        raise ValueError("Correlation reference labels do not match the encoded features")
+    rng = np.random.default_rng(int(seed))
+    targets = {}
+    for class_id in np.unique(labels):
+        rows = np.flatnonzero(labels == class_id)
+        if len(rows) < 32:
+            continue
+        chosen = rng.choice(rows, size=min(sample_limit, len(rows)), replace=False)
+        data = features[torch.as_tensor(chosen, dtype=torch.long)].detach().cpu().numpy().astype(np.float64)
+        active = np.flatnonzero(np.std(data, axis=0) > 0.05)
+        if len(active) < 2:
+            continue
+        centered = data[:, active] - np.mean(data[:, active], axis=0)
+        scale = np.sqrt(np.mean(centered ** 2, axis=0) + 1e-4)
+        standardized = centered / scale
+        correlation = (standardized.T @ standardized) / len(data)
+        if np.isfinite(correlation).all():
+            targets[int(class_id)] = (active.astype(np.int64), np.asarray(correlation, dtype=np.float32))
+    return targets
+
+
+def class_reference_correlation_loss(fake_x: torch.Tensor, labels: torch.Tensor, reference_targets: Dict[int, tuple]) -> torch.Tensor:
+    """Match synthetic per-class correlations to stable, independent real-data reservoirs."""
+    loss = fake_x.float().new_zeros(())
+    groups = 0
+    for class_id, (feature_indices, correlation) in reference_targets.items():
+        selected = labels == int(class_id)
+        if int(selected.sum()) < 16:
+            continue
+        x = fake_x[selected].float().index_select(1, feature_indices)
+        centered = x - x.mean(dim=0, keepdim=True)
+        normalized = centered / (centered.square().mean(dim=0, keepdim=True) + 1e-4).sqrt()
+        fake_corr = normalized.T @ normalized / len(x)
+        upper = torch.triu_indices(fake_corr.shape[0], fake_corr.shape[1], offset=1, device=x.device)
+        loss = loss + (fake_corr[upper[0], upper[1]] - correlation[upper[0], upper[1]]).square().mean()
+        groups += 1
+    return loss / groups if groups else loss
+
+
 def create_dataset_and_dataloader(args, config: Dict, device: torch.device) -> tuple:
     """
     Create the CSV flow dataset and configure the training data loader.
@@ -3502,6 +3601,18 @@ def create_dataset_and_dataloader(args, config: Dict, device: torch.device) -> t
 
     args._mixed_categorical_groups = list(dataset.scaler.categorical_groups)  # Define the exact V5 output groups before model initialization.
     args._mixed_categorical_class_masks = dataset.scaler.categorical_class_masks
+    if float(config.get("training", {}).get("correlation_fidelity_weight", 2.0)) > 0:
+        reference_rows = int(config.get("training", {}).get("correlation_reference_rows_per_class", 4096))
+        reference_targets = build_class_reference_correlations(dataset.X, dataset.labels, sample_limit=reference_rows, seed=int(getattr(args, "seed", 42)))
+        global V6_REFERENCE_CORRELATIONS
+        V6_REFERENCE_CORRELATIONS = {
+            class_id: (torch.as_tensor(indices, dtype=torch.long, device=device), torch.as_tensor(corr, dtype=torch.float32, device=device))
+            for class_id, (indices, corr) in reference_targets.items()
+        }
+        print(f"[V6] Stable real-data correlation targets: {len(reference_targets)} classes, <= {reference_rows} rows/class; "
+              f"correlation_fidelity_weight={config.get('training', {}).get('correlation_fidelity_weight', 2.0)}")
+    else:
+        V6_REFERENCE_CORRELATIONS = {}
     num_workers = int(config.get("dataloader", {}).get("num_workers", 8))  # Get base num_workers from config and cast to int
     num_workers_cli_override = bool(config.get("dataloader", {}).get("num_workers_cli_override", False))  # Detect explicit CLI worker precedence
     if not num_workers_cli_override:  # Auto-adjust workers only when CLI did not override them
@@ -4024,13 +4135,17 @@ def execute_generator_training_step(G, D, opt_G, scaler, device: torch.device, a
         if real_labels is None or real_x.shape != fake_x.shape:
             raise ValueError("Moment matching requires aligned real features and labels")
         g_loss = g_loss + moment_weight * class_conditional_moment_loss(real_x, fake_x, gen_labels)
-    corr_weight = float((config or {}).get("training", {}).get("correlation_fidelity_weight", 0.05))
+    corr_weight = float((config or {}).get("training", {}).get("correlation_fidelity_weight", 2.0))
     if not np.isfinite(corr_weight) or corr_weight < 0:
         raise ValueError("correlation_fidelity_weight must be finite and nonnegative")
     if corr_weight and real_x is not None:
         if real_labels is None or real_x.shape != fake_x.shape:
             raise ValueError("Correlation matching requires aligned real features and labels")
-        g_loss = g_loss + corr_weight * class_conditional_correlation_loss(real_x, fake_x, gen_labels)
+        stable_targets = V6_REFERENCE_CORRELATIONS
+        if stable_targets:
+            g_loss = g_loss + corr_weight * class_reference_correlation_loss(fake_x, gen_labels, stable_targets)
+        else:
+            g_loss = g_loss + corr_weight * class_conditional_correlation_loss(real_x, fake_x, gen_labels)
     require_finite_tensor(g_loss, "loss", args, epoch + 1, step + 1, "generator")  # Reject invalid generator loss before backward execution
     opt_G.zero_grad(set_to_none=True)  # Reset generator gradients to None for reduced memory overhead
     if scaler is not None:  # If using mixed precision
