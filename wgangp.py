@@ -109,7 +109,7 @@ psutil = (
 )  # Import psutil if available, otherwise set to None
 
 SAO_PAULO_TIMEZONE_NAME = "America/Sao_Paulo"  # Use Sao Paulo timezone for ETA finish timestamps
-FLOW_PREPROCESSING_CHECKPOINT_TAG = "ConditionalMixedStructuralV5Categorical"  # V5 categorical sampling: isolate checkpoints from earlier preprocessing/training versions.
+FLOW_PREPROCESSING_CHECKPOINT_TAG = "ConditionalMixedStructuralV5Moments"  # V5 categorical sampling: isolate checkpoints from earlier preprocessing/training versions.
 
 # Prefer CUDA autocast when available; provide a safe fallback context manager
 try:  # Attempt to import torch.amp.autocast for mixed precision support
@@ -1325,7 +1325,8 @@ def build_wgangp_provenance(args: Any) -> Dict:
     source_stat = source.stat() if source is not None else None  # Require an existing source for provenance.
     fields = ("seed", "label_col", "feature_cols", "batch_size", "critic_steps", "lr", "beta1", "beta2", "lambda_gp", "latent_dim", "g_hidden", "d_hidden", "embed_dim", "n_resblocks", "g_leaky_relu_alpha", "d_leaky_relu_alpha", "use_amp")  # Identify settings that affect learned weights.
     settings = {name: getattr(args, name, None) for name in fields}  # Snapshot resolved model and optimization settings.
-    identity = {"source_path": str(source) if source else None, "source_size": source_stat.st_size if source_stat else None, "source_mtime_ns": source_stat.st_mtime_ns if source_stat else None, "preprocessing": "class_conditional_mixed_structural_v5_categorical", "preprocessing_parameters": {key: (CONFIG or {}).get("quality", {}).get(key, default) for key, default in (("n_quantiles", 512), ("fit_sample_rows", 50000), ("class_sampling_exponent", 0.5))}, "settings": settings}  # Record source metadata and effective hyperparameters.
+    settings["moment_fidelity_weight"] = float((CONFIG or {}).get("training", {}).get("moment_fidelity_weight", 0.05))  # Ensure changed loss settings invalidate checkpoints.
+    identity = {"source_path": str(source) if source else None, "source_size": source_stat.st_size if source_stat else None, "source_mtime_ns": source_stat.st_mtime_ns if source_stat else None, "preprocessing": "class_conditional_mixed_structural_v5_moments", "preprocessing_parameters": {key: (CONFIG or {}).get("quality", {}).get(key, default) for key, default in (("n_quantiles", 512), ("fit_sample_rows", 50000), ("class_sampling_exponent", 0.5))}, "settings": settings}  # Record source metadata and effective hyperparameters.
     digest = hashlib.sha256(json.dumps(identity, sort_keys=True, default=str).encode("utf-8")).hexdigest()  # Produce a stable comparable identity.
 
     return {"identity": identity, "sha256": digest}  # Return provenance for checkpoints and output sidecars.
@@ -1506,6 +1507,7 @@ def build_default_training_and_model_config() -> Dict:
             "beta1": 0.5,  # Adam optimizer beta1 parameter
             "beta2": 0.9,  # Adam optimizer beta2 parameter
             "lambda_gp": 10.0,  # Gradient penalty coefficient
+            "moment_fidelity_weight": 0.05,  # V5 class-conditional mean/std regularization; 0 disables it.
             "save_every": 5,  # Save checkpoints every N epochs
             "log_interval": 50,  # Log metrics every N steps
             "sample_batch": 16,  # Number of samples for fixed noise generation
@@ -3906,7 +3908,35 @@ def execute_discriminator_training_steps(G, D, opt_D, scaler, real_x, labels, de
     return loss_D, gp, d_real_score, d_fake_score  # Return discriminator training results
 
 
-def execute_generator_training_step(G, D, opt_G, scaler, device: torch.device, args, n_classes: int, epoch: int, step: int, real_labels: Optional[torch.Tensor] = None) -> torch.Tensor:
+def class_conditional_moment_loss(real_x: torch.Tensor, fake_x: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
+    """Differentiable per-class moment matching on mixed numerical/one-hot feature representations.
+
+    Compute separate moments for each class to avoid rewarding an incorrect class mixture.
+    Small batches are skipped rather than comparing unreliable moments.
+    """
+    objective = fake_x.new_zeros((), dtype=torch.float32)
+    groups = 0
+    real = real_x.detach().float()
+    fake = fake_x.float()
+    for class_id in torch.unique(labels):
+        selected = labels == class_id
+        if int(selected.sum()) < 8:
+            continue
+        reference = real[selected]
+        synthesized = fake[selected]
+        reference_mean = reference.mean(dim=0)
+        reference_std = torch.sqrt(reference.var(dim=0, unbiased=False) + 1e-6)
+        synthetic_mean = synthesized.mean(dim=0)
+        synthetic_std = torch.sqrt(synthesized.var(dim=0, unbiased=False) + 1e-6)
+        # Avoid exploding gradients for genuinely rare binary features and constant real columns.
+        scale = reference_std.clamp(min=0.5).detach()
+        objective = objective + (((synthetic_mean - reference_mean) / scale).square().mean()
+                                 + ((synthetic_std - reference_std) / scale).square().mean())
+        groups += 1
+    return objective / groups if groups else objective
+
+
+def execute_generator_training_step(G, D, opt_G, scaler, device: torch.device, args, n_classes: int, epoch: int, step: int, real_labels: Optional[torch.Tensor] = None, real_x: Optional[torch.Tensor] = None, config: Optional[Dict] = None) -> torch.Tensor:
     """
     Execute a single generator training step.
 
@@ -3933,6 +3963,13 @@ def execute_generator_training_step(G, D, opt_G, scaler, device: torch.device, a
         fake_scores = D(fake_x.float(), gen_labels)  # Preserve differentiability through the precision conversion
     require_finite_tensor(fake_scores, "fake_scores", args, epoch + 1, step + 1, "generator")  # Reject invalid fake critic scores
     g_loss = -fake_scores.float().mean()  # Calculate generator loss with full-precision reduction
+    moment_weight = float((config or {}).get("training", {}).get("moment_fidelity_weight", 0.05))
+    if not np.isfinite(moment_weight) or moment_weight < 0:
+        raise ValueError("moment_fidelity_weight must be finite and nonnegative")
+    if moment_weight and real_x is not None:
+        if real_labels is None or real_x.shape != fake_x.shape:
+            raise ValueError("Moment matching requires aligned real features and labels")
+        g_loss = g_loss + moment_weight * class_conditional_moment_loss(real_x, fake_x, gen_labels)
     require_finite_tensor(g_loss, "loss", args, epoch + 1, step + 1, "generator")  # Reject invalid generator loss before backward execution
     opt_G.zero_grad(set_to_none=True)  # Reset generator gradients to None for reduced memory overhead
     if scaler is not None:  # If using mixed precision
@@ -4018,7 +4055,7 @@ def run_batch_training_loop(G, D, opt_G, opt_D, scaler, device: torch.device, ar
         require_finite_tensor(real_x, "real_samples", args, epoch + 1, step + 1, "input")  # Reject invalid input samples before model execution
 
         loss_D, gp, d_real_score, d_fake_score = execute_discriminator_training_steps(G, D, opt_D, scaler, real_x, labels, device, args, config, n_classes, epoch, step)  # Execute discriminator training steps with gradient penalty
-        g_loss = execute_generator_training_step(G, D, opt_G, scaler, device, args, n_classes, epoch, step, real_labels=labels)  # Match actual critic label frequencies
+        g_loss = execute_generator_training_step(G, D, opt_G, scaler, device, args, n_classes, epoch, step, real_labels=labels, real_x=real_x, config=config)  # Match class labels and moments to the actual real batch
 
         if step % args.log_interval == 0:  # Extract scalar metrics only at log interval to avoid per-batch CUDA synchronization
             _cached_loss_D, _cached_g_loss, _cached_gp, _cached_d_real, _cached_d_fake = record_training_step_metrics(step, args, metrics_history, loss_D, g_loss, gp, d_real_score, d_fake_score)  # Record metrics and cache scalar values
