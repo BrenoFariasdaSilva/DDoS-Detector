@@ -17,6 +17,7 @@ Description :
         - Checkpoint saving and synthetic sample generation to CSV
         - Support for multi-class conditional generation
         - Shared categorical sampling law and stable empirical frequency learning
+        - Full-class duplicate hashing, categorical frequencies, and quantile diagnostics
 
 Usage:
     1. Prepare a CSV file with network flow features and labels.
@@ -1402,6 +1403,8 @@ def assess_generated_flow_quality(args: Any, config: Dict, generated: pd.DataFra
     near_limit = min(sample_limit, max(128, int(settings.get("nearest_reference_rows", 1024))))
     rng = np.random.default_rng(int(getattr(args, "seed", 42)))
     source_samples, source_priorities = {}, {}
+    source_category_counts = {}  # Retain exact source counts for every modeled categorical feature.
+    category_columns = [scaler.feature_cols[index] for index in scaler.categorical_indices] if isinstance(scaler, ClassConditionalFlowScaler) else []  # Resolve validated empirical categorical supports.
     if getattr(args, "csv_path", None):
         required_columns = numeric_columns + [label]
         for chunk in pd.read_csv(args.csv_path, usecols=lambda col: col.strip() in required_columns, chunksize=8192, low_memory=False):
@@ -1417,6 +1420,12 @@ def assess_generated_flow_quality(args: Any, config: Dict, generated: pd.DataFra
                 candidates = candidates[reference_valid]
                 if not len(candidates):
                     continue
+                class_counts = source_category_counts.setdefault(class_key, {})  # Accumulate empirical frequencies independently of the bounded reference reservoir.
+                for column in category_columns:  # Preserve rare categories that reservoir sampling can miss.
+                    values, counts = np.unique(candidates[:, numeric_columns.index(column)], return_counts=True)  # Count observed values in this bounded source chunk.
+                    frequencies = class_counts.setdefault(column, {})  # Store one small support map per class and feature.
+                    for value, count in zip(values, counts):  # Merge exact counts without resampling or category injection.
+                        frequencies[float(value)] = frequencies.get(float(value), 0) + int(count)  # Add this chunk's empirical category occurrences.
                 priorities = rng.random(len(candidates))
                 if class_key in source_samples:
                     candidates = np.concatenate([source_samples[class_key], candidates])
@@ -1446,21 +1455,38 @@ def assess_generated_flow_quality(args: Any, config: Dict, generated: pd.DataFra
             if count:
                 report["violations"][str(column)] = count
             invalid_total += count
-        # Inspect up to 250k complete original-scale rows per class, instead of relying on a 4k
-        # sample that can conceal the true rate of identical network-flow records.
-        audit_limit = max(4096, int(settings.get("duplicate_audit_rows_per_class", 250000)))
-        audit = group if len(group) <= audit_limit else group.sample(n=audit_limit, random_state=int(getattr(args, "seed", 42)) + 17)
-        audit_features = audit[numeric_columns]
-        audited_duplicate_fraction = float(audit_features.duplicated().mean())
-        report["audited_duplicate_fraction"] = audited_duplicate_fraction
-        report["duplicate_audit_rows"] = int(len(audit))
-        report["duplicate_audit_is_complete"] = bool(len(audit) == len(group))
+        audit_limit = max(4096, int(settings.get("duplicate_audit_rows_per_class", 250000)))  # Bound hashing chunks while auditing every generated row.
+        row_hashes = np.empty(len(group), dtype=np.uint64)  # Allocate eight bytes per generated row instead of another full feature matrix.
+        for offset in range(0, len(group), audit_limit):  # Hash all rows in bounded feature blocks.
+            block = group.iloc[offset:offset + audit_limit][numeric_columns].copy()  # Exclude labels and output metadata from record identity.
+            block[block == 0] = 0.0  # Canonicalize signed zero before hashing equal numeric records.
+            row_hashes[offset:offset + len(block)] = pd.util.hash_pandas_object(block, index=False).to_numpy(dtype=np.uint64)  # Preserve complete-row identity in compact hashes.
+        audited_duplicate_fraction = float(1.0 - len(np.unique(row_hashes)) / len(group))  # Audit full-class duplicate prevalence without subsampling bias.
+        del row_hashes  # Release full-class hash storage before distance and correlation calculations.
+        report["audited_duplicate_fraction"] = audited_duplicate_fraction  # Preserve the existing duplicate metric name and threshold.
+        report["duplicate_audit_rows"] = int(len(group))  # Report the actual full population audited.
+        report["duplicate_audit_is_complete"] = True  # Every generated row participates in duplicate detection.
+        report["duplicate_audit_method"] = "Full-class 64-bit row hashes; collisions can overcount duplicates"  # Disclose the finite-hash limitation.
+        report["duplicate_hash_collision_bound_assuming_uniform_hashes"] = min(1.0, len(group) * (len(group) - 1) / (2.0 * 2 ** 64))  # Report the birthday bound under uniformly distributed hashes.
+        frequency_audit = []  # Retain exact frequency evidence including the forward-packet support.
+        for column, counts in source_category_counts.get(class_name, {}).items():  # Compare complete valid source and generated categorical populations.
+            generated_counts = group[column].replace([np.inf, -np.inf], np.nan).value_counts(dropna=True).to_dict()  # Exclude nonfinite values already recorded as domain violations from JSON category supports.
+            total = sum(counts.values())  # Resolve the valid source class population for this feature.
+            support = sorted(set(counts) | set(generated_counts))  # Include missing real modes and unsupported generated values.
+            real_probabilities = [counts.get(value, 0) / total for value in support]  # Preserve empirical source prevalence.
+            fake_probabilities = [generated_counts.get(value, 0) / len(group) for value in support]  # Measure generated prevalence without corrections.
+            frequency_audit.append({"feature": column, "values": support, "reference_probabilities": real_probabilities, "generated_probabilities": fake_probabilities, "reference_rows": total, "missing_reference_modes": sum(counts.get(value, 0) > 0 and generated_counts.get(value, 0) == 0 for value in support), "total_variation": float(np.abs(np.asarray(real_probabilities) - fake_probabilities).sum() * 0.5)})  # Record rare-mode and categorical distribution discrepancies.
+        report["full_class_categorical_frequencies"] = frequency_audit  # Preserve exact evidence outside the heuristic acceptance score.
         if (audited_duplicate_fraction > float(settings.get("max_audited_duplicate_fraction", 0.10))
                 and audited_duplicate_fraction > 0.0):
             report["quality_flags"].append("excessive_audited_duplicate_rows")
         relation_rules = rules_by_label.get(class_name, [])
         report["enforced_derived_relationships"] = [rule[-1] for rule in relation_rules]
-        report["relationship_violations"] = flow_relationship_violation_counts(sample_values, numeric_columns, relation_rules)
+        report["relationship_violations"] = {}  # Accumulate structural violations across every generated row.
+        for offset in range(0, len(group), audit_limit):  # Bound structural validation memory while retaining strict full-population coverage.
+            violations = flow_relationship_violation_counts(group.iloc[offset:offset + audit_limit][numeric_columns].to_numpy(dtype=np.float64), numeric_columns, relation_rules)  # Apply the existing calibrated mathematical relations.
+            for relationship, count in violations.items():  # Merge violations from each block.
+                report["relationship_violations"][relationship] = report["relationship_violations"].get(relationship, 0) + count  # Retain total invalid rows per relationship.
         if report["relationship_violations"]:
             report["quality_flags"].append("invalid_joint_feature_relationships")
         if len(reference) >= 32 and len(valid_generated) >= 32:
@@ -1522,23 +1548,37 @@ def assess_generated_flow_quality(args: Any, config: Dict, generated: pd.DataFra
             duplicate_fraction = float(pd.DataFrame(np.round(standardized_synthetic, 4)).duplicated().mean())
             real_duplicate_fraction = float(pd.DataFrame(np.round(standardized_original, 4)).duplicated().mean())
             differences = []
-            valid_features = np.flatnonzero(source_variable & (np.std(standardized_synthetic, axis=0) > 1e-4))
+            valid_features = np.flatnonzero(source_variable)  # Keep the reference-defined feature set even when generated features collapse.
             if len(valid_features) >= 2:
                 real_corr = np.corrcoef(standardized_original[:, valid_features], rowvar=False)
-                fake_corr = np.corrcoef(standardized_synthetic[:, valid_features], rowvar=False)
+                centered = standardized_synthetic[:, valid_features] - standardized_synthetic[:, valid_features].mean(axis=0)  # Center generated values on the same reference-defined feature set.
+                synthetic_std = centered.std(axis=0)  # Identify undefined generated Pearson correlations explicitly.
+                normalized = np.divide(centered, synthetic_std, out=np.zeros_like(centered), where=synthetic_std > 1e-4)  # Assign zero association to collapsed dimensions for the mismatch diagnostic.
+                fake_corr = normalized.T @ normalized / len(normalized)  # Compare all real-variable pairs without dropping collapsed columns.
+                report["correlation_collapsed_features"] = [numeric_columns[index] for index in valid_features[synthetic_std <= 1e-4]]  # Name features whose generated Pearson correlations are undefined.
+                report["correlation_collapse_convention"] = "Undefined generated correlations use zero association; real-variable pairs are retained"  # Disclose the diagnostic convention rather than claiming defined Pearson coefficients.
                 triangle = np.triu_indices(len(valid_features), k=1)
                 differences = np.abs(real_corr[triangle] - fake_corr[triangle])
             corr_shift = float(np.mean(differences)) if len(differences) else None
             from sklearn.neighbors import NearestNeighbors
-            nearest_original = standardized_original[:near_limit]
+            reference_count = min(near_limit, max(1, len(standardized_original) // 2))  # Reserve disjoint real queries even when the class is smaller than the configured reference limit.
+            nearest_original = standardized_original[:reference_count]  # Fit the identical neighbor reference for real and synthetic queries.
             model = NearestNeighbors(n_neighbors=1).fit(nearest_original)
             distances = model.kneighbors(standardized_synthetic, return_distance=True)[0].reshape(-1)
             near_fraction = float(np.mean(distances < 0.05))
             # Baseline: compare held-out real reference rows against a disjoint reference subset.
             # A high synthetic near-match fraction is not evidence of copying if real flows naturally repeat.
-            reference_holdout = standardized_original[near_limit:]
+            reference_holdout = standardized_original[reference_count:]  # Use only source rows excluded from the neighbor fit.
             reference_near_baseline = (float(np.mean(model.kneighbors(reference_holdout, return_distance=True)[0].reshape(-1) < 0.05))
                                        if len(reference_holdout) >= 32 else None)
+            matched_rows = min(len(reference), len(valid_generated))  # Compare duplicate fractions at the same sample size.
+            report["matched_duplicate_sample_rows"] = matched_rows  # Disclose finite-sample duplicate prevalence dependence.
+            report["matched_original_exact_duplicate_fraction"] = float(pd.DataFrame(reference[:matched_rows]).duplicated().mean())  # Measure unrounded real duplicate prevalence on the matched sample.
+            report["matched_synthetic_exact_duplicate_fraction"] = float(pd.DataFrame(valid_generated[:matched_rows]).duplicated().mean())  # Measure unrounded synthetic duplicate prevalence on the matched sample.
+            levels = np.asarray([0.01, 0.1, 0.5, 0.9, 0.99])  # Compare original-scale distributions beyond their first two moments.
+            real_quantiles = np.quantile(reference, levels, axis=0)  # Estimate source quantiles from the fixed bounded reservoir.
+            fake_quantiles = np.quantile(valid_generated, levels, axis=0)  # Estimate generated quantiles using the same probability levels.
+            report["feature_quantiles"] = [{"feature": column, "levels": levels.tolist(), "reference": real_quantiles[:, index].tolist(), "generated": fake_quantiles[:, index].tolist()} for index, column in enumerate(numeric_columns)]  # Retain per-feature distribution evidence without altering acceptance thresholds.
             report.update({"mean_shift_standardized": mean_shift, "low_variance_feature_fraction": low_variance, "synthetic_near_duplicate_fraction": duplicate_fraction, "original_near_duplicate_fraction": real_duplicate_fraction, "joint_correlation_absolute_difference_mean": corr_shift, "reference_nearest_distance_median": float(np.median(distances)), "reference_near_match_fraction": near_fraction, "reference_real_to_real_near_match_fraction": reference_near_baseline})
             if mean_shift > float(settings.get("max_mean_shift", 2.0)):
                 report["quality_flags"].append("large_marginal_mean_shift")
@@ -1592,7 +1632,7 @@ def assess_generated_flow_quality(args: Any, config: Dict, generated: pd.DataFra
     report_path = Path(args.out_file).with_suffix(".quality.json")
     report_path.parent.mkdir(parents=True, exist_ok=True)
     accepted = invalid_total == 0 and not rejecting_classes
-    result = {"schema_version": 3, "accepted": accepted, "quality_policy_sha256": build_quality_policy_fingerprint(config), "sampling_note": "Bounded screening statistics do not prove synthetic fidelity or downstream classifier utility", "sample_rows_per_class": sample_limit, "nearest_reference_rows": near_limit, "invalid_feature_values": invalid_total, "rejected_classes": rejecting_classes, "classes": reports}  # Version the expanded diagnostics and preserve strict acceptance decisions.
+    result = {"schema_version": 4, "accepted": accepted, "quality_policy_sha256": build_quality_policy_fingerprint(config), "sampling_note": "Bounded screening statistics do not prove synthetic fidelity or downstream classifier utility", "sample_rows_per_class": sample_limit, "nearest_reference_rows": near_limit, "invalid_feature_values": invalid_total, "rejected_classes": rejecting_classes, "classes": reports}  # Version the expanded diagnostics and preserve strict acceptance decisions.
     with report_path.open("w", encoding="utf-8") as stream:
         json.dump(result, stream, indent=2, allow_nan=False)
     print(f"[QUALITY] Report: {report_path} | accepted={accepted} | invalid values={invalid_total} | flagged classes={rejecting_classes}")
@@ -5367,7 +5407,10 @@ def generate_tsne_3d_separability_plot(
         if not np.isfinite(combined).all():
             raise ValueError("Nonfinite robust-scaled features for t-SNE")
 
-        tsne = TSNE(n_components=3, random_state=42, perplexity=30)  # Instantiate t-SNE for 3D reduction with fixed seed and default perplexity
+        if min(combined.shape) < 3:  # Require enough rows and features for the existing three-component PCA initialization.
+            print("[QUALITY] Skipping 3D t-SNE: fewer than three rows or features")  # Report the visualization limitation without altering acceptance.
+            return  # Preserve valid generation for low-dimensional inputs.
+        tsne = TSNE(n_components=3, random_state=42, perplexity=min(30, len(combined) - 1))  # Keep perplexity strictly below the available sample count.
         embedded = tsne.fit_transform(combined)  # Fit and reduce combined array to 3-dimensional embedding
 
         orig_emb = embedded[:n_orig]  # Slice embedding to isolate original sample coordinates
@@ -5692,7 +5735,7 @@ def verify_data_augmentation_file(args, config: Optional[Dict] = None) -> bool:
         try:  # Require source, preprocessing and quality provenance before trusting an existing output.
             existing_manifest = json.loads(existing_manifest_path.read_text(encoding="utf-8"))  # Read the persisted output's training identity.
             existing_quality = json.loads(existing_quality_path.read_text(encoding="utf-8"))  # Read class-specific output validation evidence.
-            verified_output = existing_manifest.get("sha256") == build_wgangp_provenance(args)["sha256"] and existing_quality.get("schema_version") == 3 and existing_quality.get("accepted") is True and existing_quality.get("quality_policy_sha256") == build_quality_policy_fingerprint(config)  # Require a passed class-quality acceptance report.
+            verified_output = existing_manifest.get("sha256") == build_wgangp_provenance(args)["sha256"] and existing_quality.get("schema_version") == 4 and existing_quality.get("accepted") is True and existing_quality.get("quality_policy_sha256") == build_quality_policy_fingerprint(config)  # Require a passed class-quality acceptance report.
         except (OSError, ValueError, TypeError, AttributeError):  # Treat absent or malformed historical artifacts as unverified.
             verified_output = False  # Never skip regeneration based on count alone.
         if not verified_output:  # Reject incompatible historical artifacts while preserving their bytes until a successful replacement.
@@ -7184,7 +7227,7 @@ def skip_both_mode_when_augmented_output_sufficient(args: Any, config: Dict, csv
         existing_provenance = json.loads(provenance_file.read_text(encoding="utf-8"))  # Read the output manifest when present.
         quality_path = out_path.with_suffix(".quality.json")
         quality = json.loads(quality_path.read_text(encoding="utf-8"))
-        provenance_valid = existing_provenance.get("sha256") == build_wgangp_provenance(args)["sha256"] and quality.get("schema_version") == 3 and quality.get("accepted") is True and quality.get("quality_policy_sha256") == build_quality_policy_fingerprint(config)  # Reuse only validated prior output.
+        provenance_valid = existing_provenance.get("sha256") == build_wgangp_provenance(args)["sha256"] and quality.get("schema_version") == 4 and quality.get("accepted") is True and quality.get("quality_policy_sha256") == build_quality_policy_fingerprint(config)  # Reuse only validated prior output.
     except (OSError, ValueError, TypeError, AttributeError):  # Treat missing or malformed output manifests as unverified.
         provenance_valid = False  # Require regeneration for unverifiable existing outputs.
     if existing_rows == int(required_rows) and provenance_valid:  # Skip only matching output size and verified source/model configuration.
