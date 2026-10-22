@@ -109,7 +109,7 @@ psutil = (
 )  # Import psutil if available, otherwise set to None
 
 SAO_PAULO_TIMEZONE_NAME = "America/Sao_Paulo"  # Use Sao Paulo timezone for ETA finish timestamps
-FLOW_PREPROCESSING_CHECKPOINT_TAG = "ConditionalMixedStructuralV4"  # Incompatible mixed-type, structural feature-space representation; preserve all V3 checkpoints.
+FLOW_PREPROCESSING_CHECKPOINT_TAG = "ConditionalMixedStructuralV5Categorical"  # V5 categorical sampling: isolate checkpoints from earlier preprocessing/training versions.
 
 # Prefer CUDA autocast when available; provide a safe fallback context manager
 try:  # Attempt to import torch.amp.autocast for mixed precision support
@@ -242,7 +242,7 @@ class ClassConditionalFlowScaler:
             self.categorical_class_masks.append(mask)
         if not offset:
             raise ValueError("No trainable features remain after structural feature selection")
-        print(f"[V4] Original features={len(self.feature_cols)} | modeled numeric={len(self.numeric_indices)} | "
+        print(f"[V5] Original features={len(self.feature_cols)} | modeled numeric={len(self.numeric_indices)} | "
               f"categorical groups={len(self.categorical_groups)} | structural derived={len(self.structural_targets)} | model width={offset}")
 
     def _encode_block(self, normalized: np.ndarray, original: np.ndarray, destination: np.ndarray) -> None:
@@ -325,7 +325,7 @@ class ClassConditionalFlowScaler:
         """Recover original CSV schema, exact categorical categories and derived relationships."""
         labels = np.asarray(labels).reshape(-1)
         if len(labels) != len(X) or X.shape[1] != self.model_feature_dim:
-            raise ValueError("Generated representation does not match the V4 model schema")
+            raise ValueError("Generated representation does not match the V5 model schema")
         result = np.empty((len(X), len(self.feature_cols)), dtype=np.float32)
         for class_label in np.unique(labels):
             class_id = int(class_label)
@@ -760,6 +760,7 @@ class Generator(nn.Module):
         leaky_relu_alpha: float = 0.2,
         categorical_groups: Optional[List[tuple]] = None,
         categorical_class_masks: Optional[List[np.ndarray]] = None,
+        categorical_temperature: float = 1.25,
     ):
         """
         Initialize conditional generator that maps (z, y) -> feature vector.
@@ -781,6 +782,9 @@ class Generator(nn.Module):
 
         self.latent_dim = latent_dim  # Store latent input size
         self.feature_dim = feature_dim  # Store output size
+        self.categorical_temperature = float(categorical_temperature)
+        if not np.isfinite(self.categorical_temperature) or self.categorical_temperature <= 0:
+            raise ValueError("categorical_temperature must be a positive finite number")
         self.categorical_groups = tuple((int(start), int(end)) for start, end in (categorical_groups or []))
         for start, end in self.categorical_groups:
             if not 0 <= start < end <= feature_dim:
@@ -844,7 +848,10 @@ class Generator(nn.Module):
                     if self.training:
                         choice = F.gumbel_softmax(logits.float(), tau=1.0, hard=True, dim=1).to(logits.dtype)
                     else:
-                        choice = F.one_hot(torch.argmax(logits, dim=1), num_classes=stop-start).to(logits.dtype)
+                        # Sample rather than take argmax: deterministic argmax can collapse minority categories during inference.
+                        probabilities = torch.softmax(logits.float() / self.categorical_temperature, dim=1)
+                        sampled = torch.multinomial(probabilities, num_samples=1).squeeze(1)
+                        choice = F.one_hot(sampled, num_classes=stop-start).to(logits.dtype)
                     chunks.append(choice)
                     offset = stop
                 if offset < out.shape[1]:
@@ -1318,7 +1325,7 @@ def build_wgangp_provenance(args: Any) -> Dict:
     source_stat = source.stat() if source is not None else None  # Require an existing source for provenance.
     fields = ("seed", "label_col", "feature_cols", "batch_size", "critic_steps", "lr", "beta1", "beta2", "lambda_gp", "latent_dim", "g_hidden", "d_hidden", "embed_dim", "n_resblocks", "g_leaky_relu_alpha", "d_leaky_relu_alpha", "use_amp")  # Identify settings that affect learned weights.
     settings = {name: getattr(args, name, None) for name in fields}  # Snapshot resolved model and optimization settings.
-    identity = {"source_path": str(source) if source else None, "source_size": source_stat.st_size if source_stat else None, "source_mtime_ns": source_stat.st_mtime_ns if source_stat else None, "preprocessing": "class_conditional_mixed_structural_v4", "preprocessing_parameters": {key: (CONFIG or {}).get("quality", {}).get(key, default) for key, default in (("n_quantiles", 512), ("fit_sample_rows", 50000), ("class_sampling_exponent", 0.5))}, "settings": settings}  # Record source metadata and effective hyperparameters.
+    identity = {"source_path": str(source) if source else None, "source_size": source_stat.st_size if source_stat else None, "source_mtime_ns": source_stat.st_mtime_ns if source_stat else None, "preprocessing": "class_conditional_mixed_structural_v5_categorical", "preprocessing_parameters": {key: (CONFIG or {}).get("quality", {}).get(key, default) for key, default in (("n_quantiles", 512), ("fit_sample_rows", 50000), ("class_sampling_exponent", 0.5))}, "settings": settings}  # Record source metadata and effective hyperparameters.
     digest = hashlib.sha256(json.dumps(identity, sort_keys=True, default=str).encode("utf-8")).hexdigest()  # Produce a stable comparable identity.
 
     return {"identity": identity, "sha256": digest}  # Return provenance for checkpoints and output sidecars.
@@ -1527,6 +1534,7 @@ def build_default_training_and_model_config() -> Dict:
             "force_regenerate_samples": False,  # Preserve missing-only generation by default
             "out_file": "generated.csv",  # Output CSV filename
             "gen_batch_size": 256,  # Generation batch size
+            "categorical_temperature": 1.25,  # V5 stochastic categorical sampling temperature (>0).
             "feature_dim": None,  # Feature dimensionality (None = auto-detect)
             "small_class_threshold": 100,  # Threshold for small class detection
             "small_class_min_samples": 10,  # Minimum samples for small classes
@@ -1803,7 +1811,7 @@ def preprocess_dataframe(df, label_col, remove_zero_variance=None, config: Optio
         index_columns = [column for column in numeric_cols if re.fullmatch(r"Unnamed:\s*\d+(?:\.\d+)*", str(column), re.IGNORECASE)
                          or str(column).strip().lower() in {"index", "row_index", "row_id"}]
         if index_columns:
-            print(f"[V4] Excluding CSV index/row metadata from GAN training: {index_columns}")
+            print(f"[V5] Excluding CSV index/row metadata from GAN training: {index_columns}")
             numeric_cols = [column for column in numeric_cols if column not in index_columns]
         if label_col in numeric_cols:  # If label is numeric, remove it from features
             numeric_cols.remove(label_col)  # Remove label from feature list
@@ -1823,7 +1831,7 @@ def preprocess_dataframe(df, label_col, remove_zero_variance=None, config: Optio
             values = pd.to_numeric(df_numeric[column], errors="coerce").to_numpy(dtype=np.float64, copy=False)
             invalid = flow_feature_invalid_mask(column, values)
             if np.any(invalid & valid_mask.to_numpy()):
-                print(f"[V4] Source domain violations in {column!r}: {int(np.count_nonzero(invalid & valid_mask.to_numpy()))} rows")
+                print(f"[V5] Source domain violations in {column!r}: {int(np.count_nonzero(invalid & valid_mask.to_numpy()))} rows")
             domain_invalid |= invalid
         valid_mask &= ~domain_invalid
         df_clean = df_numeric[valid_mask].copy()  # Keep only finite, domain-valid rows
@@ -3469,7 +3477,7 @@ def create_dataset_and_dataloader(args, config: Dict, device: torch.device) -> t
         args.csv_path, label_col=args.label_col, feature_cols=args.feature_cols
     )  # Load dataset from CSV
 
-    args._mixed_categorical_groups = list(dataset.scaler.categorical_groups)  # Define the exact V4 output groups before model initialization.
+    args._mixed_categorical_groups = list(dataset.scaler.categorical_groups)  # Define the exact V5 output groups before model initialization.
     args._mixed_categorical_class_masks = dataset.scaler.categorical_class_masks
     num_workers = int(config.get("dataloader", {}).get("num_workers", 8))  # Get base num_workers from config and cast to int
     num_workers_cli_override = bool(config.get("dataloader", {}).get("num_workers_cli_override", False))  # Detect explicit CLI worker precedence
@@ -3555,8 +3563,9 @@ def create_models_and_optimizers(args, config: Dict, device: torch.device, featu
         hidden_dims=args.g_hidden,  # List of hidden layer sizes for generator MLP
         embed_dim=args.embed_dim,  # Dimensionality of label embedding in generator
         n_resblocks=args.n_resblocks,  # Number of residual blocks in generator
-        categorical_groups=getattr(args, "_mixed_categorical_groups", []),  # V4 fixed real/fake one-hot locations
+        categorical_groups=getattr(args, "_mixed_categorical_groups", []),  # Preserve structural mixed-type real/fake one-hot locations
         categorical_class_masks=getattr(args, "_mixed_categorical_class_masks", []),
+        categorical_temperature=float(config.get("generation", {}).get("categorical_temperature", 1.25)),
         leaky_relu_alpha=g_leaky_relu_alpha,  # Use config value
     ).to(
         device
@@ -5399,7 +5408,7 @@ def determine_feature_dim_and_n_classes(args, scaler: Optional[Any], label_encod
     if isinstance(scaler, ClassConditionalFlowScaler) and scaler.model_feature_dim is not None:
         dimension = int(scaler.model_feature_dim)
         if args.feature_dim is not None and int(args.feature_dim) != dimension:
-            raise ValueError("Configured feature_dim conflicts with the V4 checkpoint's mixed feature width")
+            raise ValueError("Configured feature_dim conflicts with the V5 checkpoint's mixed feature width")
         return dimension, len(label_encoder.classes_)
     if args.feature_dim is not None:  # If feature dimension is provided
         feature_dim = args.feature_dim  # Use provided feature dimension
@@ -5441,8 +5450,9 @@ def build_and_load_generator(args, config: Dict, ckpt: Dict, device: torch.devic
         hidden_dims=args.g_hidden,  # List of hidden layer sizes for generator MLP
         embed_dim=args.embed_dim,  # Dimensionality of label embedding in generator
         n_resblocks=args.n_resblocks,  # Number of residual blocks in generator
-        categorical_groups=getattr(args, "_mixed_categorical_groups", []),  # V4 fixed real/fake one-hot locations
+        categorical_groups=getattr(args, "_mixed_categorical_groups", []),  # Preserve structural mixed-type real/fake one-hot locations
         categorical_class_masks=getattr(args, "_mixed_categorical_class_masks", []),
+        categorical_temperature=float(config.get("generation", {}).get("categorical_temperature", 1.25)),
         leaky_relu_alpha=g_leaky_relu_alpha,  # Use config value
     ).to(
         device
