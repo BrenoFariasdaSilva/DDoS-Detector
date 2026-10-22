@@ -95,7 +95,7 @@ from Logger import Logger  # For logging output to both terminal and file
 from mpl_toolkits.mplot3d import Axes3D  # For 3D projection type annotation and axis method resolution
 from pathlib import Path  # For handling file paths
 from sklearn.manifold import TSNE  # For 3D t-SNE separability visualization
-from sklearn.preprocessing import LabelEncoder, StandardScaler, QuantileTransformer  # For mixed-type class-conditional flow preprocessing
+from sklearn.preprocessing import LabelEncoder, StandardScaler, QuantileTransformer, RobustScaler  # For mixed-type class-conditional preprocessing and reference-fitted t-SNE scaling
 from telegram_bot import TelegramBot, send_exception_via_telegram, send_telegram_message, setup_global_exception_hook  # For Telegram utilities and global exception hook
 from torch import autograd  # For gradient penalty
 from torch.utils.data import DataLoader, Dataset, Sampler  # Dataset, dataloader and bounded class-aware sampling
@@ -1457,6 +1457,14 @@ def assess_generated_flow_quality(args: Any, config: Dict, generated: pd.DataFra
             real_variation = np.std(standardized_original[:, source_variable], axis=0)
             mean_shift = float(np.mean(np.abs(np.mean(standardized_synthetic, axis=0))))
             low_variance = float(np.mean(observed_variation < 0.1 * real_variation)) if len(real_variation) else 0.0
+            variable_names = np.asarray(numeric_columns)[source_variable]
+            std_ratios = np.divide(observed_variation, real_variation,
+                                   out=np.full_like(observed_variation, np.nan), where=real_variation > 1e-8)
+            worst = np.argsort(np.nan_to_num(std_ratios, nan=np.inf))[:15]
+            report["lowest_generated_to_real_std_ratios"] = [
+                {"feature": str(variable_names[i]), "generated_to_real_std_ratio": float(std_ratios[i])}
+                for i in worst if np.isfinite(std_ratios[i])
+            ]
             # Preserve the real class's natural duplicate baseline to avoid penalizing unavoidable identical flows.
             duplicate_fraction = float(pd.DataFrame(np.round(standardized_synthetic, 4)).duplicated().mean())
             real_duplicate_fraction = float(pd.DataFrame(np.round(standardized_original, 4)).duplicated().mean())
@@ -5249,6 +5257,14 @@ def generate_tsne_3d_separability_plot(
         n_orig = len(orig_subset)  # Count original samples used for t-SNE index boundary
         combined = np.vstack([orig_subset, gen_subset]).astype(np.float32)  # Vertically stack both groups for joint t-SNE fit
         combined = np.nan_to_num(combined, nan=0.0, posinf=0.0, neginf=0.0)  # Replace non-finite values to prevent t-SNE numerical failure
+        # Fit the scaling only on original flows; synthetic records cannot set the
+        # reference axes. Clip extreme transformed values so rate outliers do not
+        # overwhelm all other packet-flow attributes in the t-SNE embedding.
+        reference_scaler = RobustScaler(quantile_range=(10.0, 90.0))
+        reference_scaler.fit(combined[:n_orig].astype(np.float64))
+        combined = np.clip(reference_scaler.transform(combined.astype(np.float64)), -10.0, 10.0).astype(np.float32)
+        if not np.isfinite(combined).all():
+            raise ValueError("Nonfinite robust-scaled features for t-SNE")
 
         tsne = TSNE(n_components=3, random_state=42, perplexity=30)  # Instantiate t-SNE for 3D reduction with fixed seed and default perplexity
         embedded = tsne.fit_transform(combined)  # Fit and reduce combined array to 3-dimensional embedding
