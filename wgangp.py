@@ -16,6 +16,7 @@ Description :
         - WGAN-GP training loop with gradient penalty for stability
         - Checkpoint saving and synthetic sample generation to CSV
         - Support for multi-class conditional generation
+        - Shared categorical sampling law and stable empirical frequency learning
 
 Usage:
     1. Prepare a CSV file with network flow features and labels.
@@ -109,7 +110,7 @@ psutil = (
 )  # Import psutil if available, otherwise set to None
 
 SAO_PAULO_TIMEZONE_NAME = "America/Sao_Paulo"  # Use Sao Paulo timezone for ETA finish timestamps
-FLOW_PREPROCESSING_CHECKPOINT_TAG = "ConditionalMixedStructuralV62MixedDiscrete"  # V6.2 expands discrete output groups; never restore checkpoints trained with the old feature width.
+FLOW_PREPROCESSING_CHECKPOINT_TAG = "ConditionalMixedStructuralV63ProbabilityMoments"  # Isolate revised sampling, empirical fitting, and frequency objectives from prior weights.
 
 # Prefer CUDA autocast when available; provide a safe fallback context manager
 try:  # Attempt to import torch.amp.autocast for mixed precision support
@@ -247,7 +248,7 @@ class ClassConditionalFlowScaler:
             self.categorical_class_masks.append(mask)
         if not offset:
             raise ValueError("No trainable features remain after structural feature selection")
-        print(f"[V6.2] Original features={len(self.feature_cols)} | modeled numeric={len(self.numeric_indices)} | "
+        print(f"[V6.3] Original features={len(self.feature_cols)} | modeled numeric={len(self.numeric_indices)} | "  # Report the active representation version and retained dimensions.
               f"categorical groups={len(self.categorical_groups)} | structural derived={len(self.structural_targets)} | model width={offset}")
 
     def _encode_block(self, normalized: np.ndarray, original: np.ndarray, destination: np.ndarray) -> None:
@@ -285,14 +286,16 @@ class ClassConditionalFlowScaler:
                 minimum[new_min], maximum[new_max] = selected_min[new_min], selected_max[new_max]
                 minimum_rows[new_min] = chunk_indices[local_min[new_min]]
                 maximum_rows[new_max] = chunk_indices[local_max[new_max]]
-            picked = np.unique(np.concatenate((picked, minimum_rows, maximum_rows)))
-            observed = np.asarray(X[picked], dtype=np.float64)
+            calibration_rows = np.unique(np.concatenate((picked, minimum_rows, maximum_rows)))  # Preserve extreme rows for support and relationship calibration without overweighting their probability.
+            observed = np.asarray(X[calibration_rows], dtype=np.float64)  # Retain empirical extremes outside the uniform quantile-fitting sample.
             if not np.isfinite(observed).all():
                 raise ValueError(f"Nonfinite source features for label {class_label}")
             transformer = QuantileTransformer(n_quantiles=min(self.n_quantiles, len(picked)),
                                               output_distribution="normal", subsample=None,
                                               random_state=self.seed, copy=True)
-            transformer.fit(observed)
+            transformer.fit(np.asarray(X[picked], dtype=np.float64))  # Estimate quantile probabilities from a uniform source sample.
+            transformer.quantiles_[0] = minimum  # Preserve the complete source minimum as the inverse-transform endpoint.
+            transformer.quantiles_[-1] = maximum  # Preserve the complete source maximum without duplicating extreme rows.
             class_id = int(class_label)
             self.transformers[class_id] = transformer
             support = {}
@@ -330,7 +333,7 @@ class ClassConditionalFlowScaler:
         """Recover original CSV schema, exact categorical categories and derived relationships."""
         labels = np.asarray(labels).reshape(-1)
         if len(labels) != len(X) or X.shape[1] != self.model_feature_dim:
-            raise ValueError("Generated representation does not match the V6.2 model schema")
+            raise ValueError("Generated representation does not match the V6.3 model schema")  # Reject incompatible encoded dimensions before decoding.
         result = np.empty((len(X), len(self.feature_cols)), dtype=np.float32)
         for class_label in np.unique(labels):
             class_id = int(class_label)
@@ -634,7 +637,7 @@ class CSVFlowDataset(Dataset):
             else:  # If no label column was detected
                 raise ValueError(f"Label column '{label_col}' not found in CSV. Available columns: {list(df.columns)}")  # Raise error
 
-        df = preprocess_dataframe(df, label_col, remove_zero_variance=True)  # Clean and filter DataFrame
+        df = preprocess_dataframe(df, label_col, remove_zero_variance=None)  # Clean and filter DataFrame
         if df is None or df.empty:  # Ensure preprocessing returned usable tabular data
             raise ValueError(f"No valid data remaining after preprocessing {csv_path}")  # Raise error
         self.original_num_samples = len(df)  # Store number of samples after preprocessing (NaN/inf removed)
@@ -777,6 +780,9 @@ class Generator(nn.Module):
         :param embed_dim: Size of label embedding (default: 32)
         :param n_resblocks: Number of residual blocks to apply (default: 3)
         :param leaky_relu_alpha: Negative slope for LeakyReLU activation (default: 0.2)
+        :param categorical_groups: Encoded one-hot output intervals.
+        :param categorical_class_masks: Allowed categories for each class and group.
+        :param categorical_temperature: Shared categorical sampling temperature for training and inference.
         :return: None
         """
 
@@ -823,13 +829,14 @@ class Generator(nn.Module):
             nn.Linear(res_dim, feature_dim),  # Final linear projection
         )  # End output block
 
-    def forward(self, z, y):  # Compute generator output
+    def forward(self, z: torch.Tensor, y: torch.Tensor, return_log_probabilities: bool = False) -> Union[torch.Tensor, tuple]:  # Optionally expose categorical expectations from the same forward pass.
         """
         Generate synthetic features conditioned on labels.
 
         :param z: Noise tensor of shape (batch_size, latent_dim)
         :param y: Label tensor of shape (batch_size,) containing class indices
-        :return: Generated feature tensor of shape (batch_size, feature_dim)
+        :param return_log_probabilities: Return an additional feature tensor with categorical log probabilities for stable frequency loss.
+        :return: Generated feature tensor, or generated features and categorical log-probability features.
         """
 
         with autocast(z.device.type, enabled=torch.is_autocast_enabled()):  # Select BF16 inside each DataParallel worker thread
@@ -839,29 +846,35 @@ class Generator(nn.Module):
             for b in self.resblocks:  # Loop through residual blocks
                 x = b(x)  # Apply block
             out = self.out(x)  # Produce final feature vector and categorical logits
+            log_probability_chunks = []  # Collect differentiable categorical expectations without stochastic one-hot variance.
             if self.categorical_groups:
-                # Straight-through categorical choices match real one-hot critic inputs while retaining gradients.
                 chunks = []
                 offset = 0
                 for group_id, (start, stop) in enumerate(self.categorical_groups):
                     if offset < start:
                         chunks.append(out[:, offset:start])
+                        log_probability_chunks.append(out[:, offset:start])  # Preserve numeric features in the expectation representation.
                     logits = out[:, start:stop]
                     class_mask = getattr(self, f"categorical_allowed_{group_id}", None)
                     if class_mask is not None:
-                        logits = logits.masked_fill(~class_mask[y], -1e4)  # Never draw an unseen category for that class.
+                        logits = logits.masked_fill(~class_mask[y], -torch.inf)  # Give unsupported categories zero probability at every finite sampling temperature.
+                    scaled_logits = logits.float() / self.categorical_temperature  # Use identical categorical probabilities during training and inference.
+                    log_probabilities = torch.log_softmax(scaled_logits, dim=1)  # Preserve gradients for extremely unlikely supported categories.
+                    log_probability_chunks.append(log_probabilities)  # Keep log-probability gradients independent of the straight-through estimator.
                     if self.training:
-                        choice = F.gumbel_softmax(logits.float(), tau=1.0, hard=True, dim=1).to(logits.dtype)
+                        choice = F.gumbel_softmax(scaled_logits, tau=1.0, hard=True, dim=1).to(logits.dtype)  # Draw hard categories from the inference distribution with a unit relaxation temperature.
                     else:
                         # Sample rather than take argmax: deterministic argmax can collapse minority categories during inference.
-                        probabilities = torch.softmax(logits.float() / self.categorical_temperature, dim=1)
-                        sampled = torch.multinomial(probabilities, num_samples=1).squeeze(1)
+                        sampled = torch.multinomial(log_probabilities.exp(), num_samples=1).squeeze(1)  # Draw from the same masked categorical law used during training.
                         choice = F.one_hot(sampled, num_classes=stop-start).to(logits.dtype)
                     chunks.append(choice)
                     offset = stop
                 if offset < out.shape[1]:
                     chunks.append(out[:, offset:])
+                    log_probability_chunks.append(out[:, offset:])  # Preserve any trailing numeric features.
                 out = torch.cat(chunks, dim=1)
+        if return_log_probabilities:  # Expose expectations only to callers requesting the frequency objective.
+            return out, torch.cat(log_probability_chunks, dim=1) if log_probability_chunks else out  # Keep default generator output and DataParallel tensor gathering compatible.
         return out  # Return mixed continuous values and exact categorical one-hot groups
 
 
@@ -1333,8 +1346,9 @@ def build_wgangp_provenance(args: Any) -> Dict:
     settings["moment_fidelity_weight"] = float((CONFIG or {}).get("training", {}).get("moment_fidelity_weight", 0.10))  # Ensure changed loss settings invalidate checkpoints.
     settings["correlation_fidelity_weight"] = float((CONFIG or {}).get("training", {}).get("correlation_fidelity_weight", 2.0))  # Track joint-fidelity training policy.
     settings["correlation_reference_rows_per_class"] = int((CONFIG or {}).get("training", {}).get("correlation_reference_rows_per_class", 4096))
+    settings["categorical_temperature"] = float((CONFIG or {}).get("generation", {}).get("categorical_temperature", 1.25))  # Bind the shared training and inference categorical distribution to provenance.
     settings["moment_reference_rows_per_class"] = int((CONFIG or {}).get("training", {}).get("moment_reference_rows_per_class", 4096))
-    identity = {"source_path": str(source) if source else None, "source_size": source_stat.st_size if source_stat else None, "source_mtime_ns": source_stat.st_mtime_ns if source_stat else None, "preprocessing": "class_conditional_mixed_structural_v62_mixed_discrete", "preprocessing_parameters": {key: (CONFIG or {}).get("quality", {}).get(key, default) for key, default in (("n_quantiles", 512), ("fit_sample_rows", 50000), ("class_sampling_exponent", 0.5))}, "settings": settings}  # Record source metadata and effective hyperparameters.
+    identity = {"source_path": str(source) if source else None, "source_size": source_stat.st_size if source_stat else None, "source_mtime_ns": source_stat.st_mtime_ns if source_stat else None, "preprocessing": "class_conditional_mixed_structural_v63_probability_moments", "preprocessing_parameters": {key: (CONFIG or {}).get("quality", {}).get(key, default) for key, default in (("n_quantiles", 512), ("fit_sample_rows", 50000), ("class_sampling_exponent", 0.5))}, "settings": settings}  # Record source metadata and effective hyperparameters.
     digest = hashlib.sha256(json.dumps(identity, sort_keys=True, default=str).encode("utf-8")).hexdigest()  # Produce a stable comparable identity.
 
     return {"identity": identity, "sha256": digest}  # Return provenance for checkpoints and output sidecars.
@@ -1578,7 +1592,7 @@ def assess_generated_flow_quality(args: Any, config: Dict, generated: pd.DataFra
     report_path = Path(args.out_file).with_suffix(".quality.json")
     report_path.parent.mkdir(parents=True, exist_ok=True)
     accepted = invalid_total == 0 and not rejecting_classes
-    result = {"schema_version": 3, "accepted": accepted, "quality_policy_sha256": build_quality_policy_fingerprint(config), "sampling_note": "Bounded screening statistics do not prove synthetic fidelity or downstream classifier utility", "sample_rows_per_class": sample_limit, "nearest_reference_rows": near_limit, "invalid_feature_values": invalid_total, "rejected_classes": rejecting_classes, "classes": reports}
+    result = {"schema_version": 3, "accepted": accepted, "quality_policy_sha256": build_quality_policy_fingerprint(config), "sampling_note": "Bounded screening statistics do not prove synthetic fidelity or downstream classifier utility", "sample_rows_per_class": sample_limit, "nearest_reference_rows": near_limit, "invalid_feature_values": invalid_total, "rejected_classes": rejecting_classes, "classes": reports}  # Version the expanded diagnostics and preserve strict acceptance decisions.
     with report_path.open("w", encoding="utf-8") as stream:
         json.dump(result, stream, indent=2, allow_nan=False)
     print(f"[QUALITY] Report: {report_path} | accepted={accepted} | invalid values={invalid_total} | flagged classes={rejecting_classes}")
@@ -1624,7 +1638,7 @@ def build_default_training_and_model_config() -> Dict:
             "beta1": 0.5,  # Adam optimizer beta1 parameter
             "beta2": 0.9,  # Adam optimizer beta2 parameter
             "lambda_gp": 10.0,  # Gradient penalty coefficient
-            "moment_fidelity_weight": 0.10,  # V6.2 sparse-mode-aware reference moments; tune against independent validation data.
+            "moment_fidelity_weight": 0.10,  # Weight numeric moments and probability-based categorical frequencies against the adversarial objective.
             "moment_reference_rows_per_class": 4096,  # Stable real source samples per class for mean and variance targets.
             "correlation_reference_rows_per_class": 4096,  # Stable per-class real reference for correlation loss.
             "correlation_fidelity_weight": 2.0,  # V6 stable class-reference correlation penalty; 0 disables it.
@@ -1656,7 +1670,7 @@ def build_default_training_and_model_config() -> Dict:
             "force_regenerate_samples": False,  # Preserve missing-only generation by default
             "out_file": "generated.csv",  # Output CSV filename
             "gen_batch_size": 256,  # Generation batch size
-            "categorical_temperature": 1.25,  # V5 stochastic categorical sampling temperature (>0).
+            "categorical_temperature": 1.25,  # Use the same positive categorical sampling temperature in training and generation.
             "feature_dim": None,  # Feature dimensionality (None = auto-detect)
             "small_class_threshold": 100,  # Threshold for small class detection
             "small_class_min_samples": 10,  # Minimum samples for small classes
@@ -3617,13 +3631,17 @@ def build_class_reference_correlations(features: torch.Tensor, labels: np.ndarra
     return targets
 
 
-def build_class_reference_moments(features: torch.Tensor, labels: np.ndarray, sample_limit: int = 4096, seed: int = 42) -> Dict[int, tuple]:
-    """Build reproducible, class-specific mean/std targets from real encoded training rows.
+def build_class_reference_moments(features: torch.Tensor, labels: np.ndarray, sample_limit: int = 4096, seed: int = 42, categorical_groups: Optional[List[tuple]] = None) -> Dict[int, tuple]:  # Fit source moments and exact category frequencies.
+    """Build bounded numeric moments and exact class-conditional categorical frequencies.
 
-    The reference is held fixed throughout training, rather than changing with each
-    minibatch and randomly oversampling rare flows. Target statistics are detached;
-    only generated samples receive gradients. No additional data partition is made.
+    :param features: Encoded real training features on CPU.
+    :param labels: Encoded class IDs aligned with the features.
+    :param sample_limit: Maximum uniformly sampled numeric reference rows per class.
+    :param seed: Reproducible numeric reference sampling seed.
+    :param categorical_groups: One-hot feature intervals whose frequencies use all source rows.
+    :return: Mapping from class IDs to means, standard deviations, and variance eligibility.
     """
+
     if not 128 <= int(sample_limit) <= 100000:
         raise ValueError("moment_reference_rows_per_class must be between 128 and 100000")
     labels = np.asarray(labels, dtype=np.int64)
@@ -3633,8 +3651,6 @@ def build_class_reference_moments(features: torch.Tensor, labels: np.ndarray, sa
     targets = {}
     for class_id in np.unique(labels):
         rows = np.flatnonzero(labels == class_id)
-        if len(rows) < 32:
-            continue
         chosen = rng.choice(rows, size=min(int(sample_limit), len(rows)), replace=False)
         values = features[torch.as_tensor(chosen, dtype=torch.long)].detach().cpu().numpy().astype(np.float64)
         if not np.isfinite(values).all():
@@ -3648,43 +3664,65 @@ def build_class_reference_moments(features: torch.Tensor, labels: np.ndarray, sa
         for column_index in range(values.shape[1]):
             _, counts = np.unique(values[:, column_index], return_counts=True)
             reliable_std[column_index] = (counts.max() / len(values) <= 0.985)
+        for start, stop in categorical_groups or []:  # Compute exact frequencies even when rare modes miss the numeric reservoir.
+            counts = np.zeros(stop - start, dtype=np.float64)  # Accumulate bounded one-hot counts without copying a full class.
+            for offset in range(0, len(rows), 65536):  # Bound temporary source tensors independently of class size.
+                block = features[torch.as_tensor(rows[offset:offset + 65536], dtype=torch.long), start:stop]  # Select only this categorical group.
+                counts += block.double().sum(dim=0).cpu().numpy()  # Sum exact observed category occurrences in float64.
+            mean[start:stop] = counts / len(rows)  # Retain every observed category with its original prevalence.
+            reliable_std[start:stop] = False  # Categorical variance follows frequency and needs no separate minibatch constraint.
         targets[int(class_id)] = (mean.astype(np.float32), std.astype(np.float32), reliable_std)
     return targets
 
 
-def class_reference_moment_loss(fake_x: torch.Tensor, labels: torch.Tensor, targets: Dict[int, tuple]) -> torch.Tensor:
-    """Match per-class means and reliably measurable standard deviations.
+def class_reference_moment_loss(fake_x: torch.Tensor, labels: torch.Tensor, targets: Dict[int, tuple], log_probability_features: Optional[torch.Tensor] = None, categorical_groups: Optional[List[tuple]] = None) -> torch.Tensor:  # Separate numeric moments from categorical frequency matching.
+    """Match numeric moments and categorical marginal probabilities within each class.
 
-    A reference feature with >98.5% identical values may contain rare valid modes;
-    demanding its full-reference variance in *every* small generator batch creates
-    noisy, unrealistic gradients. Match its mean, but do not penalize the batch
-    standard deviation. Constant or sparse columns remain controlled by WGAN-GP.
+    :param fake_x: Generated hard mixed-type feature tensor.
+    :param labels: Class IDs aligned with generated rows.
+    :param targets: Detached real class means, standard deviations, and variance eligibility.
+    :param log_probability_features: Same-pass features with categorical log probabilities instead of draws.
+    :param categorical_groups: Encoded one-hot intervals excluded from numeric moment penalties.
+    :return: Mean numeric moment and categorical KL objective over represented classes.
     """
-    loss = fake_x.float().new_zeros(())
-    groups = 0
-    for class_id, target in targets.items():
-        target_mean, target_std = target[:2]
-        std_reliable = target[2] if len(target) > 2 else None
-        selected = labels == int(class_id)
-        if int(selected.sum()) < 8:
-            continue
-        fake = fake_x[selected].float()
-        mean = fake.mean(dim=0)
-        std = torch.sqrt(fake.var(dim=0, unbiased=False) + 1e-6)
-        scale = target_std.clamp(min=0.5)
-        mean_loss = (((mean - target_mean) / scale).square()).mean()
-        std_errors = ((std - target_std) / scale).square()
-        if std_reliable is not None:
-            reliable = std_reliable.to(device=fake_x.device, dtype=torch.bool)
-            if bool(reliable.any()):
-                std_loss = std_errors[reliable].mean()
-            else:
-                std_loss = std_errors.new_zeros(())
-        else:
-            std_loss = std_errors.mean()
-        loss = loss + mean_loss + std_loss
-        groups += 1
-    return loss / groups if groups else loss
+
+    loss = fake_x.float().new_zeros(())  # Accumulate the objective in full precision.
+    groups = 0  # Count classes contributing numeric or categorical objectives.
+    numeric = torch.ones(fake_x.shape[1], dtype=torch.bool, device=fake_x.device)  # Default to the legacy all-numeric interface.
+    for start, stop in categorical_groups or []:  # Separate categorical frequencies from numerical variance.
+        numeric[start:stop] = False  # Exclude one-hot columns from numeric moment penalties.
+
+    for class_id, target in targets.items():  # Compare each generated class against its own real distribution.
+        target_mean, target_std = target[:2]  # Resolve fixed reference moments on the training device.
+        selected = labels == int(class_id)  # Select aligned generated class rows.
+        selected_count = int(selected.sum())  # Resolve this class's minibatch population once.
+        if selected_count == 0 or (selected_count < 8 and not categorical_groups):  # Retain categorical frequency learning even for small represented classes.
+            continue  # Skip absent classes and unreliable purely numeric moments.
+        fake = fake_x[selected].float()  # Promote moment arithmetic before reductions.
+        class_loss = loss.new_zeros(())  # Initialize this class's numeric and frequency contributions.
+        if selected_count >= 8 and bool(numeric.any()):  # Require enough rows for numeric moments while supporting categorical-only datasets.
+            scale = target_std[numeric].clamp(min=0.5)  # Bound sparse-feature gradient amplification.
+            mean = fake[:, numeric].mean(dim=0)  # Estimate numeric means without one-hot expansion weighting.
+            std = torch.sqrt(fake[:, numeric].var(dim=0, unbiased=False) + 1e-6)  # Keep collapsed numeric variance finite.
+            class_loss = (((mean - target_mean[numeric]) / scale).square()).mean()  # Match standardized numeric means.
+            reliable = target[2][numeric].bool() if len(target) > 2 else torch.ones_like(scale, dtype=torch.bool)  # Preserve sparse-feature variance eligibility.
+            if bool(reliable.any()):  # Apply variance pressure only to reliably represented numeric features.
+                class_loss = class_loss + (((std - target_std[numeric]) / scale).square())[reliable].mean()  # Match eligible numeric spread.
+        categorical_loss = loss.new_zeros(())  # Average frequency loss per group rather than per expanded column.
+        for start, stop in categorical_groups or []:  # Match the categorical marginal, never individual-row class assignments.
+            expected = target_mean[start:stop]  # Use exact full-class empirical category frequencies.
+            observed = expected > 0  # Exclude unsupported categories before any logarithmic reduction.
+            if log_probability_features is not None:  # Integrate category probabilities stably over latent rows.
+                predicted_log = torch.logsumexp(log_probability_features[selected, start:stop][:, observed].float(), dim=0) - math.log(selected_count)  # Avoid underflow and clipping gradients of rare supported modes.
+            else:  # Preserve callers supplying only hard categorical outputs.
+                predicted_log = fake[:, start:stop][:, observed].mean(dim=0).clamp(min=1e-8).log()  # Bound the legacy hard-frequency logarithm.
+            categorical_loss = categorical_loss + (expected[observed] * (expected[observed].log() - predicted_log)).sum()  # Penalize lost empirical mass without forcing rare draws into every batch.
+        if categorical_groups:  # Keep frequency weighting independent of group cardinality.
+            class_loss = class_loss + categorical_loss / len(categorical_groups)  # Reuse the configured moment weight for frequency alignment.
+        loss = loss + class_loss  # Accumulate equally weighted represented classes.
+        groups += 1  # Advance the class averaging denominator.
+
+    return loss / groups if groups else loss  # Preserve finite zero loss when no class qualifies.
 
 
 def class_reference_correlation_loss(fake_x: torch.Tensor, labels: torch.Tensor, reference_targets: Dict[int, tuple]) -> torch.Tensor:
@@ -3742,14 +3780,14 @@ def create_dataset_and_dataloader(args, config: Dict, device: torch.device) -> t
     V61_REFERENCE_MOMENTS = {}
     if moment_weight > 0:
         moment_rows = int(config.get("training", {}).get("moment_reference_rows_per_class", 4096))
-        moments = build_class_reference_moments(dataset.X, dataset.labels, sample_limit=moment_rows, seed=int(getattr(args, "seed", 42)))
+        moments = build_class_reference_moments(dataset.X, dataset.labels, sample_limit=moment_rows, seed=int(getattr(args, "seed", 42)), categorical_groups=args._mixed_categorical_groups)  # Use exact empirical categorical frequencies alongside sampled numeric moments.
         V61_REFERENCE_MOMENTS = {
             class_id: (torch.as_tensor(mean, dtype=torch.float32, device=device),
                        torch.as_tensor(std, dtype=torch.float32, device=device),
                        torch.as_tensor(reliable, dtype=torch.bool, device=device))
             for class_id, (mean, std, reliable) in moments.items()
         }
-        print(f"[V6.2] Sparse-mode-aware real moment targets: {len(moments)} classes, <= {moment_rows} rows/class; moment_fidelity_weight={moment_weight}")
+        print(f"[V6.3] Numeric moments: <= {moment_rows} rows/class; exact categorical frequencies: {len(moments)} classes; moment_fidelity_weight={moment_weight}")  # Distinguish bounded numeric targets from full-source category frequencies.
     num_workers = int(config.get("dataloader", {}).get("num_workers", 8))  # Get base num_workers from config and cast to int
     num_workers_cli_override = bool(config.get("dataloader", {}).get("num_workers_cli_override", False))  # Detect explicit CLI worker precedence
     if not num_workers_cli_override:  # Auto-adjust workers only when CLI did not override them
@@ -4154,7 +4192,7 @@ def execute_discriminator_training_steps(G, D, opt_D, scaler, real_x, labels, de
         require_finite_tensor(labels, "labels", args, epoch + 1, step + 1, component)  # Reject invalid conditioning labels before critic evaluation
         require_finite_model_state(D, "parameters", args, epoch + 1, step + 1, component)  # Reject invalid critic parameters before backward execution
         require_finite_optimizer_state(opt_D, f"discriminator_optimizer[{critic_step + 1}]", args, epoch + 1, step + 1)  # Reject invalid critic optimizer state before backward execution
-        with autocast(device.type, enabled=bool(getattr(args, "use_amp", False))):  # Enable resolved BF16 AMP for sample generation
+        with torch.no_grad(), autocast(device.type, enabled=bool(getattr(args, "use_amp", False))):  # Avoid building generator gradient graphs during critic-only updates.
             z = torch.randn(args.batch_size, args.latent_dim, device=device)  # Sample noise for discriminator step
             fake_x = G(z, labels).detach()  # Generate fake samples and detach for discriminator
         require_finite_tensor(fake_x, "generated_samples", args, epoch + 1, step + 1, component)  # Reject invalid generated samples before critic reuse
@@ -4251,6 +4289,9 @@ def execute_generator_training_step(G, D, opt_G, scaler, device: torch.device, a
     :param n_classes: Number of label classes for conditional generation.
     :param epoch: Current zero-based epoch index.
     :param step: Current zero-based global training step.
+    :param real_labels: Real batch labels used to align conditional objectives.
+    :param real_x: Encoded real batch for fallback distribution targets.
+    :param config: Active training weights with default fallbacks.
     :return: Generator loss tensor.
     """
 
@@ -4259,7 +4300,7 @@ def execute_generator_training_step(G, D, opt_G, scaler, device: torch.device, a
     with autocast(device.type, enabled=bool(getattr(args, "use_amp", False))):  # Enable resolved BF16 AMP for generator training
         z = torch.randn(args.batch_size, args.latent_dim, device=device)  # Sample noise for generator step
         gen_labels = real_labels if real_labels is not None else torch.randint(0, n_classes, (args.batch_size,), device=device)  # Align conditioning with real critic classes
-        fake_x = G(z, gen_labels)  # Generate fake samples with generator
+        fake_x, log_probability_features = G(z, gen_labels, return_log_probabilities=True)  # Share one forward pass between hard adversarial samples and categorical frequency expectations.
     require_finite_tensor(fake_x, "generated_samples", args, epoch + 1, step + 1, "generator")  # Reject invalid generated samples before loss calculation
     with autocast(device.type, enabled=False):  # Keep critic scoring in FP32 during generator training
         fake_scores = D(fake_x.float(), gen_labels)  # Preserve differentiability through the precision conversion
@@ -4272,7 +4313,7 @@ def execute_generator_training_step(G, D, opt_G, scaler, device: torch.device, a
         if real_labels is None or real_x.shape != fake_x.shape:
             raise ValueError("Moment matching requires aligned real features and labels")
         if V61_REFERENCE_MOMENTS:
-            g_loss = g_loss + moment_weight * class_reference_moment_loss(fake_x, gen_labels, V61_REFERENCE_MOMENTS)
+            g_loss = g_loss + moment_weight * class_reference_moment_loss(fake_x, gen_labels, V61_REFERENCE_MOMENTS, log_probability_features, getattr(args, "_mixed_categorical_groups", []))  # Match category probabilities without imposing one-hot minibatch variance.
         else:
             g_loss = g_loss + moment_weight * class_conditional_moment_loss(real_x, fake_x, gen_labels)
     corr_weight = float((config or {}).get("training", {}).get("correlation_fidelity_weight", 2.0))
