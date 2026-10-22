@@ -18,6 +18,7 @@ Description :
         - Support for multi-class conditional generation
         - Shared categorical sampling law and stable empirical frequency learning
         - Full-class duplicate hashing, categorical frequencies, and quantile diagnostics
+        - Versioned model state with random-stream and sampler-epoch recovery
 
 Usage:
     1. Prepare a CSV file with network flow features and labels.
@@ -1347,6 +1348,9 @@ def build_wgangp_provenance(args: Any) -> Dict:
     settings["moment_fidelity_weight"] = float((CONFIG or {}).get("training", {}).get("moment_fidelity_weight", 0.10))  # Ensure changed loss settings invalidate checkpoints.
     settings["correlation_fidelity_weight"] = float((CONFIG or {}).get("training", {}).get("correlation_fidelity_weight", 2.0))  # Track joint-fidelity training policy.
     settings["correlation_reference_rows_per_class"] = int((CONFIG or {}).get("training", {}).get("correlation_reference_rows_per_class", 4096))
+    settings["generator_leaky_relu_alpha"] = float((CONFIG or {}).get("generator", {}).get("leaky_relu_alpha", 0.2))  # Track the activation actually used by model construction.
+    settings["discriminator_leaky_relu_alpha"] = float((CONFIG or {}).get("discriminator", {}).get("leaky_relu_alpha", 0.2))  # Track the critic activation actually used by training.
+    settings["remove_zero_variance"] = bool((CONFIG or {}).get("dataset", {}).get("remove_zero_variance", True))  # Bind the selected source schema to provenance.
     settings["categorical_temperature"] = float((CONFIG or {}).get("generation", {}).get("categorical_temperature", 1.25))  # Bind the shared training and inference categorical distribution to provenance.
     settings["moment_reference_rows_per_class"] = int((CONFIG or {}).get("training", {}).get("moment_reference_rows_per_class", 4096))
     identity = {"source_path": str(source) if source else None, "source_size": source_stat.st_size if source_stat else None, "source_mtime_ns": source_stat.st_mtime_ns if source_stat else None, "preprocessing": "class_conditional_mixed_structural_v63_probability_moments", "preprocessing_parameters": {key: (CONFIG or {}).get("quality", {}).get(key, default) for key, default in (("n_quantiles", 512), ("fit_sample_rows", 50000), ("class_sampling_exponent", 0.5))}, "settings": settings}  # Record source metadata and effective hyperparameters.
@@ -3098,6 +3102,9 @@ def select_finite_saved_pair(checkpoint_files: List[Path], checkpoint_dir: Path,
             g_candidate = torch.load(g_candidate_path, map_location="cpu", weights_only=False)  # Load generator candidate on CPU for validation
             d_candidate = torch.load(d_candidate_path, map_location="cpu", weights_only=False)  # Load discriminator candidate on CPU for validation
             verify_wgangp_provenance(g_candidate.get("provenance"), args, str(g_candidate_path))  # Reject mismatched source or training hyperparameters before restore.
+            verify_wgangp_provenance(d_candidate.get("provenance"), args, str(d_candidate_path))  # Require matching critic source and training semantics.
+            if g_candidate.get("epoch") != epoch_num or d_candidate.get("epoch") != epoch_num:  # Require both serialized epochs to match the selected pair.
+                raise ValueError("Saved generator and critic epochs do not match their filenames")  # Reject mixed training epochs before restoring parameters.
             require_finite_saved_state(g_candidate["state_dict"], "parameters", args, epoch_num, "saved_generator")  # Reject invalid generator parameters
             require_finite_saved_state(d_candidate["state_dict"], "parameters", args, epoch_num, "saved_discriminator")  # Reject invalid discriminator parameters
             if "opt_G_state" in g_candidate:  # Validate available generator optimizer state
@@ -3835,7 +3842,7 @@ def create_dataset_and_dataloader(args, config: Dict, device: torch.device) -> t
     else:  # Keep explicit CLI worker value unchanged
         print(f"{BackgroundColors.GREEN}Using explicit num_workers: {BackgroundColors.CYAN}{num_workers}{Style.RESET_ALL}")  # Print deterministic CLI worker value
     
-    if device.type == "cuda" and num_workers == 0:  # If CUDA available but adjusted workers is 0
+    if device.type == "cuda" and num_workers == 0 and not num_workers_cli_override:  # If CUDA available but adjusted workers is 0
         try:  # Attempt to fetch total RAM to decide whether to raise workers for CUDA
             total_ram_gb = (safe_float(psutil.virtual_memory().total, 0.0) / (1024.0 ** 3)) if psutil is not None else None  # Detect total RAM if psutil available safely
         except Exception:  # If detection fails
@@ -3849,6 +3856,8 @@ def create_dataset_and_dataloader(args, config: Dict, device: torch.device) -> t
     persistent_workers = config.get("dataloader", {}).get("persistent_workers", True) if num_workers > 0 else False  # Get persistent_workers from config
     prefetch_factor = int(config.get("dataloader", {}).get("prefetch_factor", 2)) if num_workers > 0 else None  # Get prefetch_factor from config and cast to int
 
+    if len(dataset) < args.batch_size or args.batch_size < 2:  # Reject empty training epochs and BatchNorm-incompatible batches.
+        raise ValueError("Training requires 2 <= batch_size <= usable source rows")  # Stop before saving untrained models as completed epochs.
     class_sampler = ClassAwareFlowSampler(dataset.labels, seed=int(getattr(args, "seed", 42)), exponent=float(config.get("quality", {}).get("class_sampling_exponent", 0.5)))  # Improve real-class exposure for imbalanced attack data.
     print(f"[TRAINING] Real class sampler: prevalence exponent={config.get('quality', {}).get('class_sampling_exponent', 0.5)} | Classes={len(class_sampler.class_ids)}")  # Record sampling strategy for reproducibility.
     dataloader = DataLoader(
@@ -3972,6 +3981,18 @@ def create_models_and_optimizers(args, config: Dict, device: torch.device, featu
     return G, D, opt_D, opt_G, scaler, fixed_noise, fixed_labels, step, start_epoch, metrics_history  # Return models and training state
 
 
+def unwrap_flow_model(model: nn.Module) -> nn.Module:  # Resolve parameter ownership for saving and restoring wrapped models.
+    """Return the underlying network from DataParallel or torch.compile wrappers.
+
+    :param model: Plain, parallel, or compiled generator or critic.
+    :return: Network owning the portable unprefixed parameter state.
+    """
+
+    if isinstance(model, nn.DataParallel):  # Remove the multi-device wrapper before resolving compilation.
+        model = model.module  # Retain the original network and its registered buffers.
+    return getattr(model, "_orig_mod", model)  # Preserve ordinary modules while unwrapping compiled networks.
+
+
 def load_and_restore_generator_state(g_checkpoint_path: Path, device: torch.device, G, opt_G, scaler) -> tuple:
     """
     Load generator checkpoint and restore model weights, optimizer, and scaler state.
@@ -3986,10 +4007,7 @@ def load_and_restore_generator_state(g_checkpoint_path: Path, device: torch.devi
 
     print(f"{BackgroundColors.GREEN}Loading generator checkpoint: {g_checkpoint_path.name}{Style.RESET_ALL}")  # Print loading message
     g_checkpoint = torch.load(g_checkpoint_path, map_location=device, weights_only=False)  # Load generator checkpoint with sklearn objects
-    if isinstance(cast(Any, G), torch.nn.DataParallel):  # If model wrapped by DataParallel
-        cast(Any, G).module.load_state_dict(g_checkpoint["state_dict"])  # Restore generator weights into module
-    else:  # Not DataParallel
-        cast(Any, G).load_state_dict(g_checkpoint["state_dict"])  # Restore generator weights
+    unwrap_flow_model(G).load_state_dict(g_checkpoint["state_dict"])  # Restore portable weights into plain, compiled, or parallel generators.
     start_epoch = g_checkpoint["epoch"]  # Set starting epoch
     if "opt_G_state" in g_checkpoint:  # If optimizer state saved
         opt_G.load_state_dict(g_checkpoint["opt_G_state"])  # Restore generator optimizer
@@ -4050,10 +4068,7 @@ def load_and_restore_discriminator_state(d_checkpoint_path: Path, device: torch.
     if d_checkpoint_path.exists():  # If discriminator checkpoint exists
         print(f"{BackgroundColors.GREEN}Loading discriminator checkpoint: {d_checkpoint_path.name}{Style.RESET_ALL}")  # Print loading message
         d_checkpoint = torch.load(d_checkpoint_path, map_location=device, weights_only=False)  # Load discriminator checkpoint
-        if isinstance(cast(Any, D), torch.nn.DataParallel):  # If discriminator wrapped by DataParallel
-            cast(Any, D).module.load_state_dict(d_checkpoint["state_dict"])  # Restore discriminator weights into module
-        else:  # Not DataParallel
-            cast(Any, D).load_state_dict(d_checkpoint["state_dict"])  # Restore discriminator weights
+        unwrap_flow_model(D).load_state_dict(d_checkpoint["state_dict"])  # Restore portable weights into plain, compiled, or parallel critics.
         if "opt_D_state" in d_checkpoint:  # If optimizer state saved
             opt_D.load_state_dict(d_checkpoint["opt_D_state"])  # Restore discriminator optimizer
             print(f"{BackgroundColors.GREEN}✓ Restored discriminator optimizer state{Style.RESET_ALL}")  # Confirm optimizer restoration
@@ -4133,6 +4148,15 @@ def resume_from_checkpoint(args, config: Dict, device: torch.device, G, D, opt_G
                         metrics_history,  # Pass metrics data
                         config,  # Pass configuration
                     )  # Finish regeneration
+                    step = int(g_checkpoint.get("training_step", step))  # Restore the actual completed step count rather than the last logging interval.
+                    rng_state = g_checkpoint["rng_state"]  # Require the versioned stochastic training state for reproducible continuation.
+                    random.setstate(rng_state["python"])  # Resume Python sampling at the saved epoch boundary.
+                    np.random.set_state(rng_state["numpy"])  # Resume NumPy sampling at the saved epoch boundary.
+                    torch.set_rng_state(rng_state["torch"].cpu())  # Restore CPU draws after constructing and loading models.
+                    if device.type == "cuda" and rng_state["cuda"]:  # Restore accelerator randomness on compatible device layouts.
+                        if len(rng_state["cuda"]) != torch.cuda.device_count():  # Require matching CUDA topology for exact continuation.
+                            raise ValueError("Saved CUDA RNG device count differs from the active hardware")  # Avoid claiming reproducibility across incompatible layouts.
+                        torch.cuda.set_rng_state_all([state.cpu() for state in rng_state["cuda"]])  # Restore each participating device's random stream.
                     print(f"{BackgroundColors.GREEN}✓ Resuming training from epoch {start_epoch} (step {step}){Style.RESET_ALL}")  # Confirm resume point
                 except Exception as e:  # If restoration fails after validation
                     print(f"{BackgroundColors.YELLOW}⚠ Failed to load checkpoint: {e}{Style.RESET_ALL}")  # Warn about load failure
@@ -4891,7 +4915,7 @@ def build_generator_checkpoint_payload(G, opt_G, scaler, dataset, epoch: int, me
     class_distribution = dict(zip(unique_labels.tolist(), label_counts.tolist()))  # Create label:count mapping
     g_checkpoint = {
         "epoch": epoch + 1,  # Save current epoch number
-        "state_dict": (cast(Any, G).module.state_dict() if isinstance(cast(Any, G), torch.nn.DataParallel) else cast(Any, G).state_dict()),  # Save generator state dict (unwrap DataParallel.module if present)
+        "state_dict": unwrap_flow_model(G).state_dict(),  # Save generator state dict (unwrap DataParallel.module if present)
         "opt_G_state": cast(Any, opt_G).state_dict(),  # Save generator optimizer state
         "scaler": dataset.scaler,  # Save scaler for inverse transform
         "model_feature_dim": dataset.scaler.model_feature_dim,  # Verify mixed feature width at generation.
@@ -4903,6 +4927,8 @@ def build_generator_checkpoint_payload(G, opt_G, scaler, dataset, epoch: int, me
         "metrics_history": metrics_history,  # Save metrics history for resume
         "args": vars(args),  # Save training arguments
         "provenance": build_wgangp_provenance(args),  # Bind saved weights to source identity and training configuration.
+        "training_step": int(getattr(args, "_training_step", 0)),  # Store every completed batch independently of metric logging frequency.
+        "rng_state": {"python": random.getstate(), "numpy": np.random.get_state(), "torch": torch.get_rng_state(), "cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_initialized() else []},  # Preserve stochastic streams at the saved epoch boundary.
     }  # End generator checkpoint dictionary
     if scaler is not None:  # If using AMP
         g_checkpoint["scaler_state"] = scaler.state_dict()  # Save scaler state
@@ -4931,13 +4957,14 @@ def save_model_checkpoints_to_disk(g_checkpoint: Dict, G, D, opt_D, checkpoint_d
         torch.save(g_checkpoint, str(g_path))  # Save generator checkpoint to disk
         d_checkpoint = {
             "epoch": epoch + 1,  # Save current epoch number
-            "state_dict": (cast(Any, D).module.state_dict() if isinstance(cast(Any, D), torch.nn.DataParallel) else cast(Any, D).state_dict()),  # Save discriminator state dict (unwrap DataParallel.module if present)
+            "state_dict": unwrap_flow_model(D).state_dict(),  # Save discriminator state dict (unwrap DataParallel.module if present)
             "opt_D_state": cast(Any, opt_D).state_dict(),  # Save discriminator optimizer state
+            "provenance": g_checkpoint["provenance"],  # Bind both saved models to identical source and objective semantics.
             "args": vars(args),  # Save training arguments
         }  # End discriminator checkpoint dictionary
         torch.save(d_checkpoint, str(d_path))  # Save discriminator checkpoint to disk
         latest_path = checkpoint_dir / f"{checkpoint_prefix}_generator_latest.pt"  # Path for latest generator
-        torch.save((cast(Any, G).module.state_dict() if isinstance(cast(Any, G), torch.nn.DataParallel) else cast(Any, G).state_dict()), str(latest_path))  # Save latest generator weights safely handling DataParallel
+        torch.save(unwrap_flow_model(G).state_dict(), str(latest_path))  # Save latest generator weights safely handling DataParallel
         model_save_elapsed = time.time() - model_save_start_time  # Compute model save elapsed seconds
         args._last_model_save_time = safe_float(model_save_elapsed, 0.0)  # Store last model save elapsed on args safely
         print(f"{BackgroundColors.GREEN}Model save elapsed: {BackgroundColors.CYAN}{model_save_elapsed:.2f}s{Style.RESET_ALL}")  # Print model save elapsed
@@ -5215,11 +5242,13 @@ def train(args, config: Optional[Dict] = None):
 
         training_start_time = time.time()  # Start persisted training duration immediately before the epoch loop
         for epoch in range(start_epoch, args.epochs):  # Loop over epochs starting from resume point
+            dataloader.sampler.epoch = epoch  # Continue deterministic class sampling at the restored epoch.
             epoch_start_time = time.time()  # Record epoch start timestamp
             pbar, total_steps = create_epoch_progress_bar(dataloader, args, epoch)  # Create progress bar for epoch
             
             step = run_batch_training_loop(G, D, opt_G, opt_D, scaler, device, args, config, n_classes, pbar, step, metrics_history, total_steps, epoch, training_start_time, file_progress_prefix)  # Execute batch training loop
 
+            args._training_step = step  # Persist the completed batch count before serializing this epoch.
             write_epoch_csv_row(args, config, device, dataset, epoch, epoch_start_time, epoch_milestones, results_csv_writer, results_csv_file, results_cols_cfg, metrics_history, opt_G, opt_D)  # Write epoch CSV row
             save_training_checkpoint(args, config, device, G, D, opt_G, opt_D, scaler, dataset, epoch, metrics_history)  # Save checkpoint if due
             next_notify = send_epoch_telegram_notifications(args, telegram_enabled, epoch, next_notify, progress_pct, training_start_time, file_progress_prefix)  # Send epoch telegram notifications with file progress prefix and timing
@@ -5989,7 +6018,7 @@ def generate_batches_and_collect_results(args, G: nn.Module, device: torch.devic
     batch_size = int(args.gen_batch_size)
     if batch_size <= 0:
         raise ValueError("Generation batch size must be positive")
-    base_model = getattr(G, "module", G)
+    base_model = unwrap_flow_model(G)  # Resolve encoded feature width consistently for plain, compiled, and parallel models.
     feature_dim = int(base_model.feature_dim)
     all_fake = np.empty((int(n), feature_dim), dtype=np.float32)
     started = time.time()
@@ -6451,6 +6480,7 @@ def generate(args, config: Optional[Dict] = None):
         args._mixed_categorical_groups = list(scaler.categorical_groups)  # Use checkpoint-saved group positions during reconstruction.
         args._mixed_categorical_class_masks = scaler.categorical_class_masks
         G = build_and_load_generator(args, config, ckpt, device, feature_dim, n_classes)  # Build and load generator model from checkpoint
+        set_seed(int(args.seed))  # Make generation independent of earlier training, model construction, and file execution order.
         n_per_class, labels, n = compute_generation_counts_and_labels(args, config, class_distribution, label_encoder, n_classes)  # Compute per-class counts and label array
         notify_start_of_generation(args, n)  # Send Telegram notification about generation start
         all_fake, all_labels, sample_generation_start_time = generate_batches_and_collect_results(args, G, device, labels, n)  # Generate synthetic samples in batches
@@ -6499,6 +6529,7 @@ def generate_from_in_memory_generator(args, config: Dict, G: nn.Module, dataset:
         args._generation_epoch = int(getattr(args, "_last_completed_epoch", 0))  # Store completed training epoch for generation diagnostics
         require_finite_model_state(G, "parameters", args, args._generation_epoch, 0, "generation")  # Reject invalid in-memory generator parameters before generation
 
+        set_seed(int(args.seed))  # Make generation independent of earlier training, model construction, and file execution order.
         n_per_class, labels, n = compute_generation_counts_and_labels(args, config, class_distribution, label_encoder, n_classes)  # Compute per-class counts and label array
         notify_start_of_generation(args, n)  # Send Telegram notification about generation start
         all_fake, all_labels, sample_generation_start_time = generate_batches_and_collect_results(args, G, device, labels, n)  # Generate synthetic samples in batches
