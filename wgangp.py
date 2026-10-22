@@ -1586,6 +1586,11 @@ def assess_generated_flow_quality(args: Any, config: Dict, generated: pd.DataFra
             real_quantiles = np.quantile(reference, levels, axis=0)  # Estimate source quantiles from the fixed bounded reservoir.
             fake_quantiles = np.quantile(valid_generated, levels, axis=0)  # Estimate generated quantiles using the same probability levels.
             report["feature_quantiles"] = [{"feature": column, "levels": levels.tolist(), "reference": real_quantiles[:, index].tolist(), "generated": fake_quantiles[:, index].tolist()} for index, column in enumerate(numeric_columns)]  # Retain per-feature distribution evidence without altering acceptance thresholds.
+            reference_spread = np.maximum(real_quantiles[3] - real_quantiles[1], 1e-6)  # Scale p99 shifts against reference p90-to-p10 ranges.
+            tail_differences = np.abs(fake_quantiles[-1] - real_quantiles[-1]) / reference_spread  # Quantify upper-tail anomalies on each source-scale feature.
+            valid_tail = np.isfinite(tail_differences) & np.isfinite(reference_spread) & (np.std(reference, axis=0) > 1e-5)  # Avoid ranking constant or nonfinite reference columns.
+            ranked_tail = np.flatnonzero(valid_tail)[np.argsort(tail_differences[valid_tail])[::-1][:15]]  # Retain the largest finite source-tail discrepancies.
+            report["largest_standardized_upper_tail_shifts"] = [{"feature": numeric_columns[index], "reference_p99": float(real_quantiles[-1, index]), "generated_p99": float(fake_quantiles[-1, index]), "shift_over_reference_p90_p10": float(tail_differences[index])} for index in ranked_tail]  # Report discrepancies without editing the generated data or relaxing quality gates.
             report.update({"mean_shift_standardized": mean_shift, "low_variance_feature_fraction": low_variance, "synthetic_near_duplicate_fraction": duplicate_fraction, "original_near_duplicate_fraction": real_duplicate_fraction, "joint_correlation_absolute_difference_mean": corr_shift, "reference_nearest_distance_median": float(np.median(distances)), "reference_near_match_fraction": near_fraction, "reference_real_to_real_near_match_fraction": reference_near_baseline})
             if mean_shift > float(settings.get("max_mean_shift", 2.0)):
                 report["quality_flags"].append("large_marginal_mean_shift")
