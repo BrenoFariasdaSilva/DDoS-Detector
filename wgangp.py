@@ -109,7 +109,7 @@ psutil = (
 )  # Import psutil if available, otherwise set to None
 
 SAO_PAULO_TIMEZONE_NAME = "America/Sao_Paulo"  # Use Sao Paulo timezone for ETA finish timestamps
-FLOW_PREPROCESSING_CHECKPOINT_TAG = "ConditionalMixedStructuralV62SparseMoments"  # V6.2 sparse-mode-aware moments need distinct training checkpoints.
+FLOW_PREPROCESSING_CHECKPOINT_TAG = "ConditionalMixedStructuralV62MixedDiscrete"  # V6.2 expands discrete output groups; never restore checkpoints trained with the old feature width.
 
 # Prefer CUDA autocast when available; provide a safe fallback context manager
 try:  # Attempt to import torch.amp.autocast for mixed precision support
@@ -203,16 +203,19 @@ class ClassConditionalFlowScaler:
         self.categorical_values = {}
         self.categorical_indices = []
         for index, column in enumerate(self.feature_cols):
-            if index in self.structural_targets or column.strip().lower() not in categorical_candidates:
+            # Small observed count/flag domains deserve the same exact categorical
+            # treatment as protocol and inbound. Large cardinality ports/counts stay
+            # numeric to avoid an unbounded model width or discarded rare categories.
+            if index in self.structural_targets or not (column.strip().lower() in categorical_candidates or is_discrete_flow_feature(column)):
                 continue
             # Accumulate exact support in bounded chunks; never remap rare *real* categories to another category.
             seen = set()
             for start in range(0, len(X), 65536):
                 values = np.unique(X[start:start + 65536, index])
                 seen.update(float(value) for value in values if np.isfinite(value))
-                if len(seen) > 32:
+                if len(seen) > 64:
                     break
-            if not 2 <= len(seen) <= 32:
+            if not 2 <= len(seen) <= 64:
                 continue  # Constant fields or high-cardinality integers retain normal numeric representation.
             support = np.asarray(sorted(seen), dtype=np.float64)
             if np.any(flow_feature_invalid_mask(column, support)):
@@ -244,7 +247,7 @@ class ClassConditionalFlowScaler:
             self.categorical_class_masks.append(mask)
         if not offset:
             raise ValueError("No trainable features remain after structural feature selection")
-        print(f"[V6.1] Original features={len(self.feature_cols)} | modeled numeric={len(self.numeric_indices)} | "
+        print(f"[V6.2] Original features={len(self.feature_cols)} | modeled numeric={len(self.numeric_indices)} | "
               f"categorical groups={len(self.categorical_groups)} | structural derived={len(self.structural_targets)} | model width={offset}")
 
     def _encode_block(self, normalized: np.ndarray, original: np.ndarray, destination: np.ndarray) -> None:
@@ -327,7 +330,7 @@ class ClassConditionalFlowScaler:
         """Recover original CSV schema, exact categorical categories and derived relationships."""
         labels = np.asarray(labels).reshape(-1)
         if len(labels) != len(X) or X.shape[1] != self.model_feature_dim:
-            raise ValueError("Generated representation does not match the V6.1 model schema")
+            raise ValueError("Generated representation does not match the V6.2 model schema")
         result = np.empty((len(X), len(self.feature_cols)), dtype=np.float32)
         for class_label in np.unique(labels):
             class_id = int(class_label)
@@ -1331,7 +1334,7 @@ def build_wgangp_provenance(args: Any) -> Dict:
     settings["correlation_fidelity_weight"] = float((CONFIG or {}).get("training", {}).get("correlation_fidelity_weight", 2.0))  # Track joint-fidelity training policy.
     settings["correlation_reference_rows_per_class"] = int((CONFIG or {}).get("training", {}).get("correlation_reference_rows_per_class", 4096))
     settings["moment_reference_rows_per_class"] = int((CONFIG or {}).get("training", {}).get("moment_reference_rows_per_class", 4096))
-    identity = {"source_path": str(source) if source else None, "source_size": source_stat.st_size if source_stat else None, "source_mtime_ns": source_stat.st_mtime_ns if source_stat else None, "preprocessing": "class_conditional_mixed_structural_v62_sparse_moments", "preprocessing_parameters": {key: (CONFIG or {}).get("quality", {}).get(key, default) for key, default in (("n_quantiles", 512), ("fit_sample_rows", 50000), ("class_sampling_exponent", 0.5))}, "settings": settings}  # Record source metadata and effective hyperparameters.
+    identity = {"source_path": str(source) if source else None, "source_size": source_stat.st_size if source_stat else None, "source_mtime_ns": source_stat.st_mtime_ns if source_stat else None, "preprocessing": "class_conditional_mixed_structural_v62_mixed_discrete", "preprocessing_parameters": {key: (CONFIG or {}).get("quality", {}).get(key, default) for key, default in (("n_quantiles", 512), ("fit_sample_rows", 50000), ("class_sampling_exponent", 0.5))}, "settings": settings}  # Record source metadata and effective hyperparameters.
     digest = hashlib.sha256(json.dumps(identity, sort_keys=True, default=str).encode("utf-8")).hexdigest()  # Produce a stable comparable identity.
 
     return {"identity": identity, "sha256": digest}  # Return provenance for checkpoints and output sidecars.
