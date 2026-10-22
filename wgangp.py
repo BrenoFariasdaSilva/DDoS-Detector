@@ -109,7 +109,7 @@ psutil = (
 )  # Import psutil if available, otherwise set to None
 
 SAO_PAULO_TIMEZONE_NAME = "America/Sao_Paulo"  # Use Sao Paulo timezone for ETA finish timestamps
-FLOW_PREPROCESSING_CHECKPOINT_TAG = "ConditionalMixedStructuralV6StableMoments"  # V6.1 stable moment matching changes learned weights; isolate old V6 checkpoints.
+FLOW_PREPROCESSING_CHECKPOINT_TAG = "ConditionalMixedStructuralV62SparseMoments"  # V6.2 sparse-mode-aware moments need distinct training checkpoints.
 
 # Prefer CUDA autocast when available; provide a safe fallback context manager
 try:  # Attempt to import torch.amp.autocast for mixed precision support
@@ -1327,11 +1327,11 @@ def build_wgangp_provenance(args: Any) -> Dict:
     source_stat = source.stat() if source is not None else None  # Require an existing source for provenance.
     fields = ("seed", "label_col", "feature_cols", "batch_size", "critic_steps", "lr", "beta1", "beta2", "lambda_gp", "latent_dim", "g_hidden", "d_hidden", "embed_dim", "n_resblocks", "g_leaky_relu_alpha", "d_leaky_relu_alpha", "use_amp")  # Identify settings that affect learned weights.
     settings = {name: getattr(args, name, None) for name in fields}  # Snapshot resolved model and optimization settings.
-    settings["moment_fidelity_weight"] = float((CONFIG or {}).get("training", {}).get("moment_fidelity_weight", 0.25))  # Ensure changed loss settings invalidate checkpoints.
+    settings["moment_fidelity_weight"] = float((CONFIG or {}).get("training", {}).get("moment_fidelity_weight", 0.10))  # Ensure changed loss settings invalidate checkpoints.
     settings["correlation_fidelity_weight"] = float((CONFIG or {}).get("training", {}).get("correlation_fidelity_weight", 2.0))  # Track joint-fidelity training policy.
     settings["correlation_reference_rows_per_class"] = int((CONFIG or {}).get("training", {}).get("correlation_reference_rows_per_class", 4096))
     settings["moment_reference_rows_per_class"] = int((CONFIG or {}).get("training", {}).get("moment_reference_rows_per_class", 4096))
-    identity = {"source_path": str(source) if source else None, "source_size": source_stat.st_size if source_stat else None, "source_mtime_ns": source_stat.st_mtime_ns if source_stat else None, "preprocessing": "class_conditional_mixed_structural_v61_stable_moments", "preprocessing_parameters": {key: (CONFIG or {}).get("quality", {}).get(key, default) for key, default in (("n_quantiles", 512), ("fit_sample_rows", 50000), ("class_sampling_exponent", 0.5))}, "settings": settings}  # Record source metadata and effective hyperparameters.
+    identity = {"source_path": str(source) if source else None, "source_size": source_stat.st_size if source_stat else None, "source_mtime_ns": source_stat.st_mtime_ns if source_stat else None, "preprocessing": "class_conditional_mixed_structural_v62_sparse_moments", "preprocessing_parameters": {key: (CONFIG or {}).get("quality", {}).get(key, default) for key, default in (("n_quantiles", 512), ("fit_sample_rows", 50000), ("class_sampling_exponent", 0.5))}, "settings": settings}  # Record source metadata and effective hyperparameters.
     digest = hashlib.sha256(json.dumps(identity, sort_keys=True, default=str).encode("utf-8")).hexdigest()  # Produce a stable comparable identity.
 
     return {"identity": identity, "sha256": digest}  # Return provenance for checkpoints and output sidecars.
@@ -1585,7 +1585,7 @@ def build_default_training_and_model_config() -> Dict:
             "beta1": 0.5,  # Adam optimizer beta1 parameter
             "beta2": 0.9,  # Adam optimizer beta2 parameter
             "lambda_gp": 10.0,  # Gradient penalty coefficient
-            "moment_fidelity_weight": 0.25,  # V6.1 stronger class-wide reference moment matching; tune against held-out reference data.
+            "moment_fidelity_weight": 0.10,  # V6.2 sparse-mode-aware reference moments; tune against independent validation data.
             "moment_reference_rows_per_class": 4096,  # Stable real source samples per class for mean and variance targets.
             "correlation_reference_rows_per_class": 4096,  # Stable per-class real reference for correlation loss.
             "correlation_fidelity_weight": 2.0,  # V6 stable class-reference correlation penalty; 0 disables it.
@@ -3602,19 +3602,30 @@ def build_class_reference_moments(features: torch.Tensor, labels: np.ndarray, sa
             raise ValueError(f"Nonfinite real moment reference for class {class_id}")
         mean = values.mean(axis=0)
         std = values.std(axis=0)
-        targets[int(class_id)] = (mean.astype(np.float32), std.astype(np.float32))
+        # A rare source mode cannot reliably appear in every 64-256-row generator batch.
+        # Skip *standard-deviation* pressure for near-deterministic columns rather than
+        # forcing the generator to invent rare traffic patterns in each minibatch.
+        reliable_std = np.empty(values.shape[1], dtype=bool)
+        for column_index in range(values.shape[1]):
+            _, counts = np.unique(values[:, column_index], return_counts=True)
+            reliable_std[column_index] = (counts.max() / len(values) <= 0.985)
+        targets[int(class_id)] = (mean.astype(np.float32), std.astype(np.float32), reliable_std)
     return targets
 
 
 def class_reference_moment_loss(fake_x: torch.Tensor, labels: torch.Tensor, targets: Dict[int, tuple]) -> torch.Tensor:
-    """Match stable per-class means/std in the encoded mixed-type feature space.
+    """Match per-class means and reliably measurable standard deviations.
 
-    Small class batches are skipped and each class contributes equal weight. Reference
-    standard deviations below 0.5 are floored to prevent unstable rare-bit gradients.
+    A reference feature with >98.5% identical values may contain rare valid modes;
+    demanding its full-reference variance in *every* small generator batch creates
+    noisy, unrealistic gradients. Match its mean, but do not penalize the batch
+    standard deviation. Constant or sparse columns remain controlled by WGAN-GP.
     """
     loss = fake_x.float().new_zeros(())
     groups = 0
-    for class_id, (target_mean, target_std) in targets.items():
+    for class_id, target in targets.items():
+        target_mean, target_std = target[:2]
+        std_reliable = target[2] if len(target) > 2 else None
         selected = labels == int(class_id)
         if int(selected.sum()) < 8:
             continue
@@ -3622,8 +3633,17 @@ def class_reference_moment_loss(fake_x: torch.Tensor, labels: torch.Tensor, targ
         mean = fake.mean(dim=0)
         std = torch.sqrt(fake.var(dim=0, unbiased=False) + 1e-6)
         scale = target_std.clamp(min=0.5)
-        loss = loss + (((mean - target_mean) / scale).square().mean()
-                       + ((std - target_std) / scale).square().mean())
+        mean_loss = (((mean - target_mean) / scale).square()).mean()
+        std_errors = ((std - target_std) / scale).square()
+        if std_reliable is not None:
+            reliable = std_reliable.to(device=fake_x.device, dtype=torch.bool)
+            if bool(reliable.any()):
+                std_loss = std_errors[reliable].mean()
+            else:
+                std_loss = std_errors.new_zeros(())
+        else:
+            std_loss = std_errors.mean()
+        loss = loss + mean_loss + std_loss
         groups += 1
     return loss / groups if groups else loss
 
@@ -3677,7 +3697,7 @@ def create_dataset_and_dataloader(args, config: Dict, device: torch.device) -> t
     # V6.1: fixed per-class moment targets complement stable V6 correlations.
     # Keep source statistics in runtime only, never in args or checkpoint payloads.
     global V61_REFERENCE_MOMENTS
-    moment_weight = float(config.get("training", {}).get("moment_fidelity_weight", 0.25))
+    moment_weight = float(config.get("training", {}).get("moment_fidelity_weight", 0.10))
     if not np.isfinite(moment_weight) or moment_weight < 0:
         raise ValueError("moment_fidelity_weight must be finite and nonnegative")
     V61_REFERENCE_MOMENTS = {}
@@ -3686,10 +3706,11 @@ def create_dataset_and_dataloader(args, config: Dict, device: torch.device) -> t
         moments = build_class_reference_moments(dataset.X, dataset.labels, sample_limit=moment_rows, seed=int(getattr(args, "seed", 42)))
         V61_REFERENCE_MOMENTS = {
             class_id: (torch.as_tensor(mean, dtype=torch.float32, device=device),
-                       torch.as_tensor(std, dtype=torch.float32, device=device))
-            for class_id, (mean, std) in moments.items()
+                       torch.as_tensor(std, dtype=torch.float32, device=device),
+                       torch.as_tensor(reliable, dtype=torch.bool, device=device))
+            for class_id, (mean, std, reliable) in moments.items()
         }
-        print(f"[V6.1] Stable real moment targets: {len(moments)} classes, <= {moment_rows} rows/class; moment_fidelity_weight={moment_weight}")
+        print(f"[V6.2] Sparse-mode-aware real moment targets: {len(moments)} classes, <= {moment_rows} rows/class; moment_fidelity_weight={moment_weight}")
     num_workers = int(config.get("dataloader", {}).get("num_workers", 8))  # Get base num_workers from config and cast to int
     num_workers_cli_override = bool(config.get("dataloader", {}).get("num_workers_cli_override", False))  # Detect explicit CLI worker precedence
     if not num_workers_cli_override:  # Auto-adjust workers only when CLI did not override them
@@ -4205,7 +4226,7 @@ def execute_generator_training_step(G, D, opt_G, scaler, device: torch.device, a
         fake_scores = D(fake_x.float(), gen_labels)  # Preserve differentiability through the precision conversion
     require_finite_tensor(fake_scores, "fake_scores", args, epoch + 1, step + 1, "generator")  # Reject invalid fake critic scores
     g_loss = -fake_scores.float().mean()  # Calculate generator loss with full-precision reduction
-    moment_weight = float((config or {}).get("training", {}).get("moment_fidelity_weight", 0.25))
+    moment_weight = float((config or {}).get("training", {}).get("moment_fidelity_weight", 0.10))
     if not np.isfinite(moment_weight) or moment_weight < 0:
         raise ValueError("moment_fidelity_weight must be finite and nonnegative")
     if moment_weight and real_x is not None:
