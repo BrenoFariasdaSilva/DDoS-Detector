@@ -1425,6 +1425,18 @@ def assess_generated_flow_quality(args: Any, config: Dict, generated: pd.DataFra
             if count:
                 report["violations"][str(column)] = count
             invalid_total += count
+        # Inspect up to 250k complete original-scale rows per class, instead of relying on a 4k
+        # sample that can conceal the true rate of identical network-flow records.
+        audit_limit = max(4096, int(settings.get("duplicate_audit_rows_per_class", 250000)))
+        audit = group if len(group) <= audit_limit else group.sample(n=audit_limit, random_state=int(getattr(args, "seed", 42)) + 17)
+        audit_features = audit[numeric_columns]
+        audited_duplicate_fraction = float(audit_features.duplicated().mean())
+        report["audited_duplicate_fraction"] = audited_duplicate_fraction
+        report["duplicate_audit_rows"] = int(len(audit))
+        report["duplicate_audit_is_complete"] = bool(len(audit) == len(group))
+        if (audited_duplicate_fraction > float(settings.get("max_audited_duplicate_fraction", 0.10))
+                and audited_duplicate_fraction > 0.0):
+            report["quality_flags"].append("excessive_audited_duplicate_rows")
         relation_rules = rules_by_label.get(class_name, [])
         report["enforced_derived_relationships"] = [rule[-1] for rule in relation_rules]
         report["relationship_violations"] = flow_relationship_violation_counts(sample_values, numeric_columns, relation_rules)
@@ -1457,7 +1469,12 @@ def assess_generated_flow_quality(args: Any, config: Dict, generated: pd.DataFra
             model = NearestNeighbors(n_neighbors=1).fit(nearest_original)
             distances = model.kneighbors(standardized_synthetic, return_distance=True)[0].reshape(-1)
             near_fraction = float(np.mean(distances < 0.05))
-            report.update({"mean_shift_standardized": mean_shift, "low_variance_feature_fraction": low_variance, "synthetic_near_duplicate_fraction": duplicate_fraction, "original_near_duplicate_fraction": real_duplicate_fraction, "joint_correlation_absolute_difference_mean": corr_shift, "reference_nearest_distance_median": float(np.median(distances)), "reference_near_match_fraction": near_fraction})
+            # Baseline: compare held-out real reference rows against a disjoint reference subset.
+            # A high synthetic near-match fraction is not evidence of copying if real flows naturally repeat.
+            reference_holdout = standardized_original[near_limit:]
+            reference_near_baseline = (float(np.mean(model.kneighbors(reference_holdout, return_distance=True)[0].reshape(-1) < 0.05))
+                                       if len(reference_holdout) >= 32 else None)
+            report.update({"mean_shift_standardized": mean_shift, "low_variance_feature_fraction": low_variance, "synthetic_near_duplicate_fraction": duplicate_fraction, "original_near_duplicate_fraction": real_duplicate_fraction, "joint_correlation_absolute_difference_mean": corr_shift, "reference_nearest_distance_median": float(np.median(distances)), "reference_near_match_fraction": near_fraction, "reference_real_to_real_near_match_fraction": reference_near_baseline})
             if mean_shift > float(settings.get("max_mean_shift", 2.0)):
                 report["quality_flags"].append("large_marginal_mean_shift")
             if low_variance > float(settings.get("max_low_variance_fraction", 0.5)):
@@ -1466,7 +1483,9 @@ def assess_generated_flow_quality(args: Any, config: Dict, generated: pd.DataFra
                 report["quality_flags"].append("synthetic_mode_collapse")
             if corr_shift is not None and corr_shift > float(settings.get("max_correlation_difference", 0.25)):
                 report["quality_flags"].append("joint_correlation_mismatch")
-            if near_fraction > float(settings.get("max_reference_near_match_fraction", 0.95)) and real_duplicate_fraction < 0.3:
+            if (reference_near_baseline is not None and
+                near_fraction > float(settings.get("max_reference_near_match_fraction", 0.95)) and
+                near_fraction - reference_near_baseline > float(settings.get("max_reference_near_match_excess", 0.25))):
                 report["quality_flags"].append("possible_training_data_memorization")
         else:
             report["quality_flags"].append("insufficient_reference_or_synthetic_sample")
@@ -1543,7 +1562,7 @@ def build_default_training_and_model_config() -> Dict:
             "small_class_threshold": 100,  # Threshold for small class detection
             "small_class_min_samples": 10,  # Minimum samples for small classes
         },
-        "quality": {"enabled": True, "sample_rows_per_class": 4096, "nearest_reference_rows": 1024, "reject_invalid": True, "reject_quality_flags": True, "n_quantiles": 512, "fit_sample_rows": 50000, "class_sampling_exponent": 0.5, "plot_samples_per_class": 512, "max_mean_shift": 2.0, "max_low_variance_fraction": 0.5, "max_correlation_difference": 0.25, "max_near_duplicate_fraction": 0.30, "max_reference_near_match_fraction": 0.95},  # Configure bounded quality diagnostics and fail-closed constraint enforcement.
+        "quality": {"enabled": True, "sample_rows_per_class": 4096, "nearest_reference_rows": 1024, "reject_invalid": True, "reject_quality_flags": True, "n_quantiles": 512, "fit_sample_rows": 50000, "class_sampling_exponent": 0.5, "plot_samples_per_class": 512, "max_mean_shift": 2.0, "max_low_variance_fraction": 0.5, "max_correlation_difference": 0.25, "max_near_duplicate_fraction": 0.30, "max_reference_near_match_fraction": 0.95, "max_reference_near_match_excess": 0.25, "duplicate_audit_rows_per_class": 250000, "max_audited_duplicate_fraction": 0.10},  # Configure bounded quality diagnostics and fail-closed constraint enforcement.
         "dataloader": {  # DataLoader configuration
             "num_workers": 8,  # Number of workers for data loading
             "pin_memory": True,  # Use pinned memory for faster GPU transfer
