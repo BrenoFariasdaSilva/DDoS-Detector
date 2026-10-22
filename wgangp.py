@@ -1460,6 +1460,42 @@ def assess_generated_flow_quality(args: Any, config: Dict, generated: pd.DataFra
             real_variation = np.std(standardized_original[:, source_variable], axis=0)
             mean_shift = float(np.mean(np.abs(np.mean(standardized_synthetic, axis=0))))
             low_variance = float(np.mean(observed_variation < 0.1 * real_variation)) if len(real_variation) else 0.0
+            # Quantify the coverage of common source modes, rather than inferring
+            # high fidelity from average standard deviations or t-SNE overlap alone.
+            # Use the *same* bounded class samples for reproducible paired analysis;
+            # high-cardinality ports are excluded from exact-mode comparison.
+            mode_audit = []
+            for col_index, feature in enumerate(numeric_columns):
+                if not is_discrete_flow_feature(feature):
+                    continue
+                reference_values, reference_counts = np.unique(reference[:, col_index], return_counts=True)
+                if not 2 <= len(reference_values) <= 128:
+                    continue
+                required = reference_counts >= max(4, int(math.ceil(len(reference) * 0.01)))
+                if int(required.sum()) < 2:
+                    continue
+                synthetic_values, synthetic_counts = np.unique(valid_generated[:, col_index], return_counts=True)
+                shared = np.union1d(reference_values, synthetic_values)
+                ref_prob = np.zeros(len(shared), dtype=np.float64)
+                gen_prob = np.zeros(len(shared), dtype=np.float64)
+                ref_prob[np.searchsorted(shared, reference_values)] = reference_counts / len(reference)
+                gen_prob[np.searchsorted(shared, synthetic_values)] = synthetic_counts / len(valid_generated)
+                significant = reference_values[required]
+                missing = np.setdiff1d(significant, synthetic_values)
+                mode_audit.append({
+                    "feature": str(feature),
+                    "significant_reference_modes": int(len(significant)),
+                    "missing_significant_reference_modes": int(len(missing)),
+                    "categorical_total_variation": float(np.sum(np.abs(ref_prob - gen_prob)) * 0.5),
+                    "reference_dominant_mode_fraction": float(reference_counts.max() / len(reference)),
+                    "synthetic_dominant_mode_fraction": float(synthetic_counts.max() / len(valid_generated)),
+                })
+            mode_audit.sort(key=lambda record: record["categorical_total_variation"], reverse=True)
+            report["most_divergent_discrete_mode_distributions"] = mode_audit[:15]
+            report["discrete_mode_audit_note"] = (
+                "Only source modes observed in >=1% of the bounded reference sample are counted as significant; "
+                "this diagnostic does not alter acceptance thresholds."
+            )
             variable_names = np.asarray(numeric_columns)[source_variable]
             std_ratios = np.divide(observed_variation, real_variation,
                                    out=np.full_like(observed_variation, np.nan), where=real_variation > 1e-8)
