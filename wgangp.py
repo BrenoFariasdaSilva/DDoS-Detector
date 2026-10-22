@@ -109,7 +109,7 @@ psutil = (
 )  # Import psutil if available, otherwise set to None
 
 SAO_PAULO_TIMEZONE_NAME = "America/Sao_Paulo"  # Use Sao Paulo timezone for ETA finish timestamps
-FLOW_PREPROCESSING_CHECKPOINT_TAG = "ConditionalMixedStructuralV5Moments"  # V5 categorical sampling: isolate checkpoints from earlier preprocessing/training versions.
+FLOW_PREPROCESSING_CHECKPOINT_TAG = "ConditionalMixedStructuralV5"  # V5 categorical sampling: isolate checkpoints from earlier preprocessing/training versions.
 
 # Prefer CUDA autocast when available; provide a safe fallback context manager
 try:  # Attempt to import torch.amp.autocast for mixed precision support
@@ -1326,7 +1326,8 @@ def build_wgangp_provenance(args: Any) -> Dict:
     fields = ("seed", "label_col", "feature_cols", "batch_size", "critic_steps", "lr", "beta1", "beta2", "lambda_gp", "latent_dim", "g_hidden", "d_hidden", "embed_dim", "n_resblocks", "g_leaky_relu_alpha", "d_leaky_relu_alpha", "use_amp")  # Identify settings that affect learned weights.
     settings = {name: getattr(args, name, None) for name in fields}  # Snapshot resolved model and optimization settings.
     settings["moment_fidelity_weight"] = float((CONFIG or {}).get("training", {}).get("moment_fidelity_weight", 0.05))  # Ensure changed loss settings invalidate checkpoints.
-    identity = {"source_path": str(source) if source else None, "source_size": source_stat.st_size if source_stat else None, "source_mtime_ns": source_stat.st_mtime_ns if source_stat else None, "preprocessing": "class_conditional_mixed_structural_v5_moments", "preprocessing_parameters": {key: (CONFIG or {}).get("quality", {}).get(key, default) for key, default in (("n_quantiles", 512), ("fit_sample_rows", 50000), ("class_sampling_exponent", 0.5))}, "settings": settings}  # Record source metadata and effective hyperparameters.
+    settings["correlation_fidelity_weight"] = float((CONFIG or {}).get("training", {}).get("correlation_fidelity_weight", 0.05))  # Track joint-fidelity training policy.
+    identity = {"source_path": str(source) if source else None, "source_size": source_stat.st_size if source_stat else None, "source_mtime_ns": source_stat.st_mtime_ns if source_stat else None, "preprocessing": "class_conditional_mixed_structural_v5", "preprocessing_parameters": {key: (CONFIG or {}).get("quality", {}).get(key, default) for key, default in (("n_quantiles", 512), ("fit_sample_rows", 50000), ("class_sampling_exponent", 0.5))}, "settings": settings}  # Record source metadata and effective hyperparameters.
     digest = hashlib.sha256(json.dumps(identity, sort_keys=True, default=str).encode("utf-8")).hexdigest()  # Produce a stable comparable identity.
 
     return {"identity": identity, "sha256": digest}  # Return provenance for checkpoints and output sidecars.
@@ -1508,6 +1509,7 @@ def build_default_training_and_model_config() -> Dict:
             "beta2": 0.9,  # Adam optimizer beta2 parameter
             "lambda_gp": 10.0,  # Gradient penalty coefficient
             "moment_fidelity_weight": 0.05,  # V5 class-conditional mean/std regularization; 0 disables it.
+            "correlation_fidelity_weight": 0.05,  # V5 joint-feature correlation regularization; 0 disables it.
             "save_every": 5,  # Save checkpoints every N epochs
             "log_interval": 50,  # Log metrics every N steps
             "sample_batch": 16,  # Number of samples for fixed noise generation
@@ -3936,6 +3938,39 @@ def class_conditional_moment_loss(real_x: torch.Tensor, fake_x: torch.Tensor, la
     return objective / groups if groups else objective
 
 
+def class_conditional_correlation_loss(real_x: torch.Tensor, fake_x: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
+    """Match off-diagonal feature correlations within each sufficiently sampled class.
+
+    Excludes constant real features; the independent moment loss handles variance collapse.
+    Uses detached real reference statistics to keep the critic's real batch out of gradients.
+    """
+    objective = fake_x.new_zeros((), dtype=torch.float32)
+    groups = 0
+    real, fake = real_x.detach().float(), fake_x.float()
+    for class_id in torch.unique(labels):
+        selected = labels == class_id
+        if int(selected.sum()) < 16:
+            continue
+        reference = real[selected]
+        synthesized = fake[selected]
+        reference_std = reference.std(dim=0, unbiased=False)
+        features = reference_std > 0.05
+        if int(features.sum()) < 2:
+            continue
+        reference = reference[:, features]
+        synthesized = synthesized[:, features]
+        r_centered = reference - reference.mean(0, keepdim=True)
+        f_centered = synthesized - synthesized.mean(0, keepdim=True)
+        r_normalized = r_centered / (r_centered.square().mean(0, keepdim=True) + 1e-4).sqrt()
+        f_normalized = f_centered / (f_centered.square().mean(0, keepdim=True) + 1e-4).sqrt()
+        r_corr = r_normalized.T @ r_normalized / len(reference)
+        f_corr = f_normalized.T @ f_normalized / len(synthesized)
+        upper = torch.triu_indices(r_corr.size(0), r_corr.size(1), offset=1, device=r_corr.device)
+        objective = objective + (f_corr[upper[0], upper[1]] - r_corr[upper[0], upper[1]]).square().mean()
+        groups += 1
+    return objective / groups if groups else objective
+
+
 def execute_generator_training_step(G, D, opt_G, scaler, device: torch.device, args, n_classes: int, epoch: int, step: int, real_labels: Optional[torch.Tensor] = None, real_x: Optional[torch.Tensor] = None, config: Optional[Dict] = None) -> torch.Tensor:
     """
     Execute a single generator training step.
@@ -3970,6 +4005,13 @@ def execute_generator_training_step(G, D, opt_G, scaler, device: torch.device, a
         if real_labels is None or real_x.shape != fake_x.shape:
             raise ValueError("Moment matching requires aligned real features and labels")
         g_loss = g_loss + moment_weight * class_conditional_moment_loss(real_x, fake_x, gen_labels)
+    corr_weight = float((config or {}).get("training", {}).get("correlation_fidelity_weight", 0.05))
+    if not np.isfinite(corr_weight) or corr_weight < 0:
+        raise ValueError("correlation_fidelity_weight must be finite and nonnegative")
+    if corr_weight and real_x is not None:
+        if real_labels is None or real_x.shape != fake_x.shape:
+            raise ValueError("Correlation matching requires aligned real features and labels")
+        g_loss = g_loss + corr_weight * class_conditional_correlation_loss(real_x, fake_x, gen_labels)
     require_finite_tensor(g_loss, "loss", args, epoch + 1, step + 1, "generator")  # Reject invalid generator loss before backward execution
     opt_G.zero_grad(set_to_none=True)  # Reset generator gradients to None for reduced memory overhead
     if scaler is not None:  # If using mixed precision
