@@ -112,7 +112,7 @@ psutil = (
 )  # Import psutil if available, otherwise set to None
 
 SAO_PAULO_TIMEZONE_NAME = "America/Sao_Paulo"  # Use Sao Paulo timezone for ETA finish timestamps
-FLOW_PREPROCESSING_CHECKPOINT_TAG = "ConditionalMixedStructuralV64NumericQuantiles"  # Isolate new quantile regularization from earlier trained weights.
+FLOW_PREPROCESSING_CHECKPOINT_TAG = "ConditionalMixedStructuralV65TailExcess"  # Isolate new quantile regularization from earlier trained weights.
 
 # Prefer CUDA autocast when available; provide a safe fallback context manager
 try:  # Attempt to import torch.amp.autocast for mixed precision support
@@ -157,7 +157,7 @@ RESOURCE_MONITOR_THREAD = None  # Background thread running the watcher
 RESOURCE_MONITOR_LATEST_SUFFIX = " | System RAM: N/A | Process RAM: N/A | CPU: N/A | GPU Usage: N/A | GPU VRAM: N/A"  # Immutable cached telemetry read without I/O by the training progress loop.
 V6_REFERENCE_CORRELATIONS = {}  # Runtime-only per-file correlation targets.
 V61_REFERENCE_MOMENTS = {}  # Runtime-only per-file mean/standard-deviation targets; never checkpoint these GPU tensors.
-V64_REFERENCE_NUMERIC_QUANTILES = {}  # Runtime-only quantile reference tensors for modeled independent numeric features.
+V64_REFERENCE_NUMERIC_QUANTILES = {}  # Runtime-only numeric quantiles and smoothed tail-excess reference tensors.
 
 
 # Classes Definitions:
@@ -1356,7 +1356,7 @@ def build_wgangp_provenance(args: Any) -> Dict:
     settings["moment_reference_rows_per_class"] = int((CONFIG or {}).get("training", {}).get("moment_reference_rows_per_class", 4096))
     settings["quantile_fidelity_weight"] = float((CONFIG or {}).get("training", {}).get("quantile_fidelity_weight", 0.15))  # Preserve the extra training objective in checkpoint provenance.
     settings["quantile_reference_rows_per_class"] = int((CONFIG or {}).get("training", {}).get("quantile_reference_rows_per_class", 8192))  # Preserve reference resolution for checkpoint safety.
-    identity = {"source_path": str(source) if source else None, "source_size": source_stat.st_size if source_stat else None, "source_mtime_ns": source_stat.st_mtime_ns if source_stat else None, "preprocessing": "class_conditional_mixed_structural_v64_numeric_quantiles", "preprocessing_parameters": {key: (CONFIG or {}).get("quality", {}).get(key, default) for key, default in (("n_quantiles", 512), ("fit_sample_rows", 50000), ("class_sampling_exponent", 0.5))}, "settings": settings}  # Record source metadata and effective hyperparameters.
+    identity = {"source_path": str(source) if source else None, "source_size": source_stat.st_size if source_stat else None, "source_mtime_ns": source_stat.st_mtime_ns if source_stat else None, "preprocessing": "class_conditional_mixed_structural_v65_tail_excess", "preprocessing_parameters": {key: (CONFIG or {}).get("quality", {}).get(key, default) for key, default in (("n_quantiles", 512), ("fit_sample_rows", 50000), ("class_sampling_exponent", 0.5))}, "settings": settings}  # Record source metadata and effective hyperparameters.
     digest = hashlib.sha256(json.dumps(identity, sort_keys=True, default=str).encode("utf-8")).hexdigest()  # Produce a stable comparable identity.
 
     return {"identity": identity, "sha256": digest}  # Return provenance for checkpoints and output sidecars.
@@ -3800,7 +3800,7 @@ def class_reference_correlation_loss(fake_x: torch.Tensor, labels: torch.Tensor,
     return loss / groups if groups else loss
 
 
-def build_class_reference_numeric_quantiles(features: torch.Tensor, labels: np.ndarray, numeric_feature_count: int, sample_limit: int = 8192, seed: int = 42) -> Dict[int, np.ndarray]:
+def build_class_reference_numeric_quantiles(features: torch.Tensor, labels: np.ndarray, numeric_feature_count: int, sample_limit: int = 8192, seed: int = 42) -> Dict[int, tuple]:
     """Estimate reproducible per-class numeric quantiles from encoded training observations.
 
     :param features: Encoded original training features on CPU.
@@ -3808,7 +3808,7 @@ def build_class_reference_numeric_quantiles(features: torch.Tensor, labels: np.n
     :param numeric_feature_count: Number of independent numeric columns at the beginning of each encoded row.
     :param sample_limit: Maximum source rows used for each class reference.
     :param seed: Deterministic reservoir selection seed.
-    :return: Numeric reference quantile matrices, keyed by class ID.
+    :return: Per-class numeric quantiles, source-smoothed tail excess, and stable tail bandwidth.
     """
 
     if not 128 <= int(sample_limit) <= 100000:  # Bound reference data requirements independently of source size.
@@ -3832,43 +3832,54 @@ def build_class_reference_numeric_quantiles(features: torch.Tensor, labels: np.n
         if not np.isfinite(values).all():  # Reject numerically invalid original encoded observations.
             raise ValueError(f"Nonfinite numeric quantile reference for class {class_id}")
 
-        targets[int(class_id)] = np.quantile(values, levels, axis=0).astype(np.float32)  # Preserve the full reference matrix per class.
+        quantiles = np.quantile(values, levels, axis=0).astype(np.float32)  # Preserve original quantile levels for numeric matching.
+        bandwidth = np.maximum((quantiles[2].astype(np.float64) - quantiles[0].astype(np.float64)) * 0.05, 0.10)  # Smooth tail exceedance on a reference-derived, bounded scale.
+        tail_excess = np.logaddexp(0.0, (values - quantiles[3].astype(np.float64)) / bandwidth) * bandwidth  # Evaluate a stable differentiable analogue of positive exceedance.
+        mean_tail_excess = tail_excess.mean(axis=0).astype(np.float32)  # Use the complete reference reservoir rather than a noisy minibatch tail.
+        targets[int(class_id)] = (quantiles, mean_tail_excess, bandwidth.astype(np.float32))  # Preserve matching quantile and exceedance targets without altering decoded flows.
 
     return targets  # Return only immutable numeric target values.
 
 
-def class_reference_numeric_quantile_loss(fake_x: torch.Tensor, labels: torch.Tensor, targets: Dict[int, torch.Tensor], numeric_feature_count: int) -> torch.Tensor:
-    """Penalize class-specific numeric quantile mismatches without rewriting generated flows.
+def class_reference_numeric_quantile_loss(fake_x: torch.Tensor, labels: torch.Tensor, targets: Dict[int, tuple], numeric_feature_count: int) -> torch.Tensor:
+    """Match central class quantiles and smoothly estimated 99th-percentile excess.
 
-    :param fake_x: Differentiable generator output in encoded mixed-feature space.
-    :param labels: Generated class IDs aligned with fake_x rows.
-    :param targets: Detached reference quantiles resident on the training device.
-    :param numeric_feature_count: Encoded independent numeric feature width.
-    :return: Finite smooth-L1 class-conditioned numeric quantile loss.
+    :param fake_x: Differentiable generator output in the encoded model space.
+    :param labels: Class IDs aligned with generated samples.
+    :param targets: Detached numeric quantiles, reference excess, and source bandwidth per class.
+    :param numeric_feature_count: Number of independent encoded numeric features.
+    :return: Finite class-conditional distribution penalty with tail-sensitive gradients.
     """
 
-    loss = fake_x.float().new_zeros(())  # Start with a differentiable zero scalar.
-    groups = 0  # Count only class groups having enough generated observations.
-    levels = torch.tensor([0.10, 0.50, 0.90, 0.99], dtype=torch.float32, device=fake_x.device)  # Align quantile levels with the fixed source references.
-    for class_id, target in targets.items():  # Keep source distributions separate by class.
-        selected = labels == int(class_id)  # Identify generated rows with matching class membership.
-        count = int(selected.sum())  # Determine which quantile levels are statistically supportable.
-        if count < 32 or numeric_feature_count == 0:  # Avoid unstable estimates from tiny minibatch classes.
-            continue
+    loss = fake_x.float().new_zeros(())  # Accumulate class objectives in full precision.
+    groups = 0  # Count classes with enough fake rows to estimate central quantiles.
+    levels = torch.tensor([0.10, 0.50, 0.90], dtype=torch.float32, device=fake_x.device)  # Match central distribution landmarks without relying on unstable minibatch p99.
 
-        active_levels = 4 if count >= 128 else 3  # Estimate the 99th percentile only when at least 128 fake rows exist.
-        fake = fake_x[selected, :numeric_feature_count].float()  # Exclude categorical one-hot dimensions from numeric quantile matching.
-        current = torch.quantile(fake, levels[:active_levels], dim=0)  # Retain gradients through the sorted generated numeric values.
-        reference = target[:active_levels, :numeric_feature_count].to(fake.device)  # Resolve the aligned, detached class reference.
-        if current.shape != reference.shape:  # Detect incompatible numeric model representations.
-            raise ValueError("Numeric quantile target dimensions do not match generated features")
+    for class_id, reference_target in targets.items():  # Match each generated class to its own real traffic distribution.
+        selected = labels == int(class_id)  # Preserve class-conditional separation throughout the loss.
+        count = int(selected.sum())  # Resolve current class sample size before estimating statistics.
 
-        deviation = F.smooth_l1_loss(current, reference, beta=0.5, reduction="none")  # Robustly penalize quantile mismatch without squared-outlier dominance.
-        weights = torch.tensor([1.0, 1.0, 1.0, 1.5], dtype=torch.float32, device=fake.device)[:active_levels]  # Give additional emphasis to reliably sampled upper tails.
-        loss = loss + (deviation * weights[:, None]).mean() / weights.mean()  # Normalize across levels and numeric feature count.
-        groups += 1  # Record one comparable class-conditional contribution.
+        if count < 32 or numeric_feature_count == 0:  # Avoid noisy minibatch central-quantile estimates.
+            continue  # Skip classes without enough current synthetic observations.
 
-    return loss / groups if groups else loss  # Return the mean over represented classes.
+        reference_quantiles, reference_tail_excess, reference_bandwidth = reference_target  # Use stable real-source targets computed before training.
+        fake = fake_x[selected, :numeric_feature_count].float()  # Exclude one-hot categorical columns from continuous distribution matching.
+        quantiles = torch.quantile(fake, levels, dim=0)  # Keep differentiable 10th, 50th, and 90th-percentile alignment.
+        source_quantiles = reference_quantiles[:3, :numeric_feature_count].to(fake.device)  # Match the source feature order and numeric width.
+        threshold = reference_quantiles[3, :numeric_feature_count].to(fake.device)  # Anchor the excess penalty at the original class's 99th percentile.
+        bandwidth = reference_bandwidth[:numeric_feature_count].to(fake.device).clamp_min(0.10)  # Prevent undefined or excessively sharp tail gradients.
+        reference_excess = reference_tail_excess[:numeric_feature_count].to(fake.device)  # Compare against source-observed upper-tail mass.
+
+        if quantiles.shape != source_quantiles.shape or threshold.shape != reference_excess.shape:  # Reject mismatched target dimensions.
+            raise ValueError("Numeric distribution reference dimensions do not match generated features")  # Preserve schema safety after checkpoint recovery.
+
+        central_loss = F.smooth_l1_loss(quantiles, source_quantiles, beta=0.5, reduction="mean")  # Match robust central quantiles without overemphasizing rare source outliers.
+        fake_excess = (F.softplus((fake - threshold.unsqueeze(0)) / bandwidth.unsqueeze(0)) * bandwidth.unsqueeze(0)).mean(dim=0)  # Use every fake row for differentiable upper-tail severity.
+        tail_loss = F.smooth_l1_loss(fake_excess, reference_excess, beta=0.5, reduction="mean")  # Penalize excess frequency and magnitude rather than an unstable order statistic.
+        loss = loss + (central_loss * 3.0 + tail_loss * 1.5) / 4.5  # Retain the previous relative tail emphasis and normalized objective scale.
+        groups += 1  # Include this class in the balanced conditional mean.
+
+    return loss / groups if groups else loss  # Return a finite zero when no class contributes.
 
 
 def create_dataset_and_dataloader(args, config: Dict, device: torch.device) -> tuple:
@@ -3898,8 +3909,8 @@ def create_dataset_and_dataloader(args, config: Dict, device: torch.device) -> t
     if quantile_weight and numeric_feature_count:  # Avoid extra reference work when quantile matching is disabled.
         reference_limit = int(config.get("training", {}).get("quantile_reference_rows_per_class", 8192))  # Configure bounded source quantile precision.
         references = build_class_reference_numeric_quantiles(dataset.X, dataset.labels, numeric_feature_count, reference_limit, int(getattr(args, "seed", 42)))  # Fit uniform source reservoirs only.
-        V64_REFERENCE_NUMERIC_QUANTILES = {int(class_id): torch.as_tensor(matrix, device=device, dtype=torch.float32) for class_id, matrix in references.items()}  # Publish detached fixed class targets.
-        print(f"[V6.4] Numeric quantile targets: {len(references)} classes, <= {reference_limit} rows/class; quantile_fidelity_weight={quantile_weight}")  # Record effective tail-fidelity regularization.
+        V64_REFERENCE_NUMERIC_QUANTILES = {int(class_id): tuple(torch.as_tensor(part, device=device, dtype=torch.float32) for part in target) for class_id, target in references.items()}  # Preserve detached class quantiles and the empirical upper-tail baseline.
+        print(f"[V6.5] Numeric quantiles and smoothed tail excess: {len(references)} classes, <= {reference_limit} rows/class; quantile_fidelity_weight={quantile_weight}")  # Record effective tail-fidelity regularization.
     if float(config.get("training", {}).get("correlation_fidelity_weight", 2.0)) > 0:
         reference_rows = int(config.get("training", {}).get("correlation_reference_rows_per_class", 4096))
         reference_targets = build_class_reference_correlations(dataset.X, dataset.labels, sample_limit=reference_rows, seed=int(getattr(args, "seed", 42)))
