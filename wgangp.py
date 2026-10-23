@@ -1584,8 +1584,14 @@ def assess_generated_flow_quality(args: Any, config: Dict, generated: pd.DataFra
             report["matched_synthetic_exact_duplicate_fraction"] = float(pd.DataFrame(valid_generated[:matched_rows]).duplicated().mean())  # Measure unrounded synthetic duplicate prevalence on the matched sample.
             levels = np.asarray([0.01, 0.1, 0.5, 0.9, 0.99])  # Compare original-scale distributions beyond their first two moments.
             real_quantiles = np.quantile(reference, levels, axis=0)  # Estimate source quantiles from the fixed bounded reservoir.
-            fake_quantiles = np.quantile(valid_generated, levels, axis=0)  # Estimate generated quantiles using the same probability levels.
-            report["feature_quantiles"] = [{"feature": column, "levels": levels.tolist(), "reference": real_quantiles[:, index].tolist(), "generated": fake_quantiles[:, index].tolist()} for index, column in enumerate(numeric_columns)]  # Retain per-feature distribution evidence without altering acceptance thresholds.
+            quantile_rows = min(len(group), max(sample_limit, 32768))  # Improve upper-tail precision while keeping memory independent of total output size.
+            quantile_sample = group.sample(n=quantile_rows, random_state=int(getattr(args, "seed", 42)) + 731)  # Select an independent deterministic synthetic reservoir for quantile diagnostics.
+            quantile_values = quantile_sample[numeric_columns].to_numpy(dtype=np.float64, copy=True)  # Keep only the bounded numeric feature matrix in memory.
+            quantile_values = quantile_values[np.isfinite(quantile_values).all(axis=1)]  # Exclude nonfinite rows already counted by the strict domain audit.
+            fake_quantiles = np.quantile(quantile_values, levels, axis=0) if len(quantile_values) else np.full_like(real_quantiles, np.nan)  # Estimate tail percentiles from more generated observations.
+            report["quantile_reference_rows"] = int(len(reference))  # Disclose the original-population reservoir size supporting reference quantiles.
+            report["quantile_generated_rows"] = int(len(quantile_values))  # Disclose the synthetic-population reservoir size supporting generated quantiles.
+            report["feature_quantiles"] = [{"feature": column, "levels": levels.tolist(), "reference": real_quantiles[:, index].tolist(), "generated": fake_quantiles[:, index].tolist()} for index, column in enumerate(numeric_columns)]  # Retain feature distribution comparisons without modifying acceptance decisions.
             reference_spread = np.maximum(real_quantiles[3] - real_quantiles[1], 1e-6)  # Scale p99 shifts against reference p90-to-p10 ranges.
             tail_differences = np.abs(fake_quantiles[-1] - real_quantiles[-1]) / reference_spread  # Quantify upper-tail anomalies on each source-scale feature.
             valid_tail = np.isfinite(tail_differences) & np.isfinite(reference_spread) & (np.std(reference, axis=0) > 1e-5)  # Avoid ranking constant or nonfinite reference columns.
