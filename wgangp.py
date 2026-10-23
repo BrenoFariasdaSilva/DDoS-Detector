@@ -6470,6 +6470,7 @@ def collect_generation_file_metadata(args, args_ck: Dict, ckpt: Dict, n: int, ck
     except Exception:  # Computation failed
         metadata["generated_ratio"] = ""  # Leave blank on failure
     metadata["completed_epoch"] = ckpt.get("epoch", saved_args.get("_last_completed_epoch", getattr(args, "_last_completed_epoch", "")))  # Resolve completed epoch from saved state or live args
+    metadata["training_batch_size"] = saved_args.get("batch_size") if saved_args.get("batch_size") not in (None, "") else (ckpt.get("provenance") or {}).get("identity", {}).get("settings", {}).get("batch_size", getattr(args, "batch_size", ""))  # Prefer the effective training batch recorded by the checkpoint over the unscaled configuration default.
     metadata["timing_values"] = {  # Map common column names to stored timing attributes
         "training_time_s": ceil_seconds(getattr(args, "_last_training_time", saved_args.get("_last_training_time", ""))),  # Total training elapsed seconds
         "generated_time_s": ceil_seconds(getattr(args, "_last_sample_generation_time", saved_args.get("_last_sample_generation_time", ""))),  # Generation and output-write elapsed seconds
@@ -6532,6 +6533,7 @@ def build_generation_runtime_row(args, config: Dict, n: int, device: torch.devic
     row_runtime["total_num_samples_after_augmentation"] = metadata["total_after_augmentation"]  # Store total
     row_runtime["generated_ratio"] = metadata["generated_ratio"]  # Generated/original ratio
     row_runtime["epoch"] = metadata["completed_epoch"]  # Completed training epoch used for generation
+    row_runtime["batch_size"] = metadata["training_batch_size"]  # Record the batch size used to train the loaded checkpoint rather than the default used to configure generation.
     row_runtime["critic_loss"] = metadata["critic_loss"]  # Last critic loss from checkpoint metrics
     row_runtime["generator_loss"] = metadata["generator_loss"]  # Last generator loss from checkpoint metrics
     row_runtime["gp"] = metadata.get("gp", "")  # Last gradient penalty from training metrics
