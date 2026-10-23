@@ -112,7 +112,9 @@ psutil = (
 )  # Import psutil if available, otherwise set to None
 
 SAO_PAULO_TIMEZONE_NAME = "America/Sao_Paulo"  # Use Sao Paulo timezone for ETA finish timestamps
-FLOW_PREPROCESSING_CHECKPOINT_TAG = "ConditionalMixedStructuralV65TailExcess"  # Isolate new quantile regularization from earlier trained weights.
+WGANGP_RELEASE_VERSION = "V6.5.2"  # Identify the current tested code release independently of checkpoint provenance.
+FLOW_PREPROCESSING_CHECKPOINT_TAG = "ConditionalMixedStructuralV652TailExcess"  # Name new checkpoints after the current release without changing the learned representation.
+FLOW_PREPROCESSING_COMPATIBLE_TAGS = ("ConditionalMixedStructuralV65TailExcess",)  # Reuse existing V6.5-trained weights without requiring retraining.
 
 # Prefer CUDA autocast when available; provide a safe fallback context manager
 try:  # Attempt to import torch.amp.autocast for mixed precision support
@@ -251,7 +253,7 @@ class ClassConditionalFlowScaler:
             self.categorical_class_masks.append(mask)
         if not offset:
             raise ValueError("No trainable features remain after structural feature selection")
-        print(f"[V6.3] Original features={len(self.feature_cols)} | modeled numeric={len(self.numeric_indices)} | "  # Report the active representation version and retained dimensions.
+        print(f"[{WGANGP_RELEASE_VERSION}] Original features={len(self.feature_cols)} | modeled numeric={len(self.numeric_indices)} | "  # Report the active representation version and retained dimensions.
               f"categorical groups={len(self.categorical_groups)} | structural derived={len(self.structural_targets)} | model width={offset}")
 
     def _encode_block(self, normalized: np.ndarray, original: np.ndarray, destination: np.ndarray) -> None:
@@ -336,7 +338,7 @@ class ClassConditionalFlowScaler:
         """Recover original CSV schema, exact categorical categories and derived relationships."""
         labels = np.asarray(labels).reshape(-1)
         if len(labels) != len(X) or X.shape[1] != self.model_feature_dim:
-            raise ValueError("Generated representation does not match the V6.3 model schema")  # Reject incompatible encoded dimensions before decoding.
+            raise ValueError(f"Generated representation does not match the {WGANGP_RELEASE_VERSION} model schema")  # Reject incompatible encoded dimensions before decoding.
         result = np.empty((len(X), len(self.feature_cols)), dtype=np.float32)
         for class_label in np.unique(labels):
             class_id = int(class_label)
@@ -1001,6 +1003,29 @@ class ConfigNamespace:
 # Functions Definitions:
 
 
+def resolve_flow_checkpoint_directory(checkpoint_root: Path, checkpoint_prefix: str, fresh: bool = False) -> Path:
+    """Locate versioned checkpoints while retaining compatible V6.5 training runs.
+
+    :param checkpoint_root: Parent directory containing version-specific checkpoint folders.
+    :param checkpoint_prefix: Dataset stem used in generator checkpoint filenames.
+    :param fresh: Select the new checkpoint directory when training from scratch.
+    :return: Existing compatible checkpoint directory, or the current V6.5.2 directory for new training.
+    """
+
+    current = checkpoint_root / FLOW_PREPROCESSING_CHECKPOINT_TAG  # Prefer the current release when it already contains matching generator weights.
+    if fresh:
+        return current  # Protect existing legacy checkpoints during explicitly fresh training.
+    if any(current.glob(f"{checkpoint_prefix}_generator_epoch*.pt")):
+        return current  # Continue the current release's existing training run.
+
+    for compatible_tag in FLOW_PREPROCESSING_COMPATIBLE_TAGS:  # Search older directories only for this same unchanged model representation.
+        previous = checkpoint_root / compatible_tag  # Resolve the exact previous checkpoint namespace.
+        if any(previous.glob(f"{checkpoint_prefix}_generator_epoch*.pt")):
+            return previous  # Resume compatible older checkpoints in place without moving their provenance or weights.
+
+    return current  # Save newly trained checkpoints under the V6.5.2 directory.
+
+
 setup_global_exception_hook()  # Set global exception hook to shared Telegram handler
 
 
@@ -1628,7 +1653,7 @@ def assess_generated_flow_quality(args: Any, config: Dict, generated: pd.DataFra
             ceiling = float(settings.get("max_calibrated_correlation_difference", 0.40))
             if not (np.isfinite(original_limit) and np.isfinite(margin) and np.isfinite(ceiling) and
                     original_limit > 0 and margin >= 0 and ceiling >= original_limit):
-                raise ValueError("Invalid V6 correlation acceptance limits")
+                raise ValueError(f"Invalid {WGANGP_RELEASE_VERSION} correlation acceptance limits")
             correlation_limit = min(ceiling, max(original_limit, (real_baseline + margin) if real_baseline is not None else original_limit))
             report["real_to_real_correlation_difference_mean"] = real_baseline
             report["effective_correlation_difference_limit"] = correlation_limit
@@ -2007,7 +2032,7 @@ def preprocess_dataframe(df, label_col, remove_zero_variance=None, config: Optio
         index_columns = [column for column in numeric_cols if re.fullmatch(r"Unnamed:\s*\d+(?:\.\d+)*", str(column), re.IGNORECASE)
                          or str(column).strip().lower() in {"index", "row_index", "row_id"}]
         if index_columns:
-            print(f"[V5] Excluding CSV index/row metadata from GAN training: {index_columns}")
+            print(f"[{WGANGP_RELEASE_VERSION}] Excluding CSV index/row metadata from GAN training: {index_columns}")
             numeric_cols = [column for column in numeric_cols if column not in index_columns]
         if label_col in numeric_cols:  # If label is numeric, remove it from features
             numeric_cols.remove(label_col)  # Remove label from feature list
@@ -2027,7 +2052,7 @@ def preprocess_dataframe(df, label_col, remove_zero_variance=None, config: Optio
             values = pd.to_numeric(df_numeric[column], errors="coerce").to_numpy(dtype=np.float64, copy=False)
             invalid = flow_feature_invalid_mask(column, values)
             if np.any(invalid & valid_mask.to_numpy()):
-                print(f"[V5] Source domain violations in {column!r}: {int(np.count_nonzero(invalid & valid_mask.to_numpy()))} rows")
+                print(f"[{WGANGP_RELEASE_VERSION}] Source domain violations in {column!r}: {int(np.count_nonzero(invalid & valid_mask.to_numpy()))} rows")
             domain_invalid |= invalid
         valid_mask &= ~domain_invalid
         df_clean = df_numeric[valid_mask].copy()  # Keep only finite, domain-valid rows
@@ -3916,7 +3941,7 @@ def create_dataset_and_dataloader(args, config: Dict, device: torch.device) -> t
         reference_limit = int(config.get("training", {}).get("quantile_reference_rows_per_class", 8192))  # Configure bounded source quantile precision.
         references = build_class_reference_numeric_quantiles(dataset.X, dataset.labels, numeric_feature_count, reference_limit, int(getattr(args, "seed", 42)))  # Fit uniform source reservoirs only.
         V64_REFERENCE_NUMERIC_QUANTILES = {int(class_id): tuple(torch.as_tensor(part, device=device, dtype=torch.float32) for part in target) for class_id, target in references.items()}  # Preserve detached class quantiles and the empirical upper-tail baseline.
-        print(f"[V6.5] Numeric quantiles and smoothed tail excess: {len(references)} classes, <= {reference_limit} rows/class; quantile_fidelity_weight={quantile_weight}")  # Record effective tail-fidelity regularization.
+        print(f"[{WGANGP_RELEASE_VERSION}] Numeric quantiles and smoothed tail excess: {len(references)} classes, <= {reference_limit} rows/class; quantile_fidelity_weight={quantile_weight}")  # Record effective tail-fidelity regularization.
     if float(config.get("training", {}).get("correlation_fidelity_weight", 2.0)) > 0:
         reference_rows = int(config.get("training", {}).get("correlation_reference_rows_per_class", 4096))
         reference_targets = build_class_reference_correlations(dataset.X, dataset.labels, sample_limit=reference_rows, seed=int(getattr(args, "seed", 42)))
@@ -3925,7 +3950,7 @@ def create_dataset_and_dataloader(args, config: Dict, device: torch.device) -> t
             class_id: (torch.as_tensor(indices, dtype=torch.long, device=device), torch.as_tensor(corr, dtype=torch.float32, device=device))
             for class_id, (indices, corr) in reference_targets.items()
         }
-        print(f"[V6] Stable real-data correlation targets: {len(reference_targets)} classes, <= {reference_rows} rows/class; "
+        print(f"[{WGANGP_RELEASE_VERSION}] Stable real-data correlation targets: {len(reference_targets)} classes, <= {reference_rows} rows/class; "
               f"correlation_fidelity_weight={config.get('training', {}).get('correlation_fidelity_weight', 2.0)}")
     else:
         V6_REFERENCE_CORRELATIONS = {}
@@ -3945,7 +3970,7 @@ def create_dataset_and_dataloader(args, config: Dict, device: torch.device) -> t
                        torch.as_tensor(reliable, dtype=torch.bool, device=device))
             for class_id, (mean, std, reliable) in moments.items()
         }
-        print(f"[V6.3] Numeric moments: <= {moment_rows} rows/class; exact categorical frequencies: {len(moments)} classes; moment_fidelity_weight={moment_weight}")  # Distinguish bounded numeric targets from full-source category frequencies.
+        print(f"[{WGANGP_RELEASE_VERSION}] Numeric moments: <= {moment_rows} rows/class; exact categorical frequencies: {len(moments)} classes; moment_fidelity_weight={moment_weight}")  # Distinguish bounded numeric targets from full-source category frequencies.
     num_workers = int(config.get("dataloader", {}).get("num_workers", 8))  # Get base num_workers from config and cast to int
     num_workers_cli_override = bool(config.get("dataloader", {}).get("num_workers_cli_override", False))  # Detect explicit CLI worker precedence
     if not num_workers_cli_override:  # Auto-adjust workers only when CLI did not override them
@@ -4240,7 +4265,7 @@ def resume_from_checkpoint(args, config: Dict, device: torch.device, G, D, opt_G
 
     if not args.from_scratch and args.csv_path:  # If not forcing from scratch and CSV path provided
         csv_path_obj = Path(args.csv_path)  # Create Path object from csv_path
-        checkpoint_dir = csv_path_obj.parent / "Data_Augmentation" / "Checkpoints" / FLOW_PREPROCESSING_CHECKPOINT_TAG  # Resume only compatible class-conditional preprocessing checkpoints.
+        checkpoint_dir = resolve_flow_checkpoint_directory(csv_path_obj.parent / "Data_Augmentation" / "Checkpoints", csv_path_obj.stem)  # Resume only compatible class-conditional preprocessing checkpoints.
         checkpoint_prefix = csv_path_obj.stem  # Expected filename prefix
 
         if checkpoint_dir.exists():  # If checkpoint directory exists
@@ -4990,7 +5015,7 @@ def resolve_checkpoint_dir_and_prefix(args, config: Dict, epoch: int) -> tuple:
     :return: Tuple of (checkpoint_dir, checkpoint_prefix, skip_checkpoint).
     """
 
-    checkpoint_dir = Path(args.out_dir) / "Checkpoints" / FLOW_PREPROCESSING_CHECKPOINT_TAG  # Default versioned checkpoint directory
+    checkpoint_dir = resolve_flow_checkpoint_directory(Path(args.out_dir) / "Checkpoints", "model", fresh=bool(getattr(args, "from_scratch", False)))  # Default versioned checkpoint directory
     checkpoint_prefix = "model"  # Default prefix for checkpoint files
     skip_checkpoint = False  # Initialize skip flag to False
     if (epoch + 1) % args.save_every == 0 or epoch == args.epochs - 1:  # Save checkpoints periodically
@@ -5005,7 +5030,7 @@ def resolve_checkpoint_dir_and_prefix(args, config: Dict, epoch: int) -> tuple:
         if not skip_checkpoint:  # Only proceed when disk space is sufficient for checkpoint saving
             if args.csv_path:  # If CSV path is provided
                 csv_path_obj = Path(args.csv_path)  # Create Path object from csv_path
-                checkpoint_dir = csv_path_obj.parent / "Data_Augmentation" / "Checkpoints" / FLOW_PREPROCESSING_CHECKPOINT_TAG  # Persist weights separately from historical preprocessing checkpoints.
+                checkpoint_dir = resolve_flow_checkpoint_directory(csv_path_obj.parent / "Data_Augmentation" / "Checkpoints", csv_path_obj.stem, fresh=bool(getattr(args, "from_scratch", False)))  # Persist weights separately from historical preprocessing checkpoints.
                 try:  # Guard directory creation against disk-full and other I/O errors
                     os.makedirs(checkpoint_dir, exist_ok=True)  # Ensure directory exists
                 except OSError as _ose_dir:  # Catch filesystem errors including disk full during makedirs
@@ -5016,7 +5041,7 @@ def resolve_checkpoint_dir_and_prefix(args, config: Dict, epoch: int) -> tuple:
                     skip_checkpoint = True  # Mark checkpoint as skipped due to directory creation failure
                 checkpoint_prefix = csv_path_obj.stem  # Use input filename as prefix
             else:  # No CSV path, use default out_dir
-                checkpoint_dir = Path(args.out_dir) / "Checkpoints" / FLOW_PREPROCESSING_CHECKPOINT_TAG  # Create a versioned checkpoint directory in out_dir
+                checkpoint_dir = resolve_flow_checkpoint_directory(Path(args.out_dir) / "Checkpoints", "model", fresh=bool(getattr(args, "from_scratch", False)))  # Create a versioned checkpoint directory in out_dir
                 try:  # Guard directory creation against disk-full and other I/O errors
                     os.makedirs(checkpoint_dir, exist_ok=True)  # Ensure directory exists
                 except OSError as _ose_dir:  # Catch filesystem errors including disk full during makedirs
@@ -7095,7 +7120,7 @@ def dispatch_wgangp_execution_mode(args, final_config: Dict) -> None:
                     samples_dir = data_aug_dir / final_config.get("paths", {}).get("data_augmentation_sample_dir", "Samples")  # Build augmented samples subdirectory path inside data augmentation directory
                     os.makedirs(samples_dir, exist_ok=True)  # Ensure augmented samples subdirectory exists before output file assignment
                     args.out_file = str(samples_dir / output_filename)  # Assign resolved output file path to args for generation
-                checkpoint_dir = data_aug_dir / final_config.get("paths", {}).get("checkpoint_subdir", "Checkpoints") / FLOW_PREPROCESSING_CHECKPOINT_TAG  # Discover only class-conditional generator checkpoints.
+                checkpoint_dir = resolve_flow_checkpoint_directory(data_aug_dir / final_config.get("paths", {}).get("checkpoint_subdir", "Checkpoints"), csv_path_obj.stem, fresh=bool(getattr(args, "from_scratch", False)))  # Discover only class-conditional generator checkpoints.
                 checkpoint_path = checkpoint_dir / f"{csv_path_obj.stem}_generator_epoch{args.epochs}.pt"  # Construct expected final-epoch checkpoint filename
                 if not checkpoint_path.exists():  # Find latest if specific epoch not found
                     checkpoints = list(checkpoint_dir.glob(f"{csv_path_obj.stem}_generator_epoch*.pt"))  # Discover all matching generator checkpoints in directory
@@ -7433,7 +7458,7 @@ def resolve_checkpoint_after_training(args: Any, config: Dict, csv_path_obj: Pat
 
     checkpoint_prefix = csv_path_obj.stem  # Derive checkpoint filename prefix from input CSV stem
     checkpoint_subdir = config.get("paths", {}).get("checkpoint_subdir", "Checkpoints")  # Read configured checkpoint subdirectory name
-    checkpoint_dir = data_aug_dir / checkpoint_subdir / FLOW_PREPROCESSING_CHECKPOINT_TAG  # Keep checkpoint discovery in the versioned preprocessing namespace.
+    checkpoint_dir = resolve_flow_checkpoint_directory(data_aug_dir / checkpoint_subdir, checkpoint_prefix, fresh=bool(getattr(args, "from_scratch", False)))  # Keep checkpoint discovery in the versioned preprocessing namespace.
     checkpoint_path = checkpoint_dir / f"{checkpoint_prefix}_generator_epoch{args.epochs}.pt"  # Construct expected final-epoch checkpoint filename
     
     if not checkpoint_path.exists():  # Fall back to latest checkpoint when specific epoch file is absent
