@@ -6100,6 +6100,7 @@ def compute_generation_counts_and_labels(args, config: Dict, class_distribution:
     small_class_threshold = int(config.get("generation", {}).get("small_class_threshold", 100))  # Get small class threshold and cast to int
     small_class_min_samples = int(config.get("generation", {}).get("small_class_min_samples", 10))  # Get min samples for small classes and cast to int
     n_per_class = None  # Initialize per-class count dictionary
+    args._last_selected_original_preprocessed_num_samples = None  # Reset the percentage denominator before choosing the generation classes.
     if args.n_samples <= 1.0:  # Percentage mode: generate percentage of original dataset size (1.0 == 100%)
         if class_distribution is None:  # If class distribution not available
             raise RuntimeError(
@@ -6114,6 +6115,7 @@ def compute_generation_counts_and_labels(args, config: Dict, class_distribution:
             selected_counts = {args.label: class_distribution[args.label]}  # Restrict the source denominator to the chosen class.
         else:  # Generate the requested ratio independently for every available class.
             selected_counts = class_distribution  # Preserve the generator checkpoint's class distribution.
+        args._last_selected_original_preprocessed_num_samples = int(sum(selected_counts.values()))  # Preserve the selected usable population as the notification denominator.
         n_per_class = {label: calculate_generated_count_from_ratio(int(count), args.n_samples) for label, count in selected_counts.items()}  # Apply the requested ratio to each preprocessed class independently.
         target_n = sum(n_per_class.values())  # Resolve exact total after deterministic per-class rounding.
         print(f"{BackgroundColors.CYAN}Generating {args.n_samples*100:.1f}% per original preprocessed class ({target_n} of {sum(int(count) for count in selected_counts.values())} usable source rows){Style.RESET_ALL}")  # Report per-class rather than raw-file ratio semantics.
@@ -6148,7 +6150,7 @@ def notify_start_of_generation(args, n: int) -> None:
     """
 
     try:
-        start_msg = compose_generation_start_message(n, args, Path(args.out_file).name, original_num=None)
+        start_msg = compose_generation_start_message(n, args, Path(args.out_file).name, original_num=getattr(args, "_last_selected_original_preprocessed_num_samples", None))  # Show the usable selected-class denominator rather than raw CSV rows.
         send_telegram_message(TELEGRAM_BOT, start_msg)  # Notify start of generation
     except Exception as e:  # Failed to notify start of generation
         print(str(e))  # Print send error to terminal for visibility
@@ -6358,8 +6360,8 @@ def notify_generation_finish_via_telegram(args, n: int, file_progress_prefix: st
     try:  # Build a safe, human-readable finish message and notify via Telegram
         gen_path = Path(args.out_file)  # Path object for generated file
         try:  # Try to determine original dataset size for ratio calculation
-            original_num = None  # Default original count
-            if getattr(args, "csv_path", None):  # If csv_path is available on args
+            original_num = getattr(args, "_last_selected_original_preprocessed_num_samples", None)  # Prefer the same class-selected usable source denominator used for the start message.
+            if original_num is None and getattr(args, "csv_path", None):  # Fall back to the source CSV only when the usable denominator is unavailable.
                 original_num = len(pd.read_csv(args.csv_path, low_memory=False))  # Count original CSV rows for ratio
         except Exception:
             original_num = None  # Fallback to None on any error
