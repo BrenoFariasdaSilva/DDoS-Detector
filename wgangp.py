@@ -5461,7 +5461,18 @@ def generate_csv_and_image(df: pd.DataFrame, csv_path: Union[str, Path], is_visu
         parent.mkdir(parents=True, exist_ok=True)  # Ensure parent exists
         if not os.access(str(parent), os.W_OK):  # Verify parent directory is writable before writing CSV
             raise PermissionError(f"Directory not writable: {parent}")  # Raise permission error
-        df.to_csv(str(csv_p), index=False)  # Save CSV to disk preserving DataFrame content/order
+        temporary_csv = None  # Track a same-directory temporary file until its contents have been published.
+        try:  # Keep the previously published CSV intact if writing fails.
+            with tempfile.NamedTemporaryFile(mode="w", newline="", encoding="utf-8", dir=str(parent), prefix=f".{csv_p.name}.", suffix=".tmp", delete=False) as temporary_file:  # Stage the complete CSV on the destination filesystem.
+                temporary_csv = Path(temporary_file.name)  # Remember the staging path for cleanup.
+                df.to_csv(temporary_file, index=False)  # Serialize the generated rows before making them visible at the destination.
+                temporary_file.flush()  # Flush Python's buffered output to the file descriptor.
+                os.fsync(temporary_file.fileno())  # Complete the staging file's data write before publishing.
+            os.replace(temporary_csv, csv_p)  # Atomically publish a complete CSV instead of exposing an in-progress overwrite.
+            temporary_csv = None  # Avoid cleanup after successful publication.
+        finally:  # Remove incomplete staging files without touching the previous output.
+            if temporary_csv is not None:  # Only remove a staging file that was not published.
+                temporary_csv.unlink(missing_ok=True)  # Avoid leaving partially written temporary CSV files behind.
         
         if is_visualizable and len(df) <= 100:  # Generate PNG only for visualizable DataFrames within the safe row limit
             try:  # Guard PNG rendering to prevent aborting the CSV pipeline on image export failures
