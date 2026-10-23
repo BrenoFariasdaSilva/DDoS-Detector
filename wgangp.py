@@ -4707,20 +4707,37 @@ def build_hardware_csv_value(device: torch.device) -> str:
 
 def count_persisted_output_rows(out_file: Union[str, Path]) -> int:
     """
-    Count persisted data rows in an augmented CSV file.
+    Count and validate the records in a fully published augmented CSV file.
 
     :param out_file: Path to the augmented CSV file.
-    :return: Number of data rows persisted on disk.
+    :return: Number of valid data records persisted on disk.
     """
 
-    out_path = Path(out_file)  # Normalize output path before opening
-    with open(out_path, "r", newline="", encoding="utf-8") as file_obj:  # Open augmented CSV using the project CSV parsing mode
-        reader = csv.reader(file_obj)  # Create standard CSV reader for quoted cell safety
-        row_total = sum(1 for _ in reader)  # Count CSV records including the header
-    persisted_rows = max(0, row_total - 1)  # Convert total records into data-row count
-    if persisted_rows <= 0:  # Verify persisted augmented data rows exist
-        raise ValueError(f"Augmented CSV {out_path} does not contain persisted data rows")  # Raise before writing a successful result row
-    return persisted_rows  # Return actual persisted output row count
+    out_path = Path(out_file)  # Resolve the CSV produced by the generation step.
+    previous_field_limit = csv.field_size_limit()  # Preserve the process-wide parser setting for other CSV users.
+    reader = None  # Retain the physical line number if the CSV parser reports a malformed field.
+    row_total = 0  # Count data records rather than physical lines, which may contain quoted newlines.
+    try:  # Parse the persisted output and reject incomplete or malformed rows.
+        csv.field_size_limit(max(previous_field_limit, 8 * 1024 * 1024))  # Accommodate legitimate large metadata cells while bounding malformed fields.
+        with out_path.open("r", newline="", encoding="utf-8") as file_obj:  # Preserve quoted CSV newlines during record parsing.
+            reader = csv.reader(file_obj)  # Use a quote-aware reader rather than a physical newline counter.
+            header = next(reader, None)  # Read the declared output schema before iterating over records.
+            if not header or any(not column for column in header):  # Reject a missing or malformed CSV header.
+                raise ValueError(f"Augmented CSV {out_path} does not contain a valid header")  # Prevent false success for incomplete output.
+            expected_fields = len(header)  # Require every data record to match the published schema.
+            for row in reader:  # Validate every persisted synthetic record, including the final row.
+                if len(row) != expected_fields:  # Identify a truncated, partially published, or malformed record.
+                    raise ValueError(f"Malformed augmented CSV {out_path} at physical line {reader.line_num}: expected {expected_fields} fields, found {len(row)}")  # Explain inconsistent record width.
+                row_total += 1  # Count a successfully parsed data record.
+    except csv.Error as error:  # Supply the file location and parser context missing from low-level exceptions.
+        physical_line = reader.line_num if reader is not None else 0  # Identify where CSV parsing failed.
+        raise ValueError(f"Malformed augmented CSV {out_path} near physical line {physical_line}: {error}") from error  # Preserve the original parser error for diagnosis.
+    finally:  # Do not permanently modify parsing limits used by other repository components.
+        csv.field_size_limit(previous_field_limit)  # Restore the original global CSV field-size limit.
+
+    if row_total <= 0:  # Verify persisted augmented data rows exist.
+        raise ValueError(f"Augmented CSV {out_path} does not contain persisted data rows")  # Reject empty generated outputs.
+    return row_total  # Return the validated number of synthetic records.
 
 
 def validate_augmentation_sample_totals(args: Any, persisted_total_rows: int) -> None:
