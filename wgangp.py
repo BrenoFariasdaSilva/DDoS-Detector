@@ -20,6 +20,7 @@ Description :
         - Full-class duplicate hashing, categorical frequencies, and quantile diagnostics
         - Versioned model state with random-stream and sampler-epoch recovery
         - Full-class tail quantile knots and discrete tail support for heavy-tailed flow fields
+        - Bounded mean-first, correlation-second, variance-third selection of exact-unique candidates
 
 Usage:
     1. Prepare a CSV file with network flow features and labels.
@@ -114,7 +115,7 @@ psutil = (
 )  # Import psutil if available, otherwise set to None
 
 SAO_PAULO_TIMEZONE_NAME = "America/Sao_Paulo"  # Use Sao Paulo timezone for ETA finish timestamps
-WGANGP_RELEASE_VERSION = "V6.5.4"  # Distinguish full-class tail-knot preprocessing that requires retraining from V6.5.x checkpoints.
+WGANGP_RELEASE_VERSION = "V6.5.5"  # Distinguish bounded quality-aware candidate selection while reusing V6.5.4-trained weights.
 FLOW_PREPROCESSING_CHECKPOINT_TAG = "ConditionalMixedStructuralV654TailKnots"  # Isolate weights trained on the full-class tail-knot representation.
 FLOW_PREPROCESSING_COMPATIBLE_TAGS: tuple[str, ...] = ()  # Earlier V6.5 weights were trained on a different tail encoding and are never resumed.
 QUALITY_SELECTION_POLICY = "priority_moment_swap_v1"  # Identify the bounded mean-first candidate selection policy in output provenance.
