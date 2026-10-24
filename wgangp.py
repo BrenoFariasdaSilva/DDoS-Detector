@@ -19,6 +19,7 @@ Description :
         - Shared categorical sampling law and stable empirical frequency learning
         - Full-class duplicate hashing, categorical frequencies, and quantile diagnostics
         - Versioned model state with random-stream and sampler-epoch recovery
+        - Full-class tail quantile knots and discrete tail support for heavy-tailed flow fields
 
 Usage:
     1. Prepare a CSV file with network flow features and labels.
@@ -47,7 +48,8 @@ Dependencies:
 
 Assumptions & Notes:
     - CSV should contain feature columns and a label column
-    - Features use class-conditional quantiles and empirically calibrated flow relationships
+    - Features use class-conditional quantiles refined with exact full-class tail order statistics
+      and empirically calibrated flow relationships
     - Labels are encoded via LabelEncoder (categorical to integer)
     - Output features are inverse-transformed per class, with original discrete domains preserved
     - CUDA is used if available; use --force_cpu to disable
@@ -112,7 +114,7 @@ psutil = (
 )  # Import psutil if available, otherwise set to None
 
 SAO_PAULO_TIMEZONE_NAME = "America/Sao_Paulo"  # Use Sao Paulo timezone for ETA finish timestamps
-WGANGP_RELEASE_VERSION = "V6.5.3"  # Distinguish strict unique-output generation without altering V6.5.2-trained model weights.
+WGANGP_RELEASE_VERSION = "V6.5.4"  # Distinguish full-class tail-knot preprocessing that requires retraining from V6.5.x checkpoints.
 FLOW_PREPROCESSING_CHECKPOINT_TAG = "ConditionalMixedStructuralV654TailKnots"  # Isolate weights trained on the full-class tail-knot representation.
 FLOW_PREPROCESSING_COMPATIBLE_TAGS: tuple[str, ...] = ()  # Earlier V6.5 weights were trained on a different tail encoding and are never resumed.
 
