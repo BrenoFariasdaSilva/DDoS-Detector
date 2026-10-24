@@ -113,8 +113,8 @@ psutil = (
 
 SAO_PAULO_TIMEZONE_NAME = "America/Sao_Paulo"  # Use Sao Paulo timezone for ETA finish timestamps
 WGANGP_RELEASE_VERSION = "V6.5.3"  # Distinguish strict unique-output generation without altering V6.5.2-trained model weights.
-FLOW_PREPROCESSING_CHECKPOINT_TAG = "ConditionalMixedStructuralV652TailExcess"  # Name new checkpoints after the current release without changing the learned representation.
-FLOW_PREPROCESSING_COMPATIBLE_TAGS = ("ConditionalMixedStructuralV65TailExcess",)  # Reuse existing V6.5-trained weights without requiring retraining.
+FLOW_PREPROCESSING_CHECKPOINT_TAG = "ConditionalMixedStructuralV654TailKnots"  # Isolate weights trained on the full-class tail-knot representation.
+FLOW_PREPROCESSING_COMPATIBLE_TAGS: tuple[str, ...] = ()  # Earlier V6.5 weights were trained on a different tail encoding and are never resumed.
 
 # Prefer CUDA autocast when available; provide a safe fallback context manager
 try:  # Attempt to import torch.amp.autocast for mixed precision support
@@ -275,6 +275,7 @@ class ClassConditionalFlowScaler:
             raise ValueError("Feature and label arrays have different lengths")
         rng = np.random.default_rng(self.seed)
         self.transformers, self.discrete_support, self.derived_rules = {}, {}, {}
+        inserted_tail_knots = {}  # Record full-class tail resolution added to each class transformer.
         for class_label in np.unique(labels):
             indexes = np.flatnonzero(labels == class_label)
             picked = np.sort(rng.choice(indexes, size=min(len(indexes), self.fit_sample_rows), replace=False))
@@ -282,9 +283,12 @@ class ClassConditionalFlowScaler:
             minimum_rows = np.full(X.shape[1], int(indexes[0]), dtype=np.int64)
             maximum_rows = np.full(X.shape[1], int(indexes[0]), dtype=np.int64)
             columns = np.arange(X.shape[1])
+            tail_keep = count_tail_order_statistics(max(1, min(self.n_quantiles, len(picked))), len(indexes))  # Bound exact extreme-value storage by the outer quantile-bin population.
+            lower_tail, upper_tail = None, None  # Accumulate exact full-class extreme order statistics per feature.
             for pos in range(0, len(indexes), 65536):
                 chunk_indices = indexes[pos:pos + 65536]
                 chunk = np.asarray(X[chunk_indices], dtype=np.float64)
+                lower_tail, upper_tail = update_extreme_order_statistics(lower_tail, upper_tail, chunk, tail_keep)  # Retain every source value that can define an outer-bin quantile.
                 local_min, local_max = np.argmin(chunk, axis=0), np.argmax(chunk, axis=0)
                 selected_min, selected_max = chunk[local_min, columns], chunk[local_max, columns]
                 new_min, new_max = selected_min < minimum, selected_max > maximum
@@ -302,6 +306,9 @@ class ClassConditionalFlowScaler:
             transformer.quantiles_[0] = minimum  # Preserve the complete source minimum as the inverse-transform endpoint.
             transformer.quantiles_[-1] = maximum  # Preserve the complete source maximum without duplicating extreme rows.
             class_id = int(class_label)
+            if lower_tail is None or upper_tail is None:  # Require at least one streamed source chunk for every fitted class.
+                raise ValueError(f"No source rows streamed for label {class_label}")  # Refuse an unfitted class transformer.
+            inserted_tail_knots[class_id] = insert_tail_quantile_knots(transformer, lower_tail, upper_tail, len(indexes))  # Replace linear outer-bin interpolation with exact full-class tail quantiles.
             self.transformers[class_id] = transformer
             support = {}
             for idx, column in enumerate(self.feature_cols):
@@ -313,6 +320,7 @@ class ClassConditionalFlowScaler:
                     support[idx] = legal
             self.discrete_support[class_id] = support
             self.derived_rules[class_id] = calibrate_flow_relationships(observed, self.feature_cols)
+        print(f"[{WGANGP_RELEASE_VERSION}] Full-class tail quantile knots per tail: {inserted_tail_knots}")  # Report the effective extreme-quantile resolution for each class.
         self._build_model_schema(X, labels)
         return self.transform(X, labels)
 
@@ -552,6 +560,112 @@ def flow_feature_invalid_mask(name: Any, values: Any) -> np.ndarray:
     if binary:
         invalid |= (numbers != 0) & (numbers != 1)
     return invalid
+
+
+def compute_tail_quantile_levels(n_quantiles: int, total_rows: int) -> tuple:
+    """Return geometric probability levels that resolve both outer quantile bins.
+
+    :param n_quantiles: Number of uniformly spaced fitted quantile knots.
+    :param total_rows: Complete source population of the class.
+    :return: Increasing lower-tail and upper-tail probability levels.
+    """
+
+    if n_quantiles < 2 or total_rows < 2:  # Uniform knots already cover tiny classes exactly.
+        return np.empty(0, dtype=np.float64), np.empty(0, dtype=np.float64)  # Insert no tail levels.
+
+    width = 1.0 / (n_quantiles - 1)  # Probability mass of each outer uniform quantile bin.
+    halvings = max(0, int(math.floor(math.log2(width * min(total_rows - 1, 1e7)))))  # Stop at one source-row gap or the 1e-7 normal-output clipping bound.
+    exponents = np.arange(1, halvings + 1, dtype=np.float64)  # Halve the remaining tail mass at every inserted level.
+    lower = width * 0.5 ** exponents[::-1]  # Lower-tail levels in increasing probability order.
+    upper = 1.0 - width * 0.5 ** exponents  # Upper-tail levels in increasing probability order.
+
+    return lower, upper  # Return symmetric full-class tail levels.
+
+
+def count_tail_order_statistics(n_quantiles: int, total_rows: int) -> int:
+    """Return how many extreme source values per feature define the inserted tail quantiles.
+
+    :param n_quantiles: Number of uniformly spaced fitted quantile knots.
+    :param total_rows: Complete source population of the class.
+    :return: Number of smallest and largest values retained for each feature.
+    """
+
+    if n_quantiles < 2:  # A single knot has no outer bins to refine.
+        return max(1, int(total_rows))  # Retain the complete tiny class.
+
+    return max(1, min(int(total_rows), int(math.ceil((total_rows - 1) * 0.5 / (n_quantiles - 1))) + 2))  # Cover every order statistic used by linear interpolation inside half an outer bin.
+
+
+def update_extreme_order_statistics(lower: Optional[np.ndarray], upper: Optional[np.ndarray], block: np.ndarray, keep: int) -> tuple:
+    """Retain the smallest and largest per-feature source values across bounded chunks.
+
+    :param lower: Previously retained smallest values per feature, or None.
+    :param upper: Previously retained largest values per feature, or None.
+    :param block: Current float64 source chunk.
+    :param keep: Number of extreme order statistics retained in each tail.
+    :return: Updated unsorted lower and upper per-feature extreme value buffers.
+    """
+
+    lower = block if lower is None else np.concatenate((lower, block))  # Merge retained low values with the current chunk.
+    upper = block if upper is None else np.concatenate((upper, block))  # Merge retained high values with the current chunk.
+
+    if len(lower) > keep:  # Discard values that cannot belong to the lower tail.
+        lower = np.partition(lower, keep - 1, axis=0)[:keep]  # Keep the exact smallest values of every feature.
+    if len(upper) > keep:  # Discard values that cannot belong to the upper tail.
+        upper = np.partition(upper, len(upper) - keep, axis=0)[-keep:]  # Keep the exact largest values of every feature.
+
+    return lower, upper  # Return bounded exact tail buffers.
+
+
+def exact_tail_quantiles(levels: np.ndarray, ordered: np.ndarray, total_rows: int, upper: bool) -> np.ndarray:
+    """Interpolate full-population quantiles from retained sorted extreme order statistics.
+
+    :param levels: Probability levels inside the retained tail.
+    :param ordered: Ascending per-feature extreme values from one tail.
+    :param total_rows: Complete source population of the class.
+    :param upper: Whether the buffer holds the largest values.
+    :return: Quantiles equal to NumPy linear interpolation over all class rows.
+    """
+
+    positions = (int(total_rows) - 1) * np.asarray(levels, dtype=np.float64)  # Locate fractional order-statistic ranks.
+    below = np.floor(positions).astype(np.int64)  # Lower neighboring full-population rank.
+    above = np.ceil(positions).astype(np.int64)  # Upper neighboring full-population rank.
+    offset = int(total_rows) - len(ordered) if upper else 0  # Map full-population ranks into the retained buffer.
+
+    if len(positions) and (int(below.min()) < offset or int(above.max()) - offset >= len(ordered)):  # Reject ranks outside the exact retained tail.
+        raise ValueError("Tail quantile levels exceed the retained extreme order statistics")  # Avoid extrapolated tail knots.
+
+    weight = (positions - below)[:, None]  # Linear interpolation weight between neighboring ranks.
+    return ordered[below - offset] + weight * (ordered[above - offset] - ordered[below - offset])  # Match NumPy's default linear quantile definition.
+
+
+def insert_tail_quantile_knots(transformer: QuantileTransformer, lower: np.ndarray, upper: np.ndarray, total_rows: int) -> int:
+    """Refine a fitted quantile transformer's outer bins with exact full-class tail quantiles.
+
+    :param transformer: Fitted class transformer whose endpoints already hold the full-class extremes.
+    :param lower: Retained smallest source values per feature.
+    :param upper: Retained largest source values per feature.
+    :param total_rows: Complete source population of the class.
+    :return: Number of probability knots inserted into each tail.
+    """
+
+    lower_levels, upper_levels = compute_tail_quantile_levels(len(transformer.references_), int(total_rows))  # Resolve geometric outer-bin refinement levels.
+    if not len(upper_levels):  # Keep exact uniform knots for classes without unresolved tail rows.
+        return 0  # Report no inserted knots.
+
+    references = np.concatenate((transformer.references_[:1], lower_levels, transformer.references_[1:-1], upper_levels, transformer.references_[-1:]))  # Merge tail levels between the existing extreme and interior knots.
+    if np.any(np.diff(references) <= 0.0):  # Require strictly increasing probability references for interpolation.
+        raise ValueError("Tail quantile references are not strictly increasing")  # Refuse an ambiguous inverse mapping.
+
+    lower_quantiles = exact_tail_quantiles(lower_levels, np.sort(lower, axis=0), int(total_rows), upper=False)  # Exact lower-tail values from every class row.
+    upper_quantiles = exact_tail_quantiles(upper_levels, np.sort(upper, axis=0), int(total_rows), upper=True)  # Exact upper-tail values from every class row.
+    quantiles = np.concatenate((transformer.quantiles_[:1], lower_quantiles, transformer.quantiles_[1:-1], upper_quantiles, transformer.quantiles_[-1:]))  # Align source values with merged probability references.
+
+    transformer.references_ = references  # Use the refined probability grid in forward and inverse interpolation.
+    transformer.quantiles_ = np.maximum.accumulate(quantiles, axis=0)  # Remove sampling-noise inversions between sampled interior and exact tail knots.
+    transformer.n_quantiles_ = len(references)  # Keep the fitted knot count consistent with the refined grid.
+
+    return int(len(upper_levels))  # Report inserted knots per tail.
 
 
 class ClassAwareFlowSampler(Sampler[int]):
@@ -1004,12 +1118,12 @@ class ConfigNamespace:
 
 
 def resolve_flow_checkpoint_directory(checkpoint_root: Path, checkpoint_prefix: str, fresh: bool = False) -> Path:
-    """Locate versioned checkpoints while retaining compatible V6.5 training runs.
+    """Locate versioned checkpoints while retaining compatible same-representation training runs.
 
     :param checkpoint_root: Parent directory containing version-specific checkpoint folders.
     :param checkpoint_prefix: Dataset stem used in generator checkpoint filenames.
     :param fresh: Select the new checkpoint directory when training from scratch.
-    :return: Existing compatible checkpoint directory, or the current V6.5.2 directory for new training.
+    :return: Existing compatible checkpoint directory, or the current representation directory for new training.
     """
 
     current = checkpoint_root / FLOW_PREPROCESSING_CHECKPOINT_TAG  # Prefer the current release when it already contains matching generator weights.
@@ -1023,7 +1137,7 @@ def resolve_flow_checkpoint_directory(checkpoint_root: Path, checkpoint_prefix: 
         if any(previous.glob(f"{checkpoint_prefix}_generator_epoch*.pt")):
             return previous  # Resume compatible older checkpoints in place without moving their provenance or weights.
 
-    return current  # Save newly trained checkpoints under the V6.5.2 directory.
+    return current  # Save newly trained checkpoints under the current representation directory.
 
 
 setup_global_exception_hook()  # Set global exception hook to shared Telegram handler
@@ -1381,7 +1495,7 @@ def build_wgangp_provenance(args: Any) -> Dict:
     settings["moment_reference_rows_per_class"] = int((CONFIG or {}).get("training", {}).get("moment_reference_rows_per_class", 4096))
     settings["quantile_fidelity_weight"] = float((CONFIG or {}).get("training", {}).get("quantile_fidelity_weight", 0.15))  # Preserve the extra training objective in checkpoint provenance.
     settings["quantile_reference_rows_per_class"] = int((CONFIG or {}).get("training", {}).get("quantile_reference_rows_per_class", 8192))  # Preserve reference resolution for checkpoint safety.
-    identity = {"source_path": str(source) if source else None, "source_size": source_stat.st_size if source_stat else None, "source_mtime_ns": source_stat.st_mtime_ns if source_stat else None, "preprocessing": "class_conditional_mixed_structural_v65_tail_excess", "preprocessing_parameters": {key: (CONFIG or {}).get("quality", {}).get(key, default) for key, default in (("n_quantiles", 512), ("fit_sample_rows", 50000), ("class_sampling_exponent", 0.5))}, "settings": settings}  # Record source metadata and effective hyperparameters.
+    identity = {"source_path": str(source) if source else None, "source_size": source_stat.st_size if source_stat else None, "source_mtime_ns": source_stat.st_mtime_ns if source_stat else None, "preprocessing": "class_conditional_mixed_structural_v654_full_class_tail_knots", "preprocessing_parameters": {key: (CONFIG or {}).get("quality", {}).get(key, default) for key, default in (("n_quantiles", 512), ("fit_sample_rows", 50000), ("class_sampling_exponent", 0.5))}, "settings": settings}  # Record source metadata and effective hyperparameters.
     digest = hashlib.sha256(json.dumps(identity, sort_keys=True, default=str).encode("utf-8")).hexdigest()  # Produce a stable comparable identity.
 
     return {"identity": identity, "sha256": digest}  # Return provenance for checkpoints and output sidecars.
