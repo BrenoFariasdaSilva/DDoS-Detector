@@ -105,7 +105,7 @@ from telegram_bot import TelegramBot, send_exception_via_telegram, send_telegram
 from torch import autograd  # For gradient penalty
 from torch.utils.data import DataLoader, Dataset, Sampler  # Dataset, dataloader and bounded class-aware sampling
 from tqdm import tqdm  # For progress bar visualization
-from typing import Any, Dict, List, Optional, Union, cast  # For Any type hint and cast
+from typing import Any, Dict, Iterator, List, Optional, Union, cast  # For type hints, tail-statistic iterators, and cast
 from utils.process_name import set_runtime_process_name  # Apply optional htop-visible process identities.
 from zoneinfo import ZoneInfo  # Format ETA finish timestamps in Sao Paulo local time
 
@@ -117,6 +117,9 @@ SAO_PAULO_TIMEZONE_NAME = "America/Sao_Paulo"  # Use Sao Paulo timezone for ETA 
 WGANGP_RELEASE_VERSION = "V6.5.4"  # Distinguish full-class tail-knot preprocessing that requires retraining from V6.5.x checkpoints.
 FLOW_PREPROCESSING_CHECKPOINT_TAG = "ConditionalMixedStructuralV654TailKnots"  # Isolate weights trained on the full-class tail-knot representation.
 FLOW_PREPROCESSING_COMPATIBLE_TAGS: tuple[str, ...] = ()  # Earlier V6.5 weights were trained on a different tail encoding and are never resumed.
+QUALITY_SELECTION_POLICY = "priority_moment_swap_v1"  # Identify the bounded mean-first candidate selection policy in output provenance.
+QUALITY_SELECTION_WEIGHTS = (1.0, 1.0, 0.25, 0.001, 1.0)  # Weight standardized mean, correlation, deviation, tail-rate, and tail-floor errors in priority order.
+QUALITY_SELECTION_MAX_ITERATIONS = 128  # Bound accepted and rejected swap iterations for every class.
 
 # Prefer CUDA autocast when available; provide a safe fallback context manager
 try:  # Attempt to import torch.amp.autocast for mixed precision support
@@ -1874,6 +1877,11 @@ def build_default_training_and_model_config() -> Dict:
             "max_duplicate_refill_rounds": 25,  # Fail rather than loop indefinitely when the learned support is exhausted.
             "max_duplicate_draw_multiplier": 5.0,  # Bound total candidate draws relative to requested unique records.
             "duplicate_refill_batch_rows": 32768,  # Limit temporary refill population without changing trained weights.
+            "quality_selection_enabled": True,  # Select each class quota from extra unique candidates by mean, correlation, and variance priority.
+            "quality_selection_extra_fraction": 0.5,  # Draw extra unique candidates as a fraction of each class quota.
+            "quality_selection_max_extra_rows_per_class": 1000000,  # Bound extra candidate rows retained for any class.
+            "quality_selection_max_active_rows_per_class": 1000000,  # Bound baseline rows eligible for replacement in any class.
+            "quality_selection_reference_rows_per_class": 65536,  # Bound each of the two disjoint source reference reservoirs per class.
             "categorical_temperature": 1.25,  # Use the same positive categorical sampling temperature in training and generation.
             "feature_dim": None,  # Feature dimensionality (None = auto-detect)
             "small_class_threshold": 100,  # Threshold for small class detection
@@ -6058,7 +6066,8 @@ def verify_data_augmentation_file(args, config: Optional[Dict] = None) -> bool:
                                and existing_quality.get("schema_version") == 4 and existing_quality.get("accepted") is True
                                and existing_quality.get("quality_policy_sha256") == build_quality_policy_fingerprint(config)
                                and unique_record.get("policy") == "exact_decoded_numeric_rows_v1"
-                               and unique_record.get("verified") is True)  # Never reuse old outputs with only a permissive duplicate threshold.
+                               and unique_record.get("verified") is True
+                               and (existing_manifest.get("generation_selection") or {}).get("settings_sha256") == build_generation_selection_fingerprint(config))  # Never reuse outputs from another uniqueness or candidate selection policy.
         except (OSError, ValueError, TypeError, AttributeError):  # Treat absent or malformed historical artifacts as unverified.
             verified_output = False  # Never skip regeneration based on count alone.
         if not verified_output:  # Reject incompatible historical artifacts while preserving their bytes until a successful replacement.
@@ -6334,6 +6343,570 @@ def generate_batches_and_collect_results(args, G: nn.Module, device: torch.devic
     return all_fake, labels, started
 
 
+def resolve_quality_selection_settings(config: Dict) -> Dict[str, Any]:
+    """Resolve and validate the bounded quality-aware candidate selection settings.
+
+    :param config: Runtime configuration with optional generation selection settings.
+    :return: Validated selection settings including the active policy identity.
+    """
+
+    generation = config.get("generation", {})  # Read generation-stage selection settings with code defaults.
+    settings: Dict[str, Any] = {
+        "enabled": bool(generation.get("quality_selection_enabled", True)),  # Enable priority-ordered selection unless explicitly disabled.
+        "extra_fraction": float(generation.get("quality_selection_extra_fraction", 0.5)),  # Extra unique candidates per requested class row.
+        "max_extra_rows": int(generation.get("quality_selection_max_extra_rows_per_class", 1000000)),  # Bound retained extra candidates per class.
+        "max_active_rows": int(generation.get("quality_selection_max_active_rows_per_class", 1000000)),  # Bound replaceable baseline rows per class.
+        "reference_rows": int(generation.get("quality_selection_reference_rows_per_class", 65536)),  # Bound each disjoint source reference reservoir.
+    }  # Collect the effective configurable selection limits.
+
+    if not np.isfinite(settings["extra_fraction"]) or not 0.0 < settings["extra_fraction"] <= 4.0:  # Require a bounded positive extra-candidate fraction.
+        raise ValueError("quality_selection_extra_fraction must be finite and within (0, 4]")  # Refuse unbounded or empty candidate pools.
+    if settings["max_extra_rows"] < 1 or settings["max_active_rows"] < 1 or settings["reference_rows"] < 512:  # Require usable bounded memory limits.
+        raise ValueError("Quality selection row limits must be positive and reference rows must be at least 512")  # Refuse unusable selection limits.
+
+    settings["policy"] = QUALITY_SELECTION_POLICY if settings["enabled"] else "first_unique_v1"  # Distinguish selected outputs from first-unique outputs.
+    settings["weights"] = list(QUALITY_SELECTION_WEIGHTS)  # Record the fixed priority weights in provenance.
+    settings["max_iterations"] = QUALITY_SELECTION_MAX_ITERATIONS  # Record the fixed iteration bound in provenance.
+
+    return settings  # Return validated selection settings.
+
+
+def build_generation_selection_fingerprint(config: Dict) -> str:
+    """Fingerprint the generation-stage candidate selection policy separately from model identity.
+
+    :param config: Runtime configuration with generation selection settings.
+    :return: Stable SHA-256 identity of the effective selection policy.
+    """
+
+    settings = resolve_quality_selection_settings(config)  # Resolve the exact validated selection policy.
+
+    return hashlib.sha256(json.dumps(settings, sort_keys=True, default=str).encode("utf-8")).hexdigest()  # Hash the canonical policy description.
+
+
+def build_quality_selection_references(args: Any, feature_cols: List[str], class_names: List[str], rows_per_class: int) -> Dict[str, tuple]:
+    """Stream two disjoint reproducible per-class source reservoirs for candidate selection and acceptance.
+
+    :param args: Generation arguments containing the source CSV path, label column, and seed.
+    :param feature_cols: Ordered generator feature columns.
+    :param class_names: Original class labels requested for generation.
+    :param rows_per_class: Maximum rows retained in each reservoir per class.
+    :return: Mapping from class label to selection-target and acceptance reference arrays.
+    """
+
+    source_path = getattr(args, "csv_path", None)  # Resolve the original source dataset path.
+    if not source_path or not Path(source_path).is_file():  # Generation without source data cannot compare decoded statistics.
+        return {}  # Report no available references.
+
+    label = args.label_col  # Resolve the original class label column.
+    wanted = set(feature_cols) | {label}  # Read only generator features and labels.
+    rng = np.random.default_rng(int(getattr(args, "seed", 42)) + 977)  # Isolate reservoir sampling from generation random streams.
+    pools: Dict[str, List[Any]] = {name: [None, None, None, None] for name in class_names}  # Hold target values, target priorities, acceptance values, and acceptance priorities.
+
+    for chunk in pd.read_csv(source_path, usecols=lambda column: column.strip() in wanted, chunksize=65536, low_memory=False):  # Stream the complete source in bounded chunks.
+        chunk.columns = chunk.columns.str.strip()  # Normalize source column names like training preprocessing.
+        if label not in chunk.columns or any(column not in chunk.columns for column in feature_cols):  # Require the exact generator schema.
+            raise ValueError("Selection reference source lacks the generator feature schema")  # Refuse misaligned references.
+        values = chunk[feature_cols].apply(pd.to_numeric, errors="coerce").to_numpy(dtype=np.float64)  # Convert source features without altering valid values.
+        valid = np.isfinite(values).all(axis=1)  # Keep only finite source records.
+        for index, column in enumerate(feature_cols):  # Apply the training domain filter to every feature.
+            valid &= ~flow_feature_invalid_mask(column, values[:, index])  # Exclude physically invalid source records.
+        labels = chunk[label].astype(str).to_numpy()  # Compare source labels with generated label strings.
+        priorities = rng.random(len(chunk))  # Assign uniform reservoir priorities.
+        halves = rng.random(len(chunk)) < 0.5  # Assign each source row to exactly one disjoint reservoir.
+
+        for name in class_names:  # Maintain both reservoirs for every requested class.
+            for in_target, slot in ((True, 0), (False, 2)):  # Separate selection targets from acceptance references.
+                mask = valid & (labels == name) & (halves == in_target)  # Select valid rows of this class and reservoir.
+                if not mask.any():  # Skip chunks without rows for this reservoir.
+                    continue  # Advance to the next reservoir.
+                block, keys = values[mask].astype(np.float32), priorities[mask]  # Store bounded reservoir values compactly.
+                if pools[name][slot] is not None:  # Merge with the previously retained reservoir.
+                    block = np.concatenate((pools[name][slot], block))  # Combine retained and current rows.
+                    keys = np.concatenate((pools[name][slot + 1], keys))  # Combine aligned priorities.
+                if len(keys) > rows_per_class:  # Enforce the bounded reservoir size.
+                    keep = np.argpartition(keys, rows_per_class - 1)[:rows_per_class]  # Keep the lowest uniform priorities.
+                    block, keys = block[keep], keys[keep]  # Retain the uniform bounded subset.
+                pools[name][slot], pools[name][slot + 1] = block, keys  # Publish the updated reservoir.
+
+    return {name: (pool[0], pool[2]) for name, pool in pools.items() if pool[0] is not None and pool[2] is not None}  # Return classes with both disjoint reservoirs.
+
+
+def selection_tail_kinds(z: np.ndarray, levels: np.ndarray) -> Iterator[np.ndarray]:
+    """Yield one tail-rate or tail-magnitude feature block at a time to bound selection memory.
+
+    :param z: Standardized rows on the selection-target scale.
+    :param levels: Upper thresholds in the first four rows and lower thresholds in the last four rows.
+    :return: Iterator over eight exceedance-indicator blocks followed by six tail-conditional magnitude blocks.
+    """
+
+    values = np.asarray(z, dtype=np.float64)  # Promote one bounded block for exact tail statistics.
+    for level in range(4):  # Upper-tail exceedances at 90, 99, 99.9, and 99.99 percent.
+        yield (values > levels[level]).astype(np.float64)  # Upper exceedance indicators.
+    for level in range(4, 8):  # Lower-tail exceedances at 10, 1, 0.1, and 0.01 percent.
+        yield (values < levels[level]).astype(np.float64)  # Lower exceedance indicators.
+    for level in range(1, 4):  # Upper-tail magnitudes beyond the extreme thresholds.
+        yield values * (values > levels[level])  # Upper tail-conditional magnitudes.
+    for level in range(5, 8):  # Lower-tail magnitudes beyond the extreme thresholds.
+        yield -values * (values < levels[level])  # Lower tail-conditional magnitudes.
+
+
+def selection_tail_sums(z: np.ndarray, levels: np.ndarray) -> np.ndarray:
+    """Sum tail-rate and tail-magnitude features over rows without materializing every tail kind together.
+
+    :param z: Standardized rows on the selection-target scale.
+    :param levels: Source tail thresholds from summarize_selection_target.
+    :return: Concatenated per-feature tail sums in tail-kind order.
+    """
+
+    return np.concatenate([kind.sum(axis=0) for kind in selection_tail_kinds(z, levels)])  # Accumulate one tail kind at a time.
+
+
+def selection_tail_scores(z: np.ndarray, levels: np.ndarray, gradient: np.ndarray) -> np.ndarray:
+    """Project every row's tail features onto the tail gradient one tail kind at a time.
+
+    :param z: Standardized rows on the selection-target scale.
+    :param levels: Source tail thresholds from summarize_selection_target.
+    :param gradient: Objective gradient with respect to concatenated tail sums.
+    :return: First-order tail contribution of each row.
+    """
+
+    width = int(np.asarray(z).shape[1])  # Number of variable features per tail kind.
+    scores = np.zeros(len(z), dtype=np.float64)  # Accumulate tail contributions per row.
+    for index, kind in enumerate(selection_tail_kinds(z, levels)):  # Visit tail kinds in concatenation order.
+        scores += kind @ gradient[index * width:(index + 1) * width]  # Add this tail kind's contribution.
+
+    return scores  # Return per-row tail contributions.
+
+
+def summarize_selection_target(reference: np.ndarray) -> Dict[str, Any]:
+    """Summarize original-scale class statistics targeted by candidate selection.
+
+    :param reference: Source selection-target reservoir for one class.
+    :return: Means, deviations, variable-feature mask, correlations, tail levels, tail targets, and tail variances.
+    """
+
+    values = np.asarray(reference, dtype=np.float64)  # Use full precision for reference statistics.
+    mean = values.mean(axis=0)  # Original-scale source means.
+    std = values.std(axis=0)  # Original-scale source deviations.
+    variable = std > 1e-9 * np.maximum(np.abs(mean), 1.0)  # Exclude numerically constant source features from moment targets.
+    z = (values[:, variable] - mean[variable]) / std[variable]  # Standardize variable source features.
+    levels = np.quantile(z, [0.90, 0.99, 0.999, 0.9999, 0.10, 0.01, 0.001, 0.0001], axis=0) if z.shape[1] else np.empty((8, 0))  # Source upper- and lower-tail thresholds per feature.
+    kinds = list(selection_tail_kinds(z, levels))  # Source tail rates and magnitudes per row and tail kind.
+    tail_targets = np.concatenate([kind.mean(axis=0) for kind in kinds])  # Source tail-statistic means.
+    tail_variances = np.maximum(np.concatenate([kind.var(axis=0) for kind in kinds]), 1.0 / len(values))  # Source tail variances floored at the sampling resolution.
+    del kinds  # Release per-row source tail features.
+    correlation = np.atleast_2d(np.nan_to_num(np.corrcoef(z, rowvar=False))) if z.shape[1] > 1 else np.ones((z.shape[1], z.shape[1]))  # Source Pearson correlations among variable features.
+
+    return {"mean": mean, "std": std, "variable": variable, "tail_levels": levels, "tail_targets": tail_targets, "tail_variances": tail_variances, "correlation": correlation}  # Return immutable target statistics.
+
+
+def standardize_selection_values(values: np.ndarray, target: Dict[str, Any]) -> np.ndarray:
+    """Standardize candidate rows on the selection-target scale.
+
+    :param values: Decoded original-scale candidate rows.
+    :param target: Selection-target statistics from summarize_selection_target.
+    :return: Float32 standardized variable features.
+    """
+
+    variable = target["variable"]  # Use only source-variable features.
+
+    return ((np.asarray(values, dtype=np.float64)[:, variable] - target["mean"][variable]) / target["std"][variable]).astype(np.float32)  # Standardize by source moments and store compactly.
+
+
+def tail_floor(tail_targets: torch.Tensor, tail_variances: torch.Tensor, count: int) -> torch.Tensor:
+    """Return the lowest selected tail statistics consistent with three standard errors of the source targets.
+
+    :param tail_targets: Source tail rates and magnitudes.
+    :param tail_variances: Source per-row variances of the tail features.
+    :param count: Number of selected rows.
+    :return: Tail-statistic floors that selection must not cross.
+    """
+
+    return tail_targets - 3.0 * torch.sqrt(tail_variances / count)  # Allow only ordinary finite-sample shortfall.
+
+
+def selection_objective(first: torch.Tensor, second: torch.Tensor, tails: torch.Tensor, count: int, correlation: torch.Tensor, tail_targets: torch.Tensor, tail_variances: torch.Tensor, floor: torch.Tensor) -> torch.Tensor:
+    """Evaluate the priority-weighted mean, correlation, deviation, and tail selection objective.
+
+    :param first: Sum of standardized selected rows.
+    :param second: Sum of standardized selected outer products.
+    :param tails: Sum of selected tail features.
+    :param count: Number of selected rows.
+    :param correlation: Source correlation target.
+    :param tail_targets: Source tail rates and magnitudes.
+    :param tail_variances: Source per-row variances of the tail features.
+    :param floor: Lowest acceptable selected tail statistics.
+    :return: Scalar objective tensor.
+    """
+
+    mean = first / count  # Selected standardized means.
+    covariance = second / count - torch.outer(mean, mean)  # Selected standardized covariance.
+    deviation = torch.sqrt(torch.clamp(torch.diagonal(covariance), min=1e-12))  # Selected standardized deviations.
+    selected_correlation = covariance / torch.outer(deviation, deviation)  # Selected Pearson correlations.
+    width = int(mean.shape[0])  # Number of variable features.
+    upper = torch.triu_indices(width, width, 1)  # Unique feature pairs.
+    mean_error = (mean ** 2).mean()  # Highest-priority standardized mean error.
+    correlation_error = ((selected_correlation[upper[0], upper[1]] - correlation[upper[0], upper[1]]) ** 2).mean() if width > 1 else mean.new_zeros(())  # Second-priority correlation error.
+    deviation_error = ((deviation - 1.0) ** 2).mean()  # Third-priority standardized deviation error.
+    scale = tail_variances  # Normalize every tail statistic by its resolution-floored source variance.
+    rates = 8 * width  # Tail-rate features precede tail-magnitude features.
+    tail_error = (((tails[:rates] / count) - tail_targets[:rates]) ** 2 / scale[:rates]).mean() if rates else mean.new_zeros(())  # Two-sided tail-rate safeguard against trimmed or inflated tails.
+    floor_deficit = torch.relu(floor - tails / count)  # Tail shortfall below the effective floor.
+    floor_error = (floor_deficit ** 2 / (scale / count)).mean() if len(floor) else mean.new_zeros(())  # Barrier against trimming legitimate source tails.
+
+    return QUALITY_SELECTION_WEIGHTS[0] * mean_error + QUALITY_SELECTION_WEIGHTS[1] * correlation_error + QUALITY_SELECTION_WEIGHTS[2] * deviation_error + QUALITY_SELECTION_WEIGHTS[3] * tail_error + QUALITY_SELECTION_WEIGHTS[4] * floor_error  # Combine errors in fixed priority order.
+
+
+def select_rows_by_priority_moments(z: np.ndarray, initial_count: int, frozen: tuple, quota: int, target: Dict[str, Any]) -> tuple:
+    """Swap candidate rows to reduce the priority-weighted selection objective with exact moment updates.
+
+    :param z: Standardized replaceable rows, with the initially selected rows first.
+    :param initial_count: Number of leading rows selected before swapping.
+    :param frozen: Standardized sums, outer-product sums, and tail sums of rows that always remain selected.
+    :param quota: Total selected rows including frozen rows.
+    :param target: Selection-target statistics from summarize_selection_target.
+    :return: Boolean selection mask over z and the number of accepted swap iterations.
+    """
+
+    levels = target["tail_levels"]  # Source tail thresholds for tail features.
+    selected = np.zeros(len(z), dtype=bool)  # Track the selected replaceable rows.
+    selected[:initial_count] = True  # Start from the first-unique baseline rows.
+    first, second, tails = (torch.as_tensor(part, dtype=torch.float64) for part in frozen)  # Start from the fixed selected contribution.
+    for start in range(0, initial_count, 262144):  # Accumulate initial moments in bounded float64 blocks.
+        block = z[start:min(start + 262144, initial_count)].astype(np.float64)  # Promote one block for exact accumulation.
+        first = first + torch.from_numpy(block.sum(axis=0))  # Add the block feature sums.
+        second = second + torch.from_numpy(block.T @ block)  # Add the block outer-product sums.
+        tails = tails + torch.from_numpy(selection_tail_sums(block, levels))  # Add the block tail sums.
+
+    correlation = torch.as_tensor(target["correlation"], dtype=torch.float64)  # Use the source correlation target.
+    tail_targets = torch.as_tensor(target["tail_targets"], dtype=torch.float64)  # Use the source tail targets.
+    tail_variances = torch.as_tensor(target["tail_variances"], dtype=torch.float64)  # Use the source tail variances.
+    floor = torch.minimum(tail_floor(tail_targets, tail_variances, quota), tails / quota)  # Never trim below the source floor or below an already-lower baseline.
+    current = float(selection_objective(first, second, tails, quota, correlation, tail_targets, tail_variances, floor))  # Evaluate the baseline objective.
+    batch = max(1, initial_count // 50)  # Start with bounded two-percent swap batches.
+    iterations = 0  # Count accepted swap iterations.
+    protected = np.zeros(len(z), dtype=bool)  # Rows that carry tail statistics already at their effective floor.
+    scores = np.empty(len(z), dtype=np.float64)  # First-order objective change from including each row.
+    refresh = True  # Recompute scores only after the selected moments change.
+
+    for _ in range(QUALITY_SELECTION_MAX_ITERATIONS):  # Bound the complete swap search.
+        if refresh:  # Rejected swaps leave gradients and scores unchanged.
+            parts = [part.clone().requires_grad_(True) for part in (first, second, tails)]  # Differentiate the objective with respect to selected moments.
+            gradients = torch.autograd.grad(selection_objective(parts[0], parts[1], parts[2], quota, correlation, tail_targets, tail_variances, floor), parts)  # Compute exact first-order moment gradients.
+            gradient_first = gradients[0].numpy()  # Gradient for standardized feature sums.
+            gradient_second = ((gradients[1] + gradients[1].T) / 2.0).numpy()  # Symmetric gradient for outer-product sums.
+            gradient_tails = gradients[2].numpy()  # Gradient for tail-feature sums.
+            for start in range(0, len(z), 262144):  # Score rows in bounded float64 blocks.
+                block = z[start:start + 262144].astype(np.float64)  # Promote one candidate block.
+                scores[start:start + len(block)] = block @ gradient_first + ((block @ gradient_second) * block).sum(axis=1) + selection_tail_scores(block, levels, gradient_tails)  # Linearize the objective for this block.
+            refresh = False  # Reuse these scores until a swap is accepted.
+
+        inside, outside = np.flatnonzero(selected & ~protected), np.flatnonzero(~selected)  # Resolve removable selected rows and unselected rows.
+        size = min(batch, len(inside), len(outside))  # Bound the current swap batch.
+        if size < 1:  # Stop when no replacement is possible.
+            break  # Keep the current selection.
+        removed = inside[np.argpartition(-scores[inside], size - 1)[:size]]  # Remove rows whose inclusion most increases the objective.
+        added = outside[np.argpartition(scores[outside], size - 1)[:size]]  # Add rows whose inclusion most decreases the objective.
+        removed_block, added_block = z[removed].astype(np.float64), z[added].astype(np.float64)  # Promote swapped rows for exact updates.
+        candidate_first = first + torch.from_numpy(added_block.sum(axis=0) - removed_block.sum(axis=0))  # Exact feature sums after swapping.
+        candidate_second = second + torch.from_numpy(added_block.T @ added_block - removed_block.T @ removed_block)  # Exact outer-product sums after swapping.
+        candidate_tails = tails + torch.from_numpy(selection_tail_sums(added_block, levels) - selection_tail_sums(removed_block, levels))  # Exact tail sums after swapping.
+        candidate = float(selection_objective(candidate_first, candidate_second, candidate_tails, quota, correlation, tail_targets, tail_variances, floor))  # Evaluate the exact swapped objective.
+        trimmed = bool((candidate_tails / quota < floor - 1e-12).any())  # Detect any tail statistic below its effective floor.
+
+        if candidate < current and not trimmed:  # Accept only exact objective reductions that trim no legitimate tail.
+            selected[removed], selected[added] = False, True  # Apply the swap batch.
+            first, second, tails, current = candidate_first, candidate_second, candidate_tails, candidate  # Publish the exact updated moments.
+            iterations += 1  # Count the accepted swap iteration.
+            refresh = True  # Rescore rows against the updated moments.
+        elif trimmed:  # Keep tail-carrying rows instead of shrinking the search.
+            violated = (candidate_tails / quota < floor - 1e-12).numpy()  # Tail statistics the rejected batch would trim.
+            width = int(z.shape[1])  # Number of variable features per tail kind.
+            carriers = np.zeros(len(removed), dtype=bool)  # Removed rows carrying a violated tail statistic.
+            for index, kind in enumerate(selection_tail_kinds(removed_block, levels)):  # Visit tail kinds in concatenation order.
+                carriers |= (kind[:, violated[index * width:(index + 1) * width]] > 0.0).any(axis=1)  # Mark rows contributing to violated statistics.
+            protected[removed[carriers]] = True  # Never remove rows carrying those statistics.
+        elif batch == 1:  # Stop when even a single-row swap cannot improve the objective.
+            break  # Keep the current local optimum.
+        else:  # Retry with a smaller swap batch.
+            batch = max(1, batch // 2)  # Halve the swap batch size.
+
+    return selected, iterations  # Return the selection mask and accepted iteration count.
+
+
+def measure_selection_fidelity(values: np.ndarray, reference: np.ndarray, categorical_positions: List[int]) -> Dict[str, float]:
+    """Measure decoded mean, correlation, deviation, tail, and categorical errors against an acceptance reference.
+
+    :param values: Decoded original-scale rows for one class.
+    :param reference: Disjoint source acceptance reservoir for the same class.
+    :param categorical_positions: Feature positions of modeled categorical fields.
+    :return: Exact aggregate fidelity errors on the original feature scale.
+    """
+
+    source = np.asarray(reference, dtype=np.float64)  # Use full precision for the acceptance reference.
+    mean, std = source.mean(axis=0), source.std(axis=0)  # Reference moments on the original scale.
+    variable = std > 1e-9 * np.maximum(np.abs(mean), 1.0)  # Evaluate only source-variable features.
+    width = int(variable.sum())  # Number of evaluated features.
+    first, second = np.zeros(width), np.zeros((width, width))  # Standardized sums and outer-product sums.
+    thresholds = np.quantile(source[:, variable], [0.99, 0.999, 0.01, 0.001], axis=0) if width else np.empty((4, 0))  # Reference upper- and lower-tail thresholds.
+    exceed = np.zeros((4, width))  # Generated exceedance counts beyond each threshold.
+    magnitude = np.zeros((4, width))  # Generated standardized tail-conditional magnitude sums.
+    count = len(values)  # Number of generated rows.
+
+    for start in range(0, count, 262144):  # Accumulate exact statistics in bounded float64 blocks.
+        block = np.asarray(values[start:start + 262144], dtype=np.float64)[:, variable]  # Promote one block of evaluated features.
+        z = (block - mean[variable]) / std[variable]  # Standardize by the reference moments.
+        first += z.sum(axis=0)  # Add standardized feature sums.
+        second += z.T @ z  # Add standardized outer-product sums.
+        exceed += np.stack([(block > thresholds[level]).sum(axis=0) for level in range(2)] + [(block < thresholds[level]).sum(axis=0) for level in range(2, 4)])  # Add upper- and lower-tail exceedance counts.
+        magnitude += np.stack([(z * (block > thresholds[level])).sum(axis=0) for level in range(2)] + [(-z * (block < thresholds[level])).sum(axis=0) for level in range(2, 4)])  # Add tail-conditional magnitude sums.
+
+    synthetic_mean = first / max(count, 1)  # Generated standardized means.
+    covariance = second / max(count, 1) - np.outer(synthetic_mean, synthetic_mean)  # Generated standardized covariance.
+    synthetic_std = np.sqrt(np.clip(np.diag(covariance), 0.0, None))  # Generated standardized deviations.
+    collapsed = synthetic_std <= 1e-4  # Treat collapsed generated features as zero association.
+    scale = np.where(collapsed, 1.0, synthetic_std)  # Avoid division by collapsed deviations.
+    synthetic_correlation = np.where(np.outer(~collapsed, ~collapsed), covariance / np.outer(scale, scale), 0.0)  # Generated Pearson correlations.
+    source_correlation = np.atleast_2d(np.nan_to_num(np.corrcoef((source[:, variable] - mean[variable]) / std[variable], rowvar=False))) if width > 1 else np.ones((width, width))  # Reference Pearson correlations.
+    upper = np.triu_indices(width, 1)  # Unique feature pairs.
+    source_exceed = np.stack([(source[:, variable] > thresholds[level]).mean(axis=0) for level in range(2)] + [(source[:, variable] < thresholds[level]).mean(axis=0) for level in range(2, 4)]) if width else np.empty((4, 0))  # Reference exceedance rates.
+    rate_error = np.sqrt(source_exceed * (1.0 - source_exceed) * (1.0 / max(count, 1) + 1.0 / len(source)))  # Combined binomial standard error of each rate difference.
+    source_z = (source[:, variable] - mean[variable]) / std[variable]  # Standardized acceptance reference.
+    source_magnitude = np.stack([source_z * (source[:, variable] > thresholds[level]) for level in range(2)] + [-source_z * (source[:, variable] < thresholds[level]) for level in range(2, 4)]) if width else np.empty((4, 0, 0))  # Reference tail-conditional magnitudes per row.
+    magnitude_target = source_magnitude.mean(axis=1) if width else np.empty((4, 0))  # Reference tail-conditional magnitude means.
+    magnitude_error = np.sqrt(source_magnitude.var(axis=1) * (1.0 / max(count, 1) + 1.0 / len(source))) if width else np.empty((4, 0))  # Combined standard error of each magnitude difference.
+    categorical = []  # Total-variation distances of modeled categorical fields.
+
+    for position in categorical_positions:  # Compare every modeled categorical field.
+        generated_values, generated_counts = np.unique(np.asarray(values[:, position], dtype=np.float64), return_counts=True)  # Generated category frequencies.
+        source_values, source_counts = np.unique(source[:, position], return_counts=True)  # Reference category frequencies.
+        support = np.union1d(generated_values, source_values)  # Combined category support.
+        generated_probability = np.zeros(len(support))  # Generated probabilities on the combined support.
+        source_probability = np.zeros(len(support))  # Reference probabilities on the combined support.
+        generated_probability[np.searchsorted(support, generated_values)] = generated_counts / max(count, 1)  # Place generated frequencies.
+        source_probability[np.searchsorted(support, source_values)] = source_counts / len(source)  # Place reference frequencies.
+        categorical.append(0.5 * float(np.abs(generated_probability - source_probability).sum()))  # Record total variation distance.
+
+    return {
+        "mean_error": float(np.mean(np.abs(synthetic_mean))) if width else 0.0,  # Mean absolute standardized mean shift.
+        "correlation_error": float(np.mean(np.abs(synthetic_correlation[upper] - source_correlation[upper]))) if width > 1 else 0.0,  # Mean absolute signed-correlation difference.
+        "variance_error": float(np.mean(np.abs(np.log(np.maximum(synthetic_std, 1e-3))))) if width else 0.0,  # Mean absolute log deviation ratio.
+        "tail_error": float(np.mean(np.abs(exceed / max(count, 1) - source_exceed))) if width else 0.0,  # Mean tail exceedance-rate difference.
+        "tail_floor_violations": int((exceed / max(count, 1) < source_exceed - 3.0 * rate_error).sum() + (magnitude / max(count, 1) < magnitude_target - 3.0 * magnitude_error).sum()),  # Tail rates and magnitudes trimmed beyond three combined standard errors.
+        "categorical_error": float(np.mean(categorical)) if categorical else 0.0,  # Mean categorical total variation.
+        "collapsed_features": int(collapsed.sum()),  # Number of collapsed source-variable features.
+    }  # Return exact fidelity errors.
+
+
+def decide_quality_selection(baseline: Dict[str, float], candidate: Dict[str, float], tolerance: float) -> tuple:
+    """Accept a selected class population only under the fixed mean, correlation, then variance priority.
+
+    :param baseline: First-unique fidelity errors.
+    :param candidate: Quality-selected fidelity errors.
+    :param tolerance: Fixed finite-sample comparability tolerance.
+    :return: Whether to publish the selected population and the decision reason.
+    """
+
+    if candidate["tail_error"] > baseline["tail_error"] + tolerance or candidate["tail_floor_violations"] > baseline["tail_floor_violations"]:  # Refuse selections that distort or trim source tail rates.
+        return False, "tail_safeguard"  # Keep the first-unique population.
+    if candidate["categorical_error"] > baseline["categorical_error"] + tolerance:  # Refuse selections that distort category frequencies.
+        return False, "categorical_safeguard"  # Keep the first-unique population.
+
+    mean_delta = candidate["mean_error"] - baseline["mean_error"]  # Highest-priority change.
+    correlation_delta = candidate["correlation_error"] - baseline["correlation_error"]  # Second-priority change.
+    variance_delta = candidate["variance_error"] - baseline["variance_error"]  # Third-priority change.
+
+    if mean_delta < -tolerance and correlation_delta <= 2.0 * tolerance and variance_delta <= 2.0 * tolerance:  # Mean improves without a substantial lower-priority regression.
+        return True, "mean_improved"  # Publish the selected population.
+    if abs(mean_delta) <= tolerance and correlation_delta < -tolerance and variance_delta <= 2.0 * tolerance:  # Correlation improves at comparable mean fidelity.
+        return True, "correlation_improved"  # Publish the selected population.
+    if abs(mean_delta) <= tolerance and abs(correlation_delta) <= tolerance and variance_delta < -tolerance:  # Variance improves at comparable higher priorities.
+        return True, "variance_improved"  # Publish the selected population.
+
+    return False, "no_priority_improvement"  # Keep the first-unique population.
+
+
+def decode_candidate_frame(args: Any, G: nn.Module, device: torch.device, draw_labels: np.ndarray, scaler: Any, label_encoder: Any, feature_cols: List[str]) -> pd.DataFrame:
+    """Generate and decode one bounded batch of labeled candidate flow records.
+
+    :param args: Generation arguments with batch size, latent size, and label column.
+    :param G: Trained generator in any supported wrapper.
+    :param device: Inference device.
+    :param draw_labels: Encoded class labels to draw.
+    :param scaler: Fitted class-conditional flow scaler.
+    :param label_encoder: Fitted label encoder.
+    :param feature_cols: Ordered decoded feature columns.
+    :return: Decoded candidate rows with original class labels.
+    """
+
+    draw_count = len(draw_labels)  # Number of requested candidates.
+    candidates, candidate_labels, _ = generate_batches_and_collect_results(args, G, device, draw_labels, draw_count)  # Sample encoded candidates in inference mode.
+    decoded = scaler.inverse_transform(candidates, candidate_labels)  # Decode through quantiles, categories, discrete domains, and flow rules.
+    if decoded.shape != (draw_count, len(feature_cols)) or not np.isfinite(decoded).all():  # Require complete finite decoded rows.
+        raise ValueError("Decoded synthetic candidate shape or finiteness is invalid")  # Refuse malformed candidates.
+    frame = pd.DataFrame(decoded, columns=pd.Index(feature_cols))  # Build the decoded float32 feature frame.
+    frame[args.label_col] = label_encoder.inverse_transform(candidate_labels)  # Attach original class labels.
+
+    return frame  # Return decoded labeled candidates.
+
+
+def draw_extra_unique_candidates(args: Any, G: nn.Module, device: torch.device, accepted: pd.DataFrame, extra_by_id: Dict[int, int], names: Dict[int, str], scaler: Any, label_encoder: Any, feature_cols: List[str], budget: int, max_rounds: int, batch_rows: int) -> tuple:
+    """Append bounded extra unique candidates per class after the unchanged first-unique rows.
+
+    :param args: Generation arguments with the label column.
+    :param G: Trained generator in any supported wrapper.
+    :param device: Inference device.
+    :param accepted: First-unique rows that fill every class quota.
+    :param extra_by_id: Extra unique candidates wanted per encoded class.
+    :param names: Original label for every encoded class.
+    :param scaler: Fitted class-conditional flow scaler.
+    :param label_encoder: Fitted label encoder.
+    :param feature_cols: Ordered decoded feature columns.
+    :param budget: Remaining candidate draws allowed by the global draw multiplier.
+    :param max_rounds: Maximum extra-candidate rounds.
+    :param batch_rows: Minimum candidates drawn per round.
+    :return: Candidate pool, extra draws, rejected duplicates, rounds, and stop reason.
+    """
+
+    identity_cols = list(feature_cols) + [args.label_col]  # Use the existing exact decoded-row identity.
+    quotas = accepted[args.label_col].value_counts().to_dict()  # Count first-unique rows per class.
+    pool = accepted  # Keep first-unique rows first and unchanged.
+    remaining = {class_id: count for class_id, count in extra_by_id.items() if count > 0}  # Track missing extra candidates per class.
+    per_round = max(int(batch_rows), int(math.ceil(sum(remaining.values()) / max(int(max_rounds), 1))))  # Size rounds so the round limit can cover every target.
+    draws = duplicates = rounds = stagnant = 0  # Initialize bounded refill counters.
+    reason = "targets_met"  # Default stop reason when every extra target is filled.
+
+    while any(remaining.values()):  # Draw until every class has its extra candidates.
+        if rounds >= max_rounds or draws >= budget:  # Stop at the configured round or draw budget.
+            reason = "round_limit" if rounds >= max_rounds else "draw_budget"  # Record the exhausted limit.
+            break  # Use the candidates already collected.
+        left = min(per_round, budget - draws)  # Bound this round by the remaining draw budget.
+        portions = []  # Collect per-class draw labels for this round.
+        for class_id, missing in remaining.items():  # Draw only for classes still needing candidates.
+            count = min(missing, left)  # Bound this class by the remaining round allowance.
+            if count:  # Skip classes without allowance.
+                portions.append(np.full(count, class_id, dtype=np.int64))  # Request exactly this class's missing candidates.
+                left -= count  # Consume the round allowance.
+        draw_labels = np.concatenate(portions)  # Build this round's class labels.
+        frame = decode_candidate_frame(args, G, device, draw_labels, scaler, label_encoder, feature_cols)  # Decode this round's candidates.
+        before = len(pool)  # Count candidates before deduplication.
+        pool = pd.concat((pool, frame), ignore_index=True, copy=False).drop_duplicates(subset=identity_cols, keep="first").reset_index(drop=True)  # Keep only new exact-unique decoded rows.
+        gained = len(pool) - before  # Count new unique candidates.
+        draws += len(draw_labels)  # Count extra candidate draws.
+        duplicates += len(draw_labels) - gained  # Count rejected exact duplicates.
+        rounds += 1  # Count this extra-candidate round.
+        observed = pool[args.label_col].value_counts().to_dict()  # Count candidates per class.
+        remaining = {class_id: max(0, count - (int(observed.get(names[class_id], 0)) - int(quotas.get(names[class_id], 0)))) for class_id, count in extra_by_id.items()}  # Recompute missing extras per class.
+        print(f"[{WGANGP_RELEASE_VERSION}] Quality-selection candidates: pool={len(pool)}, new={gained}/{len(draw_labels)}, rejected duplicates={duplicates}, round={rounds}/{max_rounds}")  # Report extra-candidate progress.
+        stagnant = stagnant + 1 if gained == 0 else 0  # Track successive rounds without new candidates.
+        if stagnant >= 3:  # Stop when the learned support yields no new rows.
+            reason = "no_new_unique_candidates"  # Record exhausted unique support.
+            break  # Use the candidates already collected.
+
+    return pool, draws, duplicates, rounds, reason  # Return the bounded candidate pool and counters.
+
+
+def apply_quality_aware_selection(args: Any, pool: pd.DataFrame, quota_by_name: Dict[str, int], references: Dict[str, tuple], settings: Dict[str, Any], categorical_positions: List[int], feature_cols: List[str]) -> tuple:
+    """Select each class quota from its candidate pool and publish only accepted priority improvements.
+
+    :param args: Generation arguments with the label column and seed.
+    :param pool: First-unique rows followed by extra unique candidates.
+    :param quota_by_name: Exact requested rows per original class label.
+    :param references: Disjoint selection-target and acceptance reservoirs per class.
+    :param settings: Validated quality selection settings.
+    :param categorical_positions: Feature positions of modeled categorical fields.
+    :param feature_cols: Ordered decoded feature columns.
+    :return: Final rows in candidate-pool order and per-class selection records.
+    """
+
+    labels = pool[args.label_col].to_numpy()  # Resolve candidate labels once.
+    columns = [pool.columns.get_loc(column) for column in feature_cols]  # Resolve feature column positions without copying the pool.
+    chosen = []  # Collect final row positions for every class.
+    records = {}  # Collect per-class selection evidence.
+
+    for class_index, (name, quota) in enumerate(quota_by_name.items()):  # Select every class independently.
+        started = time.time()  # Measure per-class selection time.
+        positions = np.flatnonzero(labels == name)  # Candidate rows of this class in pool order.
+        baseline, extras = positions[:quota], positions[quota:]  # Split first-unique rows from extra candidates.
+        reference = references.get(name, ())  # Resolve this class's source reservoirs.
+        entry: Dict[str, Any] = {"quota": int(quota), "extra_candidates": int(len(extras)), "accepted": False}  # Start this class record.
+        target = summarize_selection_target(reference[0]) if len(reference) == 2 and min(len(reference[0]), len(reference[1])) >= 256 else None  # Summarize a usable selection target.
+
+        if not len(extras) or target is None or not target["variable"].any():  # Keep first-unique rows when selection cannot be evaluated.
+            entry["decision"] = "no_extra_candidates" if not len(extras) else ("insufficient_source_reference" if target is None else "no_variable_source_features")  # Record the explicit fallback reason.
+            chosen.append(baseline)  # Publish the first-unique rows for this class.
+            records[name] = entry  # Store the fallback record.
+            print(f"[{WGANGP_RELEASE_VERSION}] Quality selection for {name}: first-unique rows kept ({entry['decision']})")  # Report the explicit fallback.
+            continue  # Advance to the next class.
+
+        width = int(target["variable"].sum())  # Number of selection features.
+        rng = np.random.default_rng(int(getattr(args, "seed", 42)) + 1709 + class_index)  # Isolate active-subset sampling per class.
+        active = baseline if quota <= settings["max_active_rows"] else np.sort(rng.choice(baseline, settings["max_active_rows"], replace=False))  # Bound replaceable baseline rows.
+        frozen_positions = np.setdiff1d(baseline, active, assume_unique=True)  # Baseline rows that always remain selected.
+        frozen = [np.zeros(width), np.zeros((width, width)), np.zeros(len(target["tail_targets"]))]  # Standardized sums of frozen rows.
+        for start in range(0, len(frozen_positions), 262144):  # Accumulate frozen moments in bounded blocks.
+            block = standardize_selection_values(pool.iloc[frozen_positions[start:start + 262144], columns].to_numpy(dtype=np.float32), target).astype(np.float64)  # Standardize and promote one frozen block.
+            frozen[0] += block.sum(axis=0)  # Add frozen feature sums.
+            frozen[1] += block.T @ block  # Add frozen outer-product sums.
+            frozen[2] += selection_tail_sums(block, target["tail_levels"])  # Add frozen tail sums.
+
+        replaceable = np.concatenate((active, extras))  # Rows eligible for swapping, with active baseline rows first.
+        z = standardize_selection_values(pool.iloc[replaceable, columns].to_numpy(dtype=np.float32), target)  # Standardize replaceable rows once.
+        mask, iterations = select_rows_by_priority_moments(z, len(active), tuple(frozen), quota, target)  # Search for a lower-objective subset.
+        del z  # Release standardized candidate rows.
+        selected = np.sort(np.concatenate((frozen_positions, replaceable[mask])))  # Final selected rows of this class in pool order.
+        if len(selected) != quota:  # Require the exact class quota.
+            raise RuntimeError(f"Quality selection changed the {name} quota")  # Refuse an incorrect class population.
+
+        baseline_metrics = measure_selection_fidelity(pool.iloc[baseline, columns].to_numpy(dtype=np.float32), reference[1], categorical_positions)  # Measure first-unique rows against the disjoint acceptance reference.
+        selected_metrics = measure_selection_fidelity(pool.iloc[selected, columns].to_numpy(dtype=np.float32), reference[1], categorical_positions)  # Measure selected rows against the same reference.
+        tolerance = math.sqrt(1.0 / quota + 1.0 / len(reference[1]))  # Fixed one-standard-error comparability tolerance.
+        accepted, reason = decide_quality_selection(baseline_metrics, selected_metrics, tolerance)  # Apply the mean, correlation, variance priority.
+        chosen.append(selected if accepted else baseline)  # Publish the selected rows only after priority acceptance.
+        entry.update({"accepted": bool(accepted), "decision": reason, "tolerance": tolerance, "baseline": baseline_metrics, "selected": selected_metrics, "replaced_rows": int(np.setdiff1d(selected, baseline, assume_unique=True).size), "active_rows": int(len(active)), "frozen_rows": int(len(frozen_positions)), "swap_iterations": int(iterations), "reference_rows": [int(len(reference[0])), int(len(reference[1]))], "excluded_constant_features": [feature_cols[index] for index in np.flatnonzero(~target["variable"])], "seconds": round(time.time() - started, 3)})  # Record complete per-class evidence.
+        records[name] = entry  # Store this class record.
+        print(f"[{WGANGP_RELEASE_VERSION}] Quality selection for {name}: {'selected' if accepted else 'first-unique'} rows published ({reason}) | mean {baseline_metrics['mean_error']:.6f}->{selected_metrics['mean_error']:.6f} | correlation {baseline_metrics['correlation_error']:.6f}->{selected_metrics['correlation_error']:.6f} | variance {baseline_metrics['variance_error']:.6f}->{selected_metrics['variance_error']:.6f} | tolerance {tolerance:.6f} | replaced {entry['replaced_rows']}/{quota}")  # Report the exact priority comparison.
+
+    final = pool.iloc[np.sort(np.concatenate(chosen))].reset_index(drop=True)  # Publish exactly the chosen rows in candidate-pool order.
+
+    return final, records  # Return final rows and class evidence.
+
+
+def run_quality_aware_candidate_selection(args: Any, G: nn.Module, device: torch.device, accepted: pd.DataFrame, target_by_id: Dict[int, int], names: Dict[int, str], scaler: Any, label_encoder: Any, feature_cols: List[str], settings: Dict[str, Any], budget: int, max_rounds: int, batch_rows: int) -> tuple:
+    """Draw bounded extra candidates and publish priority-accepted class selections or first-unique rows.
+
+    :param args: Generation arguments with source path, label column, and seed.
+    :param G: Trained generator in any supported wrapper.
+    :param device: Inference device.
+    :param accepted: First-unique rows that fill every class quota.
+    :param target_by_id: Exact requested rows per encoded class.
+    :param names: Original label for every encoded class.
+    :param scaler: Fitted class-conditional flow scaler.
+    :param label_encoder: Fitted label encoder.
+    :param feature_cols: Ordered decoded feature columns.
+    :param settings: Validated quality selection settings.
+    :param budget: Remaining candidate draws allowed by the global draw multiplier.
+    :param max_rounds: Maximum extra-candidate rounds.
+    :param batch_rows: Minimum candidates drawn per round.
+    :return: Final rows, selection record, extra draws, and extra rejected duplicates.
+    """
+
+    started = time.time()  # Measure complete selection overhead.
+    record: Dict[str, Any] = {"policy": settings["policy"], "settings": settings, "applied": False, "extra_draws": 0, "extra_duplicates_rejected": 0, "extra_rounds": 0, "classes": {}}  # Start the provenance record.
+    references = build_quality_selection_references(args, feature_cols, [names[class_id] for class_id in target_by_id], settings["reference_rows"])  # Stream disjoint source reservoirs.
+    if not references:  # Keep first-unique rows when the source is unavailable.
+        record["stop_reason"] = "source_reference_unavailable"  # Record the explicit fallback reason.
+        print(f"[{WGANGP_RELEASE_VERSION}] Quality selection skipped: source reference unavailable; first-unique rows kept")  # Report the explicit fallback.
+        return accepted, record, 0, 0  # Publish first-unique rows unchanged.
+
+    extra_by_id = {class_id: min(int(math.ceil(target * settings["extra_fraction"])), settings["max_extra_rows"]) for class_id, target in target_by_id.items()}  # Bound extra candidates per class.
+    pool, draws, duplicates, rounds, reason = draw_extra_unique_candidates(args, G, device, accepted, extra_by_id, names, scaler, label_encoder, feature_cols, budget, max_rounds, batch_rows)  # Collect bounded extra unique candidates.
+    categorical_positions = [int(index) for index in scaler.categorical_indices]  # Feature positions of modeled categorical fields.
+    final, classes = apply_quality_aware_selection(args, pool, {names[class_id]: target for class_id, target in target_by_id.items()}, references, settings, categorical_positions, feature_cols)  # Select every class quota.
+    record.update({"applied": any(entry["accepted"] for entry in classes.values()), "extra_draws": int(draws), "extra_duplicates_rejected": int(duplicates), "extra_rounds": int(rounds), "stop_reason": reason, "candidate_pool_rows": int(len(pool)), "classes": classes, "seconds": round(time.time() - started, 3)})  # Record pool and class outcomes.
+
+    return final, record, draws, duplicates  # Return final rows and counters.
+
 
 def generate_unique_decoded_samples(args, config: Dict, G: nn.Module, device: torch.device, labels: np.ndarray, scaler: Any, label_encoder: Any, feature_cols: List[str]) -> tuple:
     """Draw until every requested class has the exact count of unique *decoded* flow records.
@@ -6395,13 +6968,7 @@ def generate_unique_decoded_samples(args, config: Dict, G: nn.Module, device: to
         draw_count = len(draw_labels)
         if not draw_count:
             raise RuntimeError("Unique-row refill could not allocate any further candidate draws")
-        candidates, candidate_labels, _ = generate_batches_and_collect_results(args, G, device, draw_labels, draw_count)
-        decoded = scaler.inverse_transform(candidates, candidate_labels)
-        if decoded.shape != (draw_count, len(feature_cols)) or not np.isfinite(decoded).all():
-            raise ValueError("Decoded synthetic candidate shape or finiteness is invalid")
-        frame = pd.DataFrame(decoded, columns=pd.Index(feature_cols))
-        frame[args.label_col] = label_encoder.inverse_transform(candidate_labels)
-        del decoded, candidates
+        frame = decode_candidate_frame(args, G, device, draw_labels, scaler, label_encoder, feature_cols)  # Generate and decode this round's labeled candidates.
         previous_count = len(accepted) if accepted is not None else 0
         combined = frame if accepted is None else pd.concat((accepted, frame), ignore_index=True, copy=False)
         # pandas duplicated uses exact field values, not tolerance or rounded values.
@@ -6427,6 +6994,15 @@ def generate_unique_decoded_samples(args, config: Dict, G: nn.Module, device: to
         else:
             stagnant_rounds = 0
         first_round = False
+
+    selection_settings = resolve_quality_selection_settings(config)  # Resolve the validated candidate selection policy.
+    selection_record: Dict[str, Any] = {"policy": selection_settings["policy"], "settings": selection_settings, "applied": False, "classes": {}}  # Record first-unique publication by default.
+    if selection_settings["enabled"]:  # Select class quotas from bounded extra candidates when enabled.
+        accepted, selection_record, extra_draws, extra_duplicates = run_quality_aware_candidate_selection(args, G, device, accepted, target_by_id, names, scaler, label_encoder, feature_cols, selection_settings, max_draws - total_draws, max_rounds, refill_batch_rows)  # Publish priority-accepted selections or first-unique rows.
+        total_draws += extra_draws  # Count extra candidate draws against the reported total.
+        total_duplicates += extra_duplicates  # Count extra rejected duplicates against the reported total.
+    selection_record["settings_sha256"] = build_generation_selection_fingerprint(config)  # Bind the record to the effective selection policy.
+    args._last_generation_selection = selection_record  # Expose selection provenance to output persistence.
 
     if len(accepted) != len(requested) or bool(accepted.duplicated(subset=identity_cols).any()):
         raise RuntimeError("Final uniqueness/row-count verification failed; refusing to publish output")
@@ -6569,6 +7145,7 @@ def postprocess_generated_arrays_to_dataframe(args, config: Dict, all_fake: List
     generate_csv_and_image(output_df, args.out_file, is_visualizable=True)  # Save CSV
     output_provenance = build_wgangp_provenance(args)  # Keep the original training/checkpoint fingerprint unchanged.
     output_provenance["generation_uniqueness"] = getattr(args, "_last_generation_uniqueness", None)  # Record the post-decoding deduplication policy separately from model identity.
+    output_provenance["generation_selection"] = getattr(args, "_last_generation_selection", None)  # Record the candidate selection policy and per-class evidence separately from model identity.
     with Path(args.out_file).with_suffix(".provenance.json").open("w", encoding="utf-8") as provenance_file:
         json.dump(output_provenance, provenance_file, indent=2)
     safe_log("info", f"Successfully saved {len(output_df)} generated rows to {args.out_file}")  # Log saved rows
@@ -7682,7 +8259,8 @@ def skip_both_mode_when_augmented_output_sufficient(args: Any, config: Dict, csv
                             and quality.get("schema_version") == 4 and quality.get("accepted") is True
                             and quality.get("quality_policy_sha256") == build_quality_policy_fingerprint(config)
                             and unique_record.get("policy") == "exact_decoded_numeric_rows_v1"
-                            and unique_record.get("verified") is True)  # Reject older outputs unless strict duplicate-free generation was verified.
+                            and unique_record.get("verified") is True
+                            and (existing_provenance.get("generation_selection") or {}).get("settings_sha256") == build_generation_selection_fingerprint(config))  # Reject outputs from another uniqueness or candidate selection policy.
     except (OSError, ValueError, TypeError, AttributeError):  # Treat missing or malformed output manifests as unverified.
         provenance_valid = False  # Require regeneration for unverifiable existing outputs.
     if existing_rows == int(required_rows) and provenance_valid:  # Skip only matching output size and verified source/model configuration.
