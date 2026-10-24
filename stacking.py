@@ -112,6 +112,7 @@ import tracemalloc  # Capture optional Python allocation snapshots at phase boun
 import uuid  # Generate collision-resistant watcher run identifiers
 import yaml  # Import YAML library
 from colorama import Style  # For terminal text styling
+from fractions import Fraction  # For exact class-proportional synthetic quota arithmetic
 from joblib import dump, load  # For exporting and loading trained models and scalers
 from lime.lime_tabular import LimeTabularExplainer  # Import LIME library
 from Logger import Logger, SAO_PAULO_TIMEZONE_NAME  # For process-safe São Paulo timestamped runtime logging
@@ -4511,6 +4512,77 @@ def sample_augmented_by_ratio(augmented_df, original_df, ratio, config=None):
         raise
 
 
+def encode_known_synthetic_labels(labels: Any, class_labels: Any) -> np.ndarray:
+    """Encode synthetic labels in original-training class order and mark classes absent from training.
+
+    :param labels: Raw synthetic label values aligned with candidate rows.
+    :param class_labels: Original-training LabelEncoder classes in encoded order.
+    :return: Encoded synthetic labels, with -1 for labels absent from the original training classes.
+    """
+
+    class_positions = pd.Index(np.asarray(class_labels))  # Map each original-training class to its encoded position.
+
+    return np.asarray(class_positions.get_indexer(np.asarray(labels)), dtype=np.int64)  # Use exact label identity and -1 for unusable synthetic classes.
+
+
+def allocate_synthetic_class_quotas(original_counts: Dict[int, int], available_counts: Dict[int, int], ratio: float) -> Tuple[Dict[int, int], Fraction]:
+    """Allocate class-proportional synthetic quotas with exact largest-remainder rounding.
+
+    :param original_counts: Original training rows per encoded class.
+    :param available_counts: Usable synthetic rows per encoded class.
+    :param ratio: Requested synthetic-to-original-training ratio.
+    :return: Per-class synthetic quotas and the common ratio actually applied to every class.
+    """
+
+    effective_ratio = Fraction(float(ratio))  # Represent the requested ratio exactly.
+    for class_index, original_count in original_counts.items():  # Limit the common ratio by every class's synthetic supply.
+        if int(original_count) > 0:  # Ignore classes without original training rows.
+            effective_ratio = min(effective_ratio, Fraction(int(available_counts.get(class_index, 0)), int(original_count)))  # Keep every class quota within its available synthetic rows.
+
+    ideal = {class_index: effective_ratio * int(count) for class_index, count in original_counts.items()}  # Exact proportional synthetic targets per class.
+    quotas = {class_index: int(math.floor(value)) for class_index, value in ideal.items()}  # Whole synthetic rows guaranteed to every class.
+    remaining = int(round(effective_ratio * sum(int(count) for count in original_counts.values()))) - sum(quotas.values())  # Rows still needed to reach the rounded total target.
+    order = sorted(ideal, key=lambda class_index: (-(ideal[class_index] - quotas[class_index]), class_index))  # Rank largest fractional remainders with class-order tie breaking.
+
+    for class_index in order[:max(0, remaining)]:  # Assign each remaining row to one largest-remainder class.
+        quotas[class_index] += 1  # Round this class quota upward.
+
+    return quotas, effective_ratio  # Return exact quotas and the applied common ratio.
+
+
+def report_synthetic_class_allocation(original_counts: Dict[int, int], available_counts: Dict[int, int], quotas: Dict[int, int], ratio: float, effective_ratio: Fraction, class_labels: Optional[Any] = None) -> None:
+    """Print the original, ideal, available, selected, and combined class distributions of a constrained allocation.
+
+    :param original_counts: Original training rows per encoded class.
+    :param available_counts: Usable synthetic rows per encoded class.
+    :param quotas: Selected synthetic rows per encoded class.
+    :param ratio: Requested synthetic-to-original-training ratio.
+    :param effective_ratio: Common ratio actually applied to every class.
+    :param class_labels: Optional original labels in encoded order.
+    :return: None.
+    """
+
+    original_total = sum(int(count) for count in original_counts.values())  # Count all original training rows.
+    selected_total = sum(int(count) for count in quotas.values())  # Count all selected synthetic rows.
+    combined_total = original_total + selected_total  # Count the final augmented training population.
+    requested_total = int(round(Fraction(float(ratio)) * original_total))  # Count the synthetic rows requested by the configured ratio.
+    names = list(np.asarray(class_labels).tolist()) if class_labels is not None else None  # Resolve readable class names when available.
+    deviation = 0.0  # Track the largest absolute class-share change.
+
+    print(f"{BackgroundColors.YELLOW}[AUGMENTATION] Requested ratio {float(ratio):.4f} cannot be met for every class; applying common ratio {float(effective_ratio):.6f} to preserve class proportions | Requested synthetic rows={requested_total} | Selected synthetic rows={selected_total}{Style.RESET_ALL}")  # Report the unmet request explicitly.
+
+    for class_index in sorted(original_counts):  # Report every original training class in encoded order.
+        original_count = int(original_counts[class_index])  # Resolve original training rows for this class.
+        selected_count = int(quotas.get(class_index, 0))  # Resolve selected synthetic rows for this class.
+        original_share = original_count / original_total if original_total else 0.0  # Original training class proportion.
+        combined_share = (original_count + selected_count) / combined_total if combined_total else 0.0  # Final augmented training class proportion.
+        deviation = max(deviation, abs(combined_share - original_share))  # Update the largest class-share deviation.
+        label = names[class_index] if names is not None and 0 <= class_index < len(names) else class_index  # Resolve the displayed class identity.
+        print(f"{BackgroundColors.YELLOW}[AUGMENTATION] Class {label}: original={original_count} ({original_share:.6f}) | ideal={float(ratio) * original_count:.2f} | available={int(available_counts.get(class_index, 0))} | selected={selected_count} | combined={original_count + selected_count} ({combined_share:.6f}){Style.RESET_ALL}")  # Report one class allocation row.
+
+    print(f"{BackgroundColors.YELLOW}[AUGMENTATION] Maximum absolute class-share deviation after augmentation: {deviation:.6f}{Style.RESET_ALL}")  # Report the resulting distribution deviation.
+
+
 def select_synthetic_training_samples(augmented_df: pd.DataFrame, original_train_labels: np.ndarray, label_encoder: LabelEncoder, ratio: float, config: Optional[dict] = None) -> pd.DataFrame:
     """Select deterministic synthetic training rows independently for every original training class.
 
@@ -4526,32 +4598,22 @@ def select_synthetic_training_samples(augmented_df: pd.DataFrame, original_train
         config = CONFIG  # Preserve configured deterministic seeds.
     if augmented_df is None or augmented_df.empty:  # Reject absent synthetic training data explicitly.
         raise ValueError("Synthetic training data is empty")  # Prevent silent zero-ratio training.
-    if ratio not in (0.25, 0.50, 0.75, 1.00):  # Restrict experiments to configured scientific ratios.
-        raise ValueError(f"Unsupported training augmentation ratio: {ratio}")  # Preserve unambiguous ratio identities.
+
     target_column = augmented_df.columns[-1]  # Preserve the repository positional target convention.
-    seed = int(config.get("evaluation", {}).get("random_state", 42))  # Resolve the active reproducible experiment seed.
-    selected_frames = []  # Retain only required per-class synthetic rows.
-    encoded_labels = np.asarray(original_train_labels, dtype=np.int64)  # Normalize original training labels without modifying them.
-    for class_index in np.unique(encoded_labels):  # Select every original training class independently.
-        class_label = label_encoder.inverse_transform(np.asarray([class_index], dtype=np.int64))[0]  # Recover the synthetic-file label value.
-        original_count = int(np.count_nonzero(encoded_labels == class_index))  # Measure only fixed original training rows.
-        requested_count = int(round(original_count * float(ratio)))  # Calculate the required per-class synthetic count.
-        candidates = augmented_df.loc[augmented_df[target_column] == class_label]  # Restrict candidates to the matching original class.
-        if len(candidates) < requested_count:  # Refuse insufficient provenance rather than replacing or fabricating samples.
-            raise ValueError(f"Insufficient synthetic rows for class {class_label!r}: requested {requested_count}, available {len(candidates)}")  # Surface the exact scientific shortfall.
-        class_seed = seed + int(class_index) + int(round(float(ratio) * 1000))  # Derive stable independent class sampling.
-        selected_frames.append(candidates.sample(n=requested_count, replace=False, random_state=class_seed))  # Select without replacement for this class.
-    selected = pd.concat(selected_frames, axis=0, ignore_index=True)  # Assemble only selected synthetic training rows.
-    return selected  # Return class-balanced deterministic training augmentation.
+    synthetic_labels = encode_known_synthetic_labels(augmented_df[target_column].to_numpy(copy=False), label_encoder.classes_)  # Encode candidates with the original-training class identities.
+    selected_positions = select_synthetic_training_indices(synthetic_labels, original_train_labels, ratio, config=config, class_labels=label_encoder.classes_)  # Reuse the exact class-proportional selection shared by every execution path.
+
+    return augmented_df.iloc[selected_positions].reset_index(drop=True)  # Return selected synthetic rows in deterministic class and source order.
 
 
-def select_synthetic_training_indices(synthetic_labels: Any, original_train_labels: Any, ratio: float, config: Optional[dict] = None) -> np.ndarray:
-    """Select deterministic synthetic row positions independently for every original training class.
+def select_synthetic_training_indices(synthetic_labels: Any, original_train_labels: Any, ratio: float, config: Optional[dict] = None, class_labels: Optional[Any] = None) -> np.ndarray:
+    """Select deterministic synthetic row positions that preserve the original training class proportions.
 
-    :param synthetic_labels: Encoded synthetic labels aligned with candidate rows.
+    :param synthetic_labels: Encoded synthetic labels aligned with candidate rows, with -1 for unusable classes.
     :param original_train_labels: Encoded labels from the fixed original training partition.
     :param ratio: Requested synthetic-to-original-training ratio per class.
     :param config: Runtime configuration dictionary.
+    :param class_labels: Optional original labels in encoded order for allocation reports.
     :return: Ordered synthetic row positions selected without replacement.
     """
 
@@ -4559,21 +4621,30 @@ def select_synthetic_training_indices(synthetic_labels: Any, original_train_labe
         config = CONFIG  # Preserve configured deterministic seeds.
     if ratio not in (0.25, 0.50, 0.75, 1.00):  # Restrict experiments to configured scientific ratios.
         raise ValueError(f"Unsupported training augmentation ratio: {ratio}")  # Preserve unambiguous ratio identities.
+
     original_labels = np.asarray(original_train_labels, dtype=np.int64).reshape(-1)  # Normalize fixed training labels without copying feature data.
     candidate_labels = np.asarray(synthetic_labels, dtype=np.int64).reshape(-1)  # Normalize synthetic labels without copying feature data.
     seed = int(config.get("evaluation", {}).get("random_state", 42))  # Resolve active reproducible experiment seed.
+    classes = [int(class_index) for class_index in np.unique(original_labels)]  # Use every original training class as the reference distribution.
+    original_counts = {class_index: int(np.count_nonzero(original_labels == class_index)) for class_index in classes}  # Count fixed original training rows per class.
+    candidate_positions = {class_index: np.flatnonzero(candidate_labels == class_index) for class_index in classes}  # Locate synthetic candidates for each exact class.
+    available_counts = {class_index: int(len(positions)) for class_index, positions in candidate_positions.items()}  # Count usable synthetic rows per class.
+    quotas, effective_ratio = allocate_synthetic_class_quotas(original_counts, available_counts, ratio)  # Allocate proportional quotas within the available synthetic supply.
+
+    if effective_ratio < Fraction(float(ratio)):  # Report every allocation that cannot meet the requested ratio.
+        report_synthetic_class_allocation(original_counts, available_counts, quotas, ratio, effective_ratio, class_labels)  # Disclose requested, available, selected, and combined distributions.
+    if effective_ratio == 0:  # Refuse a run that would contain no synthetic training rows.
+        raise ValueError(f"No synthetic rows can be selected at ratio {ratio} without distorting the original class distribution: available={available_counts}")  # Surface the exact missing class supply.
+
     selected_positions = []  # Retain only bounded per-class index vectors.
-    for class_index in np.unique(original_labels):  # Select every original training class independently.
-        requested_count = int(round(int(np.count_nonzero(original_labels == class_index)) * float(ratio)))  # Derive required synthetic count from fixed training rows.
-        candidate_positions = np.flatnonzero(candidate_labels == class_index)  # Locate synthetic candidates for exact class.
-        if len(candidate_positions) < requested_count:  # Reject insufficient source data without replacement sampling.
-            raise ValueError(f"Insufficient synthetic rows for encoded class {int(class_index)}: requested {requested_count}, available {len(candidate_positions)}")  # Surface exact scientific shortfall.
-        generator = np.random.default_rng(seed + int(class_index) + int(round(float(ratio) * 1000)))  # Derive deterministic independent class generator.
-        selected_positions.append(np.sort(generator.choice(candidate_positions, size=requested_count, replace=False)))  # Select and order class rows without replacement.
+    for class_index in classes:  # Select every original training class independently.
+        generator = np.random.default_rng(seed + class_index + int(round(float(ratio) * 1000)))  # Derive deterministic independent class generator.
+        selected_positions.append(np.sort(generator.choice(candidate_positions[class_index], size=quotas[class_index], replace=False)))  # Select and order class rows without replacement.
+
     return np.concatenate(selected_positions).astype(np.int64, copy=False)  # Return deterministic class-grouped source positions.
 
 
-def sample_combined_files_by_ratio(files_list, original_sample_count, ratio, config=None, return_provenance=False):
+def sample_combined_files_by_ratio(files_list, original_sample_count, ratio, config=None, return_provenance=False, full_population=False):
     """
     Sample combined-file augmentation sources without retaining every source DataFrame together.
 
@@ -4581,6 +4652,7 @@ def sample_combined_files_by_ratio(files_list, original_sample_count, ratio, con
     :param original_sample_count: Original dataset row count used to size the ratio.
     :param ratio: Requested augmentation ratio.
     :param config: Runtime configuration dictionary.
+    :param full_population: Whether to return every cleaned row instead of a ratio-sized uniform sample.
     :return: Deterministic uniformly sampled combined DataFrame.
     """
 
@@ -4604,7 +4676,7 @@ def sample_combined_files_by_ratio(files_list, original_sample_count, ratio, con
         return None  # Preserve the existing failed-load signal
     total_rows = sum(row_count for _, row_count, _ in source_metadata)  # Compute the exact preprocessed global population
     requested_rows = max(1, int(round(float(ratio) * int(original_sample_count))))  # Preserve established ratio cardinality
-    sample_rows = min(requested_rows, total_rows)  # Cap sampling at the available augmented population
+    sample_rows = total_rows if full_population else min(requested_rows, total_rows)  # Retain every row for class-proportional selection or cap sampling at the available population.
     random_state = np.random.RandomState(config.get("evaluation", {}).get("random_state", 42))  # Use the active run seed for deterministic uniform sampling.
     remaining_rows = total_rows  # Track the unvisited global population for exact hypergeometric allocation
     remaining_sample = sample_rows  # Track rows still required from later sources
@@ -18834,9 +18906,8 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
                         if combined_augmented_df is None:  # Skip current ratio when augmented recombination fails.
                             active_ratio = augmentation_ratio  # Prevent repeated failed reloads inside same ratio group.
                             continue  # Advance to next canonical group.
-                        df_sampled = sample_augmented_by_ratio(combined_augmented_df, original_sample_count, augmentation_ratio, config=config)  # Sample current configured ratio deterministically once.
-                        del combined_augmented_df  # Release full augmented contents before group evaluation.
-                        gc.collect()  # Reclaim full augmented contents while retaining current sample.
+                        df_sampled = combined_augmented_df  # Retain every cleaned synthetic row for class-proportional selection after the original split.
+                        del combined_augmented_df  # Drop the duplicate reference while the selection source remains available.
                         active_ratio = augmentation_ratio  # Record reusable current ratio identity.
                     if df_sampled is None or df_sampled.empty:  # Skip unusable current-ratio samples.
                         continue  # Advance to next canonical slice.
@@ -19945,27 +20016,25 @@ def cleanup_feature_process_original_resources(resources: Optional[dict]) -> Non
     cleanup_feature_process_directory(temp_dir, arrays=arrays)  # Close mappings and delete only worker-owned feature files
 
 
-def load_feature_process_ratio_frame_data(process_payload: dict, ratio: float) -> dict:  # Load and sample one augmentation ratio into a bounded worker-local frame
+def load_feature_process_ratio_frame_data(process_payload: dict, ratio: float) -> dict:  # Load the complete synthetic candidate population into a worker-local frame
     """
-    Load and sample one augmentation ratio into a worker-local frame.
+    Load the complete cleaned synthetic candidate population for one augmentation ratio into a worker-local frame.
 
     :param process_payload: Small feature-set worker payload.
     :param ratio: Augmentation ratio required by the next combination.
-    :return: Ratio-specific raw feature and label views plus owning DataFrame.
+    :return: Raw feature, raw label, and encoded label views plus owning DataFrame.
     """
 
     if process_payload["execution_mode"] == "combined_files":  # Preserve combined-files augmented source assembly semantics
-        sampled_df, source_codes, row_orders = sample_combined_files_by_ratio(process_payload["augmentation_file_paths"], process_payload["original_sample_count"], ratio, config=process_payload["config"], return_provenance=True)  # Preserve source-local chronology while sampling sequentially
+        sampled_df, source_codes, row_orders = sample_combined_files_by_ratio(process_payload["augmentation_file_paths"], process_payload["original_sample_count"], ratio, config=process_payload["config"], return_provenance=True, full_population=True)  # Load every cleaned synthetic row with source-local chronology for class-proportional selection.
     else:  # Preserve separate-file augmented source loading semantics
         augmented_raw = load_augmented_dataset(process_payload["augmentation_file_paths"][0], config=process_payload["config"])  # Load the one located augmented file
         augmented_df = preprocess_dataframe(augmented_raw, remove_zero_variance=True, config=process_payload["config"]) if augmented_raw is not None else None  # Apply unchanged cleaning semantics
         if augmented_df is None:  # Reject a failed single-file augmentation load for the active required ratio
             raise RuntimeError(f"Failed to load augmented data for ratio {ratio}")  # Surface ratio-specific loading failure
-        sampled_df = sample_augmented_by_ratio(augmented_df, process_payload["original_sample_count"], ratio, config=process_payload["config"])  # Preserve exact deterministic single-file ratio sampling
+        sampled_df = augmented_df  # Retain every cleaned synthetic row for class-proportional selection after the original split.
         source_codes = np.zeros(len(sampled_df), dtype=np.int64)  # Encode the single augmented file as source zero.
         row_orders = sampled_df.index.to_numpy(dtype=np.int64, copy=True)  # Preserve original cleaned-row chronology before any index reset.
-        del augmented_df  # Release the complete single-file source before classifier prediction
-        gc.collect()  # Reclaim the complete single-file source while retaining only sampled rows
     if sampled_df is None or sampled_df.empty:  # Reject an unusable deterministic ratio sample
         raise RuntimeError(f"Training augmentation ratio {ratio} produced no synthetic candidate rows")  # Surface ratio-specific synthetic sample failure.
     augmented_features = sampled_df.iloc[:, :-1].select_dtypes(include=np.number)  # Preserve the established positional target and numeric feature selection
@@ -19974,7 +20043,10 @@ def load_feature_process_ratio_frame_data(process_payload: dict, ratio: float) -
         raise ValueError(f"Synthetic training data is missing original feature columns: {missing_features}")  # Preserve the established schema failure.
     X_raw = augmented_features[process_payload["input_feature_names"]].to_numpy(copy=False)  # Preserve exact original feature order without an unnecessary copy
     y_raw = sampled_df.iloc[:, -1].to_numpy(copy=False)  # Preserve exact sampled target values without an unnecessary copy
-    return {"ratio": ratio, "sampled_df": sampled_df, "augmented_features": augmented_features, "X_raw": X_raw, "y_raw": y_raw, "source_codes": source_codes, "row_orders": row_orders}  # Retain aligned features, labels, and source-local row provenance
+    frame_data = {"ratio": ratio, "sampled_df": sampled_df, "augmented_features": augmented_features, "X_raw": X_raw, "y_raw": y_raw, "source_codes": source_codes, "row_orders": row_orders}  # Retain aligned features, labels, and source-local row provenance
+    if process_payload.get("label_classes") is not None:  # Encode only when the original-training class identity is available.
+        frame_data["y_encoded"] = encode_known_synthetic_labels(y_raw, process_payload["label_classes"])  # Encode candidates with original-training classes and mark unusable labels.
+    return frame_data  # Return the complete aligned synthetic candidate frame
 
 
 def load_shared_feature_process_ratio_data(process_payload: dict, ratio: float) -> dict:  # Lazily create or reopen one coordinator-owned augmentation ratio memmap pair
@@ -19987,7 +20059,7 @@ def load_shared_feature_process_ratio_data(process_payload: dict, ratio: float) 
     """
 
     shared_directory = str(process_payload["augmentation_shared_directory"])  # Resolve the coordinator-owned shared augmentation directory
-    ratio_identity = hashlib.sha256(f"{float(ratio):.17g}".encode("utf-8")).hexdigest()[:16]  # Build one stable ratio-specific filename identity
+    ratio_identity = hashlib.sha256("complete_synthetic_population".encode("utf-8")).hexdigest()[:16]  # Share one ratio-independent synthetic candidate population across every ratio.
     descriptor_path = os.path.join(shared_directory, f"ratio_{ratio_identity}.json")  # Resolve the atomically published ratio descriptor
     build_lock_path = os.path.join(shared_directory, ".augmentation_build.lock")  # Serialize complete augmented-source reconstruction across every ratio
     build_lock = acquire_stacking_artifact_lock(build_lock_path, exclusive=True)  # Prevent complete augmented-source duplication across feature processes
@@ -20002,7 +20074,7 @@ def load_shared_feature_process_ratio_data(process_payload: dict, ratio: float) 
             try:  # Parse and validate the small descriptor before opening its backing files
                 with open(descriptor_path, "r", encoding="utf-8") as descriptor_file:  # Open the atomically published descriptor
                     descriptor = json.load(descriptor_file)  # Parse paths, shapes, dtypes, ratio, and ordered schema
-                if float(descriptor.get("ratio")) != float(ratio) or descriptor.get("input_feature_names") != process_payload["input_feature_names"]:  # Require exact ratio and ordered input schema identity
+                if descriptor.get("population") != "complete" or descriptor.get("input_feature_names") != process_payload["input_feature_names"]:  # Require the complete synthetic population and ordered input schema identity
                     descriptor = None  # Rebuild an incompatible descriptor inside this isolated run directory
                 if descriptor is not None:  # Reopen only a semantically compatible descriptor
                     X_shared = open_feature_process_array(descriptor["X_raw"])  # Reopen sampled raw features read-only
@@ -20027,14 +20099,12 @@ def load_shared_feature_process_ratio_data(process_payload: dict, ratio: float) 
                     pass  # Continue rebuilding under the held process lock
         if descriptor is None:  # Materialize this ratio once when no complete shared pair exists
             frame_data = load_feature_process_ratio_frame_data(process_payload, ratio)  # Reuse exact augmentation combination, preprocessing, sampling, and row ordering
-            ratio_label_encoder = LabelEncoder()  # Build the exact original-training label identity without loading a model artifact
-            ratio_label_encoder.classes_ = np.asarray(process_payload["label_classes"])  # Restore the coordinator-proven ordered LabelEncoder classes
-            y_encoded = np.asarray(ratio_label_encoder.transform(frame_data["y_raw"]), dtype=np.int64)  # Encode sampled labels exactly once for cross-feature reuse
+            y_encoded = np.asarray(frame_data["y_encoded"], dtype=np.int64)  # Reuse labels encoded with the coordinator-proven original-training classes.
             X_descriptor = persist_feature_process_array(frame_data["X_raw"], shared_directory, f"ratio_{ratio_identity}_X_raw")  # Persist the exact sampled raw features without dtype conversion
             y_descriptor = persist_feature_process_array(y_encoded, shared_directory, f"ratio_{ratio_identity}_y_encoded")  # Persist exact encoded labels as portable integer bytes
             source_descriptor = persist_feature_process_array(frame_data["source_codes"], shared_directory, f"ratio_{ratio_identity}_source_codes")  # Persist per-row file IDs.
             order_descriptor = persist_feature_process_array(frame_data["row_orders"], shared_directory, f"ratio_{ratio_identity}_row_orders")  # Persist per-row original chronology.
-            descriptor = {"ratio": float(ratio), "input_feature_names": list(process_payload["input_feature_names"]), "X_raw": X_descriptor, "y_encoded": y_descriptor, "source_codes": source_descriptor, "row_orders": order_descriptor}  # Publish the complete ratio and provenance descriptor
+            descriptor = {"population": "complete", "input_feature_names": list(process_payload["input_feature_names"]), "X_raw": X_descriptor, "y_encoded": y_descriptor, "source_codes": source_descriptor, "row_orders": order_descriptor}  # Publish the complete synthetic population and provenance descriptor
             write_stacking_pca_artifact_atomically(descriptor, descriptor_path, "json")  # Publish metadata only after both complete backing files are durable
             X_shared = open_feature_process_array(X_descriptor)  # Reopen the published sampled feature matrix read-only
             y_shared = open_feature_process_array(y_descriptor)  # Reopen the published encoded labels read-only
@@ -20093,7 +20163,7 @@ def build_feature_process_augmented_training_data(task: dict, process_payload: d
     :return: Worker-owned training arrays, LSTM metadata, and cleanup directory.
     """
 
-    selected_positions = select_synthetic_training_indices(ratio_data["y_encoded"], resources["y_train"], float(task["augmentation_ratio"]), config=process_payload["config"])  # Select exact synthetic rows from original train class counts.
+    selected_positions = select_synthetic_training_indices(ratio_data["y_encoded"], resources["y_train"], float(task["augmentation_ratio"]), config=process_payload["config"], class_labels=process_payload["label_classes"])  # Select class-proportional synthetic rows from original train class counts.
     train_rows = int(resources["X_train"].shape[0])  # Preserve original training row count.
     synthetic_rows = int(len(selected_positions))  # Record selected synthetic training row count.
     feature_count = int(resources["X_train"].shape[1])  # Preserve active feature representation width.
@@ -22265,9 +22335,8 @@ def orchestrate_all_combinations(input_path, dataset_name=None, config=None):
                     if df_augmented is None:  # Skip current ratio when augmented loading or validation fails.
                         active_ratio = augmentation_ratio  # Prevent repeated failed reloads within same ratio group.
                         continue  # Advance without retaining augmented data.
-                    df_sampled = sample_augmented_by_ratio(df_augmented, df_original, augmentation_ratio, config=config)  # Sample only current configured ratio once.
-                    del df_augmented  # Release full augmented contents before group evaluation.
-                    gc.collect()  # Reclaim full augmented contents while retaining current sample.
+                    df_sampled = df_augmented  # Retain every cleaned synthetic row for class-proportional selection after the original split.
+                    del df_augmented  # Drop the duplicate reference while the selection source remains available.
                     active_ratio = augmentation_ratio  # Record reusable current ratio identity.
                 if df_sampled is None or df_sampled.empty:  # Skip ratios producing no augmented test rows.
                     continue  # Advance to next canonical slice.

@@ -539,7 +539,7 @@ class FeatureSetProcessTests(unittest.TestCase):  # Group persistent feature-set
                 ratio_data = stacking.load_feature_process_ratio_data(payload, 0.5)  # Load only the exact requested 50 percent ratio
             self.assertEqual(load_mock.call_count, 1)  # Require one source load for one required ratio
             self.assertEqual(ratio_data["ratio"], 0.5)  # Require only the current ratio identity
-            self.assertEqual(len(ratio_data["y_raw"]), 2)  # Require exact deterministic sampled cardinality
+            self.assertEqual(len(ratio_data["y_raw"]), 4)  # Require every cleaned synthetic candidate for class-proportional selection
             stacking.cleanup_feature_process_ratio_data(ratio_data)  # Release current-ratio DataFrame and array views
             self.assertEqual(ratio_data, {})  # Require no retained augmentation ratio cache
             shared_directory = Path(temporary_directory) / "shared_ratios"  # Resolve one coordinator-owned shared ratio directory
