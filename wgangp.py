@@ -313,7 +313,7 @@ class ClassConditionalFlowScaler:
             support = {}
             for idx, column in enumerate(self.feature_cols):
                 if is_discrete_flow_feature(column):
-                    values = np.unique(observed[:, idx])
+                    values = np.unique(np.concatenate((observed[:, idx], lower_tail[:, idx], upper_tail[:, idx])))  # Include exact full-class extreme values that the fitting sample omits.
                     legal = values[~flow_feature_invalid_mask(column, values)]
                     if len(legal) == 0:
                         raise ValueError(f"No domain-valid source support for {column!r} class {class_id}")
