@@ -112,7 +112,7 @@ psutil = (
 )  # Import psutil if available, otherwise set to None
 
 SAO_PAULO_TIMEZONE_NAME = "America/Sao_Paulo"  # Use Sao Paulo timezone for ETA finish timestamps
-WGANGP_RELEASE_VERSION = "V6.5.2"  # Identify the current tested code release independently of checkpoint provenance.
+WGANGP_RELEASE_VERSION = "V6.5.3"  # Distinguish strict unique-output generation without altering V6.5.2-trained model weights.
 FLOW_PREPROCESSING_CHECKPOINT_TAG = "ConditionalMixedStructuralV652TailExcess"  # Name new checkpoints after the current release without changing the learned representation.
 FLOW_PREPROCESSING_COMPATIBLE_TAGS = ("ConditionalMixedStructuralV65TailExcess",)  # Reuse existing V6.5-trained weights without requiring retraining.
 
@@ -1755,6 +1755,9 @@ def build_default_training_and_model_config() -> Dict:
             "force_regenerate_samples": False,  # Preserve missing-only generation by default
             "out_file": "generated.csv",  # Output CSV filename
             "gen_batch_size": 256,  # Generation batch size
+            "max_duplicate_refill_rounds": 25,  # Fail rather than loop indefinitely when the learned support is exhausted.
+            "max_duplicate_draw_multiplier": 5.0,  # Bound total candidate draws relative to requested unique records.
+            "duplicate_refill_batch_rows": 32768,  # Limit temporary refill population without changing trained weights.
             "categorical_temperature": 1.25,  # Use the same positive categorical sampling temperature in training and generation.
             "feature_dim": None,  # Feature dimensionality (None = auto-detect)
             "small_class_threshold": 100,  # Threshold for small class detection
@@ -5934,7 +5937,12 @@ def verify_data_augmentation_file(args, config: Optional[Dict] = None) -> bool:
         try:  # Require source, preprocessing and quality provenance before trusting an existing output.
             existing_manifest = json.loads(existing_manifest_path.read_text(encoding="utf-8"))  # Read the persisted output's training identity.
             existing_quality = json.loads(existing_quality_path.read_text(encoding="utf-8"))  # Read class-specific output validation evidence.
-            verified_output = existing_manifest.get("sha256") == build_wgangp_provenance(args)["sha256"] and existing_quality.get("schema_version") == 4 and existing_quality.get("accepted") is True and existing_quality.get("quality_policy_sha256") == build_quality_policy_fingerprint(config)  # Require a passed class-quality acceptance report.
+            unique_record = existing_manifest.get("generation_uniqueness") or {}
+            verified_output = (existing_manifest.get("sha256") == build_wgangp_provenance(args)["sha256"]
+                               and existing_quality.get("schema_version") == 4 and existing_quality.get("accepted") is True
+                               and existing_quality.get("quality_policy_sha256") == build_quality_policy_fingerprint(config)
+                               and unique_record.get("policy") == "exact_decoded_numeric_rows_v1"
+                               and unique_record.get("verified") is True)  # Never reuse old outputs with only a permissive duplicate threshold.
         except (OSError, ValueError, TypeError, AttributeError):  # Treat absent or malformed historical artifacts as unverified.
             verified_output = False  # Never skip regeneration based on count alone.
         if not verified_output:  # Reject incompatible historical artifacts while preserving their bytes until a successful replacement.
@@ -6210,6 +6218,118 @@ def generate_batches_and_collect_results(args, G: nn.Module, device: torch.devic
     return all_fake, labels, started
 
 
+
+def generate_unique_decoded_samples(args, config: Dict, G: nn.Module, device: torch.device, labels: np.ndarray, scaler: Any, label_encoder: Any, feature_cols: List[str]) -> tuple:
+    """Draw until every requested class has the exact count of unique *decoded* flow records.
+
+    Deduplicate after inverse quantiles, discrete-domain projection, and flow-rule
+    reconstruction: different latent samples can become equal only at that stage.
+    Fail without publishing a partial CSV if the learned support is insufficient.
+    Training/checkpoint parameters remain untouched.
+    """
+    if not isinstance(scaler, ClassConditionalFlowScaler):
+        raise ValueError("Strict unique generation requires a fitted class-conditional flow scaler")
+    requested = np.asarray(labels, dtype=np.int64).reshape(-1)
+    if not len(requested):
+        raise ValueError("Cannot generate an empty unique synthetic dataset")
+    generation_settings = config.get("generation", {})
+    max_rounds = int(generation_settings.get("max_duplicate_refill_rounds", 25))
+    draw_multiplier = float(generation_settings.get("max_duplicate_draw_multiplier", 5.0))
+    refill_batch_rows = int(generation_settings.get("duplicate_refill_batch_rows", 32768))
+    if max_rounds < 1 or refill_batch_rows < 1 or not np.isfinite(draw_multiplier) or draw_multiplier < 1.0:
+        raise ValueError("Unique refill settings require positive rounds/batch rows and draw multiplier >= 1")
+    if not feature_cols or len(set(feature_cols)) != len(feature_cols) or args.label_col in feature_cols:
+        raise ValueError("Unique flow generation requires nonoverlapping, distinct numeric feature names")
+
+    classes, totals = np.unique(requested, return_counts=True)
+    target_by_id = {int(class_id): int(total) for class_id, total in zip(classes, totals)}
+    names = {class_id: str(label_encoder.inverse_transform([class_id])[0]) for class_id in target_by_id}
+    identity_cols = list(feature_cols) + [args.label_col]  # Never count label or hardware metadata as substitute numeric diversity.
+    max_draws = max(len(requested), int(math.ceil(len(requested) * draw_multiplier)))
+    started = time.time()
+    total_draws = 0
+    total_duplicates = 0
+    refill_rounds = 0
+    stagnant_rounds = 0
+    accepted = None
+    deficit = target_by_id.copy()
+    first_round = True
+    print(f"[{WGANGP_RELEASE_VERSION}] Exact decoded-row uniqueness enabled: {len(requested)} target rows, "
+          f"up to {max_draws} candidate draws in {max_rounds} refill rounds")
+
+    while any(deficit.values()):
+        if first_round:
+            draw_labels = requested
+        else:
+            if refill_rounds >= max_rounds or total_draws >= max_draws:
+                pending = {names[k]: v for k, v in deficit.items() if v}
+                raise RuntimeError(f"Generator exhausted the unique-row refill budget; missing by class: {pending}. "
+                                   f"Accepted {len(accepted) if accepted is not None else 0}/{len(requested)} "
+                                   f"after {total_draws} draws. Previous accepted CSV remains unchanged.")
+            allowance = min(refill_batch_rows, max_draws - total_draws)
+            remaining = allowance
+            portions = []
+            for class_id, missing in deficit.items():
+                count = min(missing, remaining)
+                if count:
+                    portions.append(np.full(count, class_id, dtype=np.int64))
+                    remaining -= count
+            draw_labels = np.concatenate(portions) if portions else np.empty(0, dtype=np.int64)
+            refill_rounds += 1
+        draw_count = len(draw_labels)
+        if not draw_count:
+            raise RuntimeError("Unique-row refill could not allocate any further candidate draws")
+        candidates, candidate_labels, _ = generate_batches_and_collect_results(args, G, device, draw_labels, draw_count)
+        decoded = scaler.inverse_transform(candidates, candidate_labels)
+        if decoded.shape != (draw_count, len(feature_cols)) or not np.isfinite(decoded).all():
+            raise ValueError("Decoded synthetic candidate shape or finiteness is invalid")
+        frame = pd.DataFrame(decoded, columns=pd.Index(feature_cols))
+        frame[args.label_col] = label_encoder.inverse_transform(candidate_labels)
+        del decoded, candidates
+        previous_count = len(accepted) if accepted is not None else 0
+        combined = frame if accepted is None else pd.concat((accepted, frame), ignore_index=True, copy=False)
+        # pandas duplicated uses exact field values, not tolerance or rounded values.
+        # This runs on the decoded float32 CSV feature representation across all classes.
+        accepted = combined.drop_duplicates(subset=identity_cols, keep="first").reset_index(drop=True)
+        total_draws += draw_count
+        gained = len(accepted) - previous_count
+        total_duplicates += draw_count - gained
+        observed = accepted[args.label_col].value_counts(dropna=False).to_dict()
+        deficit = {class_id: target - int(observed.get(names[class_id], 0))
+                   for class_id, target in target_by_id.items()}
+        if any(missing < 0 for missing in deficit.values()):
+            raise RuntimeError("Unique refill exceeded a class-specific target")
+        print(f"[{WGANGP_RELEASE_VERSION}] Unique generation: accepted={len(accepted)}/{len(requested)}, "
+              f"new={gained}/{draw_count}, rejected duplicates={total_duplicates}, "
+              f"refill_round={refill_rounds}/{max_rounds}")
+        if gained == 0:
+            stagnant_rounds += 1
+            if stagnant_rounds >= 3:
+                pending = {names[k]: v for k, v in deficit.items() if v}
+                raise RuntimeError(f"Generator produced no new unique rows in three successive rounds; "
+                                   f"unfilled class quotas: {pending}. Previous accepted CSV remains unchanged.")
+        else:
+            stagnant_rounds = 0
+        first_round = False
+
+    if len(accepted) != len(requested) or bool(accepted.duplicated(subset=identity_cols).any()):
+        raise RuntimeError("Final uniqueness/row-count verification failed; refusing to publish output")
+    observed = accepted[args.label_col].value_counts(dropna=False).to_dict()
+    for class_id, target in target_by_id.items():
+        if int(observed.get(names[class_id], 0)) != target:
+            raise RuntimeError(f"Final class quota mismatch for {names[class_id]}")
+    args._last_generation_uniqueness = {
+        "policy": "exact_decoded_numeric_rows_v1", "verified": True,
+        "requested_rows": int(len(requested)), "accepted_unique_rows": int(len(accepted)),
+        "candidate_draws": int(total_draws), "duplicates_rejected": int(total_duplicates),
+        "refill_rounds": int(refill_rounds),
+        "classes": {names[class_id]: int(target) for class_id, target in target_by_id.items()},
+    }
+    print(f"[{WGANGP_RELEASE_VERSION}] Final exact duplicate audit: 0 duplicates "
+          f"({len(accepted)} unique rows, {total_duplicates} rejected, {total_draws} total draws)")
+    return accepted, requested, started
+
+
 def build_augmented_output_dataframe(args: Any, df_generated: pd.DataFrame) -> tuple:
     """
     Build the persisted generated dataset and retain source row metadata.
@@ -6302,13 +6422,20 @@ def postprocess_generated_arrays_to_dataframe(args, config: Dict, all_fake: List
     :return: DataFrame with inverse-transformed features and decoded labels.
     """
 
-    X_fake = np.vstack(all_fake) if isinstance(all_fake, list) else all_fake  # Stack batches if list or use pre-allocated array directly
-    Y_fake = np.concatenate(all_labels) if isinstance(all_labels, list) else all_labels  # Concatenate if list or use array directly
-    if not isinstance(scaler, ClassConditionalFlowScaler):  # Require a checkpoint created for the validated mixed-type representation.
-        raise ValueError("Generator checkpoint uses an incompatible legacy preprocessing representation; retrain with --from_scratch")  # Never use a raw StandardScaler to decode quantile-space generator output.
-    X_orig = scaler.inverse_transform(X_fake, Y_fake)  # Rebuild full flow schema from independent mixed-type model features and verified identities.
-    df_generated = pd.DataFrame(X_orig, columns=pd.Index(feature_cols))  # Create DataFrame with original feature names
-    df_generated[args.label_col] = label_encoder.inverse_transform(Y_fake)  # Map integer labels back to original strings
+    if isinstance(all_fake, pd.DataFrame):  # Strict unique generation already decoded and verified every candidate row.
+        df_generated = all_fake  # Preserve the exact deduplicated rows without repeating the inverse transform.
+        if len(df_generated) != n or df_generated.duplicated(subset=feature_cols + [args.label_col]).any():
+            raise RuntimeError("Invalid decoded unique generation population")
+    else:  # Preserve the original postprocessor interface for legacy/manual callers.
+        X_fake = np.vstack(all_fake) if isinstance(all_fake, list) else all_fake  # Stack batches if list or use pre-allocated array directly
+        Y_fake = np.concatenate(all_labels) if isinstance(all_labels, list) else all_labels  # Concatenate if list or use array directly
+        if not isinstance(scaler, ClassConditionalFlowScaler):
+            raise ValueError("Generator checkpoint uses an incompatible legacy preprocessing representation; retrain with --from_scratch")
+        X_orig = scaler.inverse_transform(X_fake, Y_fake)
+        df_generated = pd.DataFrame(X_orig, columns=pd.Index(feature_cols))
+        df_generated[args.label_col] = label_encoder.inverse_transform(Y_fake)
+    if df_generated.duplicated(subset=list(feature_cols) + [args.label_col]).any():
+        raise RuntimeError("Exact decoded flow duplicates remain; refusing to publish a non-unique CSV")
     assess_generated_flow_quality(args, config, df_generated, scaler=scaler, label_encoder=label_encoder)  # Enforce class-specific quality acceptance before saving.
     output_df, original_count = build_augmented_output_dataframe(args, df_generated)  # Build output
 
@@ -6324,8 +6451,10 @@ def postprocess_generated_arrays_to_dataframe(args, config: Dict, all_fake: List
 
     safe_log("info", f"Saving {len(output_df)} generated rows to {args.out_file}")  # Log saving
     generate_csv_and_image(output_df, args.out_file, is_visualizable=True)  # Save CSV
-    with Path(args.out_file).with_suffix(".provenance.json").open("w", encoding="utf-8") as provenance_file:  # Record which training source and hyperparameters produced the output.
-        json.dump(build_wgangp_provenance(args), provenance_file, indent=2)  # Write the canonical generator provenance alongside the CSV.
+    output_provenance = build_wgangp_provenance(args)  # Keep the original training/checkpoint fingerprint unchanged.
+    output_provenance["generation_uniqueness"] = getattr(args, "_last_generation_uniqueness", None)  # Record the post-decoding deduplication policy separately from model identity.
+    with Path(args.out_file).with_suffix(".provenance.json").open("w", encoding="utf-8") as provenance_file:
+        json.dump(output_provenance, provenance_file, indent=2)
     safe_log("info", f"Successfully saved {len(output_df)} generated rows to {args.out_file}")  # Log saved rows
     print(  # Print saved rows
         f"{file_progress_prefix} {BackgroundColors.GREEN}Saved {BackgroundColors.CYAN}"  # Format prefix
@@ -6657,7 +6786,7 @@ def generate(args, config: Optional[Dict] = None):
         set_seed(int(args.seed))  # Make generation independent of earlier training, model construction, and file execution order.
         n_per_class, labels, n = compute_generation_counts_and_labels(args, config, class_distribution, label_encoder, n_classes)  # Compute per-class counts and label array
         notify_start_of_generation(args, n)  # Send Telegram notification about generation start
-        all_fake, all_labels, sample_generation_start_time = generate_batches_and_collect_results(args, G, device, labels, n)  # Generate synthetic samples in batches
+        all_fake, all_labels, sample_generation_start_time = generate_unique_decoded_samples(args, config, G, device, labels, scaler, label_encoder, feature_cols)  # Refill decoded per-class duplicates before quality evaluation.
         df = postprocess_generated_arrays_to_dataframe(args, config, all_fake, all_labels, scaler, label_encoder, feature_cols, device, n, file_progress_prefix)  # Postprocess arrays into DataFrame and save
         record_sample_generation_timing(args, sample_generation_start_time)  # Record sample generation elapsed time
         testing_start_time = time.time()  # Start post-generation verification and quality-output timing
@@ -6706,7 +6835,7 @@ def generate_from_in_memory_generator(args, config: Dict, G: nn.Module, dataset:
         set_seed(int(args.seed))  # Make generation independent of earlier training, model construction, and file execution order.
         n_per_class, labels, n = compute_generation_counts_and_labels(args, config, class_distribution, label_encoder, n_classes)  # Compute per-class counts and label array
         notify_start_of_generation(args, n)  # Send Telegram notification about generation start
-        all_fake, all_labels, sample_generation_start_time = generate_batches_and_collect_results(args, G, device, labels, n)  # Generate synthetic samples in batches
+        all_fake, all_labels, sample_generation_start_time = generate_unique_decoded_samples(args, config, G, device, labels, scaler, label_encoder, feature_cols)  # Refill decoded per-class duplicates before quality evaluation.
         df = postprocess_generated_arrays_to_dataframe(args, config, all_fake, all_labels, scaler, label_encoder, feature_cols, device, n, file_progress_prefix)  # Postprocess arrays into DataFrame and save
         record_sample_generation_timing(args, sample_generation_start_time)  # Record sample generation elapsed time
         testing_start_time = time.time()  # Start post-generation verification and quality-output timing
@@ -7432,7 +7561,12 @@ def skip_both_mode_when_augmented_output_sufficient(args: Any, config: Dict, csv
         existing_provenance = json.loads(provenance_file.read_text(encoding="utf-8"))  # Read the output manifest when present.
         quality_path = out_path.with_suffix(".quality.json")
         quality = json.loads(quality_path.read_text(encoding="utf-8"))
-        provenance_valid = existing_provenance.get("sha256") == build_wgangp_provenance(args)["sha256"] and quality.get("schema_version") == 4 and quality.get("accepted") is True and quality.get("quality_policy_sha256") == build_quality_policy_fingerprint(config)  # Reuse only validated prior output.
+        unique_record = existing_provenance.get("generation_uniqueness") or {}
+        provenance_valid = (existing_provenance.get("sha256") == build_wgangp_provenance(args)["sha256"]
+                            and quality.get("schema_version") == 4 and quality.get("accepted") is True
+                            and quality.get("quality_policy_sha256") == build_quality_policy_fingerprint(config)
+                            and unique_record.get("policy") == "exact_decoded_numeric_rows_v1"
+                            and unique_record.get("verified") is True)  # Reject older outputs unless strict duplicate-free generation was verified.
     except (OSError, ValueError, TypeError, AttributeError):  # Treat missing or malformed output manifests as unverified.
         provenance_valid = False  # Require regeneration for unverifiable existing outputs.
     if existing_rows == int(required_rows) and provenance_valid:  # Skip only matching output size and verified source/model configuration.
