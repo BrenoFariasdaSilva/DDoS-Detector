@@ -480,7 +480,7 @@ class TrainingProgressTests(unittest.TestCase):  # Group deterministic training 
         self.assertFalse(any(thread.name.startswith("training-heartbeat-") for thread in threading.enumerate()))  # Require no heartbeat thread after successful fit.
 
         eta_labels = []  # Capture heartbeat ETA notifications.
-        estimated_output = self.fit_with_output(SleepingEstimator(), "SVM", estimated_total_seconds=3600.0, eta_callback=eta_labels.append)  # Run one heartbeat-only fit with comparable historical duration.
+        estimated_output = self.fit_with_output(SleepingEstimator(), "SVM", estimated_total_seconds=3600.0, eta_callback=lambda eta_label, eta_seconds: eta_labels.append(eta_label))  # Run one heartbeat-only fit through the two-argument ETA callback contract.
         self.assertIn("Status: Active", estimated_output)  # Require the normal heartbeat row.
         self.assertNotIn("ETA: unavailable", estimated_output)  # Require historical runtime ETA when available.
         self.assertNotIn("Progress:", estimated_output)  # Forbid elapsed-time-derived percentages.

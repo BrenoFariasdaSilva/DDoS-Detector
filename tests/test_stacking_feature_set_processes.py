@@ -20,6 +20,9 @@ from unittest import mock  # Observe lazy augmentation loading and CLI behavior
 
 import numpy as np  # Verify exact memmap features and reject matrix task payloads
 import pandas as pd  # Build small deterministic production preprocessing input
+from sklearn.decomposition import PCA  # Fit an independent original-only PCA reference
+from sklearn.model_selection import train_test_split  # Reproduce the established stratified evaluation split independently
+from sklearn.preprocessing import LabelEncoder, StandardScaler  # Reproduce original-only label encoding and scaling independently
 import yaml  # Validate production and example configuration fallbacks
 
 import stacking  # Exercise the production feature-set process architecture
@@ -45,7 +48,7 @@ def run_feature_process_probe(process_payload, status_queue, status_state):  # E
     log_writer = stacking.Logger(process_payload["probe_log"], clean=False)  # Open the shared append-only process-safe logger
     try:  # Preserve complete child evidence and deterministic failure status
         for line_index in range(10):  # Emit multiple concurrent records from every child
-            log_writer.write(f"PROBE|{feature_set}|{os.getpid()}|{line_index}")  # Write one complete process-locked record
+            log_writer.write(f"PROBE|{feature_set}|{os.getpid()}|{line_index}\n")  # Write one complete newline-terminated process-locked record
         time.sleep(float(process_payload["probe_delays"].get(feature_set, 0.0)))  # Simulate independent feature-set duration without threads
         for task in process_payload["tasks"]:  # Process each matrix-free descriptor sequentially in its sole feature worker
             stacking.transition_feature_process_status(status_state, task, "started")  # Move the dequeued probe task from pending to running atomically
@@ -157,7 +160,7 @@ class FeatureSetProcessTests(unittest.TestCase):  # Group persistent feature-set
         repository_root = Path(stacking.__file__).resolve().parent  # Resolve the repository root
         for config_name in ("config.yaml", "config.yaml.example"):  # Validate runtime and example fallbacks together
             config_data = yaml.safe_load((repository_root / config_name).read_text(encoding="utf-8"))  # Parse the complete repository YAML file
-            self.assertEqual(config_data["evaluation"]["feature_set_workers"], {"full": 0, "ga": 0, "pca": 0, "rfe": 0})  # Require sequential fallback until CLI override
+            self.assertEqual(config_data["evaluation"]["feature_set_workers"], {"full": 0, "ga": 0, "pca": 0, "rfe": 0, "extra_trees": 0})  # Require sequential fallback for every supported worker, including Extra Trees, until CLI override
             self.assertIn("SVM", config_data["stacking"]["enabled_classifiers"])  # Prevent scheduler fixtures from altering scientific classifier configuration
         evaluation_plan, _, tasks = self.build_server_plan()  # Build this explicit server plan
         self.assertEqual(len(evaluation_plan), 240)  # Preserve this server-specific expected scenario only
@@ -267,8 +270,8 @@ class FeatureSetProcessTests(unittest.TestCase):  # Group persistent feature-set
         pending = {"GA Features": [tasks[1]], "PCA Components": [], "RFE Features": [tasks[3]]}  # Mark GA and RFE pending while PCA and one GA task are cached
         status_state = stacking.create_feature_process_status(mp.get_context("spawn"), tasks, pending)  # Initialize all status from the actual cache partition
         initial = stacking.read_feature_process_status(status_state)  # Read one atomic initial snapshot
-        self.assertEqual(initial["global"], {"total": 4, "cached": 2, "pending": 2, "running": 0, "computed": 0, "failed": 0, "completed": 2})  # Require exact cache-first global accounting
-        self.assertEqual(initial["features"]["PCA Components"], {"total": 1, "cached": 1, "pending": 0, "running": 0, "computed": 0, "failed": 0, "completed": 1})  # Require correct all-cached feature state
+        self.assertEqual(initial["global"], {"total": 4, "cached": 2, "pending": 2, "running": 0, "computed": 0, "failed": 0, "skipped": 0, "completed": 2})  # Require exact cache-first global accounting
+        self.assertEqual(initial["features"]["PCA Components"], {"total": 1, "cached": 1, "pending": 0, "running": 0, "computed": 0, "failed": 0, "skipped": 0, "completed": 1})  # Require correct all-cached feature state
         stacking.transition_feature_process_status(status_state, tasks[1], "started")  # Move the pending GA task into running state
         running_prefix = stacking.format_feature_process_progress(tasks[1], status_state, pid=1234)  # Format progress from synchronized dynamic denominators
         self.assertIn("[GA 1/2", running_prefix)  # Use the actual feature-local completion and total
@@ -278,7 +281,7 @@ class FeatureSetProcessTests(unittest.TestCase):  # Group persistent feature-set
         stacking.transition_feature_process_status(status_state, tasks[1], "computed")  # Complete GA through successful persistence
         stacking.transition_feature_process_status(status_state, tasks[3], "started")  # Move RFE into running state
         final = stacking.transition_feature_process_status(status_state, tasks[3], "failed")  # Fail RFE without claiming successful completion
-        self.assertEqual(final["global"], {"total": 4, "cached": 2, "pending": 0, "running": 0, "computed": 1, "failed": 1, "completed": 3})  # Require every task in one exact terminal state
+        self.assertEqual(final["global"], {"total": 4, "cached": 2, "pending": 0, "running": 0, "computed": 1, "failed": 1, "skipped": 0, "completed": 3})  # Require every task in one exact terminal state
         self.assertEqual(final["features"]["GA Features"]["completed"], 2)  # Combine one cached and one computed GA task
         self.assertEqual(final["features"]["RFE Features"]["completed"], 0)  # Exclude failed RFE work from completion
 
@@ -298,8 +301,10 @@ class FeatureSetProcessTests(unittest.TestCase):  # Group persistent feature-set
                 cache_dict[cache_key] = make_process_cache_row(task)  # Persist only small compatible result metadata
             process_payload = {"attack_types_combined": ["BENIGN", "ATTACK"], "execution_mode": "combined_files", "feature_mode_names": list(FEATURE_SET_NAMES)}  # Provide only cache-partition metadata
             cached_results, pending = stacking.partition_feature_process_tasks(tasks, cache_dict, process_payload, {})  # Recover all cache entries before any child or data resource
-        self.assertEqual(len(cached_results), len(tasks))  # Require complete cache recovery from metadata alone
-        self.assertTrue(all(not queue_tasks for queue_tasks in pending.values()))  # Never enqueue cached augmented combinations
+        original_ids = sorted(task["global_id"] for task in tasks if task["augmentation_ratio"] is None)  # Resolve combinations whose cache rows are reusable
+        augmented_ids = sorted(task["global_id"] for task in tasks if task["augmentation_ratio"] is not None)  # Resolve train-time augmented combinations that always require a fresh fit
+        self.assertEqual(len(cached_results), len(original_ids))  # Recover every original-data cache entry from metadata alone
+        self.assertEqual(sorted(task["global_id"] for queue_tasks in pending.values() for task in queue_tasks), augmented_ids)  # Enqueue only augmented combinations whose cache rows lack synthetic provenance
         augmented_open_mock.assert_not_called()  # Never parse augmentation CSV rows during planning or cache recovery
         ratio_open_mock.assert_not_called()  # Never build augmentation arrays or memmaps during planning or cache recovery
 
@@ -346,7 +351,7 @@ class FeatureSetProcessTests(unittest.TestCase):  # Group persistent feature-set
         model_maps = {False: {"Random Forest": object()}}  # Provide one process-local prototype identity behind patched evaluation boundaries
         cached_state = stacking.create_feature_process_status(mp.get_context("spawn"), [original_task], {"Full Features": [original_task]})  # Initialize final-cache recovery as pending work
         cached_resources = {"original_resources": None, "ratio_data": None, "active_ratio": None, "cache_dict": {}}  # Start with no data loaded
-        with mock.patch.object(stacking, "acquire_feature_process_combination_lock", return_value=mock.Mock()), mock.patch.object(stacking, "reload_feature_process_task_cache", return_value=({"cached": True}, {})), mock.patch.object(stacking, "prepare_feature_process_original_resources") as original_load_mock, mock.patch.object(stacking, "load_feature_process_ratio_data") as ratio_load_mock, mock.patch.object(stacking, "evaluate_feature_process_original_task") as original_fit_mock, mock.patch.object(stacking, "evaluate_feature_process_augmented_task") as augmented_fit_mock, mock.patch.object(stacking, "log_feature_process_combination"):  # Exercise a concurrent final cache hit
+        with mock.patch.object(stacking, "acquire_feature_process_combination_lock", return_value=mock.Mock()), mock.patch.object(stacking, "reload_feature_process_task_cache", return_value=({"cached": True}, {})), mock.patch.object(stacking, "prepare_feature_process_original_resources") as original_load_mock, mock.patch.object(stacking, "load_feature_process_ratio_data") as ratio_load_mock, mock.patch.object(stacking, "evaluate_feature_process_original_task") as original_fit_mock, mock.patch.object(stacking, "evaluate_feature_process_augmented_training_task") as augmented_fit_mock, mock.patch.object(stacking, "log_feature_process_combination"):  # Exercise a concurrent final cache hit
             stacking.process_feature_process_task(original_task, {"feature_set": "Full Features", "attack_types_combined": None}, model_maps, cached_resources, queue.Queue(), cached_state)  # Recover Full without fit or data loading
         original_load_mock.assert_not_called()  # Skip Full original memmap opening on cache recovery
         ratio_load_mock.assert_not_called()  # Skip augmentation on cache recovery
@@ -363,10 +368,14 @@ class FeatureSetProcessTests(unittest.TestCase):  # Group persistent feature-set
         augmented_state = stacking.create_feature_process_status(mp.get_context("spawn"), [augmented_task], {"Full Features": [augmented_task]})  # Initialize one pending augmented Full task
         augmented_resources = {"original_resources": None, "ratio_data": None, "active_ratio": None, "cache_dict": {}}  # Start augmented Full without original matrices
         ratio_data = {"ratio": 0.5, "X_raw": np.ones((5, 2), dtype=np.float64), "y_encoded": np.array([0, 1, 0, 1, 0], dtype=np.int64)}  # Provide only requested ratio data
-        with mock.patch.object(stacking, "acquire_feature_process_combination_lock", return_value=mock.Mock()), mock.patch.object(stacking, "reload_feature_process_task_cache", return_value=(None, {})), mock.patch.object(stacking, "prepare_feature_process_original_resources") as augmented_original_load_mock, mock.patch.object(stacking, "load_feature_process_ratio_data", return_value=ratio_data) as augmented_ratio_load_mock, mock.patch.object(stacking, "evaluate_feature_process_augmented_task", return_value={"persisted": True}), mock.patch.object(stacking, "log_feature_process_combination"):  # Exercise lazy augmented Full loading
+        prepared_split = {"y_test": np.zeros(2, dtype=np.int64)}  # Provide minimal original split metadata behind the patched preparation boundary
+        with mock.patch.object(stacking, "acquire_feature_process_combination_lock", return_value=mock.Mock()), mock.patch.object(stacking, "reload_feature_process_task_cache", return_value=(None, {})), mock.patch.object(stacking, "prepare_feature_process_original_resources", return_value=prepared_split) as augmented_original_load_mock, mock.patch.object(stacking, "load_feature_process_ratio_data", return_value=ratio_data) as augmented_ratio_load_mock, mock.patch.object(stacking, "evaluate_feature_process_augmented_training_task", return_value={"persisted": True}) as augmented_training_mock, mock.patch.object(stacking, "log_feature_process_combination"):  # Exercise lazy augmented Full loading
             stacking.process_feature_process_task(augmented_task, {"feature_set": "Full Features", "attack_types_combined": None}, model_maps, augmented_resources, queue.Queue(), augmented_state)  # Load exactly the pending Full ratio
-        augmented_original_load_mock.assert_not_called()  # Augmented Full does not reopen original matrices
+        augmented_original_load_mock.assert_called_once()  # Open the original split once because augmented training uses original training rows and the fixed original test partition
         augmented_ratio_load_mock.assert_called_once_with(mock.ANY, 0.5)  # Load only the required augmentation ratio
+        augmented_training_mock.assert_called_once()  # Fit one ratio-specific model from the original split and the loaded ratio
+        self.assertIs(augmented_training_mock.call_args.args[2], prepared_split)  # Pass the original split resources to augmented training
+        self.assertIs(augmented_training_mock.call_args.args[3], ratio_data)  # Pass exactly the loaded ratio resource to augmented training
         stacking.cleanup_feature_process_ratio_data(augmented_resources["ratio_data"])  # Release focused current-ratio resources
 
     def test_ratio_change_releases_previous_resource_before_loading_next(self):  # Verify bounded one-ratio worker ownership
@@ -399,10 +408,11 @@ class FeatureSetProcessTests(unittest.TestCase):  # Group persistent feature-set
 
             cleanup_calls.append(None if ratio_data is None else ratio_data.get("ratio"))  # Preserve the ratio identity before the mapping is cleared
             cleanup_implementation(ratio_data)  # Perform the real memmap and mapping release
-        with mock.patch.object(stacking, "acquire_feature_process_combination_lock", side_effect=[mock.Mock(), mock.Mock()]), mock.patch.object(stacking, "reload_feature_process_task_cache", return_value=(None, {})), mock.patch.object(stacking, "load_feature_process_ratio_data", side_effect=[first_ratio, second_ratio]) as ratio_open_mock, mock.patch.object(stacking, "cleanup_feature_process_ratio_data", side_effect=record_cleanup), mock.patch.object(stacking, "evaluate_feature_process_augmented_task", return_value={"persisted": True}), mock.patch.object(stacking, "log_feature_process_combination"):  # Instrument exact ratio open and close ordering
+        with mock.patch.object(stacking, "acquire_feature_process_combination_lock", side_effect=[mock.Mock(), mock.Mock()]), mock.patch.object(stacking, "reload_feature_process_task_cache", return_value=(None, {})), mock.patch.object(stacking, "prepare_feature_process_original_resources", return_value={"y_test": np.zeros(2, dtype=np.int64)}) as original_open_mock, mock.patch.object(stacking, "load_feature_process_ratio_data", side_effect=[first_ratio, second_ratio]) as ratio_open_mock, mock.patch.object(stacking, "cleanup_feature_process_ratio_data", side_effect=record_cleanup), mock.patch.object(stacking, "evaluate_feature_process_augmented_training_task", return_value={"persisted": True}), mock.patch.object(stacking, "log_feature_process_combination"):  # Instrument exact ratio open and close ordering
             for task in ratio_tasks:  # Process both ratios sequentially in one persistent worker state
                 stacking.process_feature_process_task(task, process_payload, model_maps, resource_state, status_queue, status_state)  # Load only the current task's required ratio
         self.assertEqual([call.args[1] for call in ratio_open_mock.call_args_list], [0.25, 0.50])  # Open only the required ratios in task order
+        original_open_mock.assert_called_once()  # Reuse one original split across consecutive augmented ratios
         self.assertEqual(cleanup_calls, [None, 0.25])  # Release the first ratio before opening the second without retaining both
         self.assertEqual(first_ratio, {})  # Drop every first-ratio reference after switching
         self.assertEqual(resource_state["active_ratio"], 0.50)  # Retain only the currently useful ratio
@@ -421,10 +431,10 @@ class FeatureSetProcessTests(unittest.TestCase):  # Group persistent feature-set
             cli_args = stacking.parse_cli_args()  # Exercise production CLI parsing
         repository_config = yaml.safe_load((Path(stacking.__file__).resolve().parent / "config.yaml").read_text(encoding="utf-8"))  # Load the actual production configuration fallback
         merged = stacking.merge_configs(stacking.get_default_config(), repository_config, cli_args)  # Exercise CLI-over-config precedence
-        self.assertEqual(merged["evaluation"]["feature_set_workers"], {"full": 0, "ga": 1, "pca": 1, "rfe": 1})  # Preserve exact committed three-worker runtime configuration with Full disabled
+        self.assertEqual(merged["evaluation"]["feature_set_workers"], {"full": 0, "ga": 1, "pca": 1, "rfe": 1, "extra_trees": 0})  # Preserve exact committed three-worker runtime configuration with Full and Extra Trees disabled
         self.assertEqual(merged["evaluation"]["n_jobs"], 1)  # Preserve estimator-level parallelism independently
         self.assertEqual(merged["evaluation"]["feature_extraction_n_jobs"], 1)  # Preserve feature-extraction parallelism independently
-        self.assertEqual(merged["stacking"]["feature_sets_config"], {"use_full": False, "use_pca": True, "use_rfe": True, "use_ga": True, "explicit_features": []})  # Resolve only the stated GA, PCA, and RFE queues
+        self.assertEqual(merged["stacking"]["feature_sets_config"], {"use_full": False, "use_pca": True, "use_rfe": True, "use_ga": True, "use_extra_trees": False, "explicit_features": []})  # Resolve only the stated GA, PCA, and RFE queues
         self.assertFalse(merged["stacking"]["methods"]["stacking"])  # Preserve individual-classifier-only execution for the stated command
         watcher_stub = mock.Mock(pid=9876)  # Represent the independently monitored watcher sidecar
         with tempfile.TemporaryDirectory() as temporary_directory, mock.patch.object(stacking, "MEMORY_WATCHER_PROCESS", None), mock.patch.object(stacking, "MEMORY_WATCHER_RUN_DIR", None), mock.patch.object(stacking, "MEMORY_WATCHER_PHASE_STATE_PATH", None), mock.patch.object(stacking, "create_memory_watcher_run_directory", return_value=temporary_directory), mock.patch.object(stacking, "write_memory_phase_event"), mock.patch.object(stacking.subprocess, "Popen", return_value=watcher_stub) as watcher_process_mock:  # Observe watcher preservation without starting a real diagnostics process
@@ -441,8 +451,8 @@ class FeatureSetProcessTests(unittest.TestCase):  # Group persistent feature-set
         with mock.patch.object(sys, "argv", full_arguments):  # Parse Full through the same production CLI boundary
             full_cli_args = stacking.parse_cli_args()  # Exercise the complete Full worker override
         full_merged = stacking.merge_configs(stacking.get_default_config(), repository_config, full_cli_args)  # Apply CLI precedence over disabled YAML fallbacks
-        self.assertEqual(full_merged["evaluation"]["feature_set_workers"], {"full": 1, "ga": 1, "pca": 1, "rfe": 1})  # Require four normalized persistent worker identities
-        self.assertEqual(full_merged["stacking"]["feature_sets_config"], {"use_full": True, "use_pca": True, "use_rfe": True, "use_ga": True, "explicit_features": []})  # Select all four runtime feature identities
+        self.assertEqual(full_merged["evaluation"]["feature_set_workers"], {"full": 1, "ga": 1, "pca": 1, "rfe": 1, "extra_trees": 0})  # Require four normalized persistent worker identities with Extra Trees disabled
+        self.assertEqual(full_merged["stacking"]["feature_sets_config"], {"use_full": True, "use_pca": True, "use_rfe": True, "use_ga": True, "use_extra_trees": False, "explicit_features": []})  # Select all four runtime feature identities
         with self.assertRaisesRegex(ValueError, "greater than 1"):  # Require explicit rejection instead of false multi-worker behavior
             stacking.validate_feature_set_workers("ga=2,pca=1,rfe=1", "--feature-set-workers")  # Reject unsafe multiple workers per feature set
         with self.assertRaisesRegex(ValueError, "greater than 1"):  # Apply the same one-worker safety limit to Full Features
@@ -464,16 +474,18 @@ class FeatureSetProcessTests(unittest.TestCase):  # Group persistent feature-set
             cache_dict[cache_key] = make_process_cache_row(task)  # Store exact compatible feature and sample metadata
         process_payload = {"attack_types_combined": ["BENIGN", "ATTACK"], "execution_mode": "combined_files", "feature_mode_names": list(FEATURE_SET_NAMES)}  # Provide only cache partition context
         cached_results, pending = stacking.partition_feature_process_tasks(tasks, cache_dict, process_payload, {})  # Classify all combinations before any data or child startup
-        self.assertEqual(len(cached_results), total_combinations)  # Require every valid cache row to recover
-        self.assertTrue(all(not queue_tasks for queue_tasks in pending.values()))  # Require no cached task to be fitted or enqueued
+        original_ids = sorted(task["global_id"] for task in tasks if task["augmentation_ratio"] is None)  # Resolve combinations whose cache rows are reusable
+        augmented_tasks = [task for task in tasks if task["augmentation_ratio"] is not None]  # Resolve train-time augmented combinations that always require a fresh fit
+        self.assertEqual(sorted(int(global_id) for global_id in cached_results), original_ids)  # Require every valid original cache row to recover
+        self.assertEqual(sorted(task["global_id"] for queue_tasks in pending.values() for task in queue_tasks), sorted(task["global_id"] for task in augmented_tasks))  # Require no valid cached task to be enqueued and every augmented task to be refitted
         with tempfile.TemporaryDirectory() as temporary_directory:  # Isolate cache-only persistent process evidence
             probe_payload = make_probe_payload(temporary_directory)  # Build a matrix-free cache-only lifecycle payload
             status_snapshot = stacking.execute_feature_set_processes(pending, probe_payload, tasks, cached_results, process_context=mp.get_context("spawn"), process_target=run_feature_process_probe)  # Start configured persistent children with plan-derived cache-only state and no fitted tasks
-            self.assertEqual(status_snapshot["global"]["completed"], total_combinations)  # Preserve dynamic cache-inclusive completed total without computation
-            self.assertEqual(status_snapshot["global"]["cached"], total_combinations)  # Classify every cache hit authoritatively
-            self.assertEqual(status_snapshot["global"]["computed"], 0)  # Prove cache-only startup performs no fits
-            evidence = [json.loads((Path(temporary_directory) / f"{key}.json").read_text(encoding="utf-8")) for key in ("ga", "pca", "rfe")]  # Load cache-only child queue evidence
-            self.assertTrue(all(not row["tasks"] for row in evidence))  # Require every valid cached combination to bypass fitting
+            self.assertEqual(status_snapshot["global"]["completed"], total_combinations)  # Preserve dynamic cache-inclusive completed total
+            self.assertEqual(status_snapshot["global"]["cached"], len(original_ids))  # Classify every original cache hit authoritatively
+            self.assertEqual(status_snapshot["global"]["computed"], len(augmented_tasks))  # Compute only the augmented combinations excluded from cache reuse
+            evidence = [json.loads((Path(temporary_directory) / f"{key}.json").read_text(encoding="utf-8")) for key in ("ga", "pca", "rfe")]  # Load child queue evidence
+            self.assertTrue(all(len(row["tasks"]) == sum(task["feature_set"] == row["feature_set"] for task in augmented_tasks) for row in evidence))  # Require every valid cached combination to bypass fitting while each worker fits its augmented queue
 
     def test_dynamic_capacity_limit_rechecks_available_ram(self):  # Verify RAM gate can expand after startup
         """
@@ -636,10 +648,10 @@ class FeatureSetProcessTests(unittest.TestCase):  # Group persistent feature-set
         scaled = np.arange(12, dtype=np.float64).reshape(6, 2)  # Build deterministic complete scaled Full matrix
         scaler = mock.Mock()  # Represent persisted original-training scaler
         scaler.transform.side_effect = lambda values: scaled[:len(values)]  # Return one exact scaled matrix per bounded input batch
-        loaded_model = mock.Mock()  # Represent the persisted classifier with observable bounded predictions
+        loaded_model = mock.Mock(spec=["predict"])  # Represent the persisted classifier exposing only its prediction interface for observable bounded predictions
         loaded_model.predict.side_effect = lambda values: np.arange(len(values), dtype=np.int64) % 2  # Produce deterministic predictions for each bounded batch
-        artifact_bundle = {"model": loaded_model, "scaler": scaler, "transformer": None, "input_feature_names": ["a", "b"], "model_feature_names": ["a", "b"], "label_encoder": mock.Mock()}  # Build complete Full artifact metadata
-        task = {"feature_set": "Full Features", "hyperparameters_enabled": False, "classifier_name": "Random Forest", "augmentation_ratio": 0.5, "expected_feature_names": ["a", "b"], "expected_n_features": 2, "expected_n_samples_train": 8, "data_source_label": "Augmented@50%_CombinedFiles", "experiment_id": "experiment", "experiment_mode": "original_training_augmented_testing"}  # Build one augmented Full task
+        artifact_bundle = {"model": loaded_model, "scaler": scaler, "transformer": None, "input_feature_names": ["a", "b"], "model_feature_names": ["a", "b"], "label_encoder": mock.Mock(), "exported_model_filename": "dataset_full_features_random_forest.joblib"}  # Build complete Full artifact metadata including the validated artifact basename every successful load exposes
+        task = {"feature_set": "Full Features", "hyperparameters_enabled": False, "classifier_name": "Random Forest", "augmentation_ratio": 0.5, "expected_feature_names": ["a", "b"], "expected_n_features": 2, "expected_n_samples_train": 8, "data_source_label": "Augmented@50%_CombinedFiles", "experiment_id": "experiment", "experiment_mode": "original_training_augmented_testing", "experiment_run": 1}  # Build one augmented Full task including the run identity every production task carries
         payload = {"file": "dataset.csv", "cache_ref_file": "dataset.csv", "execution_mode": "combined_files", "attack_types_combined": None, "config": {"stacking": {"memory_management": {"process_memmap_chunk_rows": 2}}}, "optimized_params": {}}  # Provide a small bounded prediction batch
         ratio_data = {"X_raw": np.ones((6, 2), dtype=np.float64), "y_encoded": np.array([0, 1, 0, 1, 0, 1], dtype=np.int64)}  # Provide one required ratio resource
         with mock.patch.object(stacking, "build_feature_process_artifact_context", return_value={}), mock.patch.object(stacking, "build_filename_safe_dataset_identity", return_value="dataset"), mock.patch.object(stacking, "load_existing_model_if_available", return_value=(artifact_bundle, None)), mock.patch.object(stacking, "evaluate_individual_classifier", return_value={"Accuracy": 1.0}) as evaluate_mock, mock.patch.object(stacking, "build_classifier_result_entry", return_value={"persisted": True}), mock.patch.object(stacking, "persist_cache_result_entry"), mock.patch.object(stacking, "log_feature_process_combination"):  # Isolate scientific evaluator input identity
@@ -650,6 +662,98 @@ class FeatureSetProcessTests(unittest.TestCase):  # Group persistent feature-set
         np.testing.assert_array_equal(evaluate_mock.call_args.kwargs["precomputed_predictions"], np.array([0, 1, 0, 1, 0, 1]))  # Preserve complete prediction order across batches
         self.assertFalse(evaluate_mock.call_args.kwargs["hyperparameters_enabled"])  # Preserve serialized default hyperparameter identity at evaluator boundary.
         self.assertEqual(evaluate_mock.call_args.kwargs["augmentation_ratio"], 0.5)  # Preserve serialized augmentation ratio at evaluator boundary.
+
+    def test_pca_fit_uses_original_training_rows_in_sequential_and_worker_paths(self):  # Verify one original-only PCA fitting policy across execution paths
+        """
+        Verify sequential and persistent-worker PCA fit only original training rows and project synthetic rows.
+
+        :param self: FeatureSetProcessTests instance.
+        :return: None.
+        """
+
+        feature_names = [f"f{index}" for index in range(6)]  # Name six deterministic numeric features
+        class_counts = {"BENIGN": 120, "DrDoS_DNS": 300, "Syn": 30}  # Build a small imbalanced class distribution with a rare minority
+        labels = np.repeat(list(class_counts), list(class_counts.values()))  # Expand class names into one label per row
+        codes = pd.Series(labels).map({name: code for code, name in enumerate(class_counts)}).to_numpy()  # Encode classes for class-dependent feature shifts
+        random_generator = np.random.default_rng(7)  # Seed every generated feature value deterministically
+        original_values = random_generator.normal(0.0, 1.0, (len(labels), 6))  # Draw original feature noise
+        original_values[:, 0] += 2.0 * codes  # Separate classes along the first original feature
+        original_values[:, 1] = original_values[:, 0] * 0.8 + random_generator.normal(0.0, 0.3, len(labels))  # Correlate the second feature with the first
+        original_values[:, 2] += codes  # Add a weak class shift to the third feature
+        synthetic_values = random_generator.normal(0.0, 1.0, (len(labels), 6))  # Draw synthetic feature noise
+        synthetic_values[:, 0] += 2.0 * codes  # Keep the synthetic class separation on the first feature
+        synthetic_values[:, 2] += 4.0 * codes  # Shift synthetic variance so a pooled PCA fit would yield different components
+        synthetic_values[:, 3] = random_generator.exponential(1.0 + codes, len(labels))  # Give synthetic rows a skewed class-dependent feature
+        original_df = pd.DataFrame(original_values, columns=feature_names).assign(Label=labels).sample(frac=1.0, random_state=3).reset_index(drop=True)  # Shuffle the original frame deterministically
+        synthetic_df = pd.DataFrame(synthetic_values, columns=feature_names).assign(Label=labels).sample(frac=1.0, random_state=5).reset_index(drop=True)  # Shuffle the synthetic frame deterministically
+        config = stacking.get_default_config()  # Build an independent production-default configuration
+        config["evaluation"]["random_state"] = 42  # Pin the established split seed for the independent reference
+        config.setdefault("explainability", {})["enabled"] = False  # Disable explainability artifacts outside the PCA scope
+        component_count = 3  # Request fewer components than features so the fit population changes the projection
+        X_original = original_df[feature_names].to_numpy(dtype=np.float64)  # Extract original raw features in file order
+        y_original = original_df["Label"].to_numpy()  # Extract original raw labels in file order
+        train_positions, test_positions = train_test_split(np.arange(len(original_df)), test_size=0.2, random_state=42, stratify=y_original)  # Reproduce the stratified original split independently
+        label_encoder = LabelEncoder().fit(y_original[train_positions])  # Fit label identity on original training labels only
+        scaler = StandardScaler().fit(X_original[train_positions])  # Fit scaling on original training rows only
+        y_train_reference = label_encoder.transform(y_original[train_positions])  # Encode original training labels for the reference
+        y_test_reference = label_encoder.transform(y_original[test_positions])  # Encode original testing labels for the reference
+        reference_pca = PCA(n_components=component_count).fit(scaler.transform(X_original[train_positions]))  # Fit the independent reference on original training rows only
+        train_reference = reference_pca.transform(scaler.transform(X_original[train_positions]))  # Project original training rows with the reference
+        test_reference = reference_pca.transform(scaler.transform(X_original[test_positions]))  # Project original testing rows with the reference
+        tolerance = {"rtol": 1e-8, "atol": 1e-8}  # Allow only floating-point roundoff between equivalent PCA fits
+        models = {"Random Forest": stacking.RandomForestClassifier(n_estimators=3, random_state=0)}  # Provide one unfitted classifier prototype for the sequential plan
+        for execution_mode, ratios in (("separate_files", (None, 0.5, 1.0)), ("combined_files", (1.0, 0.5, None))):  # Cover both execution modes and both PCA cache population orders
+            with tempfile.TemporaryDirectory() as temporary_directory, mock.patch.object(stacking, "CONFIG", config), mock.patch.object(stacking, "send_telegram_message"), mock.patch.object(stacking, "send_exception_via_telegram"):  # Isolate PCA cache artifacts and external notifications per mode
+                dataset_path = str(Path(temporary_directory) / "ds" / "flows.csv")  # Place the dataset inside the isolated directory
+                Path(dataset_path).parent.mkdir()  # Create the isolated dataset directory
+                original_df.to_csv(dataset_path, index=False)  # Persist the original dataset for path-derived artifact identities
+                synthetic_path = str(Path(temporary_directory) / "synthetic.csv")  # Place synthetic rows inside the isolated directory
+                synthetic_df.to_csv(synthetic_path, index=False)  # Persist synthetic rows for worker ratio loading
+                attack_types = list(class_counts) if execution_mode == "combined_files" else None  # Mirror combined-mode attack identity
+                for ratio in ratios:  # Evaluate original-only and two augmentation ratios
+                    expected_train = train_reference  # Expect only projected original training rows without augmentation
+                    if ratio is not None:  # Project the production-selected synthetic rows with the original-only reference
+                        selected_synthetic = stacking.select_synthetic_training_samples(synthetic_df.copy(), y_train_reference, label_encoder, ratio, config)  # Select synthetic rows with the production proportional policy
+                        synthetic_reference = reference_pca.transform(scaler.transform(selected_synthetic[feature_names].to_numpy(dtype=np.float64)))  # Project synthetic rows without refitting PCA
+                        expected_train = np.concatenate((train_reference, synthetic_reference), axis=0)  # Preserve original-then-synthetic training row order
+                        y_synthetic_reference = label_encoder.transform(selected_synthetic["Label"])  # Encode synthetic labels with the original encoder
+                        pooled_rows = np.concatenate((scaler.transform(X_original[train_positions]), scaler.transform(selected_synthetic[feature_names].to_numpy(dtype=np.float64))), axis=0)  # Stack scaled original and synthetic rows for the rejected pooled policy
+                        self.assertFalse(np.allclose(PCA(n_components=component_count).fit_transform(pooled_rows), expected_train, **tolerance))  # Require fixture data that distinguishes pooled and original-only fits
+                    keyword_arguments = {"data_source_label": ("Original Combined Files" if execution_mode == "combined_files" else "Original") if ratio is None else f"TrainingAugmented@{int(ratio * 100)}%", "experiment_mode": "original_only" if ratio is None else "original_training_augmented_training", "augmentation_ratio": ratio, "execution_mode_str": execution_mode, "config": config, "source_files": [dataset_path], "attack_types_combined": attack_types}  # Build the established sequential evaluation identity
+                    if ratio is not None:  # Append synthetic training data only for augmented evaluations
+                        keyword_arguments["df_augmented_for_training"] = synthetic_df.copy()  # Supply the complete synthetic pool for production selection
+                    with mock.patch.object(stacking, "evaluate_single_feature_set", return_value=({}, None, 0)) as evaluate_mock:  # Capture exact classifier inputs without fitting classifiers
+                        stacking.evaluate_on_dataset(dataset_path, original_df.copy(), feature_names, feature_names[:4], component_count, feature_names[1:5], models, extra_trees_selected_features=feature_names[::2], **keyword_arguments)  # Run the sequential PCA path
+                    pca_call = next(call for call in evaluate_mock.call_args_list if call.args[1] == "PCA Components")  # Select the sequential PCA classifier inputs
+                    sequential_train, sequential_test, sequential_y_train, sequential_y_test = (np.asarray(pca_call.args[position]) for position in (2, 3, 7, 8))  # Extract sequential PCA matrices and labels
+                    self.assertEqual(sequential_train.shape, (expected_train.shape[0], component_count))  # Require original plus synthetic rows with the configured component count
+                    self.assertEqual(sequential_test.shape, (len(test_positions), component_count))  # Require an unaugmented original test matrix
+                    np.testing.assert_allclose(sequential_train, expected_train, **tolerance)  # Require original-only PCA for original and synthetic training rows
+                    np.testing.assert_allclose(sequential_test, test_reference, **tolerance)  # Require original-only PCA for testing rows
+                    np.testing.assert_array_equal(sequential_y_train[:len(train_positions)], y_train_reference)  # Preserve original training label alignment
+                    np.testing.assert_array_equal(sequential_y_test, y_test_reference)  # Preserve testing label alignment
+                    shared_resources = stacking.create_feature_process_shared_resources(original_df.copy(), dataset_path, config)  # Build coordinator-owned worker inputs
+                    pca_cache_context = {"execution_mode": execution_mode, "data_source": "Original", "experiment_mode": "original_only", "augmentation_ratio": None, "target_column": "Label", "original_sample_count": len(original_df), "augmented_sample_count": 0, "test_size": 0.2, "random_state": 42, "experiment_run": stacking.get_current_experiment_run(config), "stratified": True, "augmentation_merged_into_training_after_split": False, "attack_types": stacking.normalize_metadata_for_json(attack_types)}  # Mirror the coordinator original-only PCA identity
+                    payload = {"file": dataset_path, "source_files": [dataset_path], "input_feature_names": feature_names, "label_classes": list(label_encoder.classes_), "execution_mode": execution_mode, "config": config, "augmentation_file_paths": [synthetic_path], "original_sample_count": len(original_df), "shared_resources": shared_resources, "pca_cache_context": pca_cache_context, "feature_set": "PCA Components", "feature_metadata": {"feature_count": component_count, "indices": None, "feature_names": [f"PC{index + 1}" for index in range(component_count)]}}  # Build the small persistent-worker PCA payload
+                    resources = stacking.prepare_feature_process_original_resources(payload)  # Run the persistent-worker PCA path
+                    try:  # Release worker mappings under every assertion outcome
+                        np.testing.assert_allclose(resources["X_train"], train_reference, **tolerance)  # Require original-only PCA for worker original training rows
+                        np.testing.assert_allclose(resources["X_test"], test_reference, **tolerance)  # Require original-only PCA for worker testing rows
+                        np.testing.assert_array_equal(resources["y_test"], y_test_reference)  # Preserve worker testing label alignment
+                        if ratio is None:  # Compare original-only sequential and worker matrices directly
+                            np.testing.assert_allclose(sequential_train, np.asarray(resources["X_train"]), **tolerance)  # Require identical original-only training projections across paths
+                        else:  # Compare augmented sequential and worker training matrices
+                            ratio_data = stacking.load_feature_process_ratio_frame_data(payload, ratio)  # Load the worker synthetic ratio frame
+                            training_data = stacking.build_feature_process_augmented_training_data({"augmentation_ratio": ratio, "classifier_name": "Random Forest"}, payload, resources, ratio_data)  # Build worker augmented training inputs
+                            try:  # Release augmented worker inputs under every assertion outcome
+                                np.testing.assert_allclose(training_data["X_train"], sequential_train, **tolerance)  # Require identical augmented training projections across paths
+                                np.testing.assert_array_equal(training_data["y_train"], sequential_y_train)  # Require identical augmented label order across paths
+                                np.testing.assert_array_equal(np.asarray(training_data["y_train"])[len(train_positions):], y_synthetic_reference)  # Preserve synthetic label alignment with projected rows
+                            finally:  # Close augmented worker mappings
+                                stacking.cleanup_feature_process_augmented_training_data(training_data)  # Release worker augmented backing files
+                    finally:  # Close worker and coordinator mappings
+                        stacking.cleanup_feature_process_original_resources(resources)  # Release worker PCA mappings
+                        stacking.cleanup_feature_process_directory(shared_resources["temp_dir"])  # Delete coordinator-owned backing files
 
     def test_augmented_task_accepts_shared_encoded_labels_without_local_frame(self):  # Verify shared ratio resources flow through the generic task path
         """
@@ -670,14 +774,15 @@ class FeatureSetProcessTests(unittest.TestCase):  # Group persistent feature-set
         status_queue = queue.Queue()  # Capture the small progress record locally
         combination_lock = mock.Mock()  # Observe complete reservation release after persistence
         shared_ratio = {"ratio": task["augmentation_ratio"], "X_raw": np.ones((2, 2), dtype=np.float64), "y_encoded": np.array([0, 1], dtype=np.int64), "shared": True}  # Provide shared ratio resources without a y_raw frame view
-        with mock.patch.object(stacking, "acquire_feature_process_combination_lock", return_value=combination_lock), mock.patch.object(stacking, "reload_feature_process_task_cache", return_value=(None, {})), mock.patch.object(stacking, "load_feature_process_ratio_data", return_value=shared_ratio), mock.patch.object(stacking, "evaluate_feature_process_augmented_task", return_value={"persisted": True}) as evaluation_mock, mock.patch.object(stacking, "log_feature_process_combination"):  # Isolate scheduling while retaining the generic augmented task flow
+        with mock.patch.object(stacking, "acquire_feature_process_combination_lock", return_value=combination_lock), mock.patch.object(stacking, "reload_feature_process_task_cache", return_value=(None, {})), mock.patch.object(stacking, "load_feature_process_ratio_data", return_value=shared_ratio), mock.patch.object(stacking, "prepare_feature_process_original_resources", return_value={"y_test": np.zeros(2, dtype=np.int64)}), mock.patch.object(stacking, "evaluate_feature_process_augmented_training_task", return_value={"persisted": True}) as evaluation_mock, mock.patch.object(stacking, "log_feature_process_combination"):  # Isolate scheduling while retaining the generic augmented task flow
             stacking.process_feature_process_task(task, process_payload, model_maps, resource_state, status_queue, status_state)  # Execute one shared-label augmented combination
-        evaluation_mock.assert_called_once()  # Require the existing augmented evaluator to receive the shared ratio resource
+        evaluation_mock.assert_called_once()  # Require the augmented training evaluator to run exactly once
+        self.assertIs(evaluation_mock.call_args.args[3], shared_ratio)  # Require the augmented training evaluator to receive the shared ratio resource
         final_status = stacking.read_feature_process_status(status_state)  # Read exact cache, pending, running, computed, failed, and completed state
         self.assertEqual(final_status["global"]["computed"], 1)  # Count the durably persisted combination once
         self.assertEqual(final_status["global"]["completed"], 1)  # Include successful computation in completed status exactly once
-        lifecycle_events = [status_queue.get_nowait()["status"], status_queue.get_nowait()["event"]]  # Read running followed by computed lifecycle transport
-        self.assertEqual(lifecycle_events, ["running", "computed"])  # Report exact state order without false cache recovery
+        lifecycle_events = [status_queue.get_nowait()["status"], status_queue.get_nowait()["status"], status_queue.get_nowait()["event"]]  # Read running, training-start, and computed lifecycle transport
+        self.assertEqual(lifecycle_events, ["running", "training_start", "computed"])  # Report exact state order for a fresh augmented fit without false cache recovery
         combination_lock.close.assert_called_once()  # Release the complete combination reservation after persistence
         stacking.cleanup_feature_process_ratio_data(resource_state["ratio_data"])  # Release the focused shared ratio resources
 
@@ -737,7 +842,7 @@ class FeatureSetProcessTests(unittest.TestCase):  # Group persistent feature-set
             self.assertLess(finished["GA Features"], finished["Full Features"])  # Slow Full does not block GA
             self.assertLess(finished["RFE Features"], finished["Full Features"])  # Slow Full does not block RFE
             self.assertLess(finished["Full Features"], finished["PCA Components"])  # Full can finish while another worker remains active
-            self.assertEqual(final_status["global"], {"total": 8, "cached": 0, "pending": 0, "running": 0, "computed": 8, "failed": 0, "completed": 8})  # Preserve exact dynamic global status
+            self.assertEqual(final_status["global"], {"total": 8, "cached": 0, "pending": 0, "running": 0, "computed": 8, "failed": 0, "skipped": 0, "completed": 8})  # Preserve exact dynamic global status with no skipped work
             self.assertTrue(all(status["completed"] == 2 for status in final_status["features"].values()))  # Complete each feature-local queue independently
             remaining_children = {child.pid for child in mp.active_children()} - baseline_children  # Identify leaked focused children
             self.assertEqual(remaining_children, set())  # Reap all four workers after success
@@ -809,9 +914,11 @@ class FeatureSetProcessTests(unittest.TestCase):  # Group persistent feature-set
             payload = make_probe_payload(temporary_directory, delays={"GA Features": 0.01, "PCA Components": 0.2, "RFE Features": 2.0}, failure="PCA Components")  # Complete GA before failing PCA while RFE remains active
             tasks, pending = make_probe_tasks()  # Assign one matrix-free task per feature process
             baseline_children = {child.pid for child in mp.active_children()}  # Snapshot unrelated active children
-            with self.assertRaisesRegex(RuntimeError, "Injected PCA Components failure") as raised:  # Require the exact child exception at the coordinator
+            with self.assertRaisesRegex(RuntimeError, "Injected PCA Components failure") as raised, mock.patch.object(stacking, "report_stacking_execution_failure", wraps=stacking.report_stacking_execution_failure) as failure_report:  # Require the exact child exception and observe the coordinator failure context
                 stacking.execute_feature_set_processes(pending, payload, tasks, {}, process_context=mp.get_context("spawn"), process_target=run_feature_process_probe)  # Exercise production failure termination and joining with dynamic total
-            self.assertIn("Traceback", str(raised.exception))  # Require complete child traceback text
+            reported_failure = failure_report.call_args.args[2]["failure"]  # Read the structured child failure delivered to the coordinator
+            self.assertIn("Traceback", reported_failure["traceback"])  # Require complete child traceback text in the coordinator failure context
+            self.assertIn("Injected PCA Components failure", reported_failure["traceback"])  # Require the traceback to describe the injected child exception
             failure_status = raised.exception.status_snapshot  # Read reconciled counters attached to the surfaced child exception
             self.assertEqual(failure_status["global"]["failed"], 1)  # Count the PCA combination as failed without completion
             self.assertEqual(failure_status["global"]["completed"], 1)  # Preserve only the GA result completed before failure

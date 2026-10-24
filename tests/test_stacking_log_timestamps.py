@@ -50,11 +50,11 @@ class StackingLogTimestampTests(unittest.TestCase):  # Verify centralized Brazil
         with tempfile.TemporaryDirectory() as temporary_directory:  # Isolate the shared append destination
             log_path = Path(temporary_directory) / "shared.log"  # Resolve one coordinator and worker log path
             coordinator = Logger(str(log_path), clean=True)  # Open the long-lived coordinator descriptor first
-            coordinator.write("coordinator-start")  # Advance the coordinator file position before worker output
+            coordinator.write("coordinator-start\n")  # Advance the coordinator file position with one newline-terminated record before worker output
             worker = Logger(str(log_path), clean=False)  # Open the worker descriptor against the same file
-            worker.write("worker-start")  # Append one record while the coordinator remains open
+            worker.write("worker-start\n")  # Append one newline-terminated record while the coordinator remains open
             worker.close()  # Close the simulated worker descriptor before coordinator resumes
-            coordinator.write("coordinator-finish")  # Append after worker output without overwriting it
+            coordinator.write("coordinator-finish\n")  # Append one newline-terminated record after worker output without overwriting it
             coordinator.close()  # Flush and close the coordinator descriptor before reading
             lines = log_path.read_text(encoding="utf-8").splitlines()  # Read exact durable record order
         self.assertEqual(lines, ["coordinator-start", "worker-start", "coordinator-finish"])  # Preserve every shared record exactly once
@@ -70,15 +70,15 @@ class StackingLogTimestampTests(unittest.TestCase):  # Verify centralized Brazil
             log_path = Path(temporary_directory) / "timestamp.log"  # Build the focused log path
             logger = Logger(str(log_path), clean=True, timestamp_timezone=SAO_PAULO_TIMEZONE_NAME, timestamp_now=recording_clock)  # Enable deterministic São Paulo formatting
             with mock.patch.object(sys, "__stdout__", None):  # Suppress terminal mirroring while preserving file output
-                logger.write("Normal stacking record")  # Emit one ordinary single-line record
-                logger.write("\033[H\033[J\033[92mColored startup\033[0m")  # Preserve leading terminal controls before the visible prefix
-                logger.write(f"{EXPECTED_PREFIX}Already timestamped")  # Verify exact existing prefixes are never duplicated
-                logger.write("Traceback (most recent call last):\n  File \"stacking.py\", line 1\n\nRuntimeError: failure")  # Emit one readable multiline traceback with a blank separator
+                logger.write("Normal stacking record\n")  # Emit one ordinary newline-terminated record as print delivers it
+                logger.write("\033[H\033[J\033[92mColored startup\033[0m\n")  # Preserve leading terminal controls before the visible prefix
+                logger.write(f"{EXPECTED_PREFIX}Already timestamped\n")  # Verify exact existing prefixes are never duplicated
+                logger.write("Traceback (most recent call last):\n  File \"stacking.py\", line 1\n\nRuntimeError: failure\n")  # Emit one readable multiline traceback with a blank separator
             logger.close()  # Close the isolated log before reading it
             logged_text = log_path.read_text(encoding="utf-8")  # Read the ANSI-clean durable representation
         expected_text = f"{EXPECTED_PREFIX}Normal stacking record\n{EXPECTED_PREFIX}Colored startup\n{EXPECTED_PREFIX}Already timestamped\n{EXPECTED_PREFIX}Traceback (most recent call last):\n{EXPECTED_PREFIX}  File \"stacking.py\", line 1\n\n{EXPECTED_PREFIX}RuntimeError: failure\n"  # Build exact non-empty-line prefix expectations
         self.assertEqual(logged_text, expected_text)  # Require exact prefix placement and readable blank traceback separation
-        self.assertEqual(observed_zones, [SAO_PAULO_TIMEZONE_NAME] * 4)  # Use America/Sao_Paulo independently for every emitted record
+        self.assertEqual(observed_zones, [SAO_PAULO_TIMEZONE_NAME] * 7)  # Use America/Sao_Paulo independently for every emitted physical line, including the traceback lines and its blank separator
         self.assertEqual(logged_text.count(f"{EXPECTED_PREFIX}Already timestamped"), 1)  # Preserve exactly one prefix on preformatted input
 
         padded_utc_time = datetime_module.datetime(2026, 1, 2, 4, 5, 9, tzinfo=datetime_module.timezone.utc)  # Build a fixture requiring zero padding after conversion
@@ -86,7 +86,7 @@ class StackingLogTimestampTests(unittest.TestCase):  # Verify centralized Brazil
             log_path = Path(temporary_directory) / "padding.log"  # Build a second focused path
             logger = Logger(str(log_path), clean=True, timestamp_timezone=SAO_PAULO_TIMEZONE_NAME, timestamp_now=lambda zone: padded_utc_time.astimezone(zone))  # Convert the zero-padding fixture explicitly
             with mock.patch.object(sys, "__stdout__", None):  # Suppress focused terminal mirroring
-                logger.write("Padded")  # Emit the zero-padding fixture record
+                logger.write("Padded\n")  # Emit the newline-terminated zero-padding fixture record
             logger.close()  # Close the focused logger before reading
             padded_text = log_path.read_text(encoding="utf-8")  # Read the exact formatted output
         self.assertEqual(padded_text, "02/01/2026 - 01h05m09s: Padded\n")  # Require two digits for day, month, hour, minute, and second
@@ -167,8 +167,8 @@ class StackingLogTimestampTests(unittest.TestCase):  # Verify centralized Brazil
             lines = [line for line in log_path.read_text(encoding="utf-8").splitlines() if line]  # Read every non-empty runtime physical line
         self.assertTrue(all(line.startswith(EXPECTED_PREFIX) for line in lines))  # Prefix heartbeats, units, phases, summaries, cache, persistence, and failures uniformly
         self.assertTrue(any("Status: Active" in line for line in lines))  # Cover recurring heartbeat output
-        self.assertTrue(any("Round: 1/2" in line for line in lines))  # Cover XGBoost-style round progress
-        self.assertTrue(any("Iteration: 1/2" in line for line in lines))  # Cover LightGBM-style iteration progress
+        self.assertTrue(any("Feature Set: GA Features | Classifier: XGBoost | Status: Active | Elapsed: 1s | ETA: 1s" in line for line in lines))  # Cover XGBoost-style round progress through its unit-derived active ETA row
+        self.assertTrue(any("Feature Set: PCA | Classifier: LightGBM | Status: Active | Elapsed: 1s | ETA: 1s" in line for line in lines))  # Cover LightGBM-style iteration progress through its unit-derived active ETA row
         self.assertTrue(any("F1-Score 0.81" in line for line in lines))  # Cover evaluation result summaries
         self.assertTrue(any("Loaded cached results" in line for line in lines))  # Cover cache output
         self.assertTrue(any("Persistence completed" in line for line in lines))  # Cover persistence and model output
@@ -176,12 +176,12 @@ class StackingLogTimestampTests(unittest.TestCase):  # Verify centralized Brazil
         self.assertTrue(any("Traceback (most recent call last)" in line for line in lines))  # Preserve readable multiline failures
 
     def test_telegram_payload_remains_unmodified(self):  # Verify logger timestamps never enter Telegram message construction
-        task = {"global_id": 4, "hyperparameters_enabled": False, "augmentation_ratio": None, "experiment_mode": "original", "execution_mode": "combined_files", "feature_set": "GA Features", "classifier_name": "Random Forest"}  # Build one authoritative completion identity
-        result_entry = {"feature_set": "GA Features", "hyperparameter_mode": "Default Hyperparameters", "model_name": "Random Forest", "execution_mode": "combined_files", "experiment_mode": "original", "augmentation_ratio": None, "f1_score": 0.75, "elapsed_time_s": 65}  # Build one persisted scalar result
+        task = {"global_id": 4, "hyperparameters_enabled": False, "augmentation_ratio": None, "experiment_mode": "original", "execution_mode": "combined_files", "feature_set": "GA Features", "classifier_name": "Random Forest", "experiment_run": 1}  # Build one authoritative completion identity including the run identity every production task carries
+        result_entry = {"feature_set": "GA Features", "hyperparameter_mode": "Default Hyperparameters", "model_name": "Random Forest", "execution_mode": "combined_files", "experiment_mode": "original", "augmentation_ratio": None, "experiment_run": 1, "f1_score": 0.75, "elapsed_time_s": 65}  # Build one persisted scalar result
         with mock.patch.object(stacking, "send_telegram_message") as telegram_send:  # Capture the established Telegram body before transport formatting
             self.assertTrue(stacking.send_feature_process_result_notification(task, result_entry, "computed", 240, set()))  # Send one application-level completion attempt
         telegram_body = telegram_send.call_args.args[1]  # Read the untouched Telegram message content
-        self.assertEqual(telegram_body, "Finished combination 4/240: GA Features - Default Hyperparameters - Original Test Data - Random Forest with F1: 0.75 in 1m 5s")  # Preserve exact preexisting Telegram wording
+        self.assertEqual(telegram_body, "Finished combination 4/240: Random Forest - Run 1 - GA Features - Default Hyperparameters - Original Training Data with weighted F1: 0.75 in 1m 5s")  # Preserve exact current Telegram wording with run identity, training-data label, and weighted F1
         self.assertIsNone(TIMESTAMP_PREFIX_PATTERN.match(telegram_body))  # Exclude the new runtime-log prefix from Telegram payloads
 
 

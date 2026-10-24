@@ -138,7 +138,7 @@ class FeatureProcessTelegramTests(unittest.TestCase):  # Verify persistent per-r
         with mock.patch.object(stacking, "send_telegram_message") as telegram_send, mock.patch.object(stacking, "notify_new_best_result_if_applicable"):  # Capture message before established host and script prefixing
             sent = stacking.send_feature_process_result_notification(task, result_entry, "computed", 240, notified)  # Send one restored completion body
         self.assertTrue(sent)  # Consume the one delivery attempt
-        self.assertEqual(telegram_send.call_args.args[1], "Finished combination 4/240: Random Forest - Run 1 - GA Features - Default Hyperparameters - Original Test Data with F1: 0.769859173861937 in 26m 3s")  # Preserve current wording with dynamic plan and persisted values
+        self.assertEqual(telegram_send.call_args.args[1], "Finished combination 4/240: Random Forest - Run 1 - GA Features - Default Hyperparameters - Original Training Data with weighted F1: 0.769859173861937 in 26m 3s")  # Preserve current wording with dynamic plan, training-data label, weighted F1, and persisted values
         self.assertEqual(notified, {4})  # Reserve exact original global identity
 
     def test_training_start_message_uses_dynamic_plan_and_unavailable_eta(self):  # Verify start message identity and truthful ETA fallback
@@ -152,7 +152,7 @@ class FeatureProcessTelegramTests(unittest.TestCase):  # Verify persistent per-r
         self.assertTrue(handled)  # Treat the first start event as handled
         self.assertTrue(duplicate)  # Treat duplicate start event as handled without sending
         self.assertEqual(telegram_send.call_count, 1)  # Send exactly one start notification
-        self.assertIn("[TRAINING START] Started Random Forest classifier training | Run 1 - PCA - Default Hyperparameters - Original Test Data | Local combination: 13/100 | Global combination: 13/320 | Initial ETA: unavailable | Previous Run Duration: unavailable | ETA Pending Run Experiments: unavailable | Worker CPU:", telegram_send.call_args.args[1])  # Preserve current start message fields
+        self.assertIn("[TRAINING START] Started Random Forest classifier training | Run 1 - PCA - Default Hyperparameters - Original Training Data | Local combination: 13/100 | Global combination: 13/320 | Initial ETA: unavailable | Previous Run Duration: unavailable | ETA Pending Run Experiments: unavailable | Worker CPU:", telegram_send.call_args.args[1])  # Preserve current start message fields
         self.assertEqual(notified, {13})  # Reserve the exact start identity
 
     def test_cached_notifications_match_sequential_semantics(self):  # Verify cache hits remain CACHE notifications without fresh completion wording
@@ -184,21 +184,25 @@ class FeatureProcessTelegramTests(unittest.TestCase):  # Verify persistent per-r
         self.assertFalse(any(record.get("status") == "training_start" for record in records))  # Cached branch emits no training-start notification
         self.assertTrue(any(record.get("event") == "cached" for record in records))  # Cached branch still emits established cache notification
 
-    def test_augmented_process_task_publishes_no_training_start(self):  # Verify loaded-model augmented evaluation cannot emit training-start
+    def test_augmented_process_task_publishes_training_start(self):  # Verify train-time augmented fitting emits one training-start before its completion
         process_context = mp.get_context("spawn")  # Build production-compatible shared counters
-        task = make_notification_task("Full Features", 1, 1, augmentation_ratio=0.5)  # Build one augmented task with no fitting phase
+        task = make_notification_task("Full Features", 1, 1, augmentation_ratio=0.5)  # Build one augmented task that fits a fresh ratio-specific model
+        task["experiment_mode"] = "original_training_augmented_training"  # Use the current train-time augmentation methodology identity
         status_state = stacking.create_feature_process_status(process_context, [task], {"Full Features": [task]})  # Initialize exact process-safe task status
         status_queue = queue.Queue()  # Capture lifecycle events locally
         result_entry = make_notification_result(task)  # Build one simulated augmented result
-        resource_state = {"original_resources": None, "ratio_data": {"y_encoded": np.asarray([0, 1])}, "active_ratio": 0.5, "cache_dict": {}}  # Provide active ratio data to skip unrelated loading
+        resource_state = {"original_resources": {"y_test": np.zeros(2, dtype=np.int64)}, "ratio_data": {"y_encoded": np.asarray([0, 1])}, "active_ratio": 0.5, "cache_dict": {}}  # Provide original split and active ratio data to skip unrelated loading
         combination_lock = mock.Mock()  # Observe reservation cleanup
-        with mock.patch.object(stacking, "acquire_feature_process_combination_lock", return_value=combination_lock), mock.patch.object(stacking, "reload_feature_process_task_cache", return_value=(None, {})), mock.patch.object(stacking, "evaluate_feature_process_augmented_task", return_value=result_entry), mock.patch.object(stacking, "log_feature_process_combination"):  # Isolate augmented loaded-model evaluation
+        with mock.patch.object(stacking, "acquire_feature_process_combination_lock", return_value=combination_lock), mock.patch.object(stacking, "reload_feature_process_task_cache", return_value=(None, {})), mock.patch.object(stacking, "evaluate_feature_process_augmented_training_task", return_value=result_entry) as training_mock, mock.patch.object(stacking, "log_feature_process_combination"):  # Isolate the train-time augmented fit
             stacking.process_feature_process_task(task, {"feature_set": "Full Features"}, {False: {"Random Forest": object()}}, resource_state, status_queue, status_state)  # Execute production task lifecycle through augmented branch
         records = []  # Accumulate queued lifecycle events
         while not status_queue.empty():  # Drain local queue
             records.append(status_queue.get_nowait())  # Preserve event payload
-        self.assertFalse(any(record.get("status") == "training_start" for record in records))  # Augmented loaded-model branch emits no training-start notification
+        training_mock.assert_called_once()  # Fit exactly one ratio-specific model for the augmented task
+        statuses = [record.get("status") for record in records]  # Preserve lifecycle order for assertions
+        self.assertEqual(statuses.count("training_start"), 1)  # Augmented fitting emits exactly one training-start notification
         self.assertTrue(any(record.get("event") == "computed" for record in records))  # Augmented branch still emits established computed notification
+        self.assertLess(statuses.index("training_start"), next(index for index, record in enumerate(records) if record.get("event") == "computed"))  # Announce training before publishing its completion
 
     def test_notification_follows_status_and_persistence_before_cleanup(self):  # Verify required successful lifecycle order
         process_context = mp.get_context("spawn")  # Build production-compatible shared counters
@@ -251,7 +255,8 @@ class FeatureProcessTelegramTests(unittest.TestCase):  # Verify persistent per-r
         result_entry = make_notification_result(task)  # Build persisted scalar fields
         result_entry.update({"matrix": np.ones((3, 3)), "estimator": object(), "predictions": np.array([0, 1]), "probabilities": np.ones((2, 2)), "features_list": ["PC1"]})  # Add forbidden scientific objects outside notification fields
         notification_result = stacking.build_feature_process_notification_result(result_entry)  # Reduce result through production event builder
-        self.assertEqual(set(notification_result), {"feature_set", "hyperparameter_mode", "model_name", "execution_mode", "experiment_mode", "augmentation_ratio", "experiment_run", "dataset", "accuracy", "precision", "recall", "f1_score", "fpr", "fnr", "elapsed_time_s"})  # Carry only required scalar fields
+        self.assertEqual(set(notification_result), {"feature_set", "hyperparameter_mode", "model_name", "execution_mode", "experiment_mode", "augmentation_ratio", "experiment_run", "dataset", "accuracy", "weighted_precision", "weighted_recall", "weighted_f1_score", "macro_f1_score", "per_class_f1_scores", "fpr", "fnr", "elapsed_time_s"})  # Carry only required canonical scalar fields
+        self.assertEqual(notification_result["weighted_f1_score"], result_entry["f1_score"])  # Resolve the canonical weighted F1 from the legacy persisted field
         self.assertFalse(any(isinstance(value, np.ndarray) for value in notification_result.values()))  # Exclude matrices, predictions, and probabilities
 
     def test_failure_shutdown_drains_already_queued_completion(self):  # Verify pending completion survives coordinator failure shutdown

@@ -7458,7 +7458,7 @@ def save_stacking_pca_cache(transformer: PCA, cache_context: dict, artifact_path
         return False  # Report that no reusable cache was published.
 
 
-def apply_pca_transformation(X_train_scaled, X_test_scaled, pca_n_components, file_path=None, config=None, feature_names=None, scaler=None, source_files=None, cache_context=None):  # Apply or safely reuse the fitted PCA transformation for one evaluation split.
+def apply_pca_transformation(X_train_scaled, X_test_scaled, pca_n_components, file_path=None, config=None, feature_names=None, scaler=None, source_files=None, cache_context=None, fit_row_count=None):  # Apply or safely reuse the fitted PCA transformation for one evaluation split.
     """
     Applies Principal Component Analysis (PCA) transformation to the scaled training
     and testing datasets using the optimal number of components.
@@ -7475,6 +7475,7 @@ def apply_pca_transformation(X_train_scaled, X_test_scaled, pca_n_components, fi
     :param scaler: Fitted scaler that produced the scaled matrices.
     :param source_files: Ordered source files used to construct the evaluated data.
     :param cache_context: Split and experiment identity metadata for compatibility validation.
+    :param fit_row_count: Number of leading original training rows used to fit PCA, or None to fit on every training row.
     :return: Tuple (X_train_pca, X_test_pca, pca) - Transformed features and fitted transformer, or null values.
     """
     
@@ -7487,6 +7488,11 @@ def apply_pca_transformation(X_train_scaled, X_test_scaled, pca_n_components, fi
         pca = None  # Initialize the fitted PCA transformer returned for classifier persistence.
 
         if pca_n_components is not None and pca_n_components > 0:  # If PCA components are specified
+            train_rows = int(X_train_scaled.shape[0])  # Count every training row transformed by PCA.
+            fit_rows = train_rows if fit_row_count is None else int(fit_row_count)  # Resolve the leading original rows that define the PCA fit.
+            if not 0 < fit_rows <= train_rows:  # Require a non-empty fit population inside the training matrix.
+                raise ValueError(f"PCA fit row count {fit_rows} must be within 1 and {train_rows}")  # Refuse an ambiguous PCA fitting population.
+            X_fit_scaled = X_train_scaled[:fit_rows] if fit_rows < train_rows else X_train_scaled  # Fit only on original rows when appended synthetic rows are present.
             n_features = X_train_scaled.shape[1]  # Get the number of features in the training set
             n_components = min(
                 pca_n_components, n_features
@@ -7503,7 +7509,7 @@ def apply_pca_transformation(X_train_scaled, X_test_scaled, pca_n_components, fi
             pca_cache_context = None  # Initialize cache provenance as unavailable until every required field is built.
             pca_artifact_paths = None  # Initialize artifact paths as unavailable until cache identity succeeds.
             try:  # Disable cache reuse safely when complete provenance cannot be built.
-                pca_cache_context = build_stacking_pca_cache_context(str(file_path), resolved_source_files, list(feature_names or []), X_train_scaled, X_test_scaled, scaler, n_components, dict(cache_context or {}))  # Build strict dataset, split, scaling, and PCA compatibility provenance.
+                pca_cache_context = build_stacking_pca_cache_context(str(file_path), resolved_source_files, list(feature_names or []), X_fit_scaled, X_test_scaled, scaler, n_components, dict(cache_context or {}))  # Build strict dataset, split, scaling, and PCA compatibility provenance.
                 pca_artifact_paths = resolve_stacking_pca_artifact_paths(str(file_path), pca_cache_context, config)  # Resolve artifacts under the existing dataset-specific Stacking model directory.
             except Exception as exc:  # Continue with a fresh in-memory fit when provenance is incomplete.
                 print(f"{BackgroundColors.YELLOW}[WARNING] Fitted PCA cache reuse is unavailable because provenance could not be built: {exc}{Style.RESET_ALL}")  # Report why safe cache reuse is disabled.
@@ -7527,7 +7533,9 @@ def apply_pca_transformation(X_train_scaled, X_test_scaled, pca_n_components, fi
                 print(f"{BackgroundColors.GREEN}[INFO] Compatible fitted PCA transformer cache was not loaded. Fitting PCA and transforming the training matrix now using {BackgroundColors.CYAN}{n_components}{BackgroundColors.GREEN} components.{Style.RESET_ALL}")  # State why computation begins after cache lookup.
                 pca = PCA(n_components=n_components)  # Initialize PCA with the effective number of components.
                 with threadpool_limits(limits=effective_feature_extraction_n_jobs):  # Limit only PCA BLAS and OpenMP work without changing process-global defaults permanently.
-                    X_train_pca = pca.fit_transform(X_train_scaled)  # Fit exact PCA on training data only and transform that same matrix.
+                    X_train_pca = pca.fit_transform(X_fit_scaled)  # Fit exact PCA on original training rows only and transform those rows.
+                    if fit_rows < train_rows:  # Project appended synthetic training rows with the same original-fitted PCA.
+                        X_train_pca = np.concatenate((X_train_pca, pca.transform(X_train_scaled[fit_rows:])), axis=0)  # Preserve original-then-synthetic training row order.
                 if pca_cache_context is not None and pca_artifact_paths is not None:  # Persist only when complete provenance and safe dataset-local paths exist.
                     print(f"{BackgroundColors.GREEN}[INFO] Saving provenance-bearing fitted PCA transformer under: {BackgroundColors.CYAN}{pca_artifact_paths['models_directory']}{Style.RESET_ALL}")  # Announce the existing Stacking model artifact directory.
                     save_stacking_pca_cache(pca, pca_cache_context, pca_artifact_paths, config=config)  # Atomically save transformer and companion metadata without changing evaluation semantics.
@@ -13296,7 +13304,7 @@ def assemble_feature_sets(X_train_scaled, X_test_scaled, feature_names, ga_selec
         raise
 
 
-def iterate_feature_sets_sequentially(feature_source_arrays: dict, feature_names: List[Any], ga_selected_features: Any, pca_n_components: Any, rfe_selected_features: Any, extra_trees_selected_features: Any, file: str, feature_sets_config: dict, config: Optional[dict], scaler: Any = None, source_files: Optional[List[str]] = None, pca_cache_context: Optional[dict] = None, pca_input_feature_names: Optional[List[Any]] = None, target_feature_mode: Optional[str] = None) -> Any:  # Yield feature matrices while carrying exact PCA cache provenance.
+def iterate_feature_sets_sequentially(feature_source_arrays: dict, feature_names: List[Any], ga_selected_features: Any, pca_n_components: Any, rfe_selected_features: Any, extra_trees_selected_features: Any, file: str, feature_sets_config: dict, config: Optional[dict], scaler: Any = None, source_files: Optional[List[str]] = None, pca_cache_context: Optional[dict] = None, pca_input_feature_names: Optional[List[Any]] = None, target_feature_mode: Optional[str] = None, pca_fit_row_count: Optional[int] = None) -> Any:  # Yield feature matrices while carrying exact PCA cache provenance.
     """
     Yield feature-set matrices one at a time.
 
@@ -13314,6 +13322,7 @@ def iterate_feature_sets_sequentially(feature_source_arrays: dict, feature_names
     :param pca_cache_context: Split and experiment identity used for PCA cache validation.
     :param pca_input_feature_names: Exact ordered numeric feature names consumed by PCA.
     :param target_feature_mode: Optional sole feature mode required by the caller.
+    :param pca_fit_row_count: Number of leading original training rows used to fit PCA, or None to use every row.
     :return: Iterator yielding feature-set matrices, names, and fitted feature transformer.
     """
 
@@ -13443,7 +13452,7 @@ def iterate_feature_sets_sequentially(feature_source_arrays: dict, feature_names
 
     if use_pca and target_feature_mode in (None, "PCA Components"):  # Resolve PCA features only when required.
         try:  # Preserve existing PCA failure tolerance.
-            X_train_pca, X_test_pca, pca_transformer = apply_pca_transformation(feature_source_arrays["X_train_scaled"], feature_source_arrays["X_test_scaled"], pca_n_components, file, config=config, feature_names=pca_input_feature_names if pca_input_feature_names is not None else feature_names, scaler=scaler, source_files=source_files, cache_context=pca_cache_context)  # Materialize PCA matrices with strict source, scaling, and split provenance.
+            X_train_pca, X_test_pca, pca_transformer = apply_pca_transformation(feature_source_arrays["X_train_scaled"], feature_source_arrays["X_test_scaled"], pca_n_components, file, config=config, feature_names=pca_input_feature_names if pca_input_feature_names is not None else feature_names, scaler=scaler, source_files=source_files, cache_context=pca_cache_context, fit_row_count=pca_fit_row_count)  # Materialize PCA matrices fitted on original training rows with strict source, scaling, and split provenance.
         except Exception as e:  # Skip PCA mode when transformation fails.
             print(f"{BackgroundColors.YELLOW}[WARNING] PCA Components skipped because transformation failed for {BackgroundColors.CYAN}{file}{BackgroundColors.YELLOW}: {e}{Style.RESET_ALL}")  # Log PCA transformation failure.
             X_train_pca, X_test_pca, pca_transformer = None, None, None  # Suppress PCA mode after failure.
@@ -17522,6 +17531,7 @@ def evaluate_on_dataset(
             return {}  # Return empty dictionary
 
         X_train_scaled, X_test_scaled, y_train, y_test, scaler, label_encoder, train_row_metadata, test_row_metadata = data_splits  # Unpack original-only splits, preprocessing, and row provenance.
+        pca_fit_row_count = None  # Fit PCA on every training row unless synthetic rows are appended below.
         if experiment_mode == "original_training_augmented_training":  # Add synthetic rows only after original split and preprocessing fit.
             if df_augmented_for_training is None or augmentation_ratio is None:  # Require explicit synthetic source and ratio.
                 raise ValueError("Training augmentation requires synthetic data and an augmentation ratio")  # Reject incomplete train-time augmentation setup.
@@ -17533,10 +17543,11 @@ def evaluate_on_dataset(
             X_synthetic_scaled = np.asarray(scaler.transform(synthetic_features[pca_input_feature_names].to_numpy(copy=False)))  # Transform synthetic rows with scaler fitted only on original training data.
             y_synthetic = np.asarray(label_encoder.transform(selected_synthetic.iloc[:, -1].to_numpy(copy=False)), dtype=np.int64)  # Encode synthetic labels with original-training encoder.
             synthetic_metadata = pd.DataFrame({"source_file": ["synthetic_training"] * len(y_synthetic), "row_order": np.arange(len(y_synthetic), dtype=np.int64)})  # Preserve source boundary for LSTM windows.
+            pca_fit_row_count = int(X_train_scaled.shape[0])  # Fit PCA only on the original training rows that precede synthetic rows.
             X_train_scaled = np.concatenate((X_train_scaled, X_synthetic_scaled), axis=0)  # Combine original and selected synthetic training features only.
             y_train = np.concatenate((y_train, y_synthetic), axis=0)  # Combine original and selected synthetic training labels only.
             train_row_metadata = pd.concat((train_row_metadata, synthetic_metadata), ignore_index=True)  # Preserve row-aligned LSTM metadata after training augmentation.
-            pca_cache_context["augmented_sample_count"] = int(len(y_synthetic))  # Record actual selected synthetic training rows for PCA identity.
+            pca_cache_context.update({"data_source": "Original Combined Files" if execution_mode_str == "combined_files" else "Original", "experiment_mode": "original_only", "augmentation_ratio": None, "augmented_sample_count": 0, "augmentation_merged_into_training_after_split": False})  # Identify the PCA fit as the original-only fit because synthetic rows are only projected.
             del selected_synthetic, synthetic_features, X_synthetic_scaled, y_synthetic, synthetic_metadata  # Release ratio-local synthetic allocations before feature evaluation.
             gc.collect()  # Reclaim synthetic selection memory before classifier fitting.
         feature_source_arrays = {"X_train_scaled": X_train_scaled, "X_test_scaled": X_test_scaled, "spilled_to_memmap": False}  # Transfer full source matrices into a mutable lifecycle holder.
@@ -17545,7 +17556,7 @@ def evaluate_on_dataset(
         gc.collect()  # Reclaim released dataframe memory before feature-set materialization.
 
         target_feature_mode = feature_mode_name if feature_mode_name is not None else (artifact_recovery_target[0] if artifact_recovery_target is not None else None)  # Resolve the sole feature mode required by this invocation.
-        feature_sets_iter = iterate_feature_sets_sequentially(feature_source_arrays, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, extra_trees_selected_features, file, feature_sets_config, config, scaler=scaler, source_files=pca_source_files, pca_cache_context=pca_cache_context, pca_input_feature_names=pca_input_feature_names, target_feature_mode=target_feature_mode)  # Create the lazy feature-set iterator with exact PCA source, feature, scaler, and split provenance.
+        feature_sets_iter = iterate_feature_sets_sequentially(feature_source_arrays, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, extra_trees_selected_features, file, feature_sets_config, config, scaler=scaler, source_files=pca_source_files, pca_cache_context=pca_cache_context, pca_input_feature_names=pca_input_feature_names, target_feature_mode=target_feature_mode, pca_fit_row_count=pca_fit_row_count)  # Create the lazy feature-set iterator with exact PCA source, feature, scaler, split, and fit-population provenance.
         for idx, (name, X_train_subset, X_test_subset, subset_feature_names_list, transformer) in enumerate(feature_sets_iter, start=1):  # Evaluate one materialized feature set at a time
             if feature_mode_name is not None and name != feature_mode_name:  # Skip feature matrices outside current canonical sequential group.
                 del X_train_subset, X_test_subset  # Release skipped yielded matrices before source spilling.
