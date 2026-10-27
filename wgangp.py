@@ -116,7 +116,7 @@ psutil = (
 )  # Import psutil if available, otherwise set to None
 
 SAO_PAULO_TIMEZONE_NAME = "America/Sao_Paulo"  # Use Sao Paulo timezone for ETA finish timestamps
-WGANGP_RELEASE_VERSION = "V6.5.11"  # Repair the highest-ranked rejected full candidate only when all fifteen complete audits fail.
+WGANGP_RELEASE_VERSION = "V6.5.12"  # Remove all ephemeral candidate metrics and release cached quality references after final audit.
 FLOW_PREPROCESSING_CHECKPOINT_TAG = "ConditionalMixedStructuralV654TailKnots"  # Isolate weights trained on the full-class tail-knot representation.
 FLOW_PREPROCESSING_COMPATIBLE_TAGS: tuple[str, ...] = ()  # Earlier V6.5 weights were trained on a different tail encoding and are never resumed.
 QUALITY_SELECTION_POLICY = "priority_moment_swap_v1"  # Identify the bounded mean-first candidate selection policy in output provenance.
@@ -7184,6 +7184,7 @@ def repair_best_quality_dataset(args: Any, config: Dict, selected: pd.DataFrame,
     for class_name in [str(row["class"]) for row in report["classes"] if row.get("quality_flags") or row.get("violations")]:  # Target only classes that actually failed their full-dataset audit.
         if class_name not in classes:  # Ensure every class comes from the trained checkpoint.
             raise RuntimeError(f"Missing trained class identity for quality repair: {class_name}")  # Never fabricate a replacement label.
+        class_token = hashlib.sha256(class_name.encode("utf-8")).hexdigest()[:12]  # Use a filesystem-safe stable identifier without exposing raw class names in temp paths.
         for attempt in range(1, settings["max_repairs"] + 1):  # Bound smaller repair attempts independently from the fifteen full trials.
             current_entry = next((row for row in best_report["classes"] if str(row["class"]) == class_name), None)  # Use the latest measured class-level failures.
             if current_entry is None or (not current_entry.get("quality_flags") and not current_entry.get("violations")):  # Avoid rewriting a previously repaired passing class.
@@ -7208,12 +7209,12 @@ def repair_best_quality_dataset(args: Any, config: Dict, selected: pd.DataFrame,
             trial.loc[trial.index[mask], feature_cols] = replacement.loc[:, feature_cols].to_numpy(copy=False)  # Change only actual decoded generator records in the failing class.
             if trial[args.label_col].value_counts().to_dict() != original_counts or trial.duplicated(subset=feature_cols + [args.label_col]).any():  # Validate every class count and exact decoded record identity.
                 raise RuntimeError("Targeted repair produced duplicates or changed class quotas")  # Prevent accepted publication of a partial or duplicate population.
-            path = directory / f"data_augmented_repair_{class_name.replace('/', '_')}_{attempt:02d}.pkl"  # Keep every evaluated repair snapshot within the run-private temporary folder.
+            path = directory / f"data_augmented_repair_{class_token}_{attempt:02d}.pkl"  # Keep every evaluated repair snapshot within the run-private temporary folder.
             trial.to_pickle(path)  # Persist a lossless candidate before measuring its original-scale quality.
             trial_report = assess_generated_flow_quality(args, config, trial, scaler=scaler, label_encoder=label_encoder, persist_report=False, enforce=False)  # Audit the FULL dataset with unchanged thresholds.
             rank = quality_recovery_dataset_rank(trial_report, quality)  # Compare repair results across all source classes.
             item.update({"accepted": bool(trial_report["accepted"]), "rank": rank, "rejected_classes": list(trial_report["rejected_classes"])})  # Report actual original quality-gate results.
-            with (directory / f"data_augmented_repair_{class_name.replace('/', '_')}_{attempt:02d}.quality.json").open("w", encoding="utf-8") as stream:  # Pair each temporary repair file with its exact diagnostic report.
+            with (directory / f"data_augmented_repair_{class_token}_{attempt:02d}.quality.json").open("w", encoding="utf-8") as stream:  # Pair each temporary repair file with its exact diagnostic report.
                 json.dump(trial_report, stream, allow_nan=False)  # Leave no stale references after workspace cleanup.
             if trial_report["accepted"]:  # Publish only after the unchanged FULL quality audit passes every class.
                 item["decision"] = "strict_quality_pass"  # Distinguish actual success from approximate ranking improvement.
@@ -7311,6 +7312,8 @@ def recover_generated_flow_quality(args: Any, config: Dict, generated: pd.DataFr
         else:  # Selection or targeted repair passed the original auditor exactly.
             record["status"] = "selected_population_strictly_accepted"  # Preserve factual success for final provenance.
         record["final_accepted"] = bool(final_probe["accepted"])  # Record actual validation, not a proxy fitness value.
+        record["temporary_files_retained"] = 0  # The private context manager deletes every attempt, repair, and matching quality-reference file.
+        record["temporary_workspace_policy"] = "ephemeral_isolated_cleanup"  # Do not serialize transient temporary paths in final provenance.
         uniqueness = getattr(args, "_last_generation_uniqueness", None)  # Include extra draw/duplicate counts with initial generator provenance.
         if isinstance(uniqueness, dict):  # Avoid changing legacy uniqueness accounting fields.
             uniqueness["quality_recovery_candidate_draws"] = int(record["candidate_draws"])  # Report the actual cost of all independent draws and repairs.
@@ -7538,7 +7541,11 @@ def postprocess_generated_arrays_to_dataframe(args, config: Dict, all_fake: List
         df_generated[args.label_col] = label_encoder.inverse_transform(Y_fake)
     if df_generated.duplicated(subset=list(feature_cols) + [args.label_col]).any():
         raise RuntimeError("Exact decoded flow duplicates remain; refusing to publish a non-unique CSV")
-    assess_generated_flow_quality(args, config, df_generated, scaler=scaler, label_encoder=label_encoder)  # Enforce class-specific quality acceptance before saving.
+    try:  # Release transient statistical source references on both successful and rejected final audits.
+        assess_generated_flow_quality(args, config, df_generated, scaler=scaler, label_encoder=label_encoder)  # Enforce unchanged strict quality acceptance before saving.
+    finally:  # Never retain source reservoirs from deleted temporary candidate reports across file runs.
+        if hasattr(args, "_generation_quality_reference_cache"):  # The final full-quality audit has now consumed its source references.
+            delattr(args, "_generation_quality_reference_cache")  # Discard transient source statistics after the final report has been written.
     output_df, original_count = build_augmented_output_dataframe(args, df_generated)  # Build output
 
     if config.get("hardware_tracking", False):  # If enabled in config
