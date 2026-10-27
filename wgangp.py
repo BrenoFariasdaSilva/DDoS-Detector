@@ -116,7 +116,7 @@ psutil = (
 )  # Import psutil if available, otherwise set to None
 
 SAO_PAULO_TIMEZONE_NAME = "America/Sao_Paulo"  # Use Sao Paulo timezone for ETA finish timestamps
-WGANGP_RELEASE_VERSION = "V6.5.10"  # Compare fifteen independently generated disk-backed populations before selecting accepted quality.
+WGANGP_RELEASE_VERSION = "V6.5.11"  # Repair the highest-ranked rejected full candidate only when all fifteen complete audits fail.
 FLOW_PREPROCESSING_CHECKPOINT_TAG = "ConditionalMixedStructuralV654TailKnots"  # Isolate weights trained on the full-class tail-knot representation.
 FLOW_PREPROCESSING_COMPATIBLE_TAGS: tuple[str, ...] = ()  # Earlier V6.5 weights were trained on a different tail encoding and are never resumed.
 QUALITY_SELECTION_POLICY = "priority_moment_swap_v1"  # Identify the bounded mean-first candidate selection policy in output provenance.
@@ -7153,6 +7153,83 @@ def draw_quality_repair_population(args: Any, G: nn.Module, device: torch.device
             break  # Preserve the incomplete candidate only in local transient memory.
     return (collected if len(collected) == wanted else None), draws, duplicates  # Never return a partial class as a complete population.
 
+
+def repair_best_quality_dataset(args: Any, config: Dict, selected: pd.DataFrame, report: Dict[str, Any], G: nn.Module, device: torch.device, scaler: Any, label_encoder: Any, feature_cols: List[str], settings: Dict[str, Any], record: Dict[str, Any], directory: Path) -> tuple:
+    """Repair the best rejected full population with bounded class-specific newly generated row chunks.
+
+    :param args: Active source labels and output paths.
+    :param config: Unchanged quality thresholds used by the final auditor.
+    :param selected: Best complete rejected population among the independent attempts.
+    :param report: Matching complete quality report for the selected population.
+    :param G: Original checkpoint-compatible conditional generator.
+    :param device: Current generator inference device.
+    :param scaler: Fitted source-domain decoder.
+    :param label_encoder: Fitted class-label decoder.
+    :param feature_cols: Ordered original-scale output feature names.
+    :param settings: Bounded targeted replacement budgets and fractions.
+    :param record: Current generation provenance and repair summaries.
+    :param directory: Isolated temporary directory removed after final selection.
+    :return: Best accepted or closest complete population and its unchanged quality report.
+    """
+
+    quality = config.get("quality", {})  # Keep the original acceptance policy entirely unchanged.
+    best = selected  # Start only from the best previously selected rejected full dataset.
+    best_report = report  # Preserve its exact source-relative fidelity evidence.
+    best_rank = quality_recovery_dataset_rank(report, quality)  # Compare improvements across ALL classes, not just the repaired class.
+    classes = {str(value): index for index, value in enumerate(label_encoder.classes_)}  # Never infer synthetic class IDs from filename conventions.
+    original_counts = selected[args.label_col].value_counts().to_dict()  # Preserve every source-specific class quota.
+    references = getattr(args, "_generation_quality_reference_cache", {})  # Reuse exact cached original-auditor statistical references if available.
+    source_samples = references.get("samples", {}) if isinstance(references, dict) else {}  # Avoid reopening the entire source CSV for every repair.
+    rng = np.random.default_rng(int(getattr(args, "seed", 42)) + 47931)  # Isolate deterministic repair decisions from generator RNG.
+    for class_name in [str(row["class"]) for row in report["classes"] if row.get("quality_flags") or row.get("violations")]:  # Target only classes that actually failed their full-dataset audit.
+        if class_name not in classes:  # Ensure every class comes from the trained checkpoint.
+            raise RuntimeError(f"Missing trained class identity for quality repair: {class_name}")  # Never fabricate a replacement label.
+        for attempt in range(1, settings["max_repairs"] + 1):  # Bound smaller repair attempts independently from the fifteen full trials.
+            current_entry = next((row for row in best_report["classes"] if str(row["class"]) == class_name), None)  # Use the latest measured class-level failures.
+            if current_entry is None or (not current_entry.get("quality_flags") and not current_entry.get("violations")):  # Avoid rewriting a previously repaired passing class.
+                break  # Preserve any accepted class population unchanged.
+            mask = best[args.label_col].to_numpy() == class_name  # Locate the exact rows for this class in the complete population.
+            quota = int(mask.sum())  # Preserve exact per-class sample count.
+            current_class = best.loc[mask].reset_index(drop=True)  # Build only this class's repair input in memory.
+            fraction = settings["repair_fraction"] / (2 ** ((attempt - 1) // 6))  # Gradually decrease replacement batches after repeated unsuccessful repairs.
+            count = min(quota, settings["repair_batch_rows"], max(1, int(math.ceil(quota * fraction))))  # Bound the fraction and absolute replacement size.
+            reference = source_samples.get(class_name)  # Reuse the same original data used by the production quality audit.
+            positions = choose_quality_repair_rows(current_class, quota, feature_cols, reference, current_entry, rng, count)  # Remove rows with the largest measured fidelity contribution without touching rare valid tails.
+            budget = min(settings["max_draw_rows"], max(count, int(math.ceil(count * settings["draw_multiplier"]))))  # Cap individual replacement draws independently of the whole-population quota.
+            replacement, draws, duplicates = draw_quality_repair_population(args, G, device, classes[class_name], current_class, positions, scaler, label_encoder, feature_cols, budget, settings["batch_rows"])  # Regenerate ONLY the bounded missing row subset.
+            record["candidate_draws"] += draws  # Account for every inference draw during targeted repair.
+            record["duplicates_rejected"] += duplicates  # Account for exact duplicates against the retained class population.
+            item = {"class": class_name, "repair": attempt, "replaced_rows": count, "draws": draws, "duplicates_rejected": duplicates, "complete": replacement is not None}  # Preserve finite repair diagnostics without temporary paths.
+            if replacement is None:  # Do not score incomplete or duplicate-filled repair populations.
+                item["decision"] = "insufficient_unique_replacement_support"  # Explain why this attempt could not be audited.
+                record["repairs"].append(item)  # Retain bounded failure evidence.
+                continue  # Give the same class another smaller bounded repair opportunity.
+            trial = best.copy()  # Preserve every unrelated class and the original row ordering.
+            trial.loc[trial.index[mask], feature_cols] = replacement.loc[:, feature_cols].to_numpy(copy=False)  # Change only actual decoded generator records in the failing class.
+            if trial[args.label_col].value_counts().to_dict() != original_counts or trial.duplicated(subset=feature_cols + [args.label_col]).any():  # Validate every class count and exact decoded record identity.
+                raise RuntimeError("Targeted repair produced duplicates or changed class quotas")  # Prevent accepted publication of a partial or duplicate population.
+            path = directory / f"data_augmented_repair_{class_name.replace('/', '_')}_{attempt:02d}.pkl"  # Keep every evaluated repair snapshot within the run-private temporary folder.
+            trial.to_pickle(path)  # Persist a lossless candidate before measuring its original-scale quality.
+            trial_report = assess_generated_flow_quality(args, config, trial, scaler=scaler, label_encoder=label_encoder, persist_report=False, enforce=False)  # Audit the FULL dataset with unchanged thresholds.
+            rank = quality_recovery_dataset_rank(trial_report, quality)  # Compare repair results across all source classes.
+            item.update({"accepted": bool(trial_report["accepted"]), "rank": rank, "rejected_classes": list(trial_report["rejected_classes"])})  # Report actual original quality-gate results.
+            with (directory / f"data_augmented_repair_{class_name.replace('/', '_')}_{attempt:02d}.quality.json").open("w", encoding="utf-8") as stream:  # Pair each temporary repair file with its exact diagnostic report.
+                json.dump(trial_report, stream, allow_nan=False)  # Leave no stale references after workspace cleanup.
+            if trial_report["accepted"]:  # Publish only after the unchanged FULL quality audit passes every class.
+                item["decision"] = "strict_quality_pass"  # Distinguish actual success from approximate ranking improvement.
+                record["repairs"].append(item)  # Keep complete accepted repair provenance.
+                record["status"] = "targeted_repair_strictly_accepted"  # Disclose that no initial full candidate passed.
+                return pd.read_pickle(path), trial_report  # Restore the exact audited disk-backed population.
+            if rank < best_rank:  # Prefer improvements in original quality rather than arbitrary exchange proposals.
+                best, best_report, best_rank = trial, trial_report, rank  # Continue future repairs from the strongest complete population.
+                item["decision"] = "improved_rejected_population"  # Do not mislabel a still-failing trial as accepted.
+            else:  # Preserve the strongest candidate when a repair worsens one or more mandatory measurements.
+                item["decision"] = "did_not_improve"  # Keep factual ranking evidence.
+            record["repairs"].append(item)  # Record every attempted bounded repair.
+            print(f"[{WGANGP_RELEASE_VERSION}] Quality repair {class_name} {attempt}/{settings['max_repairs']}: {item['decision']} | remaining={item['rejected_classes']}")  # Distinguish repair progress from successful acceptance.
+    record["status"] = "targeted_repair_exhausted"  # A lack of success must never be called an accepted dataset.
+    return best, best_report  # Let the final strict auditor reject any remaining failed gate.
+
 def recover_generated_flow_quality(args: Any, config: Dict, generated: pd.DataFrame, G: nn.Module, device: torch.device, scaler: Any, label_encoder: Any, feature_cols: List[str]) -> pd.DataFrame:
     """Evaluate fifteen independent disk-backed populations and select the best strictly accepted result.
 
@@ -7218,7 +7295,7 @@ def recover_generated_flow_quality(args: Any, config: Dict, generated: pd.DataFr
             rank, choice, path, report = min(rejected, key=lambda row: (row[0], row[1]))  # Select the rejected population nearest to the unchanged quality requirements.
             chosen = pd.read_pickle(path)  # Start repair from its exact original generator records.
             record.update({"status": "best_rejected_candidate_selected", "selected_attempt": choice, "selected_rank": rank, "passing_candidates": 0, "complete_candidates": len(rejected)})  # Never mislabel a failing candidate as valid.
-            record["status"] = "best_rejected_candidate_pending_repair"  # The next incremental version introduces bounded targeted repairs.
+            chosen, report = repair_best_quality_dataset(args, config, chosen, report, G, device, scaler, label_encoder, feature_cols, settings, record, directory)  # Repair only the best rejected population when all fifteen full trials fail.
         else:  # Every additional trial was incomplete; still preserve the initial candidate for the original rejection report.
             chosen = generated.copy()  # Do not publish any incomplete trial population.
             report = assess_generated_flow_quality(args, config, chosen, scaler=scaler, label_encoder=label_encoder, persist_report=False, enforce=False)  # Preserve strict diagnostic transparency.
@@ -7818,7 +7895,7 @@ def generate(args, config: Optional[Dict] = None):
         n_per_class, labels, n = compute_generation_counts_and_labels(args, config, class_distribution, label_encoder, n_classes)  # Compute per-class counts and label array
         notify_start_of_generation(args, n)  # Send Telegram notification about generation start
         all_fake, all_labels, sample_generation_start_time = generate_unique_decoded_samples(args, config, G, device, labels, scaler, label_encoder, feature_cols)  # Refill decoded per-class duplicates before quality evaluation.
-        all_fake = recover_generated_flow_quality(args, config, all_fake, G, device, scaler, label_encoder, feature_cols)  # Compare fifteen complete independent candidates, rank passing populations, and defer failed repairs.
+        all_fake = recover_generated_flow_quality(args, config, all_fake, G, device, scaler, label_encoder, feature_cols)  # Compare fifteen complete datasets, choose the best passing one, or repair the best rejected one.
         df = postprocess_generated_arrays_to_dataframe(args, config, all_fake, all_labels, scaler, label_encoder, feature_cols, device, n, file_progress_prefix)  # Postprocess arrays into DataFrame and save
         record_sample_generation_timing(args, sample_generation_start_time)  # Record sample generation elapsed time
         testing_start_time = time.time()  # Start post-generation verification and quality-output timing
@@ -7868,7 +7945,7 @@ def generate_from_in_memory_generator(args, config: Dict, G: nn.Module, dataset:
         n_per_class, labels, n = compute_generation_counts_and_labels(args, config, class_distribution, label_encoder, n_classes)  # Compute per-class counts and label array
         notify_start_of_generation(args, n)  # Send Telegram notification about generation start
         all_fake, all_labels, sample_generation_start_time = generate_unique_decoded_samples(args, config, G, device, labels, scaler, label_encoder, feature_cols)  # Refill decoded per-class duplicates before quality evaluation.
-        all_fake = recover_generated_flow_quality(args, config, all_fake, G, device, scaler, label_encoder, feature_cols)  # Compare fifteen complete independent candidates, rank passing populations, and defer failed repairs.
+        all_fake = recover_generated_flow_quality(args, config, all_fake, G, device, scaler, label_encoder, feature_cols)  # Compare fifteen complete datasets, choose the best passing one, or repair the best rejected one.
         df = postprocess_generated_arrays_to_dataframe(args, config, all_fake, all_labels, scaler, label_encoder, feature_cols, device, n, file_progress_prefix)  # Postprocess arrays into DataFrame and save
         record_sample_generation_timing(args, sample_generation_start_time)  # Record sample generation elapsed time
         testing_start_time = time.time()  # Start post-generation verification and quality-output timing
