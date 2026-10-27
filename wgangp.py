@@ -116,7 +116,7 @@ psutil = (
 )  # Import psutil if available, otherwise set to None
 
 SAO_PAULO_TIMEZONE_NAME = "America/Sao_Paulo"  # Use Sao Paulo timezone for ETA finish timestamps
-WGANGP_RELEASE_VERSION = "V6.5.8"  # Add bounded quality-driven regeneration of classes rejected after decoding.
+WGANGP_RELEASE_VERSION = "V6.5.9"  # Add bounded quality-driven regeneration of classes rejected after decoding.
 FLOW_PREPROCESSING_CHECKPOINT_TAG = "ConditionalMixedStructuralV654TailKnots"  # Isolate weights trained on the full-class tail-knot representation.
 FLOW_PREPROCESSING_COMPATIBLE_TAGS: tuple[str, ...] = ()  # Earlier V6.5 weights were trained on a different tail encoding and are never resumed.
 QUALITY_SELECTION_POLICY = "priority_moment_swap_v1"  # Identify the bounded mean-first candidate selection policy in output provenance.
@@ -1560,35 +1560,45 @@ def assess_generated_flow_quality(args: Any, config: Dict, generated: pd.DataFra
     source_samples, source_priorities = {}, {}
     source_category_counts = {}  # Retain exact source counts for every modeled categorical feature.
     category_columns = [scaler.feature_cols[index] for index in scaler.categorical_indices] if isinstance(scaler, ClassConditionalFlowScaler) else []  # Resolve validated empirical categorical supports.
-    if getattr(args, "csv_path", None):
-        required_columns = numeric_columns + [label]
-        for chunk in pd.read_csv(args.csv_path, usecols=lambda col: col.strip() in required_columns, chunksize=8192, low_memory=False):
-            chunk.columns = chunk.columns.str.strip()
-            if label not in chunk.columns:
-                raise ValueError(f"Missing original label column {label} for quality evaluation")
-            for class_label, group in chunk.groupby(label, sort=False):
-                class_key = str(class_label)
-                candidates = group[numeric_columns].to_numpy(dtype=np.float32, copy=True)
-                reference_valid = np.isfinite(candidates).all(axis=1)
-                for column_index, feature_name in enumerate(numeric_columns):
-                    reference_valid &= ~flow_feature_invalid_mask(feature_name, candidates[:, column_index])
-                candidates = candidates[reference_valid]
-                if not len(candidates):
-                    continue
-                class_counts = source_category_counts.setdefault(class_key, {})  # Accumulate empirical frequencies independently of the bounded reference reservoir.
-                for column in category_columns:  # Preserve rare categories that reservoir sampling can miss.
-                    values, counts = np.unique(candidates[:, numeric_columns.index(column)], return_counts=True)  # Count observed values in this bounded source chunk.
-                    frequencies = class_counts.setdefault(column, {})  # Store one small support map per class and feature.
-                    for value, count in zip(values, counts):  # Merge exact counts without resampling or category injection.
-                        frequencies[float(value)] = frequencies.get(float(value), 0) + int(count)  # Add this chunk's empirical category occurrences.
-                priorities = rng.random(len(candidates))
-                if class_key in source_samples:
-                    candidates = np.concatenate([source_samples[class_key], candidates])
-                    priorities = np.concatenate([source_priorities[class_key], priorities])
-                count = min(sample_limit, len(priorities))
-                selected = np.argpartition(priorities, count - 1)[:count]
-                source_samples[class_key] = candidates[selected]
-                source_priorities[class_key] = priorities[selected]
+    if getattr(args, "csv_path", None):  # Resolve the source file used by the unchanged class-specific quality measurements.
+        required_columns = numeric_columns + [label]  # Preserve the original label and numeric schema.
+        source_file = Path(args.csv_path)  # Identify the real source file for this generation run.
+        source_stat = source_file.stat()  # Invalidate references if the source file changes during execution.
+        cache_key = (str(source_file.resolve()), int(source_stat.st_size), int(source_stat.st_mtime_ns), tuple(required_columns), tuple(category_columns), int(sample_limit), int(getattr(args, "seed", 42)))  # Identify one exact statistical reference policy.
+        source_cache = getattr(args, "_generation_quality_reference_cache", None)  # Reuse reference samples only within the current process and source version.
+        if isinstance(source_cache, dict) and source_cache.get("key") == cache_key:  # Avoid repeatedly rereading multi-million-row original CSVs during fifteen retries.
+            source_samples = source_cache["samples"]  # Reuse the exact bounded class-specific original reservoirs.
+            source_category_counts = source_cache["categories"]  # Reuse the exact original categorical counts.
+            rng.bit_generator.state = source_cache["rng_state"]  # Preserve the same audit random stream as the uncached execution.
+        else:  # Build the original reference once with the existing unchanged sampling algorithm.
+            for chunk in pd.read_csv(args.csv_path, usecols=lambda col: col.strip() in required_columns, chunksize=8192, low_memory=False):
+                chunk.columns = chunk.columns.str.strip()
+                if label not in chunk.columns:
+                    raise ValueError(f"Missing original label column {label} for quality evaluation")
+                for class_label, group in chunk.groupby(label, sort=False):
+                    class_key = str(class_label)
+                    candidates = group[numeric_columns].to_numpy(dtype=np.float32, copy=True)
+                    reference_valid = np.isfinite(candidates).all(axis=1)
+                    for column_index, feature_name in enumerate(numeric_columns):
+                        reference_valid &= ~flow_feature_invalid_mask(feature_name, candidates[:, column_index])
+                    candidates = candidates[reference_valid]
+                    if not len(candidates):
+                        continue
+                    class_counts = source_category_counts.setdefault(class_key, {})  # Accumulate empirical frequencies independently of the bounded reference reservoir.
+                    for column in category_columns:  # Preserve rare categories that reservoir sampling can miss.
+                        values, counts = np.unique(candidates[:, numeric_columns.index(column)], return_counts=True)  # Count observed values in this bounded source chunk.
+                        frequencies = class_counts.setdefault(column, {})  # Store one small support map per class and feature.
+                        for value, count in zip(values, counts):  # Merge exact counts without resampling or category injection.
+                            frequencies[float(value)] = frequencies.get(float(value), 0) + int(count)  # Add this chunk's empirical category occurrences.
+                    priorities = rng.random(len(candidates))
+                    if class_key in source_samples:
+                        candidates = np.concatenate([source_samples[class_key], candidates])
+                        priorities = np.concatenate([source_priorities[class_key], priorities])
+                    count = min(sample_limit, len(priorities))
+                    selected = np.argpartition(priorities, count - 1)[:count]
+                    source_samples[class_key] = candidates[selected]
+                    source_priorities[class_key] = priorities[selected]
+            args._generation_quality_reference_cache = {"key": cache_key, "samples": source_samples, "categories": source_category_counts, "rng_state": rng.bit_generator.state}  # Cache original-only audit inputs without changing thresholds or synthetic rows.
     rules_by_label = {}
     if isinstance(scaler, ClassConditionalFlowScaler) and label_encoder is not None:
         for class_id, rules in scaler.derived_rules.items():
@@ -1806,7 +1816,7 @@ def assess_generated_flow_quality(args: Any, config: Dict, generated: pd.DataFra
     print(f"[QUALITY] {'Report' if persist_report else 'Recovery probe'}: {report_path} | accepted={accepted} | invalid values={invalid_total} | flagged classes={rejecting_classes}")  # Surface class-level audit results.
     must_reject = ((bool(invalid_total) and settings.get("reject_invalid", True)) or
                    (bool(rejecting_classes) and settings.get("reject_quality_flags", True)))
-    if persist_report and must_reject and settings.get("save_rejected_candidate", True):  # Quarantine only the final rejected population, never intermediate attempts.
+    if persist_report and must_reject and settings.get("save_rejected_candidate", True) and getattr(args, "_last_generation_quality_recovery", {}).get("status") != "exhausted":  # Never retain rejected augmented CSVs after the fifteen-attempt recovery workflow.
         # Save under a quarantine name. NEVER write rejected samples to the accepted
         # output path or a valid-looking results/provenance record.
         quarantine_path = Path(args.out_file).with_suffix(".rejected.csv")
@@ -6951,7 +6961,7 @@ def quality_recovery_rank(report: Dict[str, Any], class_name: str, quality: Dict
     invalid = sum(int(value) for value in entry.get("violations", {}).values()) + sum(int(value) for value in entry.get("relationship_violations", {}).values())  # Give invalid and inconsistent records highest priority.
     measures = (("mean_shift_standardized", "max_mean_shift", 2.0), ("low_variance_feature_fraction", "max_low_variance_fraction", 0.5), ("joint_correlation_absolute_difference_mean", "max_calibrated_correlation_difference", 0.40), ("audited_duplicate_fraction", "max_audited_duplicate_fraction", 0.10), ("synthetic_near_duplicate_fraction", "max_near_duplicate_fraction", 0.30))  # Summarize applicable numeric excesses without changing their acceptance logic.
     excess = sum(max(0.0, float(entry[name] or 0.0) / max(float(quality.get(limit, default)), 1e-12) - 1.0) for name, limit, default in measures if entry.get(name) is not None)  # Distinguish candidates with equal numbers of quality flags.
-    return (int(invalid > 0), len(flags), float(excess))  # Prefer valid records, fewer flags, and lower measured threshold excess.
+    return (int(invalid), len(flags), float(excess))  # Prioritize removing actual violations one by one before comparing softer fidelity errors.
 
 
 def draw_quality_recovery_class(args: Any, G: nn.Module, device: torch.device, class_id: int, quota: int, scaler: Any, label_encoder: Any, feature_cols: List[str], budget: int, batch_rows: int) -> tuple:
@@ -7245,6 +7255,9 @@ def recover_generated_flow_quality(args: Any, config: Dict, generated: pd.DataFr
         uniqueness["total_candidate_draws_including_recovery"] = int(uniqueness.get("candidate_draws", 0)) + int(args._last_generation_quality_recovery["candidate_draws"])  # Avoid hiding the recovery cost from provenance.
     args._last_generation_quality_recovery["status"] = "exhausted" if unresolved else "recovered"  # Distinguish bounded failure from strict success.
     if unresolved:  # Persist actionable recovery evidence before the existing final audit rejects the dataset.
+        obsolete_rejected = Path(args.out_file).with_suffix(".rejected.csv")  # Resolve any obsolete quarantined samples left from an earlier release.
+        if obsolete_rejected.exists():  # Remove prior rejected augmented CSVs that are not part of the diagnostic JSON contract.
+            obsolete_rejected.unlink()  # Leave only diagnostics rather than retaining bad synthetic dataset files.
         recovery_path = Path(args.out_file).with_suffix(".recovery.json")  # Use a diagnostic artifact distinct from an accepted CSV.
         recovery_path.parent.mkdir(parents=True, exist_ok=True)  # Ensure the existing augmentation folder can store failure evidence.
         with recovery_path.open("w", encoding="utf-8") as stream:  # Persist finite recovery decisions without storing unbounded candidate samples.
@@ -7488,6 +7501,10 @@ def postprocess_generated_arrays_to_dataframe(args, config: Dict, all_fake: List
 
     safe_log("info", f"Saving {len(output_df)} generated rows to {args.out_file}")  # Log saving
     generate_csv_and_image(output_df, args.out_file, is_visualizable=True)  # Save CSV
+    for stale_suffix in (".recovery.json", ".rejected.csv"):  # Clean up obsolete failed-run artifacts only AFTER successful accepted CSV publication.
+        stale_file = Path(args.out_file).with_suffix(stale_suffix)  # Resolve only the two known generated sidecars.
+        if stale_file.exists():  # Leave unrelated user data untouched.
+            stale_file.unlink()  # Remove stale recovery and quarantine evidence from an earlier failed execution.
     output_provenance = build_wgangp_provenance(args)  # Keep the original training/checkpoint fingerprint unchanged.
     output_provenance["generation_uniqueness"] = getattr(args, "_last_generation_uniqueness", None)  # Record the post-decoding deduplication policy separately from model identity.
     output_provenance["generation_selection"] = getattr(args, "_last_generation_selection", None)  # Record the candidate selection policy and per-class evidence separately from model identity.
