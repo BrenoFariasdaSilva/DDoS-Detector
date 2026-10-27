@@ -116,7 +116,7 @@ psutil = (
 )  # Import psutil if available, otherwise set to None
 
 SAO_PAULO_TIMEZONE_NAME = "America/Sao_Paulo"  # Use Sao Paulo timezone for ETA finish timestamps
-WGANGP_RELEASE_VERSION = "V6.5.7"  # Add bounded quality-driven regeneration of classes rejected after decoding.
+WGANGP_RELEASE_VERSION = "V6.5.8"  # Add bounded quality-driven regeneration of classes rejected after decoding.
 FLOW_PREPROCESSING_CHECKPOINT_TAG = "ConditionalMixedStructuralV654TailKnots"  # Isolate weights trained on the full-class tail-knot representation.
 FLOW_PREPROCESSING_COMPATIBLE_TAGS: tuple[str, ...] = ()  # Earlier V6.5 weights were trained on a different tail encoding and are never resumed.
 QUALITY_SELECTION_POLICY = "priority_moment_swap_v1"  # Identify the bounded mean-first candidate selection policy in output provenance.
@@ -6992,6 +6992,89 @@ def draw_quality_recovery_class(args: Any, G: nn.Module, device: torch.device, c
     return (accepted if accepted is not None and len(accepted) == quota else None), draws, duplicates  # Require a complete class population for recovery.
 
 
+
+def choose_quality_repair_rows(generated: pd.DataFrame, quota: int, feature_cols: List[str], reference: Optional[np.ndarray], report: Dict[str, Any], rng: np.random.Generator, replacement_rows: int) -> np.ndarray:
+    """Choose bounded replaceable rows using source-aware moment diagnostics and protected tails.
+
+    :param generated: Current complete class population.
+    :param quota: Exact existing class quota.
+    :param feature_cols: Ordered decoded numeric fields.
+    :param reference: Original-class quality reference, if available.
+    :param report: Latest strict quality result describing failing dimensions.
+    :param rng: Local reproducible random stream.
+    :param replacement_rows: Maximum number of rows to replace in this repair.
+    :return: Positions of rows to replace with new decoded candidates.
+    """
+
+    take = min(quota, max(1, int(replacement_rows)))  # Replace precisely the caller's bounded chunk instead of an entire class.
+    candidates = rng.choice(len(generated), size=min(len(generated), max(take * 5, take + 1024)), replace=False)  # Bound intermediate ranking work independently of dataset size.
+    if reference is None or len(reference) < 32 or not len(feature_cols):  # Fall back to unbiased replacement when no reliable class reference exists.
+        return np.sort(candidates[:take])  # Keep exact positions without modifying the original rows.
+    source = np.asarray(reference, dtype=np.float64)  # Use the same original-only class population as the selector.
+    candidates_array = generated.iloc[candidates][feature_cols].to_numpy(dtype=np.float64)  # Read only a bounded subset of decoded feature values.
+    real_mean = np.mean(source, axis=0)  # Derive source-specific mean targets.
+    scale = np.maximum(np.std(source, axis=0), 1e-5)  # Stabilize sparse and constant reference fields.
+    normalized = np.clip((candidates_array - real_mean) / scale, -100.0, 100.0)  # Bound extreme-value leverage when ranking candidate removals.
+    generated_sample = generated.iloc[rng.choice(len(generated), size=min(len(generated), 8192), replace=False)][feature_cols].to_numpy(dtype=np.float64)  # Estimate current class discrepancies using bounded memory.
+    shift = np.clip((np.mean(generated_sample, axis=0) - real_mean) / scale, -10.0, 10.0)  # Identify mean deviations in their actual directions.
+    scores = (normalized @ shift) / max(1, len(feature_cols))  # Favor replacing rows that amplify existing mean mismatch.
+    if "joint_correlation_mismatch" in report.get("quality_flags", []):  # Improve rank specificity when joint relationships are currently rejected.
+        current = np.clip((generated_sample - real_mean) / scale, -100.0, 100.0)  # Normalize candidate and source correlations comparably.
+        variable = (np.std(source, axis=0) > 1e-5) & (np.std(current, axis=0) > 1e-5)  # Avoid undefined correlations in near-constant fields.
+        if int(variable.sum()) >= 2:  # Require a meaningful feature pair for correlation guidance.
+            source_corr = np.nan_to_num(np.corrcoef(source[:, variable], rowvar=False), nan=0.0)  # Estimate supported real relationships.
+            current_corr = np.nan_to_num(np.corrcoef(current[:, variable], rowvar=False), nan=0.0)  # Estimate present generated relationships.
+            error = current_corr - source_corr  # Identify signs of distorted joint dependencies.
+            np.fill_diagonal(error, 0.0)  # Exclude trivial self-correlations.
+            max_pairs = np.argsort(np.abs(error).ravel())[-min(24, error.size):]  # Focus on the strongest finite pairwise errors.
+            pair_i, pair_j = np.unravel_index(max_pairs, error.shape)  # Resolve both feature positions per mismatch.
+            pair_weights = error[pair_i, pair_j]  # Preserve the direction of each correlation error.
+            z = normalized[:, variable]  # Reuse bounded standardized candidate rows.
+            scores += np.clip(np.sum((z[:, pair_i] * z[:, pair_j]) * pair_weights, axis=1) / max(1, len(pair_weights)), -50.0, 50.0)  # Prioritize rows contributing to existing joint mismatch.
+    lower, upper = np.quantile(source, [0.001, 0.999], axis=0)  # Identify rare source-supported tails for removal safeguards.
+    rare_tail = np.any((candidates_array < lower) | (candidates_array > upper), axis=1)  # Avoid preferential removal of scarce rare-mode candidates.
+    scores -= rare_tail.astype(np.float64) * (max(10.0, float(np.nanmax(np.abs(scores))) + 1.0))  # Protect rare tails before ranking high-discrepancy rows.
+    ranks = np.argsort(np.nan_to_num(scores, nan=-np.inf))[::-1][:take]  # Choose only the bounded highest-leverage replacement candidates.
+    return np.sort(candidates[ranks])  # Return deterministic existing row positions without editing feature values.
+
+
+def draw_quality_repair_population(args: Any, G: nn.Module, device: torch.device, class_id: int, existing: pd.DataFrame, positions: np.ndarray, scaler: Any, label_encoder: Any, feature_cols: List[str], budget: int, batch_rows: int) -> tuple:
+    """Replace a bounded subset with fresh decoded unique rows while preserving every class quota.
+
+    :param args: Active output schema and class label configuration.
+    :param G: Already trained, unchanged conditional generator.
+    :param device: Inference device.
+    :param class_id: Encoded original-class identity.
+    :param existing: Existing full decoded class population.
+    :param positions: Exact class-row positions selected for replacement.
+    :param scaler: Existing invertible class preprocessing.
+    :param label_encoder: Original class-label decoder.
+    :param feature_cols: Ordered decoded numeric fields.
+    :param budget: Upper bound on new candidate draws in this repair attempt.
+    :param batch_rows: Upper bound on each inference batch.
+    :return: Complete repaired class or None, attempted candidate draws, and duplicates removed.
+    """
+
+    identity = list(feature_cols) + [args.label_col]  # Use exactly the established decoded flow identity.
+    retained = existing.drop(existing.index[positions]).reset_index(drop=True)  # Exclude only the designated replaceable rows.
+    wanted = len(existing)  # Keep the original complete class quota.
+    collected = retained  # Start with all unreplaced complete network-flow records.
+    draws = duplicates = stagnant = 0  # Accumulate actual inference and rejected uniqueness work.
+    while len(collected) < wanted and draws < budget:  # Retry only the missing replacement fraction.
+        batch = min(batch_rows, budget - draws, wanted - len(collected))  # Bound inference by the remaining quota and budget.
+        if batch < 1:  # Stop when no further inference is permitted.
+            break  # Never spin on empty refill attempts.
+        fresh = decode_candidate_frame(args, G, device, np.full(batch, class_id, dtype=np.int64), scaler, label_encoder, feature_cols)  # Draw unmodified new network-flow records.
+        before = len(collected)  # Measure exact usable unique rows before insertion.
+        collected = pd.concat((collected, fresh), ignore_index=True, copy=False).drop_duplicates(subset=identity, keep="first").iloc[:wanted].reset_index(drop=True)  # Deduplicate against all retained rows after decoding.
+        draws += batch  # Include duplicate and accepted draws in the fixed budget.
+        gained = len(collected) - before  # Identify net unique replacement records.
+        duplicates += batch - gained  # Account for every duplicate rejected after decoding.
+        stagnant = stagnant + 1 if gained == 0 else 0  # Detect insufficient additional generator support.
+        if stagnant >= 4:  # Stop after repeated no-progress draws.
+            break  # Preserve the incomplete candidate only in local transient memory.
+    return (collected if len(collected) == wanted else None), draws, duplicates  # Never return a partial class as a complete population.
+
 def recover_generated_flow_quality(args: Any, config: Dict, generated: pd.DataFrame, G: nn.Module, device: torch.device, scaler: Any, label_encoder: Any, feature_cols: List[str]) -> pd.DataFrame:
     """Recover only rejected classes through bounded fresh draws while retaining strict final quality auditing.
 
@@ -7103,6 +7186,45 @@ def recover_generated_flow_quality(args: Any, config: Dict, generated: pd.DataFr
                                 attempt_record["decision"] = "best_selected_rejected_candidate"  # Disclose that selection still failed the strict quality standard.
                 class_record["attempts"].append(attempt_record)  # Record rejected results without publishing them.
                 print(f"[{WGANGP_RELEASE_VERSION}] Quality recovery {class_name}: attempt {attempt}/{settings['max_rounds']} rejected | flags={attempt_record['flags']} | cumulative draws={class_record['draws_used']}")  # Expose the precise failure reasons.
+            if not class_record["accepted"] and settings["max_repairs"] > 0:  # Attempt smaller quality-guided repairs only after complete regeneration remains rejected.
+                class_record["repair_started_from_best_disk_snapshot"] = True  # Disclose that repairs use the best measured complete candidate.
+                source_reference = references.get(class_name, ())  # Obtain the original-class statistical reference when available.
+                source_values = source_reference[0] if len(source_reference) == 2 else None  # Keep reference data independent of generated candidates.
+                repair_rng = np.random.default_rng(int(getattr(args, "seed", 42)) + 47931 + label_map[class_name])  # Isolate reproducible repair decisions from generator training RNG.
+                for repair_index in range(1, settings["max_repairs"] + 1):  # Bound successive targeted repair probes per failed class.
+                    fraction = settings["repair_fraction"] / (2 ** ((repair_index - 1) // 6))  # Decrease replacement size gradually as the search progresses.
+                    replace_rows = min(quota, settings["repair_batch_rows"], max(1, int(math.ceil(quota * fraction))))  # Never replace more than the configured class fraction or row cap.
+                    positions = choose_quality_repair_rows(best, quota, feature_cols, source_values, best_report["classes"][0], repair_rng, replace_rows)  # Rank possible removals using actual failure diagnostics.
+                    repair_limit = min(settings["max_draw_rows"], max(replace_rows, int(math.ceil(replace_rows * settings["draw_multiplier"]))))  # Budget only the replacement fraction, independently of full redraws.
+                    repaired, draws, duplicates = draw_quality_repair_population(args, G, device, label_map[class_name], best, positions, scaler, label_encoder, feature_cols, repair_limit, settings["batch_rows"])  # Regenerate missing rows until quota or budget exhaustion.
+                    args._last_generation_quality_recovery["candidate_draws"] += draws  # Report repair draws in the full generation accounting.
+                    args._last_generation_quality_recovery["duplicates_rejected"] += duplicates  # Include collisions against preserved good rows.
+                    class_record["draws_used"] += draws  # Include smaller repair attempts in the class workload.
+                    record = {"repair": repair_index, "requested_replacements": replace_rows, "draws": draws, "duplicates_rejected": duplicates, "complete": repaired is not None}  # Save each bounded repair attempt's real outcome.
+                    if repaired is None:  # Never assess incomplete reconstructed class populations as complete.
+                        record["decision"] = "insufficient_unique_replacements"  # Explain remaining recovery deficit.
+                        class_record["repairs"].append(record)  # Retain failure evidence after temporary-file cleanup.
+                        continue  # Try a different bounded replacement subset next round.
+                    trial_path = directory / f"repair-{repair_index:02d}.pkl"  # Save a lossless copy of each complete repair candidate to temporary disk.
+                    repaired.to_pickle(trial_path)  # Ensure every full replacement population has an auditable disk snapshot.
+                    repair_report = assess_generated_flow_quality(args, config, repaired, scaler=scaler, label_encoder=label_encoder, persist_report=False, enforce=False)  # Apply the EXACT established class quality gates.
+                    record["flags"] = list(repair_report["classes"][0].get("quality_flags", []))  # Preserve the factual remaining issues.
+                    record["rank"] = quality_recovery_rank(repair_report, class_name, quality)  # Compare all attempts using the same original quality measurements.
+                    if repair_report["accepted"]:  # Accept only complete outputs meeting unchanged strict acceptance rules.
+                        groups[class_name] = repaired  # Preserve original class quota and existing labels.
+                        class_record["accepted"] = True  # Mark the actual strict-auditor success.
+                        record["decision"] = "strict_repaired_quality_accepted"  # Distinguish targeted repair from whole-class success.
+                        class_record["repairs"].append(record)  # Retain the successful operation's details.
+                        break  # Stop all future attempts immediately after passing quality validation.
+                    if record["rank"] < best_rank:  # Preserve only measured quality improvements, never arbitrary replacements.
+                        best, best_report, best_rank = repaired, repair_report, record["rank"]  # Promote the genuinely better complete class.
+                        os.replace(trial_path, best_path)  # Replace the older disk snapshot with the measured better version.
+                        record["decision"] = "improved_rejected_candidate"  # Clearly distinguish progress from actual acceptance.
+                    else:  # Reject regressions without disturbing the strongest complete class.
+                        trial_path.unlink()  # Delete the temporary inferior repair population immediately.
+                        record["decision"] = "rejected_without_improvement"  # Preserve evidence of unsuccessful local repair.
+                    class_record["repairs"].append(record)  # Record the finite search trajectory.
+                    print(f"[{WGANGP_RELEASE_VERSION}] Targeted quality repair {class_name}: {repair_index}/{settings['max_repairs']} | remaining quality flags={record['flags']} | best={best_rank}")  # Show quality recovery rather than a misleading completed notice.
             if not class_record["accepted"]:  # Preserve the strongest class available, but never call it accepted without an actual pass.
                 best = pd.read_pickle(best_path)  # Restore the complete best candidate from the private disk snapshot.
                 groups[class_name] = best  # Use the best attempt only as input to the existing final strict auditor.
