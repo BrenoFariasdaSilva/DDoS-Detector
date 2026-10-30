@@ -116,7 +116,7 @@ psutil = (
 )  # Import psutil if available, otherwise set to None
 
 SAO_PAULO_TIMEZONE_NAME = "America/Sao_Paulo"  # Use Sao Paulo timezone for ETA finish timestamps
-WGANGP_RELEASE_VERSION = "V6.5.12"  # Remove all ephemeral candidate metrics and release cached quality references after final audit.
+WGANGP_RELEASE_VERSION = "V6.5.13"  # Skip existing augmented outputs before costly dataset training when missing-only mode is requested.
 FLOW_PREPROCESSING_CHECKPOINT_TAG = "ConditionalMixedStructuralV654TailKnots"  # Isolate weights trained on the full-class tail-knot representation.
 FLOW_PREPROCESSING_COMPATIBLE_TAGS: tuple[str, ...] = ()  # Earlier V6.5 weights were trained on a different tail encoding and are never resumed.
 QUALITY_SELECTION_POLICY = "priority_moment_swap_v1"  # Identify the bounded mean-first candidate selection policy in output provenance.
@@ -1116,6 +1116,7 @@ class ConfigNamespace:
             self.feature_dim = int(self.feature_dim)  # Cast to int
         
         self.force_regenerate_samples = cfg.get("generation", {}).get("force_regenerate_samples", False)  # Resolve forced regeneration with a false fallback
+        self.only_missing_augmented = bool(cfg.get("generation", {}).get("only_missing_augmented", False))  # Enable existence-only output selection independently of forced regeneration.
         self.num_workers = int(cfg.get("dataloader", {}).get("num_workers", 8))  # Cast to int
         self._last_training_time = 0.0  # Placeholder for last training elapsed time (set after train)
         self.file_progress_prefix = ""  # Default per-file progress prefix (set at runtime when batch processing)
@@ -1889,6 +1890,7 @@ def build_default_training_and_model_config() -> Dict:
             "n_samples": 1.0,  # Number/percentage of samples to generate
             "label": None,  # Specific class ID to generate (None = all classes)
             "force_regenerate_samples": False,  # Preserve missing-only generation by default
+            "only_missing_augmented": False,  # Leave existence-only output filtering disabled unless explicitly requested.
             "out_file": "generated.csv",  # Output CSV filename
             "gen_batch_size": 256,  # Generation batch size
             "max_duplicate_refill_rounds": 25,  # Fail rather than loop indefinitely when the learned support is exhausted.
@@ -2379,6 +2381,7 @@ def parse_args():
         p.add_argument("--checkpoint", type=str, default=None, help="Generator checkpoint path")  # Add checkpoint argument
         p.add_argument("--n_samples", type=float, default=None, help="Number/percentage of samples to generate")  # Add n_samples argument
         p.add_argument("--force-regenerate-samples", "--force_regenerate_samples", "--force_new_samples", dest="force_regenerate_samples", action="store_true", default=None, help="Force regeneration even if generated samples already exist")  # Add explicit forced-regeneration override
+        p.add_argument("--only-missing-augmented", "--only_missing_augmented", action="store_true", default=None, help="Only process source CSV files without an existing augmented output CSV; takes precedence over force regeneration")  # Add an opt-in existence-only output filter.
         p.add_argument("--no-force-regenerate-samples", "--no_force_regenerate_samples", dest="force_regenerate_samples", action="store_false", help="Disable forced regeneration and use existing generated samples")  # Add explicit forced-regeneration disable override
         p.add_argument("--gen_label", type=int, default=None, help="Specific class ID to generate")  # Add gen_label argument
         p.add_argument("--out_file", type=str, default=None, help="Output CSV filename")  # Add out_file argument
@@ -2515,6 +2518,8 @@ def apply_generation_and_data_cli_overrides(args, overrides: Dict) -> None:
         overrides.setdefault("generation", {})["n_samples"] = args.n_samples  # Set n_samples
     if getattr(args, "force_regenerate_samples", None) is not None:  # Apply only an explicit forced-regeneration CLI value
         overrides.setdefault("generation", {})["force_regenerate_samples"] = args.force_regenerate_samples  # Override configured forced regeneration
+    if getattr(args, "only_missing_augmented", None) is not None:  # Apply the optional missing-only CLI filter over YAML settings.
+        overrides.setdefault("generation", {})["only_missing_augmented"] = args.only_missing_augmented  # Propagate the selection policy to the shared runtime namespace.
     if args.gen_label is not None:  # If gen_label specified
         overrides.setdefault("generation", {})["label"] = args.gen_label  # Set label
     if args.out_file is not None:  # If out_file specified
@@ -8308,7 +8313,7 @@ def build_config_overrides_from_kwargs(kwargs: Dict) -> Dict:
                 cli_style_overrides.setdefault("generator", {})["embed_dim"] = value
             elif key in ["d_embed_dim"]:  # Discriminator embedding dim
                 cli_style_overrides.setdefault("discriminator", {})["embed_dim"] = value
-            elif key in ["checkpoint", "n_samples", "force_regenerate_samples", "label", "out_file", "gen_batch_size", "feature_dim"]:  # Generation params
+            elif key in ["checkpoint", "n_samples", "force_regenerate_samples", "only_missing_augmented", "label", "out_file", "gen_batch_size", "feature_dim"]:  # Generation params
                 cli_style_overrides.setdefault("generation", {})[key] = value
             elif key in ["num_workers"]:  # DataLoader params
                 cli_style_overrides.setdefault("dataloader", {})[key] = value
@@ -8597,6 +8602,27 @@ def setup_single_file_output_path(args: Any, config: Dict, csv_path_obj: Path, m
     return data_aug_dir  # Return canonical data augmentation directory path for downstream use
 
 
+def skip_existing_augmented_output_in_missing_mode(args: Any, csv_path_obj: Path, file_progress_prefix: str) -> bool:
+    """Skip existing augmented CSVs before training when missing-only mode is active.
+
+    :param args: Runtime namespace containing output filename and missing-only flag.
+    :param csv_path_obj: Original CSV file associated with this augmented output.
+    :param file_progress_prefix: Progress label for logs and Telegram notifications.
+    :return: True when an existing augmented output must be preserved without processing.
+    """
+
+    if not bool(getattr(args, "only_missing_augmented", False)):  # Preserve the existing execution workflow when the flag is disabled.
+        return False  # Continue through normal provenance, size, and forced-regeneration handling.
+    output_path = Path(args.out_file)  # Use the actual per-file output destination rather than guessing a global folder.
+    if not output_path.is_file():  # Missing or non-regular outputs remain eligible for generation.
+        return False  # Continue with training and generation of the missing augmented CSV.
+    message = f"{file_progress_prefix} [INFO] Missing-only: skipping {csv_path_obj.name}; augmented output already exists at {output_path} (force-regenerate ignored for existing output)."  # Report the exact reason and output path.
+    print(f"{BackgroundColors.GREEN}{message}{Style.RESET_ALL}")  # Show the no-training decision before any source data are loaded.
+    safe_log("info", message)  # Preserve the decision in the normal application log.
+    send_telegram_message(TELEGRAM_BOT, message)  # Notify the same skip event through Telegram.
+    return True  # Leave the existing CSV and all its companion files unchanged.
+
+
 def execute_training_with_timing(args: Any, config: Dict) -> Optional[tuple]:
     """
     Execute model training and store elapsed time on args.
@@ -8867,6 +8893,8 @@ def handle_single_file_mode(args: Any, config: Dict, mode: str, csv_path: str, r
     data_aug_dir = setup_single_file_output_path(args, config, csv_path_obj, mode, results_suffix)  # Configure output path and retrieve canonical data augmentation directory
     results_csv_path = data_aug_dir / "data_augmentation_results.csv"  # Construct results CSV path inside data augmentation directory
     create_results_csv_if_absent(results_csv_path, results_cols)  # Write header to results CSV when file does not exist
+    if skip_existing_augmented_output_in_missing_mode(args, csv_path_obj, getattr(args, "file_progress_prefix", "[1/1]")):  # Skip existing single-file outputs without training.
+        return  # Preserve existing augmented CSV and companion quality artifacts.
     dispatch_single_file_mode(args, config, mode, csv_path_obj, data_aug_dir)  # Dispatch configured mode to appropriate handler
 
 
@@ -9008,6 +9036,9 @@ def process_single_dataset_file(args: Any, config: Dict, mode: str, file: str, i
     print(f"{file_progress_prefix} {BackgroundColors.BOLD}{BackgroundColors.GREEN}Processing file: {BackgroundColors.CYAN}{file}{Style.RESET_ALL}")  # Announce current file with progress prefix
     print(f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*80}{Style.RESET_ALL}\n")  # Print decorative separator after file processing header
     csv_path_obj, data_aug_dir = setup_per_file_output(args, config, file, results_suffix)  # Configure output paths and retrieve Path objects for dispatch
+    if skip_existing_augmented_output_in_missing_mode(args, csv_path_obj, file_progress_prefix):  # Apply existence-only filtering before expensive processing.
+        mark_file_as_processed(resolved_path)  # Preserve duplicate detection and flush a logged skip.
+        return  # Leave this existing augmented output untouched.
     
     try:  # Execute configured mode with guaranteed cleanup in finally block
         dispatch_mode_for_file(args, config, mode, csv_path_obj, data_aug_dir)  # Dispatch train, gen, or both to handler
@@ -9137,7 +9168,9 @@ def main():
         start_time = datetime.datetime.now()  # Get the start time of the program
         send_telegram_message(TELEGRAM_BOT, [f"Starting WGAN-GP Data Augmentation at {start_time.strftime('%Y-%m-%d %H:%M:%S')}"])  # Send formatted start notification via Telegram
         
-        mode, csv_path, results_suffix, datasets, args = extract_runtime_parameters(config)  # Extract execution mode, paths, and arg namespace from config
+        mode, csv_path, results_suffix, datasets, args = extract_runtime_parameters(config)  # Extract execution mode, paths, and arg namespace
+        if args.only_missing_augmented and mode == "train":  # Missing-output selection requires a mode capable of generating augmented CSV files.
+            raise ValueError("--only-missing-augmented requires --mode both or --mode gen")  # Reject an ineffective training-only combination before processing.
         results_cols = validate_results_csv_columns(config)  # Validate and retrieve results CSV column configuration
 
         if csv_path is not None and os.path.isdir(csv_path):  # Directory mode (csv_path is an existing directory)
