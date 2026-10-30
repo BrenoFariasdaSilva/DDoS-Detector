@@ -116,7 +116,7 @@ psutil = (
 )  # Import psutil if available, otherwise set to None
 
 SAO_PAULO_TIMEZONE_NAME = "America/Sao_Paulo"  # Use Sao Paulo timezone for ETA finish timestamps
-WGANGP_RELEASE_VERSION = "V6.5.13"  # Skip existing augmented outputs before costly dataset training when missing-only mode is requested.
+WGANGP_RELEASE_VERSION = "V6.5.14"  # Keep missing-only selection consistent across directory, single-file, and direct generation paths.
 FLOW_PREPROCESSING_CHECKPOINT_TAG = "ConditionalMixedStructuralV654TailKnots"  # Isolate weights trained on the full-class tail-knot representation.
 FLOW_PREPROCESSING_COMPATIBLE_TAGS: tuple[str, ...] = ()  # Earlier V6.5 weights were trained on a different tail encoding and are never resumed.
 QUALITY_SELECTION_POLICY = "priority_moment_swap_v1"  # Identify the bounded mean-first candidate selection policy in output provenance.
@@ -2382,6 +2382,7 @@ def parse_args():
         p.add_argument("--n_samples", type=float, default=None, help="Number/percentage of samples to generate")  # Add n_samples argument
         p.add_argument("--force-regenerate-samples", "--force_regenerate_samples", "--force_new_samples", dest="force_regenerate_samples", action="store_true", default=None, help="Force regeneration even if generated samples already exist")  # Add explicit forced-regeneration override
         p.add_argument("--only-missing-augmented", "--only_missing_augmented", action="store_true", default=None, help="Only process source CSV files without an existing augmented output CSV; takes precedence over force regeneration")  # Add an opt-in existence-only output filter.
+        p.add_argument("--no-only-missing-augmented", "--no_only_missing_augmented", dest="only_missing_augmented", action="store_false", help="Disable missing-only selection even when enabled in the YAML configuration")  # Permit an explicit CLI opt-out of configured missing-only selection.
         p.add_argument("--no-force-regenerate-samples", "--no_force_regenerate_samples", dest="force_regenerate_samples", action="store_false", help="Disable forced regeneration and use existing generated samples")  # Add explicit forced-regeneration disable override
         p.add_argument("--gen_label", type=int, default=None, help="Specific class ID to generate")  # Add gen_label argument
         p.add_argument("--out_file", type=str, default=None, help="Output CSV filename")  # Add out_file argument
@@ -6083,6 +6084,9 @@ def verify_data_augmentation_file(args, config: Optional[Dict] = None) -> bool:
 
         out_path = Path(getattr(args, "out_file", ""))  # Resolve output path
         file_prefix = getattr(args, "file_progress_prefix", "")  # Telegram prefix
+        if bool(getattr(args, "only_missing_augmented", False)) and out_path.is_file():  # Apply existence-only precedence even for direct generation calls.
+            skip_existing_augmented_output_in_missing_mode(args, Path(getattr(args, "csv_path", out_path.name)), file_prefix)  # Report the consistent missing-only skip.
+            return False  # Never regenerate a present output, regardless of forced-regeneration settings.
 
         if not out_path.exists():  # If file does not exist
             return True  # Proceed with generation
@@ -8525,6 +8529,7 @@ def initialize_cli_and_config() -> Dict:
     set_runtime_process_name(getattr(args, "process_name", None), script_path=__file__, config=config)  # Re-apply with merged config so config.yaml can override only when CLI omitted the process name.
     force_source = resolve_force_regenerate_samples_source(args)  # Resolve effective force-regeneration source for logging.
     print(f"{BackgroundColors.GREEN}[CONFIG] force_regenerate_samples={BackgroundColors.CYAN}{bool(config.get('generation', {}).get('force_regenerate_samples', False))}{BackgroundColors.GREEN} | Source: {BackgroundColors.CYAN}{force_source}{Style.RESET_ALL}")  # Log effective force-regeneration value and source.
+    print(f"[CONFIG] only_missing_augmented={bool(config.get('generation', {}).get('only_missing_augmented', False))} | Existing augmented CSVs are preserved even when forced regeneration is enabled")  # Expose effective output-preservation precedence at startup.
     CONFIG = config  # Persist loaded configuration in global registry
     return config  # Return merged configuration dictionary to caller
 
@@ -8666,6 +8671,8 @@ def skip_both_mode_when_augmented_output_sufficient(args: Any, config: Dict, csv
     """
 
     out_path = Path(getattr(args, "out_file", ""))  # Resolve the existing output path using configured per-file output logic.
+    if bool(getattr(args, "only_missing_augmented", False)) and out_path.is_file():  # Skip before any source-data or row-count reads in direct both-mode calls.
+        return skip_existing_augmented_output_in_missing_mode(args, csv_path_obj, file_progress_prefix)  # Preserve existing outputs regardless of the force flag.
     force_regenerate = bool(getattr(args, "force_regenerate_samples", False))  # Resolve the effective force-regeneration value once for this file.
     requested_ratio = safe_float(getattr(args, "n_samples", config.get("generation", {}).get("n_samples", 1.0)), config.get("generation", {}).get("n_samples", 1.0))  # Resolve the effective requested generation ratio or absolute count.
     required_rows = None if not out_path.exists() or force_regenerate else resolve_expected_output_row_count(args, config)  # Avoid loading large source datasets for nonexistent or forcibly replaced outputs.
