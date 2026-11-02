@@ -17015,6 +17015,7 @@ def print_dataset_evaluation_header(data_source_label, evaluation_plan, executio
         total_combinations = len(evaluation_plan)  # Use the exact ordered plan length displayed by the progress bar
         canonical_total = int(skip_summary.get("canonical_total", total_combinations)) if skip_summary else total_combinations  # Resolve canonical pre-filter total.
         global_ids_by_combination = skip_summary.get("global_ids", {}) if skip_summary else {}  # Resolve stable eligible IDs when skip filtering ran.
+        has_pending_duration_metadata = pending_by_feature is not None  # Distinguish cache-classified task queues from legacy count-only headers.
         cached_results = cached_results or {}  # Normalize absent cache classification to an empty recovered block.
         pending_by_feature = pending_by_feature or {}  # Normalize absent pending classification to a fallback pending block.
         pending_global_ids = {task["global_id"] for tasks in pending_by_feature.values() for task in tasks}  # Preserve actual execution identities from cache partitioning.
@@ -17025,6 +17026,9 @@ def print_dataset_evaluation_header(data_source_label, evaluation_plan, executio
         if not pending_global_ids and not recovered_global_ids:  # Preserve legacy callers without precomputed cache classification.
             pending_global_ids = set(range(1, total_combinations + 1))  # Treat the whole plan as pending when no cache classification was supplied.
 
+        pending_duration_tasks = [task for queue_tasks in pending_by_feature.values() for task in queue_tasks]  # Reuse only cache-filtered pending task descriptors.
+        eta_pending_label = build_eta_pending_run_experiments_label(pending_duration_tasks) if has_pending_duration_metadata else "unavailable"  # Share the exact historical ETA semantics used by training progress.
+        eta_pending_suffix = f" - ETA Pending Run Experiments: {eta_pending_label}"  # Use the requested startup-log delimiter and field name.
         print(f"Evaluation plan: {total_combinations} eligible combinations | Canonical: {canonical_total} | Run: {experiment_run} | Recovered eligible: {len(recovered_global_ids)} | Pending eligible: {len(pending_global_ids)}\n")  # Print cache-aware full-grid counts.
         print(f"Execution Mode: {execution_mode_str}")  # Print the execution-mode identity shared by the plan
         if attack_types_combined:  # Print the combined attack scope when it participates in cache identity
@@ -17040,13 +17044,13 @@ def print_dataset_evaluation_header(data_source_label, evaluation_plan, executio
             training_data_label = "Original plus selected synthetic data" if augmentation_ratio is not None else "Original Data"  # Resolve active training source.
             testing_data_label = "Original held-out Data"  # Preserve identical testing source across ratios.
             if stable_global_id == min(recovered_global_ids):  # Print the block heading immediately before the first recovered combination.
-                print(f"Recovered combinations from cache: {len(recovered_global_ids)}/{total_combinations}\n")  # Print recovered count before cached plan rows.
+                print(f"Recovered combinations from cache: {len(recovered_global_ids)}/{total_combinations}{eta_pending_suffix}\n")  # Report the same pending-run ETA before cached plan rows.
             print(f"[Global ID {stable_global_id}/{canonical_total}] Feature Set: {feature_set} | Classifier: {classifier} | Hyperparameters: {hyperparameter_label} | Training Augmentation Ratio: {augmentation_label} | Training Data: {training_data_label} | Testing Data: {testing_data_label}")  # Print one complete ordered combination identity.
         if not recovered_global_ids:  # Keep the recovered block visible for empty or absent caches.
-            print(f"Recovered combinations from cache: 0/{total_combinations}")  # Report no cache recoveries explicitly.
+            print(f"Recovered combinations from cache: 0/{total_combinations}{eta_pending_suffix}")  # Report no cache recoveries with pending-run ETA.
         print()  # Separate recovered and pending plan blocks.
 
-        print(f"Pending combinations to execute: {len(pending_global_ids)}/{total_combinations}\n")  # Print pending count before executable plan rows.
+        print(f"Pending combinations to execute: {len(pending_global_ids)}/{total_combinations}{eta_pending_suffix}\n")  # Report pending count and historical pending-run ETA.
         feature_sets = list(dict.fromkeys(combination[0] for combination in evaluation_plan))  # Preserve first-occurrence feature-set order for the Telegram summary
         hyperparameter_modes = list(dict.fromkeys("Optimized Hyperparameters" if combination[1] else "Default Hyperparameters" for combination in evaluation_plan))  # Preserve first-occurrence runnable hyperparameter order
         augmentation_modes = list(dict.fromkeys(f"{combination[2] * 100:g}%" if combination[2] is not None else "None" for combination in evaluation_plan))  # Preserve first-occurrence augmented-test order.
@@ -18878,6 +18882,9 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
         if all(name in feature_metadata_by_name for name in feature_mode_names):  # Use cache-aware grouping only for feature modes with compact descriptors.
             tasks = build_feature_process_plan(evaluation_plan, feature_metadata_by_name, original_sample_count, combined_dataset_reference, "combined_files", get_current_experiment_run(config), skip_summary["global_ids"], skip_summary["canonical_total"])  # Reuse authoritative global IDs and expected original-data shapes for plan reporting
             cached_results, pending_by_feature = partition_evaluation_plan_by_cache(tasks, orchestration_cache, feature_mode_names, attack_types_list)  # Reuse existing cache matching before plan reporting
+            pending_header_tasks = [task for queue_tasks in pending_by_feature.values() for task in queue_tasks]  # Read only cache-miss tasks for startup ETA.
+            if pending_header_tasks:  # Avoid unnecessary historical cache reads for an already completed plan.
+                annotate_previous_run_durations(pending_header_tasks, combined_dataset_reference, config, attack_types_list)  # Resolve trusted earlier-run durations before logging the combined plan.
             print(format_skip_summary_line(skip_summary, len(cached_results), sum(len(queue_tasks) for queue_tasks in pending_by_feature.values())))  # Log cache-aware skip and plan totals.
             print_dataset_evaluation_header("Original Combined Files", evaluation_plan, "combined_files", attack_types_list, cached_results=cached_results, pending_by_feature=pending_by_feature, skip_summary=skip_summary)  # Print cache-aware recovered and pending plan blocks
         else:
@@ -22298,6 +22305,9 @@ def orchestrate_all_combinations(input_path, dataset_name=None, config=None):
             if all(name in feature_metadata_by_name for name in feature_mode_names):  # Use cache-aware grouping only for feature modes with compact descriptors.
                 tasks = build_feature_process_plan(evaluation_plan, feature_metadata_by_name, len(df_original), file, "separate_files", get_current_experiment_run(config), skip_summary["global_ids"], skip_summary["canonical_total"])  # Reuse authoritative global IDs and expected original-data shapes for plan reporting
                 cached_results, pending_by_feature = partition_evaluation_plan_by_cache(tasks, orchestration_cache, feature_mode_names, None)  # Reuse existing cache matching before plan reporting
+                pending_header_tasks = [task for queue_tasks in pending_by_feature.values() for task in queue_tasks]  # Read only cache-miss tasks for startup ETA.
+                if pending_header_tasks:  # Avoid unnecessary historical cache reads for an already completed plan.
+                    annotate_previous_run_durations(pending_header_tasks, file, config, None)  # Resolve trusted earlier-run durations before logging the separate-file plan.
                 print(format_skip_summary_line(skip_summary, len(cached_results), sum(len(queue_tasks) for queue_tasks in pending_by_feature.values())))  # Log cache-aware skip and plan totals.
                 print_dataset_evaluation_header("Original", evaluation_plan, "separate_files", None, cached_results=cached_results, pending_by_feature=pending_by_feature, skip_summary=skip_summary)  # Print cache-aware recovered and pending plan blocks
             else:
