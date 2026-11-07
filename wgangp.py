@@ -116,7 +116,7 @@ psutil = (
 )  # Import psutil if available, otherwise set to None
 
 SAO_PAULO_TIMEZONE_NAME = "America/Sao_Paulo"  # Use Sao Paulo timezone for ETA finish timestamps
-WGANGP_RELEASE_VERSION = "V6.5.14"  # Keep missing-only selection consistent across directory, single-file, and direct generation paths.
+WGANGP_RELEASE_VERSION = "V6.5.15"  # Explain actual strict quality gate failures in full JSON, console, and Telegram.
 FLOW_PREPROCESSING_CHECKPOINT_TAG = "ConditionalMixedStructuralV654TailKnots"  # Isolate weights trained on the full-class tail-knot representation.
 FLOW_PREPROCESSING_COMPATIBLE_TAGS: tuple[str, ...] = ()  # Earlier V6.5 weights were trained on a different tail encoding and are never resumed.
 QUALITY_SELECTION_POLICY = "priority_moment_swap_v1"  # Identify the bounded mean-first candidate selection policy in output provenance.
@@ -1535,6 +1535,67 @@ def build_quality_policy_fingerprint(config: Dict) -> str:
     return hashlib.sha256(json.dumps(policy, sort_keys=True, default=str).encode("utf-8")).hexdigest()
 
 
+
+def describe_class_quality_failures(entry: Dict[str, Any], settings: Dict[str, Any]) -> List[str]:
+    """Explain each triggered strict quality gate with its measured value and effective threshold.
+
+    All thresholds come from the same runtime quality policy as the production auditor.
+    This is diagnostic only: it neither changes acceptance nor fabricates source measurements.
+    """
+
+    flags = set(entry.get("quality_flags", []))  # Interpret only gates actually triggered by the full auditor.
+    details: List[str] = []  # Keep plain strings portable to logs, Telegram, and .quality.json.
+    measurements = (
+        ("large_marginal_mean_shift", "mean_shift_standardized", "max_mean_shift", 2.0),
+        ("low_feature_diversity", "low_variance_feature_fraction", "max_low_variance_fraction", 0.5),
+        ("excessive_audited_duplicate_rows", "audited_duplicate_fraction", "max_audited_duplicate_fraction", 0.10),
+    )
+    for flag, measure, config_key, default in measurements:  # Report the exact observed/error gate pair.
+        if flag in flags and entry.get(measure) is not None:
+            details.append(f"{flag}: {measure}={float(entry[measure]):.6g} > {config_key}={float(settings.get(config_key, default)):.6g}")
+    if "joint_correlation_mismatch" in flags:  # Respect the effective per-class real-to-real calibrated limit.
+        difference = entry.get("joint_correlation_absolute_difference_mean")
+        limit = entry.get("effective_correlation_difference_limit", settings.get("max_correlation_difference", 0.25))
+        details.append(f"joint_correlation_mismatch: mean_abs_correlation_error={float(difference):.6g} > calibrated_limit={float(limit):.6g}" if difference is not None else "joint_correlation_mismatch: missing numeric correlation result")
+        collapsed = entry.get("correlation_collapsed_features", [])
+        if collapsed:
+            details.append("undefined_generated_correlations=" + ", ".join(map(str, collapsed[:5])))
+    if "synthetic_mode_collapse" in flags:  # The original auditor uses a source-dependent adaptive duplicate threshold.
+        threshold = max(float(settings.get("max_near_duplicate_fraction", 0.3)), float(entry.get("original_near_duplicate_fraction", 0.0)) + 0.2)
+        details.append(f"synthetic_mode_collapse: rounded_near_duplicate_fraction={float(entry.get('synthetic_near_duplicate_fraction', 0.0)):.6g} > effective_limit={threshold:.6g}")
+    if "possible_training_data_memorization" in flags:
+        details.append(f"possible_training_data_memorization: generated_near_reference={float(entry.get('reference_near_match_fraction', 0.0)):.6g}, real_to_real_baseline={entry.get('reference_real_to_real_near_match_fraction')} (limit={float(settings.get('max_reference_near_match_fraction', 0.95)):.6g}; max_excess={float(settings.get('max_reference_near_match_excess', 0.25)):.6g})")
+    if "invalid_individual_feature_domains" in flags:
+        bad = sorted(entry.get("violations", {}).items(), key=lambda item: -int(item[1]))[:5]
+        details.append("invalid_individual_feature_domains: " + ", ".join(f"{name}={count}" for name, count in bad))
+    if "invalid_joint_feature_relationships" in flags:
+        bad = sorted(entry.get("relationship_violations", {}).items(), key=lambda item: -int(item[1]))[:5]
+        details.append("invalid_joint_feature_relationships: " + ", ".join(f"{name}={count}" for name, count in bad))
+    if "low_feature_diversity" in flags:
+        worst = entry.get("lowest_generated_to_real_std_ratios", [])[:5]
+        if worst:
+            details.append("collapsed_feature_std_ratios=" + ", ".join(f"{item['feature']}:{float(item['generated_to_real_std_ratio']):.4g}" for item in worst))
+    if "insufficient_reference_or_synthetic_sample" in flags:
+        details.append(f"insufficient_reference_or_synthetic_sample: generated_sample_rows={entry.get('sampled_rows')}; source reference unavailable or too small")
+    known = {item[0] for item in measurements} | {"joint_correlation_mismatch", "synthetic_mode_collapse", "possible_training_data_memorization", "invalid_individual_feature_domains", "invalid_joint_feature_relationships", "low_feature_diversity", "insufficient_reference_or_synthetic_sample"}
+    details.extend(f"unrecognized_quality_flag: {flag}" for flag in sorted(flags - known))  # Never silently drop a new upstream gate.
+    return details
+
+
+def summarize_quality_rejection(result: Dict[str, Any], max_classes: int = 4, max_chars: int = 1600) -> str:
+    """Produce an evidence-based, size-bounded Telegram-friendly strict rejection summary."""
+
+    failed = [entry for entry in result.get("classes", []) if entry.get("quality_flags")]
+    lines = []
+    for entry in failed[:max_classes]:
+        details = entry.get("quality_failure_details", [])
+        reason = "; ".join(details[:3]) if details else ", ".join(entry.get("quality_flags", []))
+        lines.append(f"{entry.get('class', '?')}: {reason}")
+    if len(failed) > max_classes:
+        lines.append(f"... plus {len(failed) - max_classes} additional rejected classes (see .quality.json)")
+    return " | ".join(lines)[:max_chars] or "No class-level rejection details reported"
+
+
 def assess_generated_flow_quality(args: Any, config: Dict, generated: pd.DataFrame, scaler: Optional[Any] = None, label_encoder: Optional[Any] = None, persist_report: bool = True, enforce: bool = True) -> Dict[str, Any]:
     """Audit per-class joint fidelity, diversity and network constraints before output acceptance.
 
@@ -1803,6 +1864,7 @@ def assess_generated_flow_quality(args: Any, config: Dict, generated: pd.DataFra
         if report["violations"]:
             report["quality_flags"].append("invalid_individual_feature_domains")
         report["accepted"] = not bool(report["quality_flags"])
+        report["quality_failure_details"] = describe_class_quality_failures(report, settings)  # State actual failed measurements and calibrated limits per class.
         if not report["accepted"]:
             rejecting_classes.append(class_name)
         reports.append(report)
@@ -1810,11 +1872,19 @@ def assess_generated_flow_quality(args: Any, config: Dict, generated: pd.DataFra
     if persist_report:  # Defer on-disk reports until final acceptance or exhausted recovery.
         report_path.parent.mkdir(parents=True, exist_ok=True)  # Ensure the audit destination exists for the final report.
     accepted = invalid_total == 0 and not rejecting_classes
-    result = {"schema_version": 4, "accepted": accepted, "quality_policy_sha256": build_quality_policy_fingerprint(config), "sampling_note": "Bounded screening statistics do not prove synthetic fidelity or downstream classifier utility", "sample_rows_per_class": sample_limit, "nearest_reference_rows": near_limit, "invalid_feature_values": invalid_total, "rejected_classes": rejecting_classes, "classes": reports}  # Version the expanded diagnostics and preserve strict acceptance decisions.
+    result = {"schema_version": 5, "accepted": accepted, "quality_policy_sha256": build_quality_policy_fingerprint(config), "sampling_note": "Bounded screening statistics do not prove synthetic fidelity or downstream classifier utility", "sample_rows_per_class": sample_limit, "nearest_reference_rows": near_limit, "invalid_feature_values": invalid_total, "rejected_classes": rejecting_classes, "classes": reports}  # Version the expanded diagnostics and preserve strict acceptance decisions.
     if persist_report:  # Leave the final quality report untouched during failed or intermediate probes.
         with report_path.open("w", encoding="utf-8") as stream:  # Persist the exact existing report format.
             json.dump(result, stream, indent=2, allow_nan=False)  # Preserve the original metrics and acceptance thresholds.
     print(f"[QUALITY] {'Report' if persist_report else 'Recovery probe'}: {report_path} | accepted={accepted} | invalid values={invalid_total} | flagged classes={rejecting_classes}")  # Surface class-level audit results.
+    if persist_report and rejecting_classes:  # Log actionable measured failure reasons only for the final audited population.
+        explanation = summarize_quality_rejection(result)  # Avoid printing speculative diagnoses for anonymous failed class IDs.
+        print(f"[QUALITY] Strict rejection details for {Path(args.csv_path).name}: {explanation}")
+        if TELEGRAM_BOT is not None:  # Send ONE readable file-level summary, not fifteen candidate-by-candidate notifications.
+            try:
+                send_telegram_message(TELEGRAM_BOT, f"[QUALITY REJECTED] {Path(args.csv_path).name}: {explanation} | Full report: {report_path}")
+            except Exception as notification_error:  # Telegram delivery must not replace or suppress the original quality decision.
+                print(f"[QUALITY] Telegram quality-details notification failed: {notification_error}")
     must_reject = ((bool(invalid_total) and settings.get("reject_invalid", True)) or
                    (bool(rejecting_classes) and settings.get("reject_quality_flags", True)))
     if persist_report and must_reject and settings.get("save_rejected_candidate", True) and getattr(args, "_last_generation_quality_recovery", {}).get("status") != "exhausted":  # Never retain rejected augmented CSVs after the fifteen-attempt recovery workflow.
@@ -1835,7 +1905,7 @@ def assess_generated_flow_quality(args: Any, config: Dict, generated: pd.DataFra
     if enforce and invalid_total and settings.get("reject_invalid", True):  # Keep the existing fail-closed invalid-domain behavior.
         raise ValueError(f"Rejected {invalid_total} invalid network-flow feature values; see {report_path}")  # Preserve the report path for diagnosis.
     if enforce and rejecting_classes and settings.get("reject_quality_flags", True):  # Keep original class-conditional thresholds unchanged.
-        raise ValueError(f"Rejected synthetic output with class-specific fidelity/diversity/relationship failures: {rejecting_classes}; see {report_path}")  # Preserve the original rejection contract.
+        raise ValueError(f"Rejected synthetic output for {rejecting_classes}: {summarize_quality_rejection(result, max_classes=3, max_chars=750)}; see {report_path}")  # Preserve fail-closed quality rejection with measured reasons.
     return result  # Expose unchanged validation evidence to the bounded recovery coordinator.
 
 
