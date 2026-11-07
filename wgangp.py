@@ -116,7 +116,7 @@ psutil = (
 )  # Import psutil if available, otherwise set to None
 
 SAO_PAULO_TIMEZONE_NAME = "America/Sao_Paulo"  # Use Sao Paulo timezone for ETA finish timestamps
-WGANGP_RELEASE_VERSION = "V6.5.15"  # Explain actual strict quality gate failures in full JSON, console, and Telegram.
+WGANGP_RELEASE_VERSION = "V6.5.16"  # Recombine strictly audited per-class populations across independent trials before repair.
 FLOW_PREPROCESSING_CHECKPOINT_TAG = "ConditionalMixedStructuralV654TailKnots"  # Isolate weights trained on the full-class tail-knot representation.
 FLOW_PREPROCESSING_COMPATIBLE_TAGS: tuple[str, ...] = ()  # Earlier V6.5 weights were trained on a different tail encoding and are never resumed.
 QUALITY_SELECTION_POLICY = "priority_moment_swap_v1"  # Identify the bounded mean-first candidate selection policy in output provenance.
@@ -7078,6 +7078,73 @@ def quality_recovery_dataset_rank(report: Dict[str, Any], quality: Dict[str, Any
     return (0 if bool(report.get("accepted")) else 1, int(invalid), int(flags), float(excess), float(worst), float(average))  # Strict acceptance always outranks any rejected output.
 
 
+def rank_quality_recovery_class(entry: Optional[Dict[str, Any]], quality: Dict[str, Any]) -> tuple:
+    """Rank one class against its ACTUAL calibrated quality gates, with strict passes first.
+
+    A complete passing class can be copied as a whole from another independent trial
+    without modifying any of its jointly generated network-flow records.
+    """
+
+    if not entry:  # Never treat absent per-class diagnostics as good quality.
+        return (1, math.inf, math.inf, math.inf, math.inf)
+    structural = sum(int(value) for value in entry.get("violations", {}).values()) + sum(int(value) for value in entry.get("relationship_violations", {}).values())
+    flags = len(entry.get("quality_flags", []))
+    measures = (
+        ("joint_correlation_absolute_difference_mean", float(entry.get("effective_correlation_difference_limit", quality.get("max_correlation_difference", 0.25))), 0.35),
+        ("mean_shift_standardized", float(quality.get("max_mean_shift", 2.0)), 0.25),
+        ("low_variance_feature_fraction", float(quality.get("max_low_variance_fraction", 0.5)), 0.20),
+        ("synthetic_near_duplicate_fraction", max(float(quality.get("max_near_duplicate_fraction", 0.3)), float(entry.get("original_near_duplicate_fraction", 0)) + 0.2), 0.10),
+        ("audited_duplicate_fraction", float(quality.get("max_audited_duplicate_fraction", 0.1)), 0.10),
+    )  # Compare each statistic using the same real-source-adjusted gate applied by the auditor.
+    weighted = excess = weight_total = 0.0
+    for field, limit, weight in measures:
+        measured = entry.get(field)
+        if measured is None:  # The strict auditor independently flags insufficient statistical evidence.
+            continue
+        ratio = float(measured) / max(limit, 1e-12)
+        if not math.isfinite(ratio):
+            ratio = math.inf
+        weighted += weight * ratio
+        excess += max(0.0, ratio - 1.0)
+        weight_total += weight
+    return (0 if bool(entry.get("accepted")) else 1, structural, flags, excess, weighted / weight_total if weight_total else math.inf)
+
+
+def assemble_best_recovery_classes(args: Any, config: Dict, ranked_candidates: list, base: pd.DataFrame, feature_cols: List[str]) -> tuple:
+    """Assemble the strongest independently audited full class from each of fifteen trials.
+
+    No individual flow features are shuffled or reconstructed. A donor is copied only
+    for its entire class, preserving within-row joint distributions, unique records,
+    and exact class quotas. The full strict auditor is rerun on the combination.
+    """
+
+    quality = config.get("quality", {})
+    label_col = args.label_col
+    base_labels = base[label_col].to_numpy()
+    selected = base.copy()
+    class_choices: Dict[str, Dict[str, Any]] = {}
+    for name in [str(value) for value in pd.unique(base_labels)]:
+        ranked = []
+        for _, attempt, path, report in ranked_candidates:
+            entry = next((item for item in report.get("classes", []) if str(item.get("class")) == name), None)
+            ranked.append((rank_quality_recovery_class(entry, quality), attempt, path, entry))
+        best_rank, best_attempt, best_path, best_report = min(ranked, key=lambda item: (item[0], item[1]))
+        if best_report is None:  # Do not silently treat a missing class audit as acceptable.
+            raise RuntimeError(f"Missing audited source class for quality recovery: {name}")
+        class_choices[name] = {"attempt": int(best_attempt), "passed": bool(best_report.get("accepted")), "flags": list(best_report.get("quality_flags", [])), "rank": best_rank}
+        donor = pd.read_pickle(best_path)  # Load one full disk-backed candidate at a time; keep memory bounded.
+        if len(donor) != len(base) or not np.array_equal(donor[label_col].to_numpy(), base_labels):
+            raise RuntimeError(f"Quality recovery trial {best_attempt} has mismatched row ordering or class quotas")
+        mask = base_labels == name
+        selected.loc[selected.index[mask], feature_cols] = donor.loc[donor.index[mask], feature_cols].to_numpy(copy=False)
+        del donor  # Avoid retaining fifteen multi-million-row datasets in memory.
+    if selected[label_col].value_counts().to_dict() != base[label_col].value_counts().to_dict():
+        raise RuntimeError("Classwise recovery changed exact class quotas")
+    if selected.duplicated(subset=list(feature_cols) + [label_col]).any():
+        raise RuntimeError("Classwise recovery introduced duplicate decoded flow records")
+    return selected, class_choices
+
+
 def draw_quality_recovery_dataset(args: Any, G: nn.Module, device: torch.device, template: pd.DataFrame, class_ids: Dict[str, int], scaler: Any, label_encoder: Any, feature_cols: List[str], settings: Dict[str, Any]) -> tuple:
     """Draw a completely fresh unique decoded population for every class in a single trial.
 
@@ -7360,7 +7427,7 @@ def recover_generated_flow_quality(args: Any, config: Dict, generated: pd.DataFr
             candidate.to_pickle(trial_path)  # Keep all fifteen completed population snapshots until ranking is finished.
             report = assess_generated_flow_quality(args, config, candidate, scaler=scaler, label_encoder=label_encoder, persist_report=False, enforce=False)  # Evaluate every complete candidate using unchanged production acceptance rules.
             rank = quality_recovery_dataset_rank(report, quality)  # Compare complete datasets, including every class, on identical reference statistics.
-            trial.update({"accepted": bool(report["accepted"]), "rank": rank, "rejected_classes": list(report.get("rejected_classes", [])), "decision": "strict_pass" if report["accepted"] else "quality_rejected"})  # Save actual quality evidence with no invented scores.
+            trial.update({"accepted": bool(report["accepted"]), "rank": rank, "rejected_classes": list(report.get("rejected_classes", [])), "decision": "strict_pass" if report["accepted"] else "quality_rejected", "failed_metrics": {str(row["class"]): list(row.get("quality_flags", [])) for row in report.get("classes", []) if row.get("quality_flags")}})  # Preserve actual failing metric names per attempt, not merely class labels.
             with (directory / f"data_augmented_attempt_{attempt:02d}.quality.json").open("w", encoding="utf-8") as stream:  # Keep temporary quality references alongside their matching candidate only.
                 json.dump(report, stream, allow_nan=False)  # Preserve complete source-relative quality metrics for ranking and audit.
             record["attempts"].append(trial)  # Retain only bounded path-free trial summaries in final provenance.
@@ -7373,9 +7440,21 @@ def recover_generated_flow_quality(args: Any, config: Dict, generated: pd.DataFr
             record.update({"status": "best_passing_candidate_selected", "selected_attempt": choice, "selected_rank": rank, "passing_candidates": len(accepted), "complete_candidates": len(accepted) + len(rejected)})  # Report the selected accepted trial without referencing deleted files.
         elif rejected:  # Only a population with no passing alternative is eligible for targeted repair.
             rank, choice, path, report = min(rejected, key=lambda row: (row[0], row[1]))  # Select the rejected population nearest to the unchanged quality requirements.
-            chosen = pd.read_pickle(path)  # Start repair from its exact original generator records.
-            record.update({"status": "best_rejected_candidate_selected", "selected_attempt": choice, "selected_rank": rank, "passing_candidates": 0, "complete_candidates": len(rejected)})  # Never mislabel a failing candidate as valid.
-            chosen, report = repair_best_quality_dataset(args, config, chosen, report, G, device, scaler, label_encoder, feature_cols, settings, record, directory)  # Repair only the best rejected population when all fifteen full trials fail.
+            chosen = pd.read_pickle(path)  # Recover a complete rejected dataset with original class ordering.
+            record.update({"status": "best_rejected_candidate_selected", "selected_attempt": choice, "selected_rank": rank, "passing_candidates": 0, "complete_candidates": len(rejected)})
+            chosen, class_choices = assemble_best_recovery_classes(args, config, rejected, chosen, feature_cols)  # Reuse the best audited entire class from ANY trial, including otherwise rejected trials.
+            record["classwise_selection"] = class_choices  # Explain why the selected dataset consists of independent source-class populations.
+            assembled_path = directory / "data_augmented_classwise_assembled.pkl"
+            chosen.to_pickle(assembled_path)  # Store the exact recombined population with the other ephemeral candidates.
+            report = assess_generated_flow_quality(args, config, chosen, scaler=scaler, label_encoder=label_encoder, persist_report=False, enforce=False)
+            with (directory / "data_augmented_classwise_assembled.quality.json").open("w", encoding="utf-8") as stream:
+                json.dump(report, stream, allow_nan=False)  # Keep matching temporary quality evidence inside the auto-cleaned directory.
+            if report["accepted"]:
+                record["status"] = "classwise_combination_strictly_accepted"  # Full-dataset verification supersedes all per-class proxy rankings.
+                print(f"[{WGANGP_RELEASE_VERSION}] Classwise combination passed all strict quality checks without retraining")
+            else:
+                print(f"[{WGANGP_RELEASE_VERSION}] Classwise candidate remains rejected: {summarize_quality_rejection(report, max_classes=4)}; starting bounded targeted repair")
+                chosen, report = repair_best_quality_dataset(args, config, chosen, report, G, device, scaler, label_encoder, feature_cols, settings, record, directory)  # Repair only classes that STILL fail after recombining the best class populations.
         else:  # Every additional trial was incomplete; still preserve the initial candidate for the original rejection report.
             chosen = generated.copy()  # Do not publish any incomplete trial population.
             report = assess_generated_flow_quality(args, config, chosen, scaler=scaler, label_encoder=label_encoder, persist_report=False, enforce=False)  # Preserve strict diagnostic transparency.
@@ -7389,7 +7468,8 @@ def recover_generated_flow_quality(args: Any, config: Dict, generated: pd.DataFr
             with diagnostic_path.open("w", encoding="utf-8") as stream:  # Retain bounded diagnostics when all fifteen attempts fail.
                 json.dump({"status": record["status"], "rejected_classes": final_probe["rejected_classes"], "recovery": record}, stream, indent=2, allow_nan=False)  # Persist no references to private files scheduled for deletion.
         else:  # Selection or targeted repair passed the original auditor exactly.
-            record["status"] = "selected_population_strictly_accepted"  # Preserve factual success for final provenance.
+            if record.get("status") not in {"classwise_combination_strictly_accepted", "targeted_repair_strictly_accepted"}:
+                record["status"] = "selected_population_strictly_accepted"  # Preserve whether recombination or repair achieved strict acceptance.
         record["final_accepted"] = bool(final_probe["accepted"])  # Record actual validation, not a proxy fitness value.
         record["temporary_files_retained"] = 0  # The private context manager deletes every attempt, repair, and matching quality-reference file.
         record["temporary_workspace_policy"] = "ephemeral_isolated_cleanup"  # Do not serialize transient temporary paths in final provenance.
