@@ -116,7 +116,7 @@ psutil = (
 )  # Import psutil if available, otherwise set to None
 
 SAO_PAULO_TIMEZONE_NAME = "America/Sao_Paulo"  # Use Sao Paulo timezone for ETA finish timestamps
-WGANGP_RELEASE_VERSION = "V6.5.20"  # Guarantee balanced same-class examples in training minibatches to activate conditional fidelity losses.
+WGANGP_RELEASE_VERSION = "V6.5.21"  # Enable source-class quantile alignment on adequately balanced minibatches without lowering output quality gates.
 FLOW_PREPROCESSING_CHECKPOINT_TAG = "ConditionalMixedStructuralV654TailKnots"  # Isolate weights trained on the full-class tail-knot representation.
 FLOW_PREPROCESSING_COMPATIBLE_TAGS: tuple[str, ...] = ()  # Earlier V6.5 weights were trained on a different tail encoding and are never resumed.
 QUALITY_SELECTION_POLICY = "priority_moment_swap_v1"  # Identify the bounded mean-first candidate selection policy in output provenance.
@@ -4177,7 +4177,7 @@ def build_class_reference_numeric_quantiles(features: torch.Tensor, labels: np.n
     return targets  # Return only immutable numeric target values.
 
 
-def class_reference_numeric_quantile_loss(fake_x: torch.Tensor, labels: torch.Tensor, targets: Dict[int, tuple], numeric_feature_count: int) -> torch.Tensor:
+def class_reference_numeric_quantile_loss(fake_x: torch.Tensor, labels: torch.Tensor, targets: Dict[int, tuple], numeric_feature_count: int, minimum_class_rows: int = 32) -> torch.Tensor:
     """Match central class quantiles and smoothly estimated 99th-percentile excess.
 
     :param fake_x: Differentiable generator output in the encoded model space.
@@ -4195,7 +4195,7 @@ def class_reference_numeric_quantile_loss(fake_x: torch.Tensor, labels: torch.Te
         selected = labels == int(class_id)  # Preserve class-conditional separation throughout the loss.
         count = int(selected.sum())  # Resolve current class sample size before estimating statistics.
 
-        if count < 32 or numeric_feature_count == 0:  # Avoid noisy minibatch central-quantile estimates.
+        if count < minimum_class_rows or numeric_feature_count == 0:  # Require a configured minimum of real-class-aligned generator rows.
             continue  # Skip classes without enough current synthetic observations.
 
         reference_quantiles, reference_tail_excess, reference_bandwidth = reference_target  # Use stable real-source targets computed before training.
@@ -4308,6 +4308,9 @@ def create_dataset_and_dataloader(args, config: Dict, device: torch.device) -> t
         print(f"[TRAINING] Real source sampler: balanced_batch | classes={len(class_sampler.class_ids)} | "
               f"batch_size={args.batch_size} | guaranteed minimum rows/class/batch={class_minimum} | "
               "source rows sampled with replacement (no synthetic real records)")
+        print(f"[TRAINING] Conditional objectives by minibatch: moment_min=8 | correlation_min=16 | "
+              f"quantile_min=16 | guaranteed_class_rows={class_minimum} | "
+              f"quantile_active={class_minimum >= 16} | correlation_active={class_minimum >= 16}")
         if class_minimum < 16 and float(config.get("training", {}).get("correlation_fidelity_weight", 2.0)) > 0:
             safe_warning(f"Class-balanced batches offer only {class_minimum} rows/class; "
                          "correlation loss requires >=16 same-class rows. Increase --batch_size or reduce the number of classes per file.")
@@ -4850,7 +4853,8 @@ def execute_generator_training_step(G, D, opt_G, scaler, device: torch.device, a
         raise ValueError("quantile_fidelity_weight must be finite and nonnegative")
     if quantile_weight and V64_REFERENCE_NUMERIC_QUANTILES:  # Match independent numeric distributions without modifying output CSV rows.
         numeric_feature_count = int(getattr(args, "_mixed_numeric_feature_count", 0))  # Use the exact numeric prefix from the fitted mixed-type scaler.
-        g_loss = g_loss + quantile_weight * class_reference_numeric_quantile_loss(fake_x, gen_labels, V64_REFERENCE_NUMERIC_QUANTILES, numeric_feature_count)  # Apply class-aligned upper-tail pressure.
+        quantile_minimum = 16 if resolve_training_class_sampler_policy(config or {}) == "balanced_batch" else 32  # Give three- and four-class 64-row batches useful distribution feedback.
+        g_loss = g_loss + quantile_weight * class_reference_numeric_quantile_loss(fake_x, gen_labels, V64_REFERENCE_NUMERIC_QUANTILES, numeric_feature_count, minimum_class_rows=quantile_minimum)  # Preserve the old 32-row requirement for legacy training.
     require_finite_tensor(g_loss, "loss", args, epoch + 1, step + 1, "generator")  # Reject invalid generator loss before backward execution
     opt_G.zero_grad(set_to_none=True)  # Reset generator gradients to None for reduced memory overhead
     if scaler is not None:  # If using mixed precision
