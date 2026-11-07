@@ -116,7 +116,7 @@ psutil = (
 )  # Import psutil if available, otherwise set to None
 
 SAO_PAULO_TIMEZONE_NAME = "America/Sao_Paulo"  # Use Sao Paulo timezone for ETA finish timestamps
-WGANGP_RELEASE_VERSION = "V6.5.19"  # Expose the exact source-scale features behind failed quality mean-shift gates.
+WGANGP_RELEASE_VERSION = "V6.5.20"  # Guarantee balanced same-class examples in training minibatches to activate conditional fidelity losses.
 FLOW_PREPROCESSING_CHECKPOINT_TAG = "ConditionalMixedStructuralV654TailKnots"  # Isolate weights trained on the full-class tail-knot representation.
 FLOW_PREPROCESSING_COMPATIBLE_TAGS: tuple[str, ...] = ()  # Earlier V6.5 weights were trained on a different tail encoding and are never resumed.
 QUALITY_SELECTION_POLICY = "priority_moment_swap_v1"  # Identify the bounded mean-first candidate selection policy in output provenance.
@@ -684,10 +684,13 @@ class ClassAwareFlowSampler(Sampler[int]):
     :return: Bounded-memory sampler exposing one epoch of source-length examples.
     """
 
-    def __init__(self, labels: np.ndarray, seed: int = 42, exponent: float = 0.5):  # Initialize class-balanced real critic sampling.
+    def __init__(self, labels: np.ndarray, seed: int = 42, exponent: float = 0.5, batch_size: Optional[int] = None):  # Optional exact per-minibatch class coverage; None retains legacy sampling.
         self.class_indexes = {}  # Store compact source positions for every attack class.
         self.seed = int(seed)  # Retain reproducible sampling seed.
         self.epoch = 0  # Increment the deterministic epoch stream on every iteration.
+        self.batch_size = int(batch_size) if batch_size is not None else None  # Align sampling blocks with the DataLoader's actual batch boundaries.
+        if self.batch_size is not None and self.batch_size < 2:
+            raise ValueError("Balanced class minibatches require batch_size >= 2")
         self.total = len(labels)  # Preserve original epoch length for progress reporting.
         exponent = float(exponent)  # Normalize configured class prevalence exponent.
         if not 0.0 <= exponent <= 1.0:  # Reject invalid class-balancing policies.
@@ -715,6 +718,25 @@ class ClassAwareFlowSampler(Sampler[int]):
 
         rng = np.random.default_rng(self.seed + self.epoch)  # Use an independent reproducible RNG per epoch.
         self.epoch += 1  # Advance the sampling stream for the next epoch.
+        if self.batch_size is not None:  # Guarantee as many per-class observations as the fixed minibatch size permits.
+            # No synthetic inputs are inserted into training: every yielded index points to an actual source row.
+            # Minority classes are sampled with replacement, as in the prior class-aware sampler.
+            for offset in range(0, self.total, self.batch_size):
+                size = min(self.batch_size, self.total - offset)
+                full, extra = divmod(size, len(self.class_ids))
+                classes = np.repeat(self.class_ids, full)
+                if extra:
+                    classes = np.concatenate((classes, self.class_ids[rng.permutation(len(self.class_ids))[:extra]]))
+                rng.shuffle(classes)  # Avoid class ordering leaking into adversarial/BatchNorm training.
+                positions = np.empty(size, dtype=np.int64)
+                for class_id in self.class_ids:
+                    mask = classes == class_id
+                    count = int(np.count_nonzero(mask))
+                    if count:
+                        rows = self.class_indexes[int(class_id)]
+                        positions[mask] = rows[rng.integers(0, len(rows), size=count)]
+                yield from positions.tolist()
+            return
         for offset in range(0, self.total, 4096):  # Avoid materializing a full epoch of replacement indices.
             count = min(4096, self.total - offset)  # Restrict temporary work to one small batch.
             classes = rng.choice(self.class_ids, size=count, p=self.class_probabilities)  # Draw per-class real samples under the configured weighting policy.
@@ -1481,6 +1503,14 @@ def build_default_runtime_config() -> Dict:
     }  # End runtime configuration dictionary
 
 
+def resolve_training_class_sampler_policy(config: Dict) -> str:
+    """Choose class-balanced training without silently overriding explicit legacy configuration."""
+    policy = str(config.get("training", {}).get("class_sampler_policy", "balanced_batch"))
+    if policy not in {"balanced_batch", "weighted_random"}:
+        raise ValueError("training.class_sampler_policy must be 'balanced_batch' or 'weighted_random'")
+    return policy
+
+
 def build_wgangp_provenance(args: Any) -> Dict:
     """
     Describe source identity and generator training settings without reading large source files.
@@ -1493,6 +1523,10 @@ def build_wgangp_provenance(args: Any) -> Dict:
     source_stat = source.stat() if source is not None else None  # Require an existing source for provenance.
     fields = ("seed", "label_col", "feature_cols", "batch_size", "critic_steps", "lr", "beta1", "beta2", "lambda_gp", "latent_dim", "g_hidden", "d_hidden", "embed_dim", "n_resblocks", "g_leaky_relu_alpha", "d_leaky_relu_alpha", "use_amp")  # Identify settings that affect learned weights.
     settings = {name: getattr(args, name, None) for name in fields}  # Snapshot resolved model and optimization settings.
+    sampler_policy = resolve_training_class_sampler_policy(CONFIG or {})  # Checkpoint identity must change when the actual class-label training distribution changes.
+    if sampler_policy != "weighted_random":  # Preserve byte-for-byte legacy provenance when explicitly retaining the historical sampling policy.
+        settings["class_sampler_policy"] = sampler_policy
+        settings["class_sampler_batch_size"] = int(getattr(args, "batch_size", 64))
     settings["moment_fidelity_weight"] = float((CONFIG or {}).get("training", {}).get("moment_fidelity_weight", 0.10))  # Ensure changed loss settings invalidate checkpoints.
     settings["correlation_fidelity_weight"] = float((CONFIG or {}).get("training", {}).get("correlation_fidelity_weight", 2.0))  # Track joint-fidelity training policy.
     settings["correlation_reference_rows_per_class"] = int((CONFIG or {}).get("training", {}).get("correlation_reference_rows_per_class", 4096))
@@ -1939,6 +1973,7 @@ def build_default_training_and_model_config() -> Dict:
             "beta1": 0.5,  # Adam optimizer beta1 parameter
             "beta2": 0.9,  # Adam optimizer beta2 parameter
             "lambda_gp": 10.0,  # Gradient penalty coefficient
+            "class_sampler_policy": "balanced_batch",  # Guarantee minority classes are represented in each real and generated training minibatch; choose weighted_random for legacy checkpoints.
             "moment_fidelity_weight": 0.10,  # Weight numeric moments and probability-based categorical frequencies against the adversarial objective.
             "moment_reference_rows_per_class": 4096,  # Stable real source samples per class for mean and variance targets.
             "quantile_fidelity_weight": 0.15,  # Modest numeric quantile penalty for class-conditional median and tail fidelity.
@@ -4264,9 +4299,21 @@ def create_dataset_and_dataloader(args, config: Dict, device: torch.device) -> t
 
     if len(dataset) < args.batch_size or args.batch_size < 2:  # Reject empty training epochs and BatchNorm-incompatible batches.
         raise ValueError("Training requires 2 <= batch_size <= usable source rows")  # Stop before saving untrained models as completed epochs.
-    class_sampler = ClassAwareFlowSampler(dataset.labels, seed=int(getattr(args, "seed", 42)), exponent=float(config.get("quality", {}).get("class_sampling_exponent", 0.5)))  # Improve real-class exposure for imbalanced attack data.
-    print(f"[TRAINING] Real class sampler: prevalence exponent={config.get('quality', {}).get('class_sampling_exponent', 0.5)} | Classes={len(class_sampler.class_ids)}")  # Record sampling strategy for reproducibility.
-    report_training_class_coverage(class_sampler, int(args.batch_size), getattr(dataset.label_encoder, "classes_", None), bool(float(config.get("training", {}).get("correlation_fidelity_weight", 2.0)) > 0))  # Surface underrepresented losses before expensive training without changing weights.
+    sampler_policy = resolve_training_class_sampler_policy(config)
+    class_sampler = ClassAwareFlowSampler(dataset.labels, seed=int(getattr(args, "seed", 42)),
+                                          exponent=float(config.get("quality", {}).get("class_sampling_exponent", 0.5)),
+                                          batch_size=(int(args.batch_size) if sampler_policy == "balanced_batch" else None))
+    class_minimum = int(args.batch_size) // len(class_sampler.class_ids)
+    if sampler_policy == "balanced_batch":
+        print(f"[TRAINING] Real source sampler: balanced_batch | classes={len(class_sampler.class_ids)} | "
+              f"batch_size={args.batch_size} | guaranteed minimum rows/class/batch={class_minimum} | "
+              "source rows sampled with replacement (no synthetic real records)")
+        if class_minimum < 16 and float(config.get("training", {}).get("correlation_fidelity_weight", 2.0)) > 0:
+            safe_warning(f"Class-balanced batches offer only {class_minimum} rows/class; "
+                         "correlation loss requires >=16 same-class rows. Increase --batch_size or reduce the number of classes per file.")
+    else:
+        print(f"[TRAINING] Real source sampler: weighted_random | prevalence exponent={config.get('quality', {}).get('class_sampling_exponent', 0.5)} | Classes={len(class_sampler.class_ids)}")
+        report_training_class_coverage(class_sampler, int(args.batch_size), getattr(dataset.label_encoder, "classes_", None), bool(float(config.get("training", {}).get("correlation_fidelity_weight", 2.0)) > 0))
     dataloader = DataLoader(
         dataset,  # Dataset object to load data from
         batch_size=args.batch_size,  # Batch size for training
