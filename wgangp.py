@@ -116,7 +116,7 @@ psutil = (
 )  # Import psutil if available, otherwise set to None
 
 SAO_PAULO_TIMEZONE_NAME = "America/Sao_Paulo"  # Use Sao Paulo timezone for ETA finish timestamps
-WGANGP_RELEASE_VERSION = "V6.5.16"  # Recombine strictly audited per-class populations across independent trials before repair.
+WGANGP_RELEASE_VERSION = "V6.5.17"  # Use bounded per-batch decoded uniqueness tracking and explicit recovery budgets.
 FLOW_PREPROCESSING_CHECKPOINT_TAG = "ConditionalMixedStructuralV654TailKnots"  # Isolate weights trained on the full-class tail-knot representation.
 FLOW_PREPROCESSING_COMPATIBLE_TAGS: tuple[str, ...] = ()  # Earlier V6.5 weights were trained on a different tail encoding and are never resumed.
 QUALITY_SELECTION_POLICY = "priority_moment_swap_v1"  # Identify the bounded mean-first candidate selection policy in output provenance.
@@ -1975,7 +1975,7 @@ def build_default_training_and_model_config() -> Dict:
             "quality_recovery_max_rounds": 15,  # Maintain the legacy maximum while the new fifteen-population policy uses its own setting.
             "quality_recovery_full_candidates": 15,  # Evaluate fifteen independent complete augmented populations, including the initial output.
             "quality_recovery_max_draw_multiplier": 3.0,  # Bound total recovery draws relative to each failing class quota.
-            "quality_recovery_max_draw_rows_per_class": 4000000,  # Bound recovery draws for very large source classes.
+            "quality_recovery_max_draw_rows_per_class": 8000000,  # Permit meaningful duplicate refill for >3M-flow classes while retaining a finite per-class draw cap.
             "quality_recovery_batch_rows": 32768,  # Bound each decoded candidate batch and memory spikes.
             "quality_recovery_max_repairs": 24,  # Bound smaller quality-guided repair attempts after complete regeneration.
             "quality_recovery_repair_fraction": 0.02,  # Replace at most two percent of a failing class during each repair.
@@ -7021,7 +7021,7 @@ def resolve_quality_recovery_settings(config: Dict) -> Dict[str, Any]:
     """
 
     generation = config.get("generation", {})  # Read recovery controls from the ordinary generation configuration.
-    settings = {"enabled": bool(generation.get("quality_recovery_enabled", True)), "max_rounds": int(generation.get("quality_recovery_full_candidates", 15)), "draw_multiplier": float(generation.get("quality_recovery_max_draw_multiplier", 3.0)), "max_draw_rows": int(generation.get("quality_recovery_max_draw_rows_per_class", 4000000)), "batch_rows": int(generation.get("quality_recovery_batch_rows", 32768)), "max_repairs": int(generation.get("quality_recovery_max_repairs", 24)), "repair_fraction": float(generation.get("quality_recovery_repair_fraction", 0.02)), "repair_batch_rows": int(generation.get("quality_recovery_repair_batch_rows", 32768))}  # Separate strictly bounded recovery settings from model-training settings.
+    settings = {"enabled": bool(generation.get("quality_recovery_enabled", True)), "max_rounds": int(generation.get("quality_recovery_full_candidates", 15)), "draw_multiplier": float(generation.get("quality_recovery_max_draw_multiplier", 3.0)), "max_draw_rows": int(generation.get("quality_recovery_max_draw_rows_per_class", 8000000)), "batch_rows": int(generation.get("quality_recovery_batch_rows", 32768)), "max_repairs": int(generation.get("quality_recovery_max_repairs", 24)), "repair_fraction": float(generation.get("quality_recovery_repair_fraction", 0.02)), "repair_batch_rows": int(generation.get("quality_recovery_repair_batch_rows", 32768))}  # Separate strictly bounded recovery settings from model-training settings.
     if settings["max_rounds"] < 0 or settings["max_rounds"] > 15 or not np.isfinite(settings["draw_multiplier"]) or not 1.0 <= settings["draw_multiplier"] <= 20.0 or settings["max_draw_rows"] < 1 or settings["batch_rows"] < 1 or not 0 <= settings["max_repairs"] <= 100 or not np.isfinite(settings["repair_fraction"]) or not 0.0 < settings["repair_fraction"] <= 0.25 or settings["repair_batch_rows"] < 1:  # Refuse invalid or unbounded recovery configurations.
         raise ValueError("Quality recovery requires rounds in [0,15], repairs in [0,100], repair fraction in (0,0.25], multiplier in [1,20], and positive draw/batch limits")  # Prevent unsafe loops and overflow.
     return settings  # Return the complete bounded policy.
@@ -7178,6 +7178,41 @@ def draw_quality_recovery_dataset(args: Any, G: nn.Module, device: torch.device,
         raise RuntimeError("Independent recovery attempt changed sample quotas or introduced duplicates")  # Refuse an internally corrupt population.
     return population, draws, duplicates  # Provide one independent full dataset for disk-backed audit.
 
+def hash_canonical_decoded_rows(frame: pd.DataFrame, identity: List[str]) -> np.ndarray:
+    """Hash decoded full rows with the same numeric signed-zero rule as the final auditor."""
+
+    block = frame.loc[:, identity].copy()
+    for feature in block.select_dtypes(include=[np.number]).columns:
+        block[feature] = block[feature].astype(np.float64)  # Equal float32/float64 values must hash identically.
+        values = block[feature]
+        block.loc[values == 0, feature] = 0.0
+    return pd.util.hash_pandas_object(block, index=False).to_numpy(dtype=np.uint64)
+
+
+def take_unique_decoded_batch(frame: pd.DataFrame, identity: List[str], hashes_seen: set, required: int) -> pd.DataFrame:
+    """Accept at most required never-before-seen complete decoded flows in original draw order.
+
+    The same 64-bit pandas row hash is used by the production full-class duplicate
+    auditor. Potential hash collisions reject extra rows rather than admitting
+    duplicates. This avoids repeatedly concatenating and deduplicating an entire
+    multi-million-row DataFrame for every new 32K candidate batch.
+    """
+
+    if required < 1 or frame.empty:
+        return frame.iloc[:0]
+    signatures = hash_canonical_decoded_rows(frame, identity)
+    selected = []
+    for index, signature in enumerate(signatures):
+        token = int(signature)
+        if token in hashes_seen:
+            continue
+        hashes_seen.add(token)
+        selected.append(index)
+        if len(selected) >= required:
+            break
+    return frame.iloc[selected].copy()
+
+
 def draw_quality_recovery_class(args: Any, G: nn.Module, device: torch.device, class_id: int, quota: int, scaler: Any, label_encoder: Any, feature_cols: List[str], budget: int, batch_rows: int) -> tuple:
     """Draw exactly one fresh unique decoded class or stop at the remaining finite draw budget.
 
@@ -7195,25 +7230,28 @@ def draw_quality_recovery_class(args: Any, G: nn.Module, device: torch.device, c
     """
 
     identity = list(feature_cols) + [args.label_col]  # Deduplicate the same decoded columns as normal generation.
-    accepted = None  # Accumulate only one class's candidate rows at a time.
-    draws = duplicates = stagnant = 0  # Track exact budget and failure of learned unique support.
-    while draws < budget and (accepted is None or len(accepted) < quota):  # Stop on exact quota or exhaustion, never run indefinitely.
-        remaining = quota - (0 if accepted is None else len(accepted))  # Request only the outstanding class deficit.
-        batch = min(batch_rows, remaining, budget - draws)  # Bound decoding and candidate draws independently of the class size.
-        if batch <= 0:  # Stop when every permitted draw is exhausted.
-            break  # Preserve the previous accepted synthetic CSV.
-        generated = decode_candidate_frame(args, G, device, np.full(batch, class_id, dtype=np.int64), scaler, label_encoder, feature_cols)  # Use only the trained generator's decoded samples.
-        prior = 0 if accepted is None else len(accepted)  # Count unique records before this refill batch.
-        accepted = (generated if accepted is None else pd.concat((accepted, generated), ignore_index=True, copy=False)).drop_duplicates(subset=identity, keep="first").reset_index(drop=True)  # Deduplicate after complete network-flow reconstruction.
-        if len(accepted) > quota:  # Do not permit a larger class than requested.
-            accepted = accepted.iloc[:quota].copy()  # Retain only the class-specific requested quota.
-        gained = len(accepted) - prior  # Count newly usable unique samples.
-        draws += batch  # Account for all sampled candidates.
-        duplicates += batch - gained  # Report exact duplicates removed during recovery.
-        stagnant = stagnant + 1 if gained == 0 else 0  # Detect insufficient unique generator support.
-        if stagnant >= 3:  # Stop after repeated nonproductive draws.
-            break  # Never spin forever on a collapsed generator.
-    return (accepted if accepted is not None and len(accepted) == quota else None), draws, duplicates  # Require a complete class population for recovery.
+    chunks = []  # Append each bounded unique block only once; never rehash all previous generated rows.
+    seen = set()  # Track complete decoded-row identities using the same canonical hash as the final auditor.
+    count = draws = duplicates = stagnant = 0
+    while draws < budget and count < quota:
+        remaining = quota - count
+        batch = min(batch_rows, remaining, budget - draws)
+        if batch <= 0:
+            break
+        generated = decode_candidate_frame(args, G, device, np.full(batch, class_id, dtype=np.int64), scaler, label_encoder, feature_cols)
+        unique = take_unique_decoded_batch(generated, identity, seen, remaining)
+        gained = len(unique)
+        if gained:
+            chunks.append(unique)
+            count += gained
+        draws += batch
+        duplicates += batch - gained
+        stagnant = stagnant + 1 if gained == 0 else 0
+        if stagnant >= 3:
+            break
+    if count != quota:
+        return None, draws, duplicates  # Never publish an incomplete class quota.
+    return pd.concat(chunks, ignore_index=True, copy=False), draws, duplicates  # Join only once after uniqueness is guaranteed.
 
 
 
@@ -7282,22 +7320,30 @@ def draw_quality_repair_population(args: Any, G: nn.Module, device: torch.device
     identity = list(feature_cols) + [args.label_col]  # Use exactly the established decoded flow identity.
     retained = existing.drop(existing.index[positions]).reset_index(drop=True)  # Exclude only the designated replaceable rows.
     wanted = len(existing)  # Keep the original complete class quota.
-    collected = retained  # Start with all unreplaced complete network-flow records.
-    draws = duplicates = stagnant = 0  # Accumulate actual inference and rejected uniqueness work.
-    while len(collected) < wanted and draws < budget:  # Retry only the missing replacement fraction.
-        batch = min(batch_rows, budget - draws, wanted - len(collected))  # Bound inference by the remaining quota and budget.
-        if batch < 1:  # Stop when no further inference is permitted.
-            break  # Never spin on empty refill attempts.
-        fresh = decode_candidate_frame(args, G, device, np.full(batch, class_id, dtype=np.int64), scaler, label_encoder, feature_cols)  # Draw unmodified new network-flow records.
-        before = len(collected)  # Measure exact usable unique rows before insertion.
-        collected = pd.concat((collected, fresh), ignore_index=True, copy=False).drop_duplicates(subset=identity, keep="first").iloc[:wanted].reset_index(drop=True)  # Deduplicate against all retained rows after decoding.
-        draws += batch  # Include duplicate and accepted draws in the fixed budget.
-        gained = len(collected) - before  # Identify net unique replacement records.
-        duplicates += batch - gained  # Account for every duplicate rejected after decoding.
-        stagnant = stagnant + 1 if gained == 0 else 0  # Detect insufficient additional generator support.
-        if stagnant >= 4:  # Stop after repeated no-progress draws.
-            break  # Preserve the incomplete candidate only in local transient memory.
-    return (collected if len(collected) == wanted else None), draws, duplicates  # Never return a partial class as a complete population.
+    seen = set()  # Keep hash memory bounded independently of the source class size.
+    for offset in range(0, len(retained), 65536):
+        seen.update(int(value) for value in hash_canonical_decoded_rows(retained.iloc[offset:offset + 65536], identity))  # Normalize original and fresh float widths consistently.
+    chunks = [retained]
+    count = len(retained)
+    draws = duplicates = stagnant = 0
+    while count < wanted and draws < budget:
+        batch = min(batch_rows, budget - draws, wanted - count)
+        if batch < 1:
+            break
+        fresh = decode_candidate_frame(args, G, device, np.full(batch, class_id, dtype=np.int64), scaler, label_encoder, feature_cols)
+        unique = take_unique_decoded_batch(fresh, identity, seen, wanted - count)
+        gained = len(unique)
+        if gained:
+            chunks.append(unique)
+            count += gained
+        draws += batch
+        duplicates += batch - gained
+        stagnant = stagnant + 1 if gained == 0 else 0
+        if stagnant >= 4:
+            break
+    if count != wanted:
+        return None, draws, duplicates  # Preserve the original complete class when refill is insufficient.
+    return pd.concat(chunks, ignore_index=True, copy=False), draws, duplicates
 
 
 def repair_best_quality_dataset(args: Any, config: Dict, selected: pd.DataFrame, report: Dict[str, Any], G: nn.Module, device: torch.device, scaler: Any, label_encoder: Any, feature_cols: List[str], settings: Dict[str, Any], record: Dict[str, Any], directory: Path) -> tuple:
@@ -7392,7 +7438,8 @@ def recover_generated_flow_quality(args: Any, config: Dict, generated: pd.DataFr
     """
 
     settings = resolve_quality_recovery_settings(config)  # Validate bounded trial and repair configuration before drawing anything.
-    record = {"policy": "fifteen_independent_complete_candidates_v1", "settings": settings, "candidate_draws": 0, "duplicates_rejected": 0, "attempts": [], "repairs": [], "selected_attempt": None, "status": "pending"}  # Preserve per-trial metrics without persistent temporary-file paths.
+    print(f"[{WGANGP_RELEASE_VERSION}] Quality recovery: up to {settings['max_rounds']} independent complete candidates; per-class budget=min({settings['max_draw_rows']}, ceil(quota*{settings['draw_multiplier']})); repairs={settings['max_repairs']}")
+    record = {"policy": "fifteen_independent_complete_candidates_plus_classwise_v2", "settings": settings, "candidate_draws": 0, "duplicates_rejected": 0, "attempts": [], "repairs": [], "selected_attempt": None, "status": "pending"}  # Preserve per-trial metrics without persistent temporary-file paths.
     args._last_generation_quality_recovery = record  # Expose accurate generation provenance for the selected final result.
     if not settings["enabled"] or not settings["max_rounds"]:  # Preserve existing explicit disable behavior.
         record["status"] = "disabled"  # Explain why no independent reruns were requested.
@@ -7419,6 +7466,7 @@ def recover_generated_flow_quality(args: Any, config: Dict, generated: pd.DataFr
             trial = {"attempt": attempt, "draws": draws, "duplicates_rejected": duplicates, "complete": candidate is not None}  # Record all attempts, including failed completion.
             if candidate is None:  # Generator may lack the unique support needed for one or more classes.
                 trial["decision"] = "incomplete_unique_population"  # Never audit incomplete samples as passing.
+                trial["possible_causes"] = "decoded duplicate exhaustion or per-class draw budget; inspect quality_recovery_max_draw_rows_per_class and model uniqueness"
                 record["attempts"].append(trial)  # Keep finite diagnostic evidence without creating misleading files.
                 continue  # Continue independent trials until the full configured attempt count is exhausted.
             if candidate[args.label_col].value_counts().to_dict() != expected or candidate.duplicated(subset=feature_cols + [args.label_col]).any():  # Require exact class quotas and globally unique decoded rows.
