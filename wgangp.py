@@ -116,7 +116,7 @@ psutil = (
 )  # Import psutil if available, otherwise set to None
 
 SAO_PAULO_TIMEZONE_NAME = "America/Sao_Paulo"  # Use Sao Paulo timezone for ETA finish timestamps
-WGANGP_RELEASE_VERSION = "V6.5.17"  # Use bounded per-batch decoded uniqueness tracking and explicit recovery budgets.
+WGANGP_RELEASE_VERSION = "V6.5.18"  # Try bounded whole-flow class mixing and warn when minority-class training losses are underrepresented.
 FLOW_PREPROCESSING_CHECKPOINT_TAG = "ConditionalMixedStructuralV654TailKnots"  # Isolate weights trained on the full-class tail-knot representation.
 FLOW_PREPROCESSING_COMPATIBLE_TAGS: tuple[str, ...] = ()  # Earlier V6.5 weights were trained on a different tail encoding and are never resumed.
 QUALITY_SELECTION_POLICY = "priority_moment_swap_v1"  # Identify the bounded mean-first candidate selection policy in output provenance.
@@ -1980,6 +1980,7 @@ def build_default_training_and_model_config() -> Dict:
             "quality_recovery_max_repairs": 24,  # Bound smaller quality-guided repair attempts after complete regeneration.
             "quality_recovery_repair_fraction": 0.02,  # Replace at most two percent of a failing class during each repair.
             "quality_recovery_repair_batch_rows": 32768,  # Bound replacement and audit work for targeted repairs.
+            "quality_recovery_max_class_blends": 6,  # Search a few source-faithful mixtures of existing generator draws before spending more GPU time.
             "categorical_temperature": 1.25,  # Use the same positive categorical sampling temperature in training and generation.
             "feature_dim": None,  # Feature dimensionality (None = auto-detect)
             "small_class_threshold": 100,  # Threshold for small class detection
@@ -3916,6 +3917,35 @@ def normalize_args_and_setup_hardware(args: Any, config: Dict) -> tuple:
     return device, training_start_time, file_start_time, epoch_milestones, file_progress_prefix  # Return hardware setup results
 
 
+def report_training_class_coverage(class_sampler: ClassAwareFlowSampler, batch_size: int, classes: Any, correlation_enabled: bool) -> List[str]:
+    """Warn when a class is unlikely to receive enough minibatch examples for a training regularizer.
+
+    The existing moment loss needs >=8 same-class rows; correlation matching needs
+    >=16. Check class-conditional EXPECTED counts before 60 expensive epochs.
+    This function does not modify the critic, sampler, model, or checkpoint.
+    """
+
+    warnings = []
+    for class_id, probability in zip(class_sampler.class_ids, class_sampler.class_probabilities):
+        expected = float(batch_size) * float(probability)
+        name = str(classes[int(class_id)]) if classes is not None else str(class_id)
+        missing = []
+        if expected < 8:
+            missing.append("moment-loss minimum=8")
+        if correlation_enabled and expected < 16:
+            missing.append("correlation-loss minimum=16")
+        if missing:
+            warnings.append(f"{name}: expected {expected:.2f} rows/batch, below {', '.join(missing)}")
+    for warning in warnings:
+        print(f"[TRAINING QUALITY WARNING] {warning}; adjust source-class sampling/batch size only in a separately validated fresh-training experiment")
+    if warnings and TELEGRAM_BOT is not None:
+        try:
+            send_telegram_message(TELEGRAM_BOT, "[TRAINING QUALITY WARNING] Some source classes may rarely contribute to conditional moment/correlation penalties: " + " | ".join(warnings[:5]) + "; check class_sampling_exponent and batch_size before retraining (checkpoint provenance changes)")
+        except Exception as notification_error:
+            print(f"[TRAINING] Coverage diagnostic notification failed: {notification_error}")
+    return warnings
+
+
 def build_class_reference_correlations(features: torch.Tensor, labels: np.ndarray, sample_limit: int = 4096, seed: int = 42) -> Dict[int, tuple]:
     """Fit stable class-conditional correlation targets from *real* encoded training rows.
 
@@ -4225,6 +4255,7 @@ def create_dataset_and_dataloader(args, config: Dict, device: torch.device) -> t
         raise ValueError("Training requires 2 <= batch_size <= usable source rows")  # Stop before saving untrained models as completed epochs.
     class_sampler = ClassAwareFlowSampler(dataset.labels, seed=int(getattr(args, "seed", 42)), exponent=float(config.get("quality", {}).get("class_sampling_exponent", 0.5)))  # Improve real-class exposure for imbalanced attack data.
     print(f"[TRAINING] Real class sampler: prevalence exponent={config.get('quality', {}).get('class_sampling_exponent', 0.5)} | Classes={len(class_sampler.class_ids)}")  # Record sampling strategy for reproducibility.
+    report_training_class_coverage(class_sampler, int(args.batch_size), getattr(dataset.label_encoder, "classes_", None), bool(float(config.get("training", {}).get("correlation_fidelity_weight", 2.0)) > 0))  # Surface underrepresented losses before expensive training without changing weights.
     dataloader = DataLoader(
         dataset,  # Dataset object to load data from
         batch_size=args.batch_size,  # Batch size for training
@@ -7021,9 +7052,9 @@ def resolve_quality_recovery_settings(config: Dict) -> Dict[str, Any]:
     """
 
     generation = config.get("generation", {})  # Read recovery controls from the ordinary generation configuration.
-    settings = {"enabled": bool(generation.get("quality_recovery_enabled", True)), "max_rounds": int(generation.get("quality_recovery_full_candidates", 15)), "draw_multiplier": float(generation.get("quality_recovery_max_draw_multiplier", 3.0)), "max_draw_rows": int(generation.get("quality_recovery_max_draw_rows_per_class", 8000000)), "batch_rows": int(generation.get("quality_recovery_batch_rows", 32768)), "max_repairs": int(generation.get("quality_recovery_max_repairs", 24)), "repair_fraction": float(generation.get("quality_recovery_repair_fraction", 0.02)), "repair_batch_rows": int(generation.get("quality_recovery_repair_batch_rows", 32768))}  # Separate strictly bounded recovery settings from model-training settings.
-    if settings["max_rounds"] < 0 or settings["max_rounds"] > 15 or not np.isfinite(settings["draw_multiplier"]) or not 1.0 <= settings["draw_multiplier"] <= 20.0 or settings["max_draw_rows"] < 1 or settings["batch_rows"] < 1 or not 0 <= settings["max_repairs"] <= 100 or not np.isfinite(settings["repair_fraction"]) or not 0.0 < settings["repair_fraction"] <= 0.25 or settings["repair_batch_rows"] < 1:  # Refuse invalid or unbounded recovery configurations.
-        raise ValueError("Quality recovery requires rounds in [0,15], repairs in [0,100], repair fraction in (0,0.25], multiplier in [1,20], and positive draw/batch limits")  # Prevent unsafe loops and overflow.
+    settings = {"enabled": bool(generation.get("quality_recovery_enabled", True)), "max_rounds": int(generation.get("quality_recovery_full_candidates", 15)), "draw_multiplier": float(generation.get("quality_recovery_max_draw_multiplier", 3.0)), "max_draw_rows": int(generation.get("quality_recovery_max_draw_rows_per_class", 8000000)), "batch_rows": int(generation.get("quality_recovery_batch_rows", 32768)), "max_repairs": int(generation.get("quality_recovery_max_repairs", 24)), "repair_fraction": float(generation.get("quality_recovery_repair_fraction", 0.02)), "repair_batch_rows": int(generation.get("quality_recovery_repair_batch_rows", 32768)), "max_class_blends": int(generation.get("quality_recovery_max_class_blends", 6))}  # Separate strictly bounded recovery settings from model-training settings.
+    if settings["max_rounds"] < 0 or settings["max_rounds"] > 15 or not np.isfinite(settings["draw_multiplier"]) or not 1.0 <= settings["draw_multiplier"] <= 20.0 or settings["max_draw_rows"] < 1 or settings["batch_rows"] < 1 or not 0 <= settings["max_repairs"] <= 100 or not np.isfinite(settings["repair_fraction"]) or not 0.0 < settings["repair_fraction"] <= 0.25 or settings["repair_batch_rows"] < 1 or not 0 <= settings["max_class_blends"] <= 32:  # Refuse invalid or unbounded recovery configurations.
+        raise ValueError("Quality recovery requires rounds in [0,15], repairs in [0,100], blends in [0,32], repair fraction in (0,0.25], multiplier in [1,20], and positive draw/batch limits")  # Prevent unsafe loops and overflow.
     return settings  # Return the complete bounded policy.
 
 
@@ -7346,6 +7377,76 @@ def draw_quality_repair_population(args: Any, G: nn.Module, device: torch.device
     return pd.concat(chunks, ignore_index=True, copy=False), draws, duplicates
 
 
+def blend_rejected_class_populations(args: Any, config: Dict, current: pd.DataFrame, report: Dict[str, Any], ranked_candidates: list, feature_cols: List[str], settings: Dict[str, Any], record: Dict[str, Any], directory: Path, scaler: Any, label_encoder: Any) -> tuple:
+    """Try bounded mixtures of WHOLE generator-created rows from independent trial populations.
+
+    This cannot correct a systematically bad generator, but some otherwise rejected
+    populations contain complementary real-like modes. Mixing copies complete rows
+    only; never invents individual feature values or relaxes original thresholds.
+    """
+
+    record["blends"] = []
+    max_trials = int(settings["max_class_blends"])
+    if max_trials < 1:
+        return current, report
+    best = current
+    best_report = report
+    best_rank = quality_recovery_dataset_rank(report, config.get("quality", {}))
+    label_col = args.label_col
+    rng = np.random.default_rng(int(getattr(args, "seed", 42)) + 20117)  # Stable proposal stream, independent of torch RNG.
+    for entry in report.get("classes", []):
+        if not entry.get("quality_flags"):
+            continue  # Never disturb classes that already passed strict quality checks.
+        name = str(entry["class"])
+        expected_positions = np.flatnonzero(best[label_col].to_numpy() == name)
+        if not len(expected_positions):
+            continue
+        excluded = record.get("classwise_selection", {}).get(name, {}).get("attempt")
+        donors = []
+        for _, attempt, path, donor_report in ranked_candidates:
+            if attempt == excluded:
+                continue
+            donor_entry = next((row for row in donor_report.get("classes", []) if str(row.get("class")) == name), None)
+            donors.append((rank_quality_recovery_class(donor_entry, config.get("quality", {})), attempt, path))
+        donors.sort(key=lambda item: (item[0], item[1]))
+        for _, donor_attempt, path in donors[:3]:  # Do not repeatedly read low-ranked multi-million-row populations.
+            if len(record["blends"]) >= max_trials:
+                return best, best_report
+            donor = pd.read_pickle(path)
+            if len(donor) != len(best) or not np.array_equal(donor[label_col].to_numpy(), best[label_col].to_numpy()):
+                raise RuntimeError(f"Quality blend donor {donor_attempt} has a mismatched class schema")
+            donor_baseline = best  # Compare all blend fractions against the same pre-donor population, not a moving intermediate result.
+            for fraction in (0.25, 0.50, 0.75):  # Test increasing full-row mixing fractions, never per-feature interpolations.
+                if len(record["blends"]) >= max_trials:
+                    break
+                count = min(len(expected_positions), max(1, int(round(len(expected_positions) * fraction))))
+                selected_positions = np.sort(rng.choice(expected_positions, size=count, replace=False))
+                trial = donor_baseline.copy()
+                trial.loc[trial.index[selected_positions], feature_cols] = donor.loc[donor.index[selected_positions], feature_cols].to_numpy(copy=False)
+                item = {"class": name, "donor_attempt": int(donor_attempt), "fraction": fraction, "rows_exchanged": int(count)}
+                if trial.duplicated(subset=list(feature_cols) + [label_col]).any():
+                    item["decision"] = "rejected_duplicate_decoded_rows"
+                    record["blends"].append(item)
+                    continue  # Never weaken decoded uniqueness to manufacture a passing dataset.
+                trial_report = assess_generated_flow_quality(args, config, trial, scaler=scaler, label_encoder=label_encoder, persist_report=False, enforce=False)
+                rank = quality_recovery_dataset_rank(trial_report, config.get("quality", {}))
+                item.update({"accepted": bool(trial_report.get("accepted")), "rejected_classes": list(trial_report.get("rejected_classes", [])), "rank": rank})
+                if rank < best_rank:
+                    best, best_report, best_rank = trial, trial_report, rank
+                    item["decision"] = "strict_pass" if trial_report["accepted"] else "improved_quality"
+                    trial.to_pickle(directory / "data_augmented_best_blend.pkl")  # Only persist the strongest blend, within the private auto-cleaned workspace.
+                    with (directory / "data_augmented_best_blend.quality.json").open("w", encoding="utf-8") as stream:
+                        json.dump(trial_report, stream, allow_nan=False)
+                else:
+                    item["decision"] = "no_strict_quality_improvement"
+                record["blends"].append(item)
+                if trial_report["accepted"]:
+                    record["status"] = "classwise_blending_strictly_accepted"
+                    return best, best_report
+            del donor  # Release the full donor before opening another snapshot.
+    return best, best_report
+
+
 def repair_best_quality_dataset(args: Any, config: Dict, selected: pd.DataFrame, report: Dict[str, Any], G: nn.Module, device: torch.device, scaler: Any, label_encoder: Any, feature_cols: List[str], settings: Dict[str, Any], record: Dict[str, Any], directory: Path) -> tuple:
     """Repair the best rejected full population with bounded class-specific newly generated row chunks.
 
@@ -7501,8 +7602,11 @@ def recover_generated_flow_quality(args: Any, config: Dict, generated: pd.DataFr
                 record["status"] = "classwise_combination_strictly_accepted"  # Full-dataset verification supersedes all per-class proxy rankings.
                 print(f"[{WGANGP_RELEASE_VERSION}] Classwise combination passed all strict quality checks without retraining")
             else:
-                print(f"[{WGANGP_RELEASE_VERSION}] Classwise candidate remains rejected: {summarize_quality_rejection(report, max_classes=4)}; starting bounded targeted repair")
-                chosen, report = repair_best_quality_dataset(args, config, chosen, report, G, device, scaler, label_encoder, feature_cols, settings, record, directory)  # Repair only classes that STILL fail after recombining the best class populations.
+                print(f"[{WGANGP_RELEASE_VERSION}] Classwise candidate remains rejected: {summarize_quality_rejection(report, max_classes=4)}; searching bounded mixtures of genuine generator-created rows")
+                chosen, report = blend_rejected_class_populations(args, config, chosen, report, rejected, feature_cols, settings, record, directory, scaler, label_encoder)
+                if not report["accepted"]:
+                    print(f"[{WGANGP_RELEASE_VERSION}] Strict quality still rejected after bounded blends: {summarize_quality_rejection(report, max_classes=4)}; starting targeted repair")
+                    chosen, report = repair_best_quality_dataset(args, config, chosen, report, G, device, scaler, label_encoder, feature_cols, settings, record, directory)  # Use generator-only new chunks only if both classwise selection and blending failed.
         else:  # Every additional trial was incomplete; still preserve the initial candidate for the original rejection report.
             chosen = generated.copy()  # Do not publish any incomplete trial population.
             report = assess_generated_flow_quality(args, config, chosen, scaler=scaler, label_encoder=label_encoder, persist_report=False, enforce=False)  # Preserve strict diagnostic transparency.
@@ -7516,7 +7620,7 @@ def recover_generated_flow_quality(args: Any, config: Dict, generated: pd.DataFr
             with diagnostic_path.open("w", encoding="utf-8") as stream:  # Retain bounded diagnostics when all fifteen attempts fail.
                 json.dump({"status": record["status"], "rejected_classes": final_probe["rejected_classes"], "recovery": record}, stream, indent=2, allow_nan=False)  # Persist no references to private files scheduled for deletion.
         else:  # Selection or targeted repair passed the original auditor exactly.
-            if record.get("status") not in {"classwise_combination_strictly_accepted", "targeted_repair_strictly_accepted"}:
+            if record.get("status") not in {"classwise_combination_strictly_accepted", "classwise_blending_strictly_accepted", "targeted_repair_strictly_accepted"}:
                 record["status"] = "selected_population_strictly_accepted"  # Preserve whether recombination or repair achieved strict acceptance.
         record["final_accepted"] = bool(final_probe["accepted"])  # Record actual validation, not a proxy fitness value.
         record["temporary_files_retained"] = 0  # The private context manager deletes every attempt, repair, and matching quality-reference file.
