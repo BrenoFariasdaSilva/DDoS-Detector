@@ -116,7 +116,7 @@ psutil = (
 )  # Import psutil if available, otherwise set to None
 
 SAO_PAULO_TIMEZONE_NAME = "America/Sao_Paulo"  # Use Sao Paulo timezone for ETA finish timestamps
-WGANGP_RELEASE_VERSION = "V6.5.18"  # Try bounded whole-flow class mixing and warn when minority-class training losses are underrepresented.
+WGANGP_RELEASE_VERSION = "V6.5.19"  # Expose the exact source-scale features behind failed quality mean-shift gates.
 FLOW_PREPROCESSING_CHECKPOINT_TAG = "ConditionalMixedStructuralV654TailKnots"  # Isolate weights trained on the full-class tail-knot representation.
 FLOW_PREPROCESSING_COMPATIBLE_TAGS: tuple[str, ...] = ()  # Earlier V6.5 weights were trained on a different tail encoding and are never resumed.
 QUALITY_SELECTION_POLICY = "priority_moment_swap_v1"  # Identify the bounded mean-first candidate selection policy in output provenance.
@@ -1725,7 +1725,18 @@ def assess_generated_flow_quality(args: Any, config: Dict, generated: pd.DataFra
             source_variable = np.std(standardized_original, axis=0) > 1e-4
             observed_variation = np.std(standardized_synthetic[:, source_variable], axis=0)
             real_variation = np.std(standardized_original[:, source_variable], axis=0)
-            mean_shift = float(np.mean(np.abs(np.mean(standardized_synthetic, axis=0))))
+            per_feature_mean_shift = np.abs(np.mean(standardized_synthetic, axis=0))  # Expose which raw network fields drive the strict average mean-shift gate.
+            mean_shift = float(np.mean(per_feature_mean_shift))
+            largest_mean_shifts = np.argsort(per_feature_mean_shift)[::-1][:15]
+            report["largest_standardized_mean_shifts"] = [
+                {"feature": str(numeric_columns[index]),
+                 "reference_mean": float(original_mean[index]),
+                 "generated_mean": float(np.mean(valid_generated[:, index])),
+                 "reference_std": float(original_std[index]),
+                 "normalization_floor_applied": bool(original_std[index] < 1e-5),
+                 "standardized_absolute_mean_shift": float(per_feature_mean_shift[index])}
+                for index in largest_mean_shifts if np.isfinite(per_feature_mean_shift[index])
+            ]  # Diagnostic only: never hide extreme shifts or modify the unchanged fail-closed threshold.
             low_variance = float(np.mean(observed_variation < 0.1 * real_variation)) if len(real_variation) else 0.0
             # Quantify the coverage of common source modes, rather than inferring
             # high fidelity from average standard deviations or t-SNE overlap alone.
@@ -1872,7 +1883,7 @@ def assess_generated_flow_quality(args: Any, config: Dict, generated: pd.DataFra
     if persist_report:  # Defer on-disk reports until final acceptance or exhausted recovery.
         report_path.parent.mkdir(parents=True, exist_ok=True)  # Ensure the audit destination exists for the final report.
     accepted = invalid_total == 0 and not rejecting_classes
-    result = {"schema_version": 5, "accepted": accepted, "quality_policy_sha256": build_quality_policy_fingerprint(config), "sampling_note": "Bounded screening statistics do not prove synthetic fidelity or downstream classifier utility", "sample_rows_per_class": sample_limit, "nearest_reference_rows": near_limit, "invalid_feature_values": invalid_total, "rejected_classes": rejecting_classes, "classes": reports}  # Version the expanded diagnostics and preserve strict acceptance decisions.
+    result = {"schema_version": 6, "accepted": accepted, "quality_policy_sha256": build_quality_policy_fingerprint(config), "sampling_note": "Bounded screening statistics do not prove synthetic fidelity or downstream classifier utility", "sample_rows_per_class": sample_limit, "nearest_reference_rows": near_limit, "invalid_feature_values": invalid_total, "rejected_classes": rejecting_classes, "classes": reports}  # Version the expanded diagnostics and preserve strict acceptance decisions.
     if persist_report:  # Leave the final quality report untouched during failed or intermediate probes.
         with report_path.open("w", encoding="utf-8") as stream:  # Persist the exact existing report format.
             json.dump(result, stream, indent=2, allow_nan=False)  # Preserve the original metrics and acceptance thresholds.
