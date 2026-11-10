@@ -116,7 +116,7 @@ psutil = (
 )  # Import psutil if available, otherwise set to None
 
 SAO_PAULO_TIMEZONE_NAME = "America/Sao_Paulo"  # Use Sao Paulo timezone for ETA finish timestamps
-WGANGP_RELEASE_VERSION = "V6.5.22"  # Vectorize in-memory DataLoader fetches without changing sampled source rows or quality thresholds.
+WGANGP_RELEASE_VERSION = "V6.5.23"  # Amortize redundant optimizer-moment scanning while retaining per-step loss and gradient guards.
 FLOW_PREPROCESSING_CHECKPOINT_TAG = "ConditionalMixedStructuralV654TailKnots"  # Isolate weights trained on the full-class tail-knot representation.
 FLOW_PREPROCESSING_COMPATIBLE_TAGS: tuple[str, ...] = ()  # Earlier V6.5 weights were trained on a different tail encoding and are never resumed.
 QUALITY_SELECTION_POLICY = "priority_moment_swap_v1"  # Identify the bounded mean-first candidate selection policy in output provenance.
@@ -2003,6 +2003,7 @@ def build_default_training_and_model_config() -> Dict:
             "correlation_fidelity_weight": 2.0,  # V6 stable class-reference correlation penalty; 0 disables it.
             "save_every": 5,  # Save checkpoints every N epochs
             "log_interval": 50,  # Log metrics every N steps
+            "optimizer_state_check_interval": 128,  # Scan complete Adam state once per 128 minibatches and at every epoch boundary; leave loss/gradient checks eager.
             "sample_batch": 16,  # Number of samples for fixed noise generation
             "use_amp": False,  # Use automatic mixed precision
             "compile": False,  # Use torch.compile() for faster execution
@@ -3382,6 +3383,19 @@ def require_finite_optimizer_state(optimizer: torch.optim.Optimizer, optimizer_n
                 require_finite_tensor(state_value, f"{optimizer_name}[{parameter_index}].{state_name}", args, epoch, step, optimizer_name)  # Reject invalid optimizer state before use
 
 
+def should_scan_optimizer_state(config: Optional[Dict], batch_step: int) -> bool:
+    """Amortize full Adam-moment scans; every loss, gradient and parameter remains checked each update.
+
+    A disabled interval (1) exactly restores the legacy every-batch policy.
+    For larger intervals, state is still checked at entry, periodically and
+    after every epoch before serializing checkpoints.
+    """
+    interval = int((config or {}).get("training", {}).get("optimizer_state_check_interval", 128))
+    if interval < 1:
+        raise ValueError("training.optimizer_state_check_interval must be >= 1")
+    return int(batch_step) % interval == 0
+
+
 def require_finite_saved_state(saved_state: Any, state_name: str, args: Any, epoch: int, component: str) -> None:
     """
     Require every numeric value in a saved training state to be finite.
@@ -4743,7 +4757,8 @@ def execute_discriminator_training_steps(G, D, opt_D, scaler, real_x, labels, de
         require_finite_tensor(real_x, "real_samples", args, epoch + 1, step + 1, component)  # Reject invalid real samples before critic evaluation
         require_finite_tensor(labels, "labels", args, epoch + 1, step + 1, component)  # Reject invalid conditioning labels before critic evaluation
         require_finite_model_state(D, "parameters", args, epoch + 1, step + 1, component)  # Reject invalid critic parameters before backward execution
-        require_finite_optimizer_state(opt_D, f"discriminator_optimizer[{critic_step + 1}]", args, epoch + 1, step + 1)  # Reject invalid critic optimizer state before backward execution
+        if should_scan_optimizer_state(config, step):
+            require_finite_optimizer_state(opt_D, f"discriminator_optimizer[{critic_step + 1}]", args, epoch + 1, step + 1)
         with torch.no_grad(), autocast(device.type, enabled=bool(getattr(args, "use_amp", False))):  # Avoid building generator gradient graphs during critic-only updates.
             z = torch.randn(args.batch_size, args.latent_dim, device=device)  # Sample noise for discriminator step
             fake_x = G(z, labels).detach()  # Generate fake samples and detach for discriminator
@@ -4761,7 +4776,8 @@ def execute_discriminator_training_steps(G, D, opt_D, scaler, real_x, labels, de
         require_finite_model_state(D, "gradients", args, epoch + 1, step + 1, component, gradients=True)  # Reject invalid discriminator gradients before optimizer execution
         opt_D.step()  # Update discriminator parameters with unscaled full-precision gradients
         require_finite_model_state(D, "parameters", args, epoch + 1, step + 1, component)  # Reject invalid discriminator parameters immediately after update
-        require_finite_optimizer_state(opt_D, f"discriminator_optimizer[{critic_step + 1}]", args, epoch + 1, step + 1)  # Reject invalid critic optimizer state immediately after update
+        if should_scan_optimizer_state(config, step):
+            require_finite_optimizer_state(opt_D, f"discriminator_optimizer[{critic_step + 1}]", args, epoch + 1, step + 1)
         d_real_score = d_real.mean()  # Store average real score
         d_fake_score = d_fake.mean()  # Store average fake score
     return loss_D, gp, d_real_score, d_fake_score  # Return discriminator training results
@@ -4848,7 +4864,8 @@ def execute_generator_training_step(G, D, opt_G, scaler, device: torch.device, a
     """
 
     require_finite_model_state(G, "parameters", args, epoch + 1, step + 1, "generator")  # Reject invalid generator parameters before backward execution
-    require_finite_optimizer_state(opt_G, "generator_optimizer", args, epoch + 1, step + 1)  # Reject invalid generator optimizer state before backward execution
+    if should_scan_optimizer_state(config, step):
+        require_finite_optimizer_state(opt_G, "generator_optimizer", args, epoch + 1, step + 1)
     with autocast(device.type, enabled=bool(getattr(args, "use_amp", False))):  # Enable resolved BF16 AMP for generator training
         z = torch.randn(args.batch_size, args.latent_dim, device=device)  # Sample noise for generator step
         gen_labels = real_labels if real_labels is not None else torch.randint(0, n_classes, (args.batch_size,), device=device)  # Align conditioning with real critic classes
@@ -4899,7 +4916,8 @@ def execute_generator_training_step(G, D, opt_G, scaler, device: torch.device, a
         require_finite_model_state(G, "gradients", args, epoch + 1, step + 1, "generator", gradients=True)  # Reject invalid generator gradients before optimizer execution
         opt_G.step()  # Update generator parameters
     require_finite_model_state(G, "parameters", args, epoch + 1, step + 1, "generator")  # Reject invalid generator parameters immediately after update
-    require_finite_optimizer_state(opt_G, "generator_optimizer", args, epoch + 1, step + 1)  # Reject invalid generator optimizer state immediately after update
+    if should_scan_optimizer_state(config, step):
+        require_finite_optimizer_state(opt_G, "generator_optimizer", args, epoch + 1, step + 1)
     return g_loss  # Return generator loss tensor
 
 
@@ -5760,6 +5778,9 @@ def train(args, config: Optional[Dict] = None):
             
             step = run_batch_training_loop(G, D, opt_G, opt_D, scaler, device, args, config, n_classes, pbar, step, metrics_history, total_steps, epoch, training_start_time, file_progress_prefix)  # Execute batch training loop
 
+            # Always verify optimizer moments at an epoch boundary, regardless of the scan interval.
+            require_finite_optimizer_state(opt_G, "generator_optimizer_epoch_end", args, epoch + 1, step)
+            require_finite_optimizer_state(opt_D, "discriminator_optimizer_epoch_end", args, epoch + 1, step)
             args._training_step = step  # Persist the completed batch count before serializing this epoch.
             write_epoch_csv_row(args, config, device, dataset, epoch, epoch_start_time, epoch_milestones, results_csv_writer, results_csv_file, results_cols_cfg, metrics_history, opt_G, opt_D)  # Write epoch CSV row
             save_training_checkpoint(args, config, device, G, D, opt_G, opt_D, scaler, dataset, epoch, metrics_history)  # Save checkpoint if due
