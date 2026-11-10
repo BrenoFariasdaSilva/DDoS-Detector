@@ -116,7 +116,7 @@ psutil = (
 )  # Import psutil if available, otherwise set to None
 
 SAO_PAULO_TIMEZONE_NAME = "America/Sao_Paulo"  # Use Sao Paulo timezone for ETA finish timestamps
-WGANGP_RELEASE_VERSION = "V6.5.25"  # Add per-process GPU pinning with safe fallback across training and checkpoint-based generation.
+WGANGP_RELEASE_VERSION = "V6.5.26"  # Report selected GPU topology and keep pinned training/generation observable.
 FLOW_PREPROCESSING_CHECKPOINT_TAG = "ConditionalMixedStructuralV654TailKnots"  # Isolate weights trained on the full-class tail-knot representation.
 FLOW_PREPROCESSING_COMPATIBLE_TAGS: tuple[str, ...] = ()  # Earlier V6.5 weights were trained on a different tail encoding and are never resumed.
 QUALITY_SELECTION_POLICY = "priority_moment_swap_v1"  # Identify the bounded mean-first candidate selection policy in output provenance.
@@ -4036,16 +4036,17 @@ def normalize_args_and_setup_hardware(args: Any, config: Dict) -> tuple:
     suggested_workers = min(max(1, (os.cpu_count() or 1) // 2), 32)  # Suggest a conservative default for num_workers
     file_progress_prefix = getattr(args, "file_progress_prefix", f"{BackgroundColors.CYAN}[1/1]{Style.RESET_ALL}")  # Build colored prefix (default single-file)
     
-    print(f"[WGANGP RUNTIME] release={WGANGP_RELEASE_VERSION} | visible_cuda_gpus={gpu_count} | effective_training_batch={args.batch_size}")
-    print(f"{BackgroundColors.GREEN}Detected {gpu_count} GPUs.{Style.RESET_ALL}")  # Print GPU count
+    print(f"[WGANGP RUNTIME] release={WGANGP_RELEASE_VERSION} | visible_cuda_gpus={torch.cuda.device_count() if device.type == 'cuda' else 0} | active_cuda_gpus={active_gpu_indices} | device={device} | effective_training_batch={args.batch_size}")
+    print(f"{BackgroundColors.GREEN}Active CUDA GPUs: {active_gpu_indices} (visible: {torch.cuda.device_count() if device.type == 'cuda' else 0}).{Style.RESET_ALL}")  # Distinguish selected cards from visible cards.
     print(f"{BackgroundColors.GREEN}Using DataParallel: {use_dataparallel}{Style.RESET_ALL}")  # Print whether DataParallel will be used
     print(f"{BackgroundColors.GREEN}Batch size: {BackgroundColors.CYAN}{args.batch_size}{Style.RESET_ALL}")  # Print effective batch size after scaling
     print(f"{BackgroundColors.GREEN}Hardware suggested num_workers: {BackgroundColors.CYAN}{suggested_workers}{Style.RESET_ALL}")  # Print hardware-derived worker suggestion
     print(f"{BackgroundColors.GREEN}AMP enabled: {BackgroundColors.CYAN}{args.use_amp}{Style.RESET_ALL}")  # Print AMP usage
     print(f"{BackgroundColors.GREEN}cuDNN benchmark: {BackgroundColors.CYAN}{torch.backends.cudnn.benchmark}{Style.RESET_ALL}")  # Print cuDNN benchmark status
     send_telegram_message(TELEGRAM_BOT, compose_training_start_message(args, file_progress_prefix))  # Telegram start with colored prefix and file statistics
+    send_telegram_message(TELEGRAM_BOT, f"{file_progress_prefix} [GPU] requested_gpu={getattr(args, 'gpu', None)} | training_device={device} | active_cuda_gpus={active_gpu_indices} | DataParallel={use_dataparallel} | effective_batch={args.batch_size}")  # Distinguish concurrent GPU-pinned processes.
 
-    print(f"{BackgroundColors.GREEN}Device: {BackgroundColors.CYAN}{device.type.upper()}{Style.RESET_ALL}")  # Print device type
+    print(f"{BackgroundColors.GREEN}Device: {BackgroundColors.CYAN}{device}{Style.RESET_ALL}")  # Print the actual CUDA index.
     if args.use_amp and device.type == "cuda":  # If AMP enabled and using CUDA
         print(f"{BackgroundColors.GREEN}Using BF16 AMP for generator training without loss scaling; WGAN-GP critic remains FP32{Style.RESET_ALL}")  # Print resolved precision boundary
     if args.compile:  # If torch.compile requested
@@ -6436,7 +6437,7 @@ def normalize_args_and_load_checkpoint(args, config: Dict) -> tuple:
         args.label = int(args.label)  # Ensure label is int
     device = select_wgangp_device(args)  # Honor --gpu when loading a checkpoint and generating samples.
     file_progress_prefix = getattr(args, "file_progress_prefix", f"{BackgroundColors.CYAN}[1/1]{Style.RESET_ALL}")  # Build colored prefix (default single-file)
-    send_telegram_message(TELEGRAM_BOT, f"{file_progress_prefix} Starting WGAN-GP generation from {Path(args.checkpoint).name}")  # Telegram start with colored prefix
+    send_telegram_message(TELEGRAM_BOT, f"{file_progress_prefix} Starting WGAN-GP generation from {Path(args.checkpoint).name} | requested_gpu={getattr(args, 'gpu', None)} | device={device}")  # Include the selected CUDA device in generation telemetry.
     ckpt = torch.load(args.checkpoint, map_location=device, weights_only=False)  # Load checkpoint from disk with sklearn objects
     args_ck = ckpt.get("args", {})  # Retrieve saved arguments from checkpoint
     args._generation_epoch = int(ckpt.get("epoch", 0))  # Store checkpoint epoch for generation diagnostics
@@ -8652,7 +8653,7 @@ def get_hardware_specifications(device_used=None):
         device_used_str = "CPU"  # Default device used label
         try:
             if isinstance(device_used, torch.device) and device_used is not None:  # If a valid torch.device was provided
-                device_used_str = "CUDA" if device_used.type == "cuda" else "CPU"  # Map to human label
+                device_used_str = str(device_used).upper() if device_used.type == "cuda" else "CPU"  # Include the selected CUDA ordinal in hardware metadata.
             else:  # If not a torch.device, try string representation
                 device_used_str = str(device_used)  # Use provided value as string
         except Exception:
