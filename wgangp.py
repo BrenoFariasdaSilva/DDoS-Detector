@@ -116,7 +116,7 @@ psutil = (
 )  # Import psutil if available, otherwise set to None
 
 SAO_PAULO_TIMEZONE_NAME = "America/Sao_Paulo"  # Use Sao Paulo timezone for ETA finish timestamps
-WGANGP_RELEASE_VERSION = "V6.5.21"  # Enable source-class quantile alignment on adequately balanced minibatches without lowering output quality gates.
+WGANGP_RELEASE_VERSION = "V6.5.22"  # Vectorize in-memory DataLoader fetches without changing sampled source rows or quality thresholds.
 FLOW_PREPROCESSING_CHECKPOINT_TAG = "ConditionalMixedStructuralV654TailKnots"  # Isolate weights trained on the full-class tail-knot representation.
 FLOW_PREPROCESSING_COMPATIBLE_TAGS: tuple[str, ...] = ()  # Earlier V6.5 weights were trained on a different tail encoding and are never resumed.
 QUALITY_SELECTION_POLICY = "priority_moment_swap_v1"  # Identify the bounded mean-first candidate selection policy in output provenance.
@@ -860,6 +860,27 @@ class CSVFlowDataset(Dataset):
         """
 
         return self.X[idx], self._labels_tensor[idx]  # Return pre-converted tensor views directly without numpy-to-tensor overhead
+
+    def __getitems__(self, indices):
+        """Fetch a complete minibatch by one tensor gather instead of per-row Python calls.
+
+        When fast batching is disabled, retain PyTorch's expected list-of-records
+        contract. The accelerated DataLoader instead uses collate_prebatched_flow
+        to accept the two already-stacked tensors directly. Neither path changes
+        sampler indices, class proportions, random streams, or numeric values.
+        """
+        if not getattr(self, "_fast_in_memory_batches", False):
+            return [self[index] for index in indices]
+        positions = torch.as_tensor(indices, dtype=torch.long)
+        return (self.X.index_select(0, positions),
+                self._labels_tensor.index_select(0, positions))
+
+
+def collate_prebatched_flow(batch: tuple) -> tuple:
+    """Identity collator for a vectorized CSVFlowDataset.__getitems__ result."""
+    if not isinstance(batch, tuple) or len(batch) != 2:
+        raise TypeError("Expected the pair of tensors returned by vectorized CSVFlowDataset fetching")
+    return batch
 
 
 class ResidualBlockFC(nn.Module):
@@ -2038,6 +2059,7 @@ def build_default_training_and_model_config() -> Dict:
             "pin_memory": True,  # Use pinned memory for faster GPU transfer
             "persistent_workers": True,  # Keep workers alive between epochs
             "prefetch_factor": 2,  # Number of batches to prefetch
+            "fast_in_memory_batches": True,  # Gather complete tensor batches; avoid dozens of DataLoader workers on already-resident data.
         },
     }  # End training and model configuration dictionary
 
@@ -4278,12 +4300,20 @@ def create_dataset_and_dataloader(args, config: Dict, device: torch.device) -> t
         print(f"[{WGANGP_RELEASE_VERSION}] Numeric moments: <= {moment_rows} rows/class; exact categorical frequencies: {len(moments)} classes; moment_fidelity_weight={moment_weight}")  # Distinguish bounded numeric targets from full-source category frequencies.
     num_workers = int(config.get("dataloader", {}).get("num_workers", 8))  # Get base num_workers from config and cast to int
     num_workers_cli_override = bool(config.get("dataloader", {}).get("num_workers_cli_override", False))  # Detect explicit CLI worker precedence
-    if not num_workers_cli_override:  # Auto-adjust workers only when CLI did not override them
-        num_workers = adjust_num_workers_for_file(args.csv_path, num_workers, config)  # Adjust num_workers based on file size and system RAM
-    else:  # Keep explicit CLI worker value unchanged
-        print(f"{BackgroundColors.GREEN}Using explicit num_workers: {BackgroundColors.CYAN}{num_workers}{Style.RESET_ALL}")  # Print deterministic CLI worker value
+    fast_in_memory_batches = bool(config.get("dataloader", {}).get("fast_in_memory_batches", True))
+    dataset._fast_in_memory_batches = fast_in_memory_batches  # Only this DataLoader may select the vectorized __getitems__ contract.
+    if fast_in_memory_batches and not num_workers_cli_override:
+        # All X/labels already reside in CPU torch tensors. Process workers would duplicate
+        # Python batching overhead and contend with the second independent WGAN process.
+        num_workers = 0
+        print(f"[PERFORMANCE] Vectorized in-memory DataLoader: workers=0, batch_size={args.batch_size}; "
+              "class sampler indices and GPU training mathematics unchanged")
+    elif not num_workers_cli_override:
+        num_workers = adjust_num_workers_for_file(args.csv_path, num_workers, config)
+    else:
+        print(f"{BackgroundColors.GREEN}Using explicit num_workers: {BackgroundColors.CYAN}{num_workers}{Style.RESET_ALL}")
     
-    if device.type == "cuda" and num_workers == 0 and not num_workers_cli_override:  # If CUDA available but adjusted workers is 0
+    if device.type == "cuda" and num_workers == 0 and not num_workers_cli_override and not fast_in_memory_batches:  # Legacy loader fallback only
         try:  # Attempt to fetch total RAM to decide whether to raise workers for CUDA
             total_ram_gb = (safe_float(psutil.virtual_memory().total, 0.0) / (1024.0 ** 3)) if psutil is not None else None  # Detect total RAM if psutil available safely
         except Exception:  # If detection fails
@@ -4327,6 +4357,7 @@ def create_dataset_and_dataloader(args, config: Dict, device: torch.device) -> t
         pin_memory=pin_memory,  # Faster CPU->GPU transfer
         persistent_workers=persistent_workers,  # Keep workers alive between epochs
         prefetch_factor=prefetch_factor,  # Prefetch batches for better GPU utilization
+        collate_fn=collate_prebatched_flow if fast_in_memory_batches else None,  # Avoid Python per-record stacking in the accelerated path.
     )  # Create dataloader for batching
 
     return dataset, dataloader  # Return dataset and configured dataloader
