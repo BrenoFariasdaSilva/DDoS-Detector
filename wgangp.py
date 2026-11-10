@@ -116,7 +116,7 @@ psutil = (
 )  # Import psutil if available, otherwise set to None
 
 SAO_PAULO_TIMEZONE_NAME = "America/Sao_Paulo"  # Use Sao Paulo timezone for ETA finish timestamps
-WGANGP_RELEASE_VERSION = "V6.5.23"  # Amortize redundant optimizer-moment scanning while retaining per-step loss and gradient guards.
+WGANGP_RELEASE_VERSION = "V6.5.24"  # Throttle display-only training progress formatting without changing training calculations.
 FLOW_PREPROCESSING_CHECKPOINT_TAG = "ConditionalMixedStructuralV654TailKnots"  # Isolate weights trained on the full-class tail-knot representation.
 FLOW_PREPROCESSING_COMPATIBLE_TAGS: tuple[str, ...] = ()  # Earlier V6.5 weights were trained on a different tail encoding and are never resumed.
 QUALITY_SELECTION_POLICY = "priority_moment_swap_v1"  # Identify the bounded mean-first candidate selection policy in output provenance.
@@ -2004,6 +2004,7 @@ def build_default_training_and_model_config() -> Dict:
             "save_every": 5,  # Save checkpoints every N epochs
             "log_interval": 50,  # Log metrics every N steps
             "optimizer_state_check_interval": 128,  # Scan complete Adam state once per 128 minibatches and at every epoch boundary; leave loss/gradient checks eager.
+            "progress_description_interval": 25,  # Reformat progress messages periodically; leave optimizer and losses unchanged.
             "sample_batch": 16,  # Number of samples for fixed noise generation
             "use_amp": False,  # Use automatic mixed precision
             "compile": False,  # Use torch.compile() for faster execution
@@ -3982,6 +3983,7 @@ def normalize_args_and_setup_hardware(args: Any, config: Dict) -> tuple:
     suggested_workers = min(max(1, (os.cpu_count() or 1) // 2), 32)  # Suggest a conservative default for num_workers
     file_progress_prefix = getattr(args, "file_progress_prefix", f"{BackgroundColors.CYAN}[1/1]{Style.RESET_ALL}")  # Build colored prefix (default single-file)
     
+    print(f"[WGANGP RUNTIME] release={WGANGP_RELEASE_VERSION} | visible_cuda_gpus={gpu_count} | effective_training_batch={args.batch_size}")
     print(f"{BackgroundColors.GREEN}Detected {gpu_count} GPUs.{Style.RESET_ALL}")  # Print GPU count
     print(f"{BackgroundColors.GREEN}Using DataParallel: {use_dataparallel}{Style.RESET_ALL}")  # Print whether DataParallel will be used
     print(f"{BackgroundColors.GREEN}Batch size: {BackgroundColors.CYAN}{args.batch_size}{Style.RESET_ALL}")  # Print effective batch size after scaling
@@ -4994,24 +4996,28 @@ def run_batch_training_loop(G, D, opt_G, opt_D, scaler, device: torch.device, ar
         if step % args.log_interval == 0:  # Extract scalar metrics only at log interval to avoid per-batch CUDA synchronization
             _cached_loss_D, _cached_g_loss, _cached_gp, _cached_d_real, _cached_d_fake = record_training_step_metrics(step, args, metrics_history, loss_D, g_loss, gp, d_real_score, d_fake_score)  # Record metrics and cache scalar values
 
-        completed_global_steps = (epoch * total_steps) + (batch_idx + 1)  # Count completed training batches across all epochs
-        total_global_steps = max(1, int(args.epochs) * int(total_steps))  # Resolve total training batches across all epochs
-        elapsed_seconds = max(0.0, time.time() - float(training_start_time))  # Measure total elapsed wall-clock training time
-        remaining_seconds = ((elapsed_seconds / float(completed_global_steps)) * float(total_global_steps - completed_global_steps)) if completed_global_steps > 0 and total_global_steps > completed_global_steps else 0.0  # Estimate remaining wall-clock time from completed global batch progress
-        finish_suffix = format_estimated_finish_time_suffix(remaining_seconds)  # Format overall estimated finish timestamp once per displayed update
-        pbar.set_description(  # Update tqdm description using cached scalars to avoid CUDA synchronization
-            (
-                f"{getattr(args, 'file_progress_prefix', '')} "  # File progress prefix (may include colored index)
-                f"{BackgroundColors.CYAN}{(Path(getattr(args, 'csv_path', '')).name if getattr(args, 'csv_path', None) else '')}{Style.RESET_ALL} | "  # Current filename
+        progress_interval = int(config.get("training", {}).get("progress_description_interval", 25))
+        if progress_interval < 1:
+            raise ValueError("training.progress_description_interval must be >= 1")
+        if batch_idx == 0 or (batch_idx + 1) % progress_interval == 0 or batch_idx + 1 == total_steps:
+            completed_global_steps = (epoch * total_steps) + (batch_idx + 1)  # Count completed training batches across all epochs
+            total_global_steps = max(1, int(args.epochs) * int(total_steps))  # Resolve total training batches across all epochs
+            elapsed_seconds = max(0.0, time.time() - float(training_start_time))  # Measure total elapsed wall-clock training time
+            remaining_seconds = ((elapsed_seconds / float(completed_global_steps)) * float(total_global_steps - completed_global_steps)) if completed_global_steps > 0 and total_global_steps > completed_global_steps else 0.0  # Estimate remaining wall-clock time from completed global batch progress
+            finish_suffix = format_estimated_finish_time_suffix(remaining_seconds)  # Format overall estimated finish timestamp once per displayed update
+            pbar.set_description(  # Update tqdm description using cached scalars to avoid CUDA synchronization
+                (
+                    f"{getattr(args, 'file_progress_prefix', '')} "  # File progress prefix (may include colored index)
+                    f"{BackgroundColors.CYAN}{(Path(getattr(args, 'csv_path', '')).name if getattr(args, 'csv_path', None) else '')}{Style.RESET_ALL} | "  # Current filename
+                )
+                + f"{BackgroundColors.CYAN}Epoch {epoch+1}/{args.epochs}{Style.RESET_ALL} | "  # Current epoch and total epochs
+                + f"{BackgroundColors.YELLOW}step {batch_idx+1}/{total_steps}{Style.RESET_ALL} | "  # Current batch index and total batches per epoch
+                + f"{BackgroundColors.RED}loss_D: {_cached_loss_D:.4f}{Style.RESET_ALL} | "  # Discriminator loss from cached value
+                + f"{BackgroundColors.GREEN}loss_G: {_cached_g_loss:.4f}{Style.RESET_ALL} | "  # Generator loss from cached value
+                + f"gp: {_cached_gp:.4f} | "  # Gradient penalty from cached value
+                + f"D(real): {_cached_d_real:.4f} | "  # Average critic score on real from cached value
+                + f"D(fake): {_cached_d_fake:.4f}{get_cached_training_resource_suffix()}{finish_suffix}"  # Append cached CPU/RAM/GPU telemetry before the unchanged finish timestamp.
             )
-            + f"{BackgroundColors.CYAN}Epoch {epoch+1}/{args.epochs}{Style.RESET_ALL} | "  # Current epoch and total epochs
-            + f"{BackgroundColors.YELLOW}step {batch_idx+1}/{total_steps}{Style.RESET_ALL} | "  # Current batch index and total batches per epoch
-            + f"{BackgroundColors.RED}loss_D: {_cached_loss_D:.4f}{Style.RESET_ALL} | "  # Discriminator loss from cached value
-            + f"{BackgroundColors.GREEN}loss_G: {_cached_g_loss:.4f}{Style.RESET_ALL} | "  # Generator loss from cached value
-            + f"gp: {_cached_gp:.4f} | "  # Gradient penalty from cached value
-            + f"D(real): {_cached_d_real:.4f} | "  # Average critic score on real from cached value
-            + f"D(fake): {_cached_d_fake:.4f}{get_cached_training_resource_suffix()}{finish_suffix}"  # Append cached CPU/RAM/GPU telemetry before the unchanged finish timestamp.
-        )
 
         step += 1  # Increment global step counter
 
