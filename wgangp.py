@@ -116,7 +116,7 @@ psutil = (
 )  # Import psutil if available, otherwise set to None
 
 SAO_PAULO_TIMEZONE_NAME = "America/Sao_Paulo"  # Use Sao Paulo timezone for ETA finish timestamps
-WGANGP_RELEASE_VERSION = "V6.5.24"  # Throttle display-only training progress formatting without changing training calculations.
+WGANGP_RELEASE_VERSION = "V6.5.25"  # Add per-process GPU pinning with safe fallback across training and checkpoint-based generation.
 FLOW_PREPROCESSING_CHECKPOINT_TAG = "ConditionalMixedStructuralV654TailKnots"  # Isolate weights trained on the full-class tail-knot representation.
 FLOW_PREPROCESSING_COMPATIBLE_TAGS: tuple[str, ...] = ()  # Earlier V6.5 weights were trained on a different tail encoding and are never resumed.
 QUALITY_SELECTION_POLICY = "priority_moment_swap_v1"  # Identify the bounded mean-first candidate selection policy in output provenance.
@@ -1125,6 +1125,7 @@ class ConfigNamespace:
         self.feature_cols = cfg.get("wgangp", {}).get("feature_cols")
         self.seed = int(cfg.get("wgangp", {}).get("seed", 42))  # Cast to int
         self.force_cpu = cfg.get("wgangp", {}).get("force_cpu", False)
+        self.gpu = cfg.get("wgangp", {}).get("gpu", None)  # Optional CUDA device index; None retains the historical automatic multi-GPU mode.
         self.from_scratch = cfg.get("wgangp", {}).get("from_scratch", False)
         self.out_dir = cfg.get("paths", {}).get("out_dir", "outputs")
         self.epochs = int(cfg.get("training", {}).get("epochs", 60))  # Cast to int
@@ -1473,6 +1474,7 @@ def build_default_runtime_config() -> Dict:
             "feature_cols": None,  # List of feature column names (None = use all)
             "seed": 42,  # Random seed for reproducibility
             "force_cpu": False,  # Force CPU usage even if CUDA available
+            "gpu": None,  # Optional zero-based, visible CUDA GPU index; None preserves automatic multi-GPU behavior.
             "from_scratch": False,  # Force training from scratch, ignore checkpoints
             "generating_order": "off",  # Dataset file processing order by file size: "off", "Ascending", or "Descending"
             "execution_mode": "both",  # Execution mode: train, gen, or both for WGANGP
@@ -2505,6 +2507,7 @@ def parse_args():
         p.add_argument("--log_interval", type=int, default=None, help="Log metrics every N steps")  # Add log_interval argument
         p.add_argument("--sample_batch", type=int, default=None, help="Number of samples for fixed noise")  # Add sample_batch argument
         p.add_argument("--force_cpu", action="store_true", help="Force CPU usage")  # Add force_cpu argument
+        p.add_argument("--gpu", type=int, default=None, metavar="N", help="Pin this process to visible CUDA GPU N (zero-based); unavailable N falls back to GPU 0, or CPU if no CUDA")
         p.add_argument("--use_amp", action="store_true", help="Use automatic mixed precision")  # Add use_amp argument
         p.add_argument("--compile", action="store_true", help="Use torch.compile()")  # Add compile argument
         p.add_argument("--from_scratch", action="store_true", help="Train from scratch")  # Add from_scratch argument
@@ -2572,6 +2575,8 @@ def apply_core_cli_overrides(args, overrides: Dict) -> None:
         overrides.setdefault("wgangp", {})["seed"] = args.seed  # Set seed
     if args.force_cpu:  # If force_cpu flag set
         overrides.setdefault("wgangp", {})["force_cpu"] = True  # Enable force_cpu
+    if args.gpu is not None:  # Respect an explicit GPU selection without changing training hyperparameters.
+        overrides.setdefault("wgangp", {})["gpu"] = args.gpu
     if args.from_scratch:  # If from_scratch flag set
         overrides.setdefault("wgangp", {})["from_scratch"] = True  # Enable from_scratch
 
@@ -3924,6 +3929,53 @@ def is_checkpoint_space_available(dataset_dirs: List[str], config: Optional[Dict
         return True  # Default to allowing checkpoint saving when verification fails
 
 
+def select_wgangp_device(args: Any) -> torch.device:
+    """Resolve an optional zero-based CUDA device for all WGAN-GP execution modes.
+
+    A pinned process must not replicate its models onto the other visible GPUs.
+    GPU indexes refer to PyTorch-visible devices (after CUDA_VISIBLE_DEVICES remapping).
+    Without --gpu, retain the prior multi-GPU execution policy.
+    """
+    requested = getattr(args, "gpu", None)
+    if requested is not None:
+        if isinstance(requested, bool):
+            raise ValueError("--gpu must be a nonnegative integer CUDA index")
+        try:
+            parsed = int(requested)
+        except (TypeError, ValueError, OverflowError) as error:
+            raise ValueError("--gpu must be a nonnegative integer CUDA index") from error
+        if parsed < 0 or str(requested).strip() != str(parsed):
+            raise ValueError("--gpu must be a nonnegative integer CUDA index")
+        requested = parsed
+    args._selected_cuda_gpu = None
+    if getattr(args, "force_cpu", False):
+        if requested is not None:
+            print(f"[WGANGP GPU] --force_cpu overrides --gpu {requested}; using CPU")
+        return torch.device("cpu")
+    if not torch.cuda.is_available() or torch.cuda.device_count() == 0:
+        if requested is not None:
+            print(f"[WGANGP GPU] --gpu {requested} requested, but CUDA is unavailable; using CPU")
+        return torch.device("cpu")
+    available = torch.cuda.device_count()
+    selected = requested if requested is not None and requested < available else 0
+    if requested is not None and requested != selected:
+        print(f"[WGANGP GPU] --gpu {requested} unavailable (visible CUDA GPUs: {available}); falling back to GPU {selected}")
+    torch.cuda.set_device(selected)  # Ensure implicit CUDA allocations follow the selected device.
+    args._selected_cuda_gpu = selected
+    if requested is not None:
+        print(f"[WGANGP GPU] Pinned process to cuda:{selected}; DataParallel disabled for this process")
+    return torch.device(f"cuda:{selected}")
+
+
+def active_wgangp_cuda_devices(args: Any, device: torch.device) -> List[int]:
+    """List active CUDA indices; pinned processes have exactly one active GPU."""
+    if device.type != "cuda":
+        return []
+    if getattr(args, "gpu", None) is not None:
+        return [int(device.index)]
+    return list(range(torch.cuda.device_count()))
+
+
 def normalize_args_and_setup_hardware(args: Any, config: Dict) -> tuple:
     """
     Normalize argument types and configure hardware settings for training.
@@ -3955,26 +4007,27 @@ def normalize_args_and_setup_hardware(args: Any, config: Dict) -> tuple:
     args.gen_batch_size = int(args.gen_batch_size)  # Ensure gen_batch_size is int
     args.num_workers = int(args.num_workers)  # Ensure num_workers is int
 
-    device = torch.device(
-        "cuda" if torch.cuda.is_available() and not args.force_cpu else "cpu"
-    )  # Select device for training
+    device = select_wgangp_device(args)  # Honor --gpu for training and in-memory generation.
     training_start_time = time.time()  # Record training session start timestamp
     file_start_time = training_start_time  # Record this file processing start timestamp
     set_seed(args.seed)  # Set random seed for reproducibility
 
-    gpu_count = torch.cuda.device_count() if (torch.cuda.is_available() and not args.force_cpu) else 0  # Detect number of CUDA devices available
-    use_dataparallel = gpu_count > 1  # Whether to use DataParallel when multiple GPUs present
+    active_gpu_indices = active_wgangp_cuda_devices(args, device)  # Restrict BF16 checks and batch scaling to GPUs active in this process.
+    gpu_count = len(active_gpu_indices)  # Pinned processes count as one active GPU regardless of the number visible.
+    use_dataparallel = gpu_count > 1  # Only unpinned multi-GPU runs use DataParallel.
     
     if gpu_count > 0:  # If at least one GPU is available
         torch.backends.cudnn.benchmark = True  # Enable cuDNN autotuner for potential speedups
         
     batch_size_cli_override = bool(config.get("training", {}).get("batch_size_cli_override", False))  # Detect explicit CLI batch-size precedence
-    batch_multiplier = 1 if batch_size_cli_override else (min(8, max(1, 2 * gpu_count)) if gpu_count > 0 else 1)  # Scale configured batch size only when CLI did not override it
+    # Preserve the historical effective batch on the same host when pinning a process: GPU choice is not a request to change training hyperparameters.
+    visible_gpu_count = torch.cuda.device_count() if device.type == "cuda" else 0
+    batch_multiplier = 1 if batch_size_cli_override else (min(8, max(1, 2 * visible_gpu_count)) if visible_gpu_count > 0 else 1)  # Retain the pre-pinning default batch scaling (or honor an explicit --batch_size).
     scaled_batch = configured_batch_size * batch_multiplier  # Compute scaled batch size once
     args.batch_size = int(scaled_batch)  # Apply scaled batch size to args
     args.use_amp = bool(args.use_amp and gpu_count > 0 and _torch_autocast is not None)  # Honor explicit AMP configuration only when CUDA autocast is available
     if args.use_amp:  # Resolve BF16 support across every DataParallel device
-        for device_index in range(gpu_count):  # Inspect each participating CUDA device
+        for device_index in active_gpu_indices:  # Inspect only the participating CUDA device(s).
             with torch.cuda.device(device_index):  # Query support on the selected device
                 if not hasattr(torch.cuda, "is_bf16_supported") or not torch.cuda.is_bf16_supported():  # Require supported BF16 arithmetic
                     args.use_amp = False  # Select FP32 when BF16 is unavailable
@@ -4439,7 +4492,7 @@ def create_models_and_optimizers(args, config: Dict, device: torch.device, featu
         device
     )  # Initialize discriminator model
 
-    if torch.cuda.is_available() and not args.force_cpu and torch.cuda.device_count() > 1:  # If multi-GPU condition met
+    if device.type == "cuda" and getattr(args, "gpu", None) is None and torch.cuda.device_count() > 1:  # Preserve DataParallel only for automatic multi-GPU runs.
         G = torch.nn.DataParallel(G)  # Wrap generator in DataParallel to utilize multiple GPUs
         D = torch.nn.DataParallel(D)  # Wrap discriminator in DataParallel to utilize multiple GPUs
         print(f"{BackgroundColors.GREEN}Wrapped models using DataParallel across {torch.cuda.device_count()} GPUs{Style.RESET_ALL}")  # Notify wrapping
@@ -6381,9 +6434,7 @@ def normalize_args_and_load_checkpoint(args, config: Dict) -> tuple:
         args.n_samples = float(args.n_samples)  # Ensure n_samples is float
     if args.label is not None:  # If label provided
         args.label = int(args.label)  # Ensure label is int
-    device = torch.device(
-        "cuda" if torch.cuda.is_available() and not args.force_cpu else "cpu"
-    )  # Select device for generation
+    device = select_wgangp_device(args)  # Honor --gpu when loading a checkpoint and generating samples.
     file_progress_prefix = getattr(args, "file_progress_prefix", f"{BackgroundColors.CYAN}[1/1]{Style.RESET_ALL}")  # Build colored prefix (default single-file)
     send_telegram_message(TELEGRAM_BOT, f"{file_progress_prefix} Starting WGAN-GP generation from {Path(args.checkpoint).name}")  # Telegram start with colored prefix
     ckpt = torch.load(args.checkpoint, map_location=device, weights_only=False)  # Load checkpoint from disk with sklearn objects
