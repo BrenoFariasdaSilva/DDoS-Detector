@@ -116,7 +116,7 @@ psutil = (
 )  # Import psutil if available, otherwise set to None
 
 SAO_PAULO_TIMEZONE_NAME = "America/Sao_Paulo"  # Use Sao Paulo timezone for ETA finish timestamps
-WGANGP_RELEASE_VERSION = "V6.5.26"  # Report selected GPU topology and keep pinned training/generation observable.
+WGANGP_RELEASE_VERSION = "V6.5.27"  # Audit class mean fidelity using full-population streaming moments instead of a sparse 4096-row reservoir.
 FLOW_PREPROCESSING_CHECKPOINT_TAG = "ConditionalMixedStructuralV654TailKnots"  # Isolate weights trained on the full-class tail-knot representation.
 FLOW_PREPROCESSING_COMPATIBLE_TAGS: tuple[str, ...] = ()  # Earlier V6.5 weights were trained on a different tail encoding and are never resumed.
 QUALITY_SELECTION_POLICY = "priority_moment_swap_v1"  # Identify the bounded mean-first candidate selection policy in output provenance.
@@ -1589,6 +1589,7 @@ def build_quality_policy_fingerprint(config: Dict) -> str:
     """
 
     policy = {key: value for key, value in config.get("quality", {}).items() if key not in {"n_quantiles", "fit_sample_rows", "class_sampling_exponent", "plot_samples_per_class"}}
+    policy["mean_shift_metric_version"] = "full_valid_class_population_moments_v1"  # Invalidate quality-policy identities from the former 4k-only metric without changing the threshold.
     return hashlib.sha256(json.dumps(policy, sort_keys=True, default=str).encode("utf-8")).hexdigest()
 
 
@@ -1653,6 +1654,42 @@ def summarize_quality_rejection(result: Dict[str, Any], max_classes: int = 4, ma
     return " | ".join(lines)[:max_chars] or "No class-level rejection details reported"
 
 
+def merge_full_population_moments(state: Optional[Dict[str, Any]], rows: np.ndarray) -> Dict[str, Any]:
+    """Merge finite real class-flow blocks using stable parallel/Chan variance updates.
+
+    A small fixed-size reservoir can miss rare legitimate classes of flow values and
+    incorrectly estimate their variance as zero. The population-wide mean and
+    standard deviation are needed for a stable strict marginal-mean audit.
+    """
+    values = np.asarray(rows, dtype=np.float64)
+    if values.ndim != 2 or len(values) == 0 or not np.isfinite(values).all():
+        raise ValueError("Full-population moment blocks must contain finite two-dimensional records")
+    count = int(len(values))
+    mean = np.mean(values, axis=0, dtype=np.float64)
+    m2 = np.sum(np.square(values - mean), axis=0, dtype=np.float64)
+    if state is None:
+        return {"count": count, "mean": mean, "m2": m2}
+    old_count = int(state["count"])
+    old_mean = np.asarray(state["mean"], dtype=np.float64)
+    old_m2 = np.asarray(state["m2"], dtype=np.float64)
+    if old_count < 1 or old_mean.shape != mean.shape:
+        raise ValueError("Incompatible class population moment dimensions")
+    total = old_count + count
+    delta = mean - old_mean
+    return {"count": total,
+            "mean": old_mean + delta * (count / total),
+            "m2": old_m2 + m2 + np.square(delta) * (old_count * (count / total))}
+
+
+def finalize_full_population_moments(state: Dict[str, Any]) -> Dict[str, Any]:
+    """Finalize population (ddof=0) moments without changing any quality limit."""
+    count = int(state["count"])
+    if count <= 0:
+        raise ValueError("Cannot finalize moments for an empty real class")
+    return {"count": count, "mean": np.asarray(state["mean"], dtype=np.float64),
+            "std": np.sqrt(np.maximum(np.asarray(state["m2"], dtype=np.float64) / count, 0.0))}
+
+
 def assess_generated_flow_quality(args: Any, config: Dict, generated: pd.DataFrame, scaler: Optional[Any] = None, label_encoder: Optional[Any] = None, persist_report: bool = True, enforce: bool = True) -> Dict[str, Any]:
     """Audit per-class joint fidelity, diversity and network constraints before output acceptance.
 
@@ -1677,6 +1714,7 @@ def assess_generated_flow_quality(args: Any, config: Dict, generated: pd.DataFra
     near_limit = min(sample_limit, max(128, int(settings.get("nearest_reference_rows", 1024))))
     rng = np.random.default_rng(int(getattr(args, "seed", 42)))
     source_samples, source_priorities = {}, {}
+    source_population_states, source_population_moments = {}, {}  # Source-wide stable streaming moments, separate from the 4k correlation reservoir.
     source_category_counts = {}  # Retain exact source counts for every modeled categorical feature.
     category_columns = [scaler.feature_cols[index] for index in scaler.categorical_indices] if isinstance(scaler, ClassConditionalFlowScaler) else []  # Resolve validated empirical categorical supports.
     if getattr(args, "csv_path", None):  # Resolve the source file used by the unchanged class-specific quality measurements.
@@ -1688,6 +1726,7 @@ def assess_generated_flow_quality(args: Any, config: Dict, generated: pd.DataFra
         if isinstance(source_cache, dict) and source_cache.get("key") == cache_key:  # Avoid repeatedly rereading multi-million-row original CSVs during fifteen retries.
             source_samples = source_cache["samples"]  # Reuse the exact bounded class-specific original reservoirs.
             source_category_counts = source_cache["categories"]  # Reuse the exact original categorical counts.
+            source_population_moments = source_cache["population_moments"]  # Avoid restreaming source-wide real moments on each recovery trial.
             rng.bit_generator.state = source_cache["rng_state"]  # Preserve the same audit random stream as the uncached execution.
         else:  # Build the original reference once with the existing unchanged sampling algorithm.
             for chunk in pd.read_csv(args.csv_path, usecols=lambda col: col.strip() in required_columns, chunksize=8192, low_memory=False):
@@ -1703,6 +1742,7 @@ def assess_generated_flow_quality(args: Any, config: Dict, generated: pd.DataFra
                     candidates = candidates[reference_valid]
                     if not len(candidates):
                         continue
+                    source_population_states[class_key] = merge_full_population_moments(source_population_states.get(class_key), candidates)  # Accumulate every physically valid original row before reservoir subsampling.
                     class_counts = source_category_counts.setdefault(class_key, {})  # Accumulate empirical frequencies independently of the bounded reference reservoir.
                     for column in category_columns:  # Preserve rare categories that reservoir sampling can miss.
                         values, counts = np.unique(candidates[:, numeric_columns.index(column)], return_counts=True)  # Count observed values in this bounded source chunk.
@@ -1717,7 +1757,8 @@ def assess_generated_flow_quality(args: Any, config: Dict, generated: pd.DataFra
                     selected = np.argpartition(priorities, count - 1)[:count]
                     source_samples[class_key] = candidates[selected]
                     source_priorities[class_key] = priorities[selected]
-            args._generation_quality_reference_cache = {"key": cache_key, "samples": source_samples, "categories": source_category_counts, "rng_state": rng.bit_generator.state}  # Cache original-only audit inputs without changing thresholds or synthetic rows.
+            source_population_moments = {name: finalize_full_population_moments(state) for name, state in source_population_states.items()}  # Population statistics include legitimate rare real modes missed by bounded reservoirs.
+            args._generation_quality_reference_cache = {"key": cache_key, "samples": source_samples, "categories": source_category_counts, "population_moments": source_population_moments, "rng_state": rng.bit_generator.state}  # Cache original-only audit inputs without changing thresholds or synthetic rows.
     rules_by_label = {}
     if isinstance(scaler, ClassConditionalFlowScaler) and label_encoder is not None:
         for class_id, rules in scaler.derived_rules.items():
@@ -1741,9 +1782,15 @@ def assess_generated_flow_quality(args: Any, config: Dict, generated: pd.DataFra
             invalid_total += count
         audit_limit = max(4096, int(settings.get("duplicate_audit_rows_per_class", 250000)))  # Bound hashing chunks while auditing every generated row.
         row_hashes = np.empty(len(group), dtype=np.uint64)  # Allocate eight bytes per generated row instead of another full feature matrix.
+        synthetic_sum = np.zeros(len(numeric_columns), dtype=np.float64)  # Measure the entire generated population, not just a random 4k sample.
+        synthetic_valid_rows = 0  # Omit nonfinite rows from moments; domain checks still reject them.
         for offset in range(0, len(group), audit_limit):  # Hash all rows in bounded feature blocks.
             block = group.iloc[offset:offset + audit_limit][numeric_columns].copy()  # Exclude labels and output metadata from record identity.
             block[block == 0] = 0.0  # Canonicalize signed zero before hashing equal numeric records.
+            block_values = block.to_numpy(dtype=np.float64, copy=False)  # Reuse the existing bounded full-population audit block.
+            finite_rows = np.isfinite(block_values).all(axis=1)
+            synthetic_sum += np.sum(block_values[finite_rows], axis=0, dtype=np.float64)
+            synthetic_valid_rows += int(np.count_nonzero(finite_rows))
             row_hashes[offset:offset + len(block)] = pd.util.hash_pandas_object(block, index=False).to_numpy(dtype=np.uint64)  # Preserve complete-row identity in compact hashes.
         audited_duplicate_fraction = float(1.0 - len(np.unique(row_hashes)) / len(group))  # Audit full-class duplicate prevalence without subsampling bias.
         del row_hashes  # Release full-class hash storage before distance and correlation calculations.
@@ -1782,18 +1829,34 @@ def assess_generated_flow_quality(args: Any, config: Dict, generated: pd.DataFra
             source_variable = np.std(standardized_original, axis=0) > 1e-4
             observed_variation = np.std(standardized_synthetic[:, source_variable], axis=0)
             real_variation = np.std(standardized_original[:, source_variable], axis=0)
-            per_feature_mean_shift = np.abs(np.mean(standardized_synthetic, axis=0))  # Expose which raw network fields drive the strict average mean-shift gate.
+            sampled_mean_shift = float(np.mean(np.abs(np.mean(standardized_synthetic, axis=0))))  # Retain old 4k-based value as diagnostic only, never as a quality decision.
+            population = source_population_moments.get(class_name)
+            if population is not None and int(population["count"]) >= 32 and synthetic_valid_rows >= 32:
+                real_mean_for_gate = np.asarray(population["mean"], dtype=np.float64)
+                real_std_for_gate = np.asarray(population["std"], dtype=np.float64)
+                fake_mean_for_gate = synthetic_sum / synthetic_valid_rows
+                report["mean_shift_estimator"] = "full_valid_source_and_synthetic_class_populations_float64"
+                report["mean_shift_reference_rows"] = int(population["count"])
+                report["mean_shift_generated_rows"] = int(synthetic_valid_rows)
+            else:
+                real_mean_for_gate, real_std_for_gate = original_mean, original_std
+                fake_mean_for_gate = np.mean(valid_generated, axis=0)
+                report["mean_shift_estimator"] = "bounded_reservoir_fallback"
+                report["mean_shift_reference_rows"] = int(len(reference))
+                report["mean_shift_generated_rows"] = int(len(valid_generated))
+            per_feature_mean_shift = np.abs(fake_mean_for_gate - real_mean_for_gate) / np.maximum(real_std_for_gate, 1e-5)  # Keep the same 2.0 threshold; correct the estimator's sampling bias.
             mean_shift = float(np.mean(per_feature_mean_shift))
+            report["legacy_sampled_mean_shift_standardized"] = sampled_mean_shift  # Show whether old rejections came from rare-source-mode undersampling.
             largest_mean_shifts = np.argsort(per_feature_mean_shift)[::-1][:15]
             report["largest_standardized_mean_shifts"] = [
                 {"feature": str(numeric_columns[index]),
-                 "reference_mean": float(original_mean[index]),
-                 "generated_mean": float(np.mean(valid_generated[:, index])),
-                 "reference_std": float(original_std[index]),
-                 "normalization_floor_applied": bool(original_std[index] < 1e-5),
+                 "reference_mean": float(real_mean_for_gate[index]),
+                 "generated_mean": float(fake_mean_for_gate[index]),
+                 "reference_std": float(real_std_for_gate[index]),
+                 "normalization_floor_applied": bool(real_std_for_gate[index] < 1e-5),
                  "standardized_absolute_mean_shift": float(per_feature_mean_shift[index])}
                 for index in largest_mean_shifts if np.isfinite(per_feature_mean_shift[index])
-            ]  # Diagnostic only: never hide extreme shifts or modify the unchanged fail-closed threshold.
+            ]  # Report the same full-class statistics used by the strict gate, not a different sampled proxy.
             low_variance = float(np.mean(observed_variation < 0.1 * real_variation)) if len(real_variation) else 0.0
             # Quantify the coverage of common source modes, rather than inferring
             # high fidelity from average standard deviations or t-SNE overlap alone.
@@ -1940,7 +2003,7 @@ def assess_generated_flow_quality(args: Any, config: Dict, generated: pd.DataFra
     if persist_report:  # Defer on-disk reports until final acceptance or exhausted recovery.
         report_path.parent.mkdir(parents=True, exist_ok=True)  # Ensure the audit destination exists for the final report.
     accepted = invalid_total == 0 and not rejecting_classes
-    result = {"schema_version": 6, "accepted": accepted, "quality_policy_sha256": build_quality_policy_fingerprint(config), "sampling_note": "Bounded screening statistics do not prove synthetic fidelity or downstream classifier utility", "sample_rows_per_class": sample_limit, "nearest_reference_rows": near_limit, "invalid_feature_values": invalid_total, "rejected_classes": rejecting_classes, "classes": reports}  # Version the expanded diagnostics and preserve strict acceptance decisions.
+    result = {"schema_version": 7, "accepted": accepted, "quality_policy_sha256": build_quality_policy_fingerprint(config), "sampling_note": "Bounded screening statistics do not prove synthetic fidelity or downstream classifier utility", "sample_rows_per_class": sample_limit, "nearest_reference_rows": near_limit, "invalid_feature_values": invalid_total, "rejected_classes": rejecting_classes, "classes": reports}  # Version the expanded diagnostics and preserve strict acceptance decisions.
     if persist_report:  # Leave the final quality report untouched during failed or intermediate probes.
         with report_path.open("w", encoding="utf-8") as stream:  # Persist the exact existing report format.
             json.dump(result, stream, indent=2, allow_nan=False)  # Preserve the original metrics and acceptance thresholds.
