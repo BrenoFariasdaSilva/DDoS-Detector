@@ -116,7 +116,7 @@ psutil = (
 )  # Import psutil if available, otherwise set to None
 
 SAO_PAULO_TIMEZONE_NAME = "America/Sao_Paulo"  # Use Sao Paulo timezone for ETA finish timestamps
-WGANGP_RELEASE_VERSION = "V6.5.27"  # Audit class mean fidelity using full-population streaming moments instead of a sparse 4096-row reservoir.
+WGANGP_RELEASE_VERSION = "V6.5.28"  # Repair failing classes against the same stable full-source moments used by the strict quality auditor.
 FLOW_PREPROCESSING_CHECKPOINT_TAG = "ConditionalMixedStructuralV654TailKnots"  # Isolate weights trained on the full-class tail-knot representation.
 FLOW_PREPROCESSING_COMPATIBLE_TAGS: tuple[str, ...] = ()  # Earlier V6.5 weights were trained on a different tail encoding and are never resumed.
 QUALITY_SELECTION_POLICY = "priority_moment_swap_v1"  # Identify the bounded mean-first candidate selection policy in output provenance.
@@ -7521,7 +7521,7 @@ def draw_quality_recovery_class(args: Any, G: nn.Module, device: torch.device, c
 
 
 
-def choose_quality_repair_rows(generated: pd.DataFrame, quota: int, feature_cols: List[str], reference: Optional[np.ndarray], report: Dict[str, Any], rng: np.random.Generator, replacement_rows: int) -> np.ndarray:
+def choose_quality_repair_rows(generated: pd.DataFrame, quota: int, feature_cols: List[str], reference: Optional[np.ndarray], report: Dict[str, Any], rng: np.random.Generator, replacement_rows: int, full_source_moments: Optional[Dict[str, Any]] = None) -> np.ndarray:
     """Choose bounded replaceable rows using source-aware moment diagnostics and protected tails.
 
     :param generated: Current complete class population.
@@ -7540,11 +7540,15 @@ def choose_quality_repair_rows(generated: pd.DataFrame, quota: int, feature_cols
         return np.sort(candidates[:take])  # Keep exact positions without modifying the original rows.
     source = np.asarray(reference, dtype=np.float64)  # Use the same original-only class population as the selector.
     candidates_array = generated.iloc[candidates][feature_cols].to_numpy(dtype=np.float64)  # Read only a bounded subset of decoded feature values.
-    real_mean = np.mean(source, axis=0)  # Derive source-specific mean targets.
-    scale = np.maximum(np.std(source, axis=0), 1e-5)  # Stabilize sparse and constant reference fields.
+    real_mean = np.asarray(full_source_moments["mean"], dtype=np.float64) if full_source_moments is not None else np.mean(source, axis=0)  # Match the full-population auditor, not rare-mode-blind reservoir moments.
+    real_std = np.asarray(full_source_moments["std"], dtype=np.float64) if full_source_moments is not None else np.std(source, axis=0)
+    if real_mean.shape != (len(feature_cols),) or real_std.shape != real_mean.shape:
+        raise ValueError("Full-class reference moments do not match the repair feature schema")
+    scale = np.maximum(real_std, 1e-5)  # Apply exactly the auditor's marginal-moment normalization.
     normalized = np.clip((candidates_array - real_mean) / scale, -100.0, 100.0)  # Bound extreme-value leverage when ranking candidate removals.
     generated_sample = generated.iloc[rng.choice(len(generated), size=min(len(generated), 8192), replace=False)][feature_cols].to_numpy(dtype=np.float64)  # Estimate current class discrepancies using bounded memory.
-    shift = np.clip((np.mean(generated_sample, axis=0) - real_mean) / scale, -10.0, 10.0)  # Identify mean deviations in their actual directions.
+    generated_mean = generated[feature_cols].mean(axis=0).to_numpy(dtype=np.float64) if full_source_moments is not None else np.mean(generated_sample, axis=0)
+    shift = np.clip((generated_mean - real_mean) / scale, -10.0, 10.0)  # Use the entire class when targeting errors measured over the entire class.
     scores = (normalized @ shift) / max(1, len(feature_cols))  # Favor replacing rows that amplify existing mean mismatch.
     if "joint_correlation_mismatch" in report.get("quality_flags", []):  # Improve rank specificity when joint relationships are currently rejected.
         current = np.clip((generated_sample - real_mean) / scale, -100.0, 100.0)  # Normalize candidate and source correlations comparably.
@@ -7708,6 +7712,7 @@ def repair_best_quality_dataset(args: Any, config: Dict, selected: pd.DataFrame,
     original_counts = selected[args.label_col].value_counts().to_dict()  # Preserve every source-specific class quota.
     references = getattr(args, "_generation_quality_reference_cache", {})  # Reuse exact cached original-auditor statistical references if available.
     source_samples = references.get("samples", {}) if isinstance(references, dict) else {}  # Avoid reopening the entire source CSV for every repair.
+    population_moments = references.get("population_moments", {}) if isinstance(references, dict) else {}  # Use the strict auditor's full-class source moment targets.
     rng = np.random.default_rng(int(getattr(args, "seed", 42)) + 47931)  # Isolate deterministic repair decisions from generator RNG.
     for class_name in [str(row["class"]) for row in report["classes"] if row.get("quality_flags") or row.get("violations")]:  # Target only classes that actually failed their full-dataset audit.
         if class_name not in classes:  # Ensure every class comes from the trained checkpoint.
@@ -7723,7 +7728,7 @@ def repair_best_quality_dataset(args: Any, config: Dict, selected: pd.DataFrame,
             fraction = settings["repair_fraction"] / (2 ** ((attempt - 1) // 6))  # Gradually decrease replacement batches after repeated unsuccessful repairs.
             count = min(quota, settings["repair_batch_rows"], max(1, int(math.ceil(quota * fraction))))  # Bound the fraction and absolute replacement size.
             reference = source_samples.get(class_name)  # Reuse the same original data used by the production quality audit.
-            positions = choose_quality_repair_rows(current_class, quota, feature_cols, reference, current_entry, rng, count)  # Remove rows with the largest measured fidelity contribution without touching rare valid tails.
+            positions = choose_quality_repair_rows(current_class, quota, feature_cols, reference, current_entry, rng, count, full_source_moments=population_moments.get(class_name))  # Target the same full-class mean as the strict gate while retaining joint flow rows.
             budget = min(settings["max_draw_rows"], max(count, int(math.ceil(count * settings["draw_multiplier"]))))  # Cap individual replacement draws independently of the whole-population quota.
             replacement, draws, duplicates = draw_quality_repair_population(args, G, device, classes[class_name], current_class, positions, scaler, label_encoder, feature_cols, budget, settings["batch_rows"])  # Regenerate ONLY the bounded missing row subset.
             record["candidate_draws"] += draws  # Account for every inference draw during targeted repair.
