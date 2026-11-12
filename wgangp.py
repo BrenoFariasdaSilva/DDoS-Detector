@@ -116,7 +116,7 @@ psutil = (
 )  # Import psutil if available, otherwise set to None
 
 SAO_PAULO_TIMEZONE_NAME = "America/Sao_Paulo"  # Use Sao Paulo timezone for ETA finish timestamps
-WGANGP_RELEASE_VERSION = "V6.5.29"  # Eliminate duplicate numerical invariant scans within the critic minibatch.
+WGANGP_RELEASE_VERSION = "V6.5.30"  # Stage bounded source tensors once on the selected GPU, preserving sampled batch content.
 FLOW_PREPROCESSING_CHECKPOINT_TAG = "ConditionalMixedStructuralV654TailKnots"  # Isolate weights trained on the full-class tail-knot representation.
 FLOW_PREPROCESSING_COMPATIBLE_TAGS: tuple[str, ...] = ()  # Earlier V6.5 weights were trained on a different tail encoding and are never resumed.
 QUALITY_SELECTION_POLICY = "priority_moment_swap_v1"  # Identify the bounded mean-first candidate selection policy in output provenance.
@@ -871,6 +871,12 @@ class CSVFlowDataset(Dataset):
         """
         if not getattr(self, "_fast_in_memory_batches", False):
             return [self[index] for index in indices]
+        cached_features = getattr(self, "_gpu_cached_features", None)
+        if cached_features is not None:  # DataLoader still owns the *identical* source sampler and drop_last policy.
+            cached_labels = self._gpu_cached_labels
+            positions = torch.as_tensor(indices, dtype=torch.long, device=cached_features.device)
+            return (cached_features.index_select(0, positions),
+                    cached_labels.index_select(0, positions))
         positions = torch.as_tensor(indices, dtype=torch.long)
         return (self.X.index_select(0, positions),
                 self._labels_tensor.index_select(0, positions))
@@ -2127,6 +2133,7 @@ def build_default_training_and_model_config() -> Dict:
             "persistent_workers": True,  # Keep workers alive between epochs
             "prefetch_factor": 2,  # Number of batches to prefetch
             "fast_in_memory_batches": True,  # Gather complete tensor batches; avoid dozens of DataLoader workers on already-resident data.
+            "gpu_resident_batches": "auto",  # Cache the exact training tensors on a selected CUDA card only when conservative VRAM headroom permits.
         },
     }  # End training and model configuration dictionary
 
@@ -4391,6 +4398,56 @@ def class_reference_numeric_quantile_loss(fake_x: torch.Tensor, labels: torch.Te
     return loss / groups if groups else loss  # Return a finite zero when no class contributes.
 
 
+
+def gpu_resident_cache_fits(free_bytes: int, required_bytes: int, reserve_bytes: int = 3 * 1024 ** 3) -> bool:
+    """Conservatively keep free VRAM for models, gradients, Adam, and generation.
+
+    The source cache only changes where existing float32/long tensors reside;
+    it does not change input samples, sampler draws, losses, or random streams.
+    """
+    free = int(free_bytes)
+    required = int(required_bytes)
+    return required > 0 and free > reserve_bytes and required <= min(int(free * 0.40), free - reserve_bytes)
+
+
+def maybe_cache_training_tensors_on_gpu(dataset: CSVFlowDataset, device: torch.device, config: Dict, num_workers: int) -> bool:
+    """Stage in-memory training tensors on the selected CUDA device when safe.
+
+    This optimization is intentionally disabled for multiprocessing workers,
+    non-vectorized DataLoaders, CPU runs, or insufficient GPU memory.
+    Keeping dataset.X on CPU preserves unchanged source-reference calculations.
+    """
+    setting = config.get("dataloader", {}).get("gpu_resident_batches", "auto")
+    if isinstance(setting, bool):
+        setting = "auto" if setting else "off"
+    setting = str(setting).strip().lower()
+    if setting not in {"auto", "off"}:
+        raise ValueError("dataloader.gpu_resident_batches must be 'auto' or false")
+    if (setting == "off" or device.type != "cuda" or num_workers != 0 or
+            not bool(getattr(dataset, "_fast_in_memory_batches", False))):
+        return False
+    required = (dataset.X.numel() * dataset.X.element_size() +
+                dataset._labels_tensor.numel() * dataset._labels_tensor.element_size())
+    try:
+        free_bytes, _ = torch.cuda.mem_get_info(device)
+        if not gpu_resident_cache_fits(free_bytes, required):
+            print(f"[PERFORMANCE] GPU batch cache skipped: required={required / 2**20:.1f} MiB, "
+                  f"free={free_bytes / 2**20:.1f} MiB; keeping original CPU batches")
+            return False
+        # Exact copies of the same tensors, with no extra rounding, normalization, or RNG use.
+        dataset._gpu_cached_features = dataset.X.to(device=device, non_blocking=False)
+        dataset._gpu_cached_labels = dataset._labels_tensor.to(device=device, non_blocking=False)
+        print(f"[PERFORMANCE] GPU-resident source batches enabled on {device}: "
+              f"{required / 2**20:.1f} MiB staged once; same class sampler, batch size and losses")
+        return True
+    except torch.cuda.OutOfMemoryError:
+        dataset._gpu_cached_features = None
+        dataset._gpu_cached_labels = None
+        torch.cuda.empty_cache()
+        print("[PERFORMANCE] GPU batch cache allocation failed; preserving CPU DataLoader path")
+        return False
+
+
 def create_dataset_and_dataloader(args, config: Dict, device: torch.device) -> tuple:
     """
     Create the CSV flow dataset and configure the training data loader.
@@ -4498,6 +4555,9 @@ def create_dataset_and_dataloader(args, config: Dict, device: torch.device) -> t
     else:
         print(f"[TRAINING] Real source sampler: weighted_random | prevalence exponent={config.get('quality', {}).get('class_sampling_exponent', 0.5)} | Classes={len(class_sampler.class_ids)}")
         report_training_class_coverage(class_sampler, int(args.batch_size), getattr(dataset.label_encoder, "classes_", None), bool(float(config.get("training", {}).get("correlation_fidelity_weight", 2.0)) > 0))
+    cached_on_gpu = maybe_cache_training_tensors_on_gpu(dataset, device, config, num_workers)
+    if cached_on_gpu:
+        pin_memory = False  # CUDA tensors are already device-resident; pin_memory only accepts CPU tensors.
     dataloader = DataLoader(
         dataset,  # Dataset object to load data from
         batch_size=args.batch_size,  # Batch size for training
