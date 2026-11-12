@@ -116,7 +116,7 @@ psutil = (
 )  # Import psutil if available, otherwise set to None
 
 SAO_PAULO_TIMEZONE_NAME = "America/Sao_Paulo"  # Use Sao Paulo timezone for ETA finish timestamps
-WGANGP_RELEASE_VERSION = "V6.5.28"  # Repair failing classes against the same stable full-source moments used by the strict quality auditor.
+WGANGP_RELEASE_VERSION = "V6.5.29"  # Eliminate duplicate numerical invariant scans within the critic minibatch.
 FLOW_PREPROCESSING_CHECKPOINT_TAG = "ConditionalMixedStructuralV654TailKnots"  # Isolate weights trained on the full-class tail-knot representation.
 FLOW_PREPROCESSING_COMPATIBLE_TAGS: tuple[str, ...] = ()  # Earlier V6.5 weights were trained on a different tail encoding and are never resumed.
 QUALITY_SELECTION_POLICY = "priority_moment_swap_v1"  # Identify the bounded mean-first candidate selection policy in output provenance.
@@ -3409,6 +3409,24 @@ def require_finite_tensor(tensor: torch.Tensor, tensor_name: str, args: Any, epo
     raise FloatingPointError(message)  # Stop before invalid state propagates
 
 
+
+def require_finite_tensor_group(named_tensors: List[tuple], args: Any, epoch: int, step: int, component: str) -> None:
+    """Validate several already-computed CUDA tensors with a single host synchronization.
+
+    On failure, invoke the original detailed validator in the original input order,
+    so the exact tensor, nonfinite values, and exception contract are retained.
+    No tensors are modified, detached for training, or transferred to the CPU.
+    """
+    if not named_tensors:
+        return
+    checks = [torch.isfinite(value.detach()).all() for _, value in named_tensors]
+    if bool(torch.stack(checks).all().item()):
+        return
+    for name, value in named_tensors:
+        require_finite_tensor(value, name, args, epoch, step, component)
+    raise FloatingPointError(f"Non-finite value in {component}, epoch={epoch}, step={step}")
+
+
 def require_finite_model_state(model: nn.Module, state_name: str, args: Any, epoch: int, step: int, component: str, gradients: bool = False) -> None:
     """
     Require model parameters or gradients to contain only finite values.
@@ -4871,13 +4889,18 @@ def execute_discriminator_training_steps(G, D, opt_D, scaler, real_x, labels, de
     gp = torch.tensor(0.0, device=device)  # Initialize gradient penalty
     d_real_score = torch.tensor(0.0, device=device)  # Initialize real score tracker
     d_fake_score = torch.tensor(0.0, device=device)  # Initialize fake score tracker
+    # Real input and label tensors do not change during the five critic updates.
+    # The previous critic's post-step validation already guarantees finite D parameters
+    # and optimizer state before the following critic; avoid rescanning them beforehand.
+    first_component = "discriminator[1]"
+    require_finite_tensor(real_x, "real_samples", args, epoch + 1, step + 1, first_component)
+    require_finite_tensor(labels, "labels", args, epoch + 1, step + 1, first_component)
+    require_finite_model_state(D, "parameters", args, epoch + 1, step + 1, first_component)
+    scan_optimizer = should_scan_optimizer_state(config, step)
+    if scan_optimizer:
+        require_finite_optimizer_state(opt_D, "discriminator_optimizer[1]", args, epoch + 1, step + 1)
     for critic_step in range(args.critic_steps):  # Train discriminator multiple steps
         component = f"discriminator[{critic_step + 1}]"  # Name current critic update for diagnostics
-        require_finite_tensor(real_x, "real_samples", args, epoch + 1, step + 1, component)  # Reject invalid real samples before critic evaluation
-        require_finite_tensor(labels, "labels", args, epoch + 1, step + 1, component)  # Reject invalid conditioning labels before critic evaluation
-        require_finite_model_state(D, "parameters", args, epoch + 1, step + 1, component)  # Reject invalid critic parameters before backward execution
-        if should_scan_optimizer_state(config, step):
-            require_finite_optimizer_state(opt_D, f"discriminator_optimizer[{critic_step + 1}]", args, epoch + 1, step + 1)
         with torch.no_grad(), autocast(device.type, enabled=bool(getattr(args, "use_amp", False))):  # Avoid building generator gradient graphs during critic-only updates.
             z = torch.randn(args.batch_size, args.latent_dim, device=device)  # Sample noise for discriminator step
             fake_x = G(z, labels).detach()  # Generate fake samples and detach for discriminator
@@ -4885,8 +4908,7 @@ def execute_discriminator_training_steps(G, D, opt_D, scaler, real_x, labels, de
         with autocast(device.type, enabled=False):  # Keep complete critic objective and backward graph in full precision
             d_real = D(real_x.float(), labels)  # Compute real critic scores in full precision
             d_fake = D(fake_x.float(), labels)  # Compute fake critic scores in full precision
-            require_finite_tensor(d_real, "real_scores", args, epoch + 1, step + 1, component)  # Reject invalid real critic scores
-            require_finite_tensor(d_fake, "fake_scores", args, epoch + 1, step + 1, component)  # Reject invalid fake critic scores
+            require_finite_tensor_group([("real_scores", d_real), ("fake_scores", d_fake)], args, epoch + 1, step + 1, component)  # Same numerical checks with one host synchronization.
             gp = gradient_penalty(D, real_x.float(), fake_x.float(), labels, device, config, args, epoch + 1, step + 1, component)  # Compute complete gradient penalty in full precision
             loss_D = d_fake.float().mean() - d_real.float().mean() + args.lambda_gp * gp  # Calculate full-precision WGAN-GP discriminator loss
         require_finite_tensor(loss_D, "loss", args, epoch + 1, step + 1, component)  # Reject invalid discriminator loss before backward execution
@@ -4895,7 +4917,7 @@ def execute_discriminator_training_steps(G, D, opt_D, scaler, real_x, labels, de
         require_finite_model_state(D, "gradients", args, epoch + 1, step + 1, component, gradients=True)  # Reject invalid discriminator gradients before optimizer execution
         opt_D.step()  # Update discriminator parameters with unscaled full-precision gradients
         require_finite_model_state(D, "parameters", args, epoch + 1, step + 1, component)  # Reject invalid discriminator parameters immediately after update
-        if should_scan_optimizer_state(config, step):
+        if scan_optimizer:
             require_finite_optimizer_state(opt_D, f"discriminator_optimizer[{critic_step + 1}]", args, epoch + 1, step + 1)
         d_real_score = d_real.mean()  # Store average real score
         d_fake_score = d_fake.mean()  # Store average fake score
