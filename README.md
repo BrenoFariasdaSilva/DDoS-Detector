@@ -29,7 +29,6 @@ The current headline empirical result is from the CICDDoS2019 `01-12` combined-f
 ![GitHub Contributors](https://img.shields.io/github/contributors/BrenoFariasdaSilva/DDoS-Detector)
 ![GitHub Created At](https://img.shields.io/github/created-at/BrenoFariasdaSilva/DDoS-Detector)
 ![wakatime](https://wakatime.com/badge/github/BrenoFariasdaSilva/DDoS-Detector.svg)
-[![GitHub Repository Size](https://img.shields.io/github/repo-size/BrenoFariasdaSilva/DDoS-Detector)](https://github.com/BrenoFariasdaSilva/DDoS-Detector)
 [![Open Issues](https://img.shields.io/github/issues/BrenoFariasdaSilva/DDoS-Detector)](https://github.com/BrenoFariasdaSilva/DDoS-Detector/issues)
 [![Closed Issues](https://img.shields.io/github/issues-closed/BrenoFariasdaSilva/DDoS-Detector)](https://github.com/BrenoFariasdaSilva/DDoS-Detector/issues?q=is%3Aissue+is%3Aclosed)
 [![Open Pull Requests](https://img.shields.io/github/issues-pr/BrenoFariasdaSilva/DDoS-Detector)](https://github.com/BrenoFariasdaSilva/DDoS-Detector/pulls)
@@ -40,7 +39,6 @@ The current headline empirical result is from the CICDDoS2019 `01-12` combined-f
 ![Domain](https://img.shields.io/badge/Domain-DDoS%20Detection-b21d41)
 ![Feature Selection](https://img.shields.io/badge/Feature%20Selection-PCA%20RFE%20GA-237b7c)
 ![Augmentation](https://img.shields.io/badge/Augmentation-WGAN--GP-6c5ce7)
-
 ![RepoBeats Statistics](https://repobeats.axiom.co/api/embed/deca67a753c6ad283c2b87e95f2b676767739706.svg "Repobeats analytics image")
 
 </div>
