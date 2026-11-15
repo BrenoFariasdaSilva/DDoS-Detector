@@ -26,6 +26,7 @@ The current headline empirical result is from the CICDDoS2019 `01-12` combined-f
 ![GitHub Language Count](https://img.shields.io/github/languages/count/BrenoFariasdaSilva/DDoS-Detector)
 ![GitHub License](https://img.shields.io/github/license/BrenoFariasdaSilva/DDoS-Detector)
 ![GitHub Stars](https://img.shields.io/github/stars/BrenoFariasdaSilva/DDoS-Detector)
+[![GitHub Releases](https://img.shields.io/badge/releases-75-blue)](https://github.com/BrenoFariasdaSilva/DDoS-Detector/releases)
 ![GitHub Contributors](https://img.shields.io/github/contributors/BrenoFariasdaSilva/DDoS-Detector)
 ![GitHub Created At](https://img.shields.io/github/created-at/BrenoFariasdaSilva/DDoS-Detector)
 ![wakatime](https://wakatime.com/badge/github/BrenoFariasdaSilva/DDoS-Detector.svg)
