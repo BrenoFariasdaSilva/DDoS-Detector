@@ -18,18 +18,29 @@ The current headline empirical result is from the CICDDoS2019 `01-12` combined-f
 
 <div align="center">
 
-![GitHub Code Size in Bytes](https://img.shields.io/github/languages/code-size/BrenoFariasdaSilva/DDoS-Detector)
 ![Lines Of Code](https://raw.githubusercontent.com/BrenoFariasdaSilva/DDoS-Detector/image-data/badge.svg)
+![GitHub Code Size in Bytes](https://img.shields.io/github/languages/code-size/BrenoFariasdaSilva/DDoS-Detector)
 ![GitHub Commits](https://img.shields.io/github/commit-activity/t/BrenoFariasdaSilva/DDoS-Detector/main)
 ![GitHub Last Commit](https://img.shields.io/github/last-commit/BrenoFariasdaSilva/DDoS-Detector)
 ![GitHub Forks](https://img.shields.io/github/forks/BrenoFariasdaSilva/DDoS-Detector)
 ![GitHub Language Count](https://img.shields.io/github/languages/count/BrenoFariasdaSilva/DDoS-Detector)
 ![GitHub License](https://img.shields.io/github/license/BrenoFariasdaSilva/DDoS-Detector)
 ![GitHub Stars](https://img.shields.io/github/stars/BrenoFariasdaSilva/DDoS-Detector)
-[![GitHub Releases](https://img.shields.io/badge/releases-75-blue)](https://github.com/BrenoFariasdaSilva/DDoS-Detector/releases)
 ![GitHub Contributors](https://img.shields.io/github/contributors/BrenoFariasdaSilva/DDoS-Detector)
 ![GitHub Created At](https://img.shields.io/github/created-at/BrenoFariasdaSilva/DDoS-Detector)
 ![wakatime](https://wakatime.com/badge/github/BrenoFariasdaSilva/DDoS-Detector.svg)
+[![GitHub Repository Size](https://img.shields.io/github/repo-size/BrenoFariasdaSilva/DDoS-Detector)](https://github.com/BrenoFariasdaSilva/DDoS-Detector)
+[![Open Issues](https://img.shields.io/github/issues/BrenoFariasdaSilva/DDoS-Detector)](https://github.com/BrenoFariasdaSilva/DDoS-Detector/issues)
+[![Closed Issues](https://img.shields.io/github/issues-closed/BrenoFariasdaSilva/DDoS-Detector)](https://github.com/BrenoFariasdaSilva/DDoS-Detector/issues?q=is%3Aissue+is%3Aclosed)
+[![Open Pull Requests](https://img.shields.io/github/issues-pr/BrenoFariasdaSilva/DDoS-Detector)](https://github.com/BrenoFariasdaSilva/DDoS-Detector/pulls)
+[![Closed Pull Requests](https://img.shields.io/github/issues-pr-closed/BrenoFariasdaSilva/DDoS-Detector)](https://github.com/BrenoFariasdaSilva/DDoS-Detector/pulls?q=is%3Apr+is%3Aclosed)
+[![Monthly Commits](https://img.shields.io/github/commit-activity/m/BrenoFariasdaSilva/DDoS-Detector/main)](https://github.com/BrenoFariasdaSilva/DDoS-Detector/commits)
+[![Merged PRs](https://img.shields.io/github/issues-search/BrenoFariasdaSilva/DDoS-Detector?query=is%3Apr%20is%3Amerged&label=merged%20PRs&color=blue)](https://github.com/BrenoFariasdaSilva/DDoS-Detector/pulls?q=is%3Apr+is%3Amerged)
+![Language](https://img.shields.io/badge/Language-Python-3776AB)
+![Domain](https://img.shields.io/badge/Domain-DDoS%20Detection-b21d41)
+![Feature Selection](https://img.shields.io/badge/Feature%20Selection-PCA%20RFE%20GA-237b7c)
+![Augmentation](https://img.shields.io/badge/Augmentation-WGAN--GP-6c5ce7)
+
 ![RepoBeats Statistics](https://repobeats.axiom.co/api/embed/deca67a753c6ad283c2b87e95f2b676767739706.svg "Repobeats analytics image")
 
 </div>
