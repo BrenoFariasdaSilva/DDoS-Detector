@@ -4843,6 +4843,12 @@ def resume_from_checkpoint(args, config: Dict, device: torch.device, G, D, opt_G
                 g_checkpoint_path, d_checkpoint_path = select_finite_saved_pair(checkpoint_files, checkpoint_dir, checkpoint_prefix, csv_path_obj, args, scaler)  # Select newest usable saved pair
                 try:  # Restore the prevalidated pair into live training state
                     g_checkpoint, start_epoch = load_and_restore_generator_state(g_checkpoint_path, device, G, opt_G, scaler)  # Load and restore generator state from saved pair
+                    old_duration = checkpoint_training_duration(g_checkpoint, g_checkpoint_path)
+                    args._last_saved_generator_path = str(g_checkpoint_path)
+                    args._last_completed_epoch = start_epoch
+                    if (g_checkpoint.get("args") or {}).get("_last_epoch_time") not in (None, ""):
+                        args._last_epoch_time = g_checkpoint["args"]["_last_epoch_time"]
+                    args._training_elapsed_before_session = float(old_duration) if old_duration not in (None, "", 0) and math.isfinite(float(old_duration)) and float(old_duration) > 0 else None
                     metrics_history, step, metrics_loaded = restore_metrics_from_checkpoint_or_json(g_checkpoint, checkpoint_dir, checkpoint_prefix, metrics_history, step)  # Restore metrics from saved state or JSON fallback
                     load_and_restore_discriminator_state(d_checkpoint_path, device, D, opt_D)  # Load and restore discriminator state from saved pair
                     regenerate_missing_training_plot(  # Regenerate plot
@@ -5694,6 +5700,7 @@ def save_model_checkpoints_to_disk(g_checkpoint: Dict, G, D, opt_D, checkpoint_d
     try:  # Time model saving to measure save phase duration
         model_save_start_time = time.time()  # Record model save start timestamp
         torch.save(g_checkpoint, str(g_path))  # Save generator checkpoint to disk
+        args._last_saved_generator_path = str(g_path)
         d_checkpoint = {
             "epoch": epoch + 1,  # Save current epoch number
             "state_dict": unwrap_flow_model(D).state_dict(),  # Save discriminator state dict (unwrap DataParallel.module if present)
@@ -5818,7 +5825,10 @@ def compute_and_store_final_timing(args, training_start_time: float, file_start_
 
     try:  # Safely compute total training and file elapsed times
         training_elapsed = time.time() - training_start_time  # Calculate total training elapsed seconds
-        args._last_training_time = ceil_seconds(training_elapsed)  # Store training elapsed as upward-rounded integer seconds
+        prior = getattr(args, "_training_elapsed_before_session", 0.0)
+        args._last_training_time = ceil_seconds(prior + training_elapsed) if prior is not None else ""
+        if prior is None:
+            print("[TIMING] Previous checkpoint has no historical duration; total training time is unknown")
         file_elapsed = time.time() - file_start_time  # Calculate file processing elapsed seconds
         args._last_file_time = ceil_seconds(file_elapsed)  # Store file elapsed as upward-rounded integer seconds for console reporting
         print(f"{BackgroundColors.GREEN}Training finished! Total training elapsed: {BackgroundColors.CYAN}{training_elapsed:.2f}s{Style.RESET_ALL}")  # Print total training elapsed message
@@ -8445,7 +8455,7 @@ def collect_generation_file_metadata(args, args_ck: Dict, ckpt: Dict, n: int, ck
     metadata["completed_epoch"] = ckpt.get("epoch", saved_args.get("_last_completed_epoch", getattr(args, "_last_completed_epoch", "")))  # Resolve completed epoch from saved state or live args
     metadata["training_batch_size"] = saved_args.get("batch_size") if saved_args.get("batch_size") not in (None, "") else (ckpt.get("provenance") or {}).get("identity", {}).get("settings", {}).get("batch_size", getattr(args, "batch_size", ""))  # Prefer the effective training batch recorded by the checkpoint over the unscaled configuration default.
     metadata["timing_values"] = {  # Map common column names to stored timing attributes
-        "training_time_s": ceil_seconds(getattr(args, "_last_training_time", saved_args.get("_last_training_time", ""))),  # Total training elapsed seconds
+        "training_time_s": ceil_seconds(getattr(args, "_last_training_time", None) or saved_args.get("_last_training_time") or ""),  # Total training elapsed seconds
         "generated_time_s": ceil_seconds(getattr(args, "_last_sample_generation_time", saved_args.get("_last_sample_generation_time", ""))),  # Generation and output-write elapsed seconds
         "testing_time_s": ceil_seconds(getattr(args, "_last_testing_time", saved_args.get("_last_testing_time", ""))),  # Post-generation verification elapsed seconds
         "epoch_time_s": ceil_seconds(getattr(args, "_last_epoch_time", saved_args.get("_last_epoch_time", ""))),  # Last completed epoch elapsed seconds
@@ -8506,6 +8516,9 @@ def build_generation_runtime_row(args, config: Dict, n: int, device: torch.devic
     row_runtime["total_num_samples_after_augmentation"] = metadata["total_after_augmentation"]  # Store total
     row_runtime["generated_ratio"] = metadata["generated_ratio"]  # Generated/original ratio
     row_runtime["epoch"] = metadata["completed_epoch"]  # Completed training epoch used for generation
+    row_runtime["epochs"] = getattr(args, "epochs", metadata["completed_epoch"])
+    row_runtime["lambda_gp"] = getattr(args, "lambda_gp", "")
+    row_runtime["latent_dim"] = getattr(args, "latent_dim", "")
     row_runtime["batch_size"] = metadata["training_batch_size"]  # Record the batch size used to train the loaded checkpoint rather than the default used to configure generation.
     row_runtime["critic_loss"] = metadata["critic_loss"]  # Last critic loss from checkpoint metrics
     row_runtime["generator_loss"] = metadata["generator_loss"]  # Last generator loss from checkpoint metrics
@@ -9046,7 +9059,7 @@ def dispatch_wgangp_execution_mode(args, final_config: Dict) -> None:
         if args.mode == "train":  # Training mode
             training_start_time = time.time()  # Record training start time using time.time()
             train(args, final_config)  # Train model
-            if getattr(args, "_last_training_time", "") in ("", None):  # Preserve train-loop timing when train recorded it
+            if getattr(args, "_last_training_time", "") in ("", None) and getattr(args, "_training_elapsed_before_session", 0) is not None:  # Preserve unknown historical duration
                 args._last_training_time = ceil_seconds(time.time() - training_start_time)  # Store fallback elapsed seconds with upward rounding
         elif args.mode == "gen":  # Generation mode
             if args.checkpoint is None:  # Verify checkpoint provided
@@ -9055,7 +9068,7 @@ def dispatch_wgangp_execution_mode(args, final_config: Dict) -> None:
         elif args.mode == "both":  # Combined mode
             training_start_time = time.time()  # Record training start time using time.time()
             train(args, final_config)  # Train first
-            if getattr(args, "_last_training_time", "") in ("", None):  # Preserve train-loop timing when train recorded it
+            if getattr(args, "_last_training_time", "") in ("", None) and getattr(args, "_training_elapsed_before_session", 0) is not None:  # Preserve unknown historical duration
                 args._last_training_time = ceil_seconds(time.time() - training_start_time)  # Store fallback elapsed seconds with upward rounding
             if args.csv_path:  # If CSV provided
                 csv_path_obj = Path(args.csv_path)  # Create Path object from csv_path for path operations
@@ -9332,7 +9345,7 @@ def execute_training_with_timing(args: Any, config: Dict) -> Optional[tuple]:
 
     training_start_time = time.time()  # Record training start timestamp for elapsed time calculation
     result = train(args, config)  # Execute WGAN-GP training loop with provided configuration
-    if getattr(args, "_last_training_time", "") in ("", None):  # Preserve train-recorded elapsed seconds when available
+    if getattr(args, "_last_training_time", "") in ("", None) and getattr(args, "_training_elapsed_before_session", 0) is not None:  # Preserve unknown historical duration
         args._last_training_time = ceil_seconds(time.time() - training_start_time)  # Store fallback training elapsed seconds with upward rounding
     return result  # Return training artifacts for in-memory generation fallback
 
@@ -9660,7 +9673,8 @@ def setup_per_file_output(args: Any, config: Dict, file: str, results_suffix: st
     for previous_field in ("_last_original_num_samples", "_last_original_preprocessed_num_samples",
                            "_last_generated_num_samples", "_last_total_num_samples_after_augmentation",
                            "_last_sample_generation_time", "_last_testing_time", "_last_epoch_time",
-                           "_last_completed_epoch", "_last_metrics_history", "_last_file_time"):
+                           "_last_completed_epoch", "_last_metrics_history", "_last_file_time", "_last_model_save_time",
+                           "_training_elapsed_before_session", "_last_saved_generator_path"):
         if hasattr(args, previous_field):
             delattr(args, previous_field)
     args._last_training_time = 0.0
