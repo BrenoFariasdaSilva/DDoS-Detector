@@ -2605,6 +2605,18 @@ def parse_args():
         p.add_argument("--gen_label", type=int, default=None, help="Specific class ID to generate")  # Add gen_label argument
         p.add_argument("--out_file", type=str, default=None, help="Output CSV filename")  # Add out_file argument
         p.add_argument("--gen_batch_size", type=int, default=None, help="Generation batch size")  # Add gen_batch_size argument
+        for key, kind, description in (
+                ("max_duplicate_refill_rounds", int, "Minimum adaptive refill-round allowance (draw multiplier remains the hard bound)"),
+                ("max_duplicate_draw_multiplier", float, "Hard candidate-draw budget as a multiple of requested rows"),
+                ("duplicate_refill_batch_rows", int, "Maximum rows per duplicate-refill block"),
+                ("quality_recovery_max_draw_rows_per_class", int, "Absolute per-class draw cap; scalable when dynamic budget is enabled"),
+                ("quality_recovery_max_draw_multiplier", float, "Hard per-class quality-recovery draw multiplier"),
+                ("historical_training_time_s", float, "Verified historical training duration for a generation-only checkpoint")):
+            p.add_argument("--" + key.replace("_", "-"), "--" + key, dest=key, type=kind, default=None, help=description)
+        for key, description in (("resume_unique_generation", "Persist first-unique generation blocks and RNG state"),
+                                 ("quality_recovery_dynamic_draw_budget", "Scale the absolute quality-recovery cap to the requested class quota")):
+            option = "--" + key.replace("_", "-")
+            p.add_argument(option, dest=key, action=argparse.BooleanOptionalAction, default=None, help=description)
         p.add_argument("--feature_dim", type=int, default=None, help="Feature dimensionality")  # Add feature_dim argument
         
         p.add_argument("--num_workers", type=int, default=None, help="Number of DataLoader workers")  # Add num_workers argument
@@ -2733,6 +2745,12 @@ def apply_generation_and_data_cli_overrides(args, overrides: Dict) -> None:
     :return: None
     """
 
+    for key in ("max_duplicate_refill_rounds", "max_duplicate_draw_multiplier", "duplicate_refill_batch_rows",
+                "quality_recovery_max_draw_rows_per_class", "quality_recovery_max_draw_multiplier",
+                "historical_training_time_s", "resume_unique_generation", "quality_recovery_dynamic_draw_budget"):
+        value = getattr(args, key, None)
+        if value is not None:
+            overrides.setdefault("generation", {})[key] = value
     if args.checkpoint is not None:  # If checkpoint specified
         overrides.setdefault("generation", {})["checkpoint"] = args.checkpoint  # Set checkpoint
     if args.n_samples is not None:  # If n_samples specified
@@ -2774,6 +2792,16 @@ def args_to_config_overrides(args):
         apply_core_cli_overrides(args, overrides)  # Apply execution, wgangp, and paths overrides
         apply_training_and_model_cli_overrides(args, overrides)  # Apply training, generator, and discriminator overrides
         apply_generation_and_data_cli_overrides(args, overrides)  # Apply generation, dataloader, and dataset overrides
+        explicit = [key for key in ("seed", "label_col", "feature_cols", "batch_size", "critic_steps", "lr", "beta1", "beta2", "lambda_gp", "latent_dim", "g_hidden", "d_hidden", "n_resblocks") if getattr(args, key, None) is not None]
+        for option, field in (("g_embed_dim", "embed_dim"), ("g_leaky_relu_alpha", "generator_leaky_relu_alpha"), ("d_leaky_relu_alpha", "discriminator_leaky_relu_alpha")):
+            if getattr(args, option, None) is not None:
+                explicit.append(field)
+        if getattr(args, "use_amp", False):
+            explicit.append("use_amp")
+        if getattr(args, "remove_zero_variance", False) or getattr(args, "no_remove_zero_variance", False):
+            explicit.append("remove_zero_variance")
+        if explicit:
+            overrides.setdefault("wgangp", {})["generation_explicit_training_fields"] = explicit
         
         return overrides  # Return overrides dictionary
     except Exception as e:
@@ -9023,7 +9051,7 @@ def build_config_overrides_from_kwargs(kwargs: Dict) -> Dict:
                 cli_style_overrides.setdefault("generator", {})["embed_dim"] = value
             elif key in ["d_embed_dim"]:  # Discriminator embedding dim
                 cli_style_overrides.setdefault("discriminator", {})["embed_dim"] = value
-            elif key in ["checkpoint", "n_samples", "force_regenerate_samples", "only_missing_augmented", "label", "out_file", "gen_batch_size", "feature_dim"]:  # Generation params
+            elif key in ["checkpoint", "n_samples", "force_regenerate_samples", "only_missing_augmented", "label", "out_file", "gen_batch_size", "feature_dim", "max_duplicate_refill_rounds", "max_duplicate_draw_multiplier", "duplicate_refill_batch_rows", "quality_recovery_max_draw_rows_per_class", "quality_recovery_max_draw_multiplier", "historical_training_time_s", "resume_unique_generation", "quality_recovery_dynamic_draw_budget"]:  # Generation params
                 cli_style_overrides.setdefault("generation", {})[key] = value
             elif key in ["num_workers"]:  # DataLoader params
                 cli_style_overrides.setdefault("dataloader", {})[key] = value
@@ -9036,6 +9064,13 @@ def build_config_overrides_from_kwargs(kwargs: Dict) -> Dict:
                 cli_style_overrides.setdefault("sound", {})["enabled"] = value
             else:  # Unknown parameter
                 print(f"{BackgroundColors.YELLOW}Warning: Unknown parameter '{key}' will be ignored{Style.RESET_ALL}")
+        explicit = set(kwargs).intersection({"seed", "label_col", "feature_cols", "batch_size", "critic_steps", "lr", "beta1", "beta2", "lambda_gp", "latent_dim", "g_hidden", "d_hidden", "n_resblocks", "use_amp", "remove_zero_variance"})
+        if "g_embed_dim" in kwargs:
+            explicit.add("embed_dim")
+        if "leaky_relu_alpha" in kwargs:
+            explicit.update(("generator_leaky_relu_alpha", "discriminator_leaky_relu_alpha"))
+        if explicit:
+            cli_style_overrides.setdefault("wgangp", {})["generation_explicit_training_fields"] = sorted(explicit)
         return cli_style_overrides  # Return the assembled overrides dictionary
     except Exception as e:
         print(str(e))
