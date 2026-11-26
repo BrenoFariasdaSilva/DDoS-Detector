@@ -66,8 +66,8 @@ if __name__ in {"__main__", "__mp_main__"}:
 
 import argparse  # For CLI argument parsing
 import atexit  # For playing a sound when the program finishes
-import csv
-import copy  # For writing per-directory results CSV
+import csv  # For writing per-directory results CSV
+import copy  # Isolate checkpoint-restored inference configuration
 import hashlib  # Compute stable experiment fingerprints and sample hashes
 import dataframe_image as dfi  # For exporting DataFrame to PNG images
 import datetime  # For tracking execution time
@@ -76,10 +76,9 @@ import math  # Use ceiling rounding for persisted duration values
 import matplotlib.pyplot as plt  # For plotting training metrics
 import numpy as np  # Numerical operations
 import os  # For running a command in the terminal
-import pandas as pd
-from utils.wgangp_generation_resume import (GenerationJournal, adaptive_refill_limit, recovery_draw_budget, file_sha256, locked_generation)  # For CSV handling
-import platform
-import pickle  # For getting the operating system name
+import pandas as pd  # For CSV handling
+import platform  # For getting the operating system name
+import pickle  # Private generation journal identity
 import random  # For reproducibility
 import re  # Identify CSV-generated index features during preprocessing
 import shutil  # For disk space queries when psutil is unavailable
@@ -111,6 +110,8 @@ from torch import autograd  # For gradient penalty
 from torch.utils.data import DataLoader, Dataset, Sampler  # Dataset, dataloader and bounded class-aware sampling
 from tqdm import tqdm  # For progress bar visualization
 from typing import Any, Dict, Iterator, List, Optional, Union, cast  # For type hints, tail-statistic iterators, and cast
+from utils.wgangp_generation_resume import (GenerationJournal, adaptive_refill_limit,
+    recovery_draw_budget, file_sha256, locked_generation)
 from utils.process_name import set_runtime_process_name  # Apply optional htop-visible process identities.
 from zoneinfo import ZoneInfo  # Format ETA finish timestamps in Sao Paulo local time
 
@@ -6604,6 +6605,135 @@ def verify_data_augmentation_file(args, config: Optional[Dict] = None) -> bool:
         except Exception:
             pass
         return True
+
+
+def restore_generation_training_settings(args, config: Dict, ckpt: Dict) -> None:
+    """Use the saved effective training/model configuration in inference-only mode.
+
+    The source path/statistics and preprocessing tag are never overridden. Explicit
+    conflicting CLI hyperparameters fail closed; YAML defaults may be replaced by
+    checkpoint settings in the private inference configuration. Quality thresholds,
+    generation budgets, device and output arguments are not training settings.
+    """
+    identity = (ckpt.get("provenance") or {}).get("identity", {})
+    settings = identity.get("settings", {})
+    explicit = set(config.get("wgangp", {}).get("generation_explicit_training_fields", []))
+    if config.get("training", {}).get("batch_size_cli_override"):
+        explicit.add("batch_size")
+    changes = []
+
+    def restore(field, section=None, key=None, arg_name=None, values=None):
+        values = settings if values is None else values
+        if field not in values:
+            return
+        saved = copy.deepcopy(values[field])
+        if arg_name is not None:
+            previous = getattr(args, arg_name, None)
+        else:
+            previous = config.get(section, {}).get(key)
+        if field in explicit and previous != saved:
+            raise ValueError(f"Explicit generation {field} conflicts with the saved effective training {field}")
+        if previous != saved:
+            changes.append(f"{field}={saved!r}")
+        if arg_name is not None:
+            setattr(args, arg_name, saved)
+        if section is not None:
+            config.setdefault(section, {})[key] = saved
+
+    for field in ("seed", "label_col", "feature_cols"):
+        restore(field, "wgangp", field, field)
+    for field in ("batch_size", "critic_steps", "lr", "beta1", "beta2", "lambda_gp", "use_amp"):
+        restore(field, "training", field, field)
+    for field, section, key in (("latent_dim", "generator", "latent_dim"), ("g_hidden", "generator", "hidden_dims"),
+                                 ("embed_dim", "generator", "embed_dim"), ("n_resblocks", "generator", "n_resblocks"),
+                                 ("d_hidden", "discriminator", "hidden_dims")):
+        restore(field, section, key, field)
+    for field in ("g_leaky_relu_alpha", "d_leaky_relu_alpha"):
+        restore(field, arg_name=field)
+    for field in ("moment_fidelity_weight", "correlation_fidelity_weight", "correlation_reference_rows_per_class",
+                  "moment_reference_rows_per_class", "quantile_fidelity_weight", "quantile_reference_rows_per_class"):
+        restore(field, "training", field)
+    if settings:
+        restore("class_sampler_policy", "training", "class_sampler_policy", values={"class_sampler_policy": settings.get("class_sampler_policy", "weighted_random")})
+    restore("generator_leaky_relu_alpha", "generator", "leaky_relu_alpha")
+    restore("discriminator_leaky_relu_alpha", "discriminator", "leaky_relu_alpha")
+    restore("remove_zero_variance", "dataset", "remove_zero_variance")
+    restore("categorical_temperature", "generation", "categorical_temperature")
+    for field in ("n_quantiles", "fit_sample_rows", "class_sampling_exponent"):
+        restore(field, "quality", field, values=identity.get("preprocessing_parameters", {}))
+    if ckpt.get("epoch"):
+        args.epochs = int((ckpt.get("args") or {}).get("epochs", ckpt["epoch"]))
+        config.setdefault("training", {})["epochs"] = args.epochs
+    args._generation_provenance_config = config
+    print(f"[CHECKPOINT] Restored effective training batch_size={args.batch_size}, use_amp={args.use_amp}")
+    if changes:
+        print("[CHECKPOINT] Restored checkpoint settings: " + ", ".join(changes))
+
+
+def checkpoint_training_duration(ckpt: Dict, path=None, digest=None):
+    """Prefer a verified final timing sidecar, otherwise use checkpoint-embedded timing."""
+    if path:
+        try:
+            path = Path(path)
+            timing = json.loads(path.with_suffix(".timing.json").read_text(encoding="utf-8"))
+            duration = float(timing["training_time_s"])
+            if (timing["epoch"] == ckpt.get("epoch") and math.isfinite(duration) and duration > 0
+                    and timing["checkpoint_sha256"] == (digest or file_sha256(path))):
+                return duration
+        except (OSError, ValueError, KeyError, TypeError):
+            pass  # Never trust an invalid or mismatched sidecar.
+    return (ckpt.get("args") or {}).get("_last_training_time")
+
+
+def persist_checkpoint_training_duration(args):
+    """Record completed cumulative training time without rewriting any model weights."""
+    saved = getattr(args, "_last_saved_generator_path", None)
+    duration = getattr(args, "_last_training_time", None)
+    epoch = getattr(args, "_last_completed_epoch", None)
+    if not saved or not duration or not epoch:
+        return
+    path = Path(saved)
+    if extract_saved_epoch(path) != epoch:
+        return  # Never attach a later epoch's duration to an earlier checkpoint.
+    temporary = None
+    try:
+        value = {"epoch": epoch, "training_time_s": duration, "checkpoint_sha256": file_sha256(path)}
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent, prefix=".timing-", delete=False) as stream:
+            temporary = Path(stream.name)
+            json.dump(value, stream, allow_nan=False)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path.with_suffix(".timing.json"))
+    except OSError as exc:
+        print(f"[TIMING] Could not persist final timing sidecar: {exc}")
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
+def restore_generation_training_time(args, config: Dict, ckpt: Dict) -> None:
+    """Use known historical duration; old checkpoints may not have recorded it."""
+    override = config.get("generation", {}).get("historical_training_time_s")
+    saved = checkpoint_training_duration(ckpt, getattr(args, "checkpoint", None), getattr(args, "_generation_checkpoint_digest", None))
+    live = getattr(args, "_last_training_time", None)
+    if override is not None:
+        if getattr(args, "mode", "gen") != "gen":
+            raise ValueError("historical_training_time_s is only supported for generation-only mode")
+        value = float(override)
+        if not math.isfinite(value) or value <= 0:
+            raise ValueError("historical_training_time_s must be finite and positive")
+        args._last_training_time = ceil_seconds(value)
+        print(f"[CHECKPOINT] Using explicitly supplied historical training time: {args._last_training_time}s")
+    elif live not in (None, "", 0) and getattr(args, "mode", "gen") != "gen":
+        pass  # The just-completed training session has a more precise final timing.
+    elif saved not in (None, "", 0) and math.isfinite(float(saved)) and float(saved) > 0:
+        args._last_training_time = ceil_seconds(saved)
+    else:
+        args._last_training_time = ""
+        print("[CHECKPOINT] Historical training time unavailable; use --historical-training-time-s with a verified duration")
+    saved_epoch_time = (ckpt.get("args") or {}).get("_last_epoch_time")
+    if saved_epoch_time not in (None, "", 0):
+        args._last_epoch_time = ceil_seconds(saved_epoch_time)
 
 
 def normalize_args_and_load_checkpoint(args, config: Dict) -> tuple:
