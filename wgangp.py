@@ -2107,7 +2107,10 @@ def build_default_training_and_model_config() -> Dict:
             "only_missing_augmented": False,  # Leave existence-only output filtering disabled unless explicitly requested.
             "out_file": "generated.csv",  # Output CSV filename
             "gen_batch_size": 256,  # Generation batch size
-            "max_duplicate_refill_rounds": 25,  # Fail rather than loop indefinitely when the learned support is exhausted.
+            "max_duplicate_refill_rounds": 64,  # Minimum adaptive round allowance; total draws remain strictly bounded.
+            "resume_unique_generation": True,  # Commit private first-unique blocks and RNG state.
+            "quality_recovery_dynamic_draw_budget": True,  # Scale the absolute cap to large class quotas.
+            "historical_training_time_s": None,  # Optional verified legacy timing; never infer missing duration.
             "max_duplicate_draw_multiplier": 5.0,  # Bound total candidate draws relative to requested unique records.
             "duplicate_refill_batch_rows": 32768,  # Limit temporary refill population without changing trained weights.
             "quality_selection_enabled": True,  # Select each class quota from extra unique candidates by mean, correlation, and variance priority.
@@ -2119,7 +2122,7 @@ def build_default_training_and_model_config() -> Dict:
             "quality_recovery_max_rounds": 15,  # Maintain the legacy maximum while the new fifteen-population policy uses its own setting.
             "quality_recovery_full_candidates": 15,  # Evaluate fifteen independent complete augmented populations, including the initial output.
             "quality_recovery_max_draw_multiplier": 3.0,  # Bound total recovery draws relative to each failing class quota.
-            "quality_recovery_max_draw_rows_per_class": 8000000,  # Permit meaningful duplicate refill for >3M-flow classes while retaining a finite per-class draw cap.
+            "quality_recovery_max_draw_rows_per_class": 52000000,  # Absolute cap floor with dynamic scaling enabled.
             "quality_recovery_batch_rows": 32768,  # Bound each decoded candidate batch and memory spikes.
             "quality_recovery_max_repairs": 24,  # Bound smaller quality-guided repair attempts after complete regeneration.
             "quality_recovery_repair_fraction": 0.02,  # Replace at most two percent of a failing class during each repair.
