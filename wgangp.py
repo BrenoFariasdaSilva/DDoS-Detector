@@ -6007,6 +6007,8 @@ def train(args, config: Optional[Dict] = None):
             config = CONFIG or get_default_config()  # Use global or default config
     
         device, training_start_time, file_start_time, epoch_milestones, file_progress_prefix = normalize_args_and_setup_hardware(args, config)  # Normalize arguments and setup hardware
+        args._training_elapsed_before_session = 0.0
+        args._last_saved_generator_path = None
 
         dataset, dataloader = create_dataset_and_dataloader(args, config, device)  # Create dataset and dataloader
 
@@ -6034,10 +6036,16 @@ def train(args, config: Optional[Dict] = None):
             require_finite_optimizer_state(opt_D, "discriminator_optimizer_epoch_end", args, epoch + 1, step)
             args._training_step = step  # Persist the completed batch count before serializing this epoch.
             write_epoch_csv_row(args, config, device, dataset, epoch, epoch_start_time, epoch_milestones, results_csv_writer, results_csv_file, results_cols_cfg, metrics_history, opt_G, opt_D)  # Write epoch CSV row
+            prior = args._training_elapsed_before_session
+            args._last_training_time = ceil_seconds(prior + time.time() - training_start_time) if prior is not None else ""
             save_training_checkpoint(args, config, device, G, D, opt_G, opt_D, scaler, dataset, epoch, metrics_history)  # Save checkpoint if due
             next_notify = send_epoch_telegram_notifications(args, telegram_enabled, epoch, next_notify, progress_pct, training_start_time, file_progress_prefix)  # Send epoch telegram notifications with file progress prefix and timing
 
         write_final_timing_and_csv_row(args, config, device, dataset, training_start_time, file_start_time, results_csv_writer, results_csv_file, results_cols_cfg, metrics_history, opt_G, opt_D)  # Compute final training timing state
+        if start_epoch >= args.epochs:
+            prior = args._training_elapsed_before_session
+            args._last_training_time = ceil_seconds(prior) if prior is not None else ""
+        persist_checkpoint_training_duration(args)
         args._last_metrics_history = metrics_history  # Store metrics history for in-memory generation result rows
         generate_training_plots(args, config, metrics_history, file_progress_prefix)  # Generate training plots
         send_final_telegram_messages(args, config, file_progress_prefix)  # Send final telegram messages
