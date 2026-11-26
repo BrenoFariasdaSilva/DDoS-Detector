@@ -1015,6 +1015,13 @@ generation:
   force_regenerate_samples: false # When true, regenerate selected samples even if output exists
   out_file: "generated.csv" # Output CSV filename
   gen_batch_size: 256 # Generation batch size
+  max_duplicate_refill_rounds: 64 # Minimum adaptive refill allowance; bounded by the draw multiplier
+  max_duplicate_draw_multiplier: 5.0 # Hard total draw budget relative to the exact requested population
+  duplicate_refill_batch_rows: 32768 # Maximum candidates per refill block
+  resume_unique_generation: true # Persist accepted blocks and RNG state until successful output and results
+  quality_recovery_max_draw_rows_per_class: 52000000 # Absolute cap floor with dynamic scaling enabled
+  quality_recovery_dynamic_draw_budget: true # Ensure the per-class multiplier remains attainable at any quota
+  historical_training_time_s: null # Optional verified duration for legacy checkpoints lacking timing
   feature_dim: null # Feature dimensionality (null = auto-detect)
   small_class_threshold: 100 # Threshold for small class detection
   small_class_min_samples: 10 # Minimum samples for small classes
