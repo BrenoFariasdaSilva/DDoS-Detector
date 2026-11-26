@@ -75,7 +75,8 @@ import math  # Use ceiling rounding for persisted duration values
 import matplotlib.pyplot as plt  # For plotting training metrics
 import numpy as np  # Numerical operations
 import os  # For running a command in the terminal
-import pandas as pd  # For CSV handling
+import pandas as pd
+from utils.wgangp_generation_resume import recovery_draw_budget  # For CSV handling
 import platform  # For getting the operating system name
 import random  # For reproducibility
 import re  # Identify CSV-generated index features during preprocessing
@@ -7369,9 +7370,10 @@ def resolve_quality_recovery_settings(config: Dict) -> Dict[str, Any]:
     """
 
     generation = config.get("generation", {})  # Read recovery controls from the ordinary generation configuration.
-    settings = {"enabled": bool(generation.get("quality_recovery_enabled", True)), "max_rounds": int(generation.get("quality_recovery_full_candidates", 15)), "draw_multiplier": float(generation.get("quality_recovery_max_draw_multiplier", 3.0)), "max_draw_rows": int(generation.get("quality_recovery_max_draw_rows_per_class", 8000000)), "batch_rows": int(generation.get("quality_recovery_batch_rows", 32768)), "max_repairs": int(generation.get("quality_recovery_max_repairs", 24)), "repair_fraction": float(generation.get("quality_recovery_repair_fraction", 0.02)), "repair_batch_rows": int(generation.get("quality_recovery_repair_batch_rows", 32768)), "max_class_blends": int(generation.get("quality_recovery_max_class_blends", 6))}  # Separate strictly bounded recovery settings from model-training settings.
+    settings = {"enabled": bool(generation.get("quality_recovery_enabled", True)), "max_rounds": int(generation.get("quality_recovery_full_candidates", 15)), "draw_multiplier": float(generation.get("quality_recovery_max_draw_multiplier", 3.0)), "max_draw_rows": int(generation.get("quality_recovery_max_draw_rows_per_class", 52000000)), "batch_rows": int(generation.get("quality_recovery_batch_rows", 32768)), "max_repairs": int(generation.get("quality_recovery_max_repairs", 24)), "repair_fraction": float(generation.get("quality_recovery_repair_fraction", 0.02)), "repair_batch_rows": int(generation.get("quality_recovery_repair_batch_rows", 32768)), "max_class_blends": int(generation.get("quality_recovery_max_class_blends", 6))}  # Separate strictly bounded recovery settings from model-training settings.
     if settings["max_rounds"] < 0 or settings["max_rounds"] > 15 or not np.isfinite(settings["draw_multiplier"]) or not 1.0 <= settings["draw_multiplier"] <= 20.0 or settings["max_draw_rows"] < 1 or settings["batch_rows"] < 1 or not 0 <= settings["max_repairs"] <= 100 or not np.isfinite(settings["repair_fraction"]) or not 0.0 < settings["repair_fraction"] <= 0.25 or settings["repair_batch_rows"] < 1 or not 0 <= settings["max_class_blends"] <= 32:  # Refuse invalid or unbounded recovery configurations.
         raise ValueError("Quality recovery requires rounds in [0,15], repairs in [0,100], blends in [0,32], repair fraction in (0,0.25], multiplier in [1,20], and positive draw/batch limits")  # Prevent unsafe loops and overflow.
+    settings["dynamic_draw_budget"] = bool(generation.get("quality_recovery_dynamic_draw_budget", True))
     return settings  # Return the complete bounded policy.
 
 
@@ -7515,7 +7517,7 @@ def draw_quality_recovery_dataset(args: Any, G: nn.Module, device: torch.device,
         if not len(positions):  # Ignore label identities absent from the requested generated output.
             continue  # Keep original class quotas unchanged.
         quota = len(positions)  # Resolve the original number of unique network-flow rows.
-        budget = min(settings["max_draw_rows"], int(math.ceil(quota * settings["draw_multiplier"])))  # Give each class its own bounded budget every trial.
+        budget = recovery_draw_budget(quota, settings)  # Give each class its own bounded budget every trial.
         fresh, attempted, rejected = draw_quality_recovery_class(args, G, device, class_id, quota, scaler, label_encoder, feature_cols, budget, settings["batch_rows"])  # Draw real generator output, not corrected feature values.
         draws += attempted  # Include draws from an incomplete trial in accounting.
         duplicates += rejected  # Report exact duplicate candidates removed after decoding.
@@ -7811,7 +7813,7 @@ def repair_best_quality_dataset(args: Any, config: Dict, selected: pd.DataFrame,
             count = min(quota, settings["repair_batch_rows"], max(1, int(math.ceil(quota * fraction))))  # Bound the fraction and absolute replacement size.
             reference = source_samples.get(class_name)  # Reuse the same original data used by the production quality audit.
             positions = choose_quality_repair_rows(current_class, quota, feature_cols, reference, current_entry, rng, count, full_source_moments=population_moments.get(class_name))  # Target the same full-class mean as the strict gate while retaining joint flow rows.
-            budget = min(settings["max_draw_rows"], max(count, int(math.ceil(count * settings["draw_multiplier"]))))  # Cap individual replacement draws independently of the whole-population quota.
+            budget = recovery_draw_budget(count, settings)  # Cap individual replacement draws independently of the whole-population quota.
             replacement, draws, duplicates = draw_quality_repair_population(args, G, device, classes[class_name], current_class, positions, scaler, label_encoder, feature_cols, budget, settings["batch_rows"])  # Regenerate ONLY the bounded missing row subset.
             record["candidate_draws"] += draws  # Account for every inference draw during targeted repair.
             record["duplicates_rejected"] += duplicates  # Account for exact duplicates against the retained class population.
@@ -7861,7 +7863,7 @@ def recover_generated_flow_quality(args: Any, config: Dict, generated: pd.DataFr
     """
 
     settings = resolve_quality_recovery_settings(config)  # Validate bounded trial and repair configuration before drawing anything.
-    print(f"[{WGANGP_RELEASE_VERSION}] Quality recovery: up to {settings['max_rounds']} independent complete candidates; per-class budget=min({settings['max_draw_rows']}, ceil(quota*{settings['draw_multiplier']})); repairs={settings['max_repairs']}")
+    print(f"[{WGANGP_RELEASE_VERSION}] Quality recovery: up to {settings['max_rounds']} independent complete candidates; per-class multiplier={settings['draw_multiplier']}; cap={settings['max_draw_rows']}; dynamic cap={settings['dynamic_draw_budget']}; repairs={settings['max_repairs']}")
     record = {"policy": "fifteen_independent_complete_candidates_plus_classwise_v2", "settings": settings, "candidate_draws": 0, "duplicates_rejected": 0, "attempts": [], "repairs": [], "selected_attempt": None, "status": "pending"}  # Preserve per-trial metrics without persistent temporary-file paths.
     args._last_generation_quality_recovery = record  # Expose accurate generation provenance for the selected final result.
     if not settings["enabled"] or not settings["max_rounds"]:  # Preserve existing explicit disable behavior.
