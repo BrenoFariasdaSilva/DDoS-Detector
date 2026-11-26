@@ -7223,8 +7223,11 @@ def draw_extra_unique_candidates(args: Any, G: nn.Module, device: torch.device, 
     """
 
     identity_cols = list(feature_cols) + [args.label_col]  # Use the existing exact decoded-row identity.
-    quotas = accepted[args.label_col].value_counts().to_dict()  # Count first-unique rows per class.
-    pool = accepted  # Keep first-unique rows first and unchanged.
+    chunks = [accepted]  # Keep first-unique rows first and unchanged.
+    seen = set()
+    for offset in range(0, len(accepted), 65536):
+        seen.update(map(int, hash_canonical_decoded_rows(accepted.iloc[offset:offset+65536], identity_cols)))
+    pool_count = len(accepted)
     remaining = {class_id: count for class_id, count in extra_by_id.items() if count > 0}  # Track missing extra candidates per class.
     per_round = max(int(batch_rows), int(math.ceil(sum(remaining.values()) / max(int(max_rounds), 1))))  # Size rounds so the round limit can cover every target.
     draws = duplicates = rounds = stagnant = 0  # Initialize bounded refill counters.
@@ -7243,21 +7246,23 @@ def draw_extra_unique_candidates(args: Any, G: nn.Module, device: torch.device, 
                 left -= count  # Consume the round allowance.
         draw_labels = np.concatenate(portions)  # Build this round's class labels.
         frame = decode_candidate_frame(args, G, device, draw_labels, scaler, label_encoder, feature_cols)  # Decode this round's candidates.
-        before = len(pool)  # Count candidates before deduplication.
-        pool = pd.concat((pool, frame), ignore_index=True, copy=False).drop_duplicates(subset=identity_cols, keep="first").reset_index(drop=True)  # Keep only new exact-unique decoded rows.
-        gained = len(pool) - before  # Count new unique candidates.
+        unique = take_unique_decoded_batch(frame, identity_cols, seen, len(frame))
+        gained = len(unique)
+        if gained:
+            chunks.append(unique)
+            pool_count += gained
         draws += len(draw_labels)  # Count extra candidate draws.
         duplicates += len(draw_labels) - gained  # Count rejected exact duplicates.
         rounds += 1  # Count this extra-candidate round.
-        observed = pool[args.label_col].value_counts().to_dict()  # Count candidates per class.
-        remaining = {class_id: max(0, count - (int(observed.get(names[class_id], 0)) - int(quotas.get(names[class_id], 0)))) for class_id, count in extra_by_id.items()}  # Recompute missing extras per class.
-        print(f"[{WGANGP_RELEASE_VERSION}] Quality-selection candidates: pool={len(pool)}, new={gained}/{len(draw_labels)}, rejected duplicates={duplicates}, round={rounds}/{max_rounds}")  # Report extra-candidate progress.
+        observed = unique[args.label_col].value_counts().to_dict()
+        remaining = {class_id: max(0, count - int(observed.get(names[class_id], 0))) for class_id, count in remaining.items()}
+        print(f"[{WGANGP_RELEASE_VERSION}] Quality-selection candidates: pool={pool_count}, new={gained}/{len(draw_labels)}, rejected duplicates={duplicates}, round={rounds}/{max_rounds}")  # Report extra-candidate progress.
         stagnant = stagnant + 1 if gained == 0 else 0  # Track successive rounds without new candidates.
         if stagnant >= 3:  # Stop when the learned support yields no new rows.
             reason = "no_new_unique_candidates"  # Record exhausted unique support.
             break  # Use the candidates already collected.
 
-    return pool, draws, duplicates, rounds, reason  # Return the bounded candidate pool and counters.
+    return pd.concat(chunks, ignore_index=True, copy=False), draws, duplicates, rounds, reason  # Assemble once.
 
 
 def apply_quality_aware_selection(args: Any, pool: pd.DataFrame, quota_by_name: Dict[str, int], references: Dict[str, tuple], settings: Dict[str, Any], categorical_positions: List[int], feature_cols: List[str]) -> tuple:
