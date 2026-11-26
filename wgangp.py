@@ -66,7 +66,8 @@ if __name__ in {"__main__", "__mp_main__"}:
 
 import argparse  # For CLI argument parsing
 import atexit  # For playing a sound when the program finishes
-import csv  # For writing per-directory results CSV
+import csv
+import copy  # For writing per-directory results CSV
 import hashlib  # Compute stable experiment fingerprints and sample hashes
 import dataframe_image as dfi  # For exporting DataFrame to PNG images
 import datetime  # For tracking execution time
@@ -1554,21 +1555,22 @@ def build_wgangp_provenance(args: Any) -> Dict:
     source_stat = source.stat() if source is not None else None  # Require an existing source for provenance.
     fields = ("seed", "label_col", "feature_cols", "batch_size", "critic_steps", "lr", "beta1", "beta2", "lambda_gp", "latent_dim", "g_hidden", "d_hidden", "embed_dim", "n_resblocks", "g_leaky_relu_alpha", "d_leaky_relu_alpha", "use_amp")  # Identify settings that affect learned weights.
     settings = {name: getattr(args, name, None) for name in fields}  # Snapshot resolved model and optimization settings.
-    sampler_policy = resolve_training_class_sampler_policy(CONFIG or {})  # Checkpoint identity must change when the actual class-label training distribution changes.
+    provenance_config = getattr(args, "_generation_provenance_config", None) or CONFIG or {}
+    sampler_policy = resolve_training_class_sampler_policy(provenance_config)  # Checkpoint identity must change when the actual class-label training distribution changes.
     if sampler_policy != "weighted_random":  # Preserve byte-for-byte legacy provenance when explicitly retaining the historical sampling policy.
         settings["class_sampler_policy"] = sampler_policy
         settings["class_sampler_batch_size"] = int(getattr(args, "batch_size", 64))
-    settings["moment_fidelity_weight"] = float((CONFIG or {}).get("training", {}).get("moment_fidelity_weight", 0.10))  # Ensure changed loss settings invalidate checkpoints.
-    settings["correlation_fidelity_weight"] = float((CONFIG or {}).get("training", {}).get("correlation_fidelity_weight", 2.0))  # Track joint-fidelity training policy.
-    settings["correlation_reference_rows_per_class"] = int((CONFIG or {}).get("training", {}).get("correlation_reference_rows_per_class", 4096))
-    settings["generator_leaky_relu_alpha"] = float((CONFIG or {}).get("generator", {}).get("leaky_relu_alpha", 0.2))  # Track the activation actually used by model construction.
-    settings["discriminator_leaky_relu_alpha"] = float((CONFIG or {}).get("discriminator", {}).get("leaky_relu_alpha", 0.2))  # Track the critic activation actually used by training.
-    settings["remove_zero_variance"] = bool((CONFIG or {}).get("dataset", {}).get("remove_zero_variance", True))  # Bind the selected source schema to provenance.
-    settings["categorical_temperature"] = float((CONFIG or {}).get("generation", {}).get("categorical_temperature", 1.25))  # Bind the shared training and inference categorical distribution to provenance.
-    settings["moment_reference_rows_per_class"] = int((CONFIG or {}).get("training", {}).get("moment_reference_rows_per_class", 4096))
-    settings["quantile_fidelity_weight"] = float((CONFIG or {}).get("training", {}).get("quantile_fidelity_weight", 0.15))  # Preserve the extra training objective in checkpoint provenance.
-    settings["quantile_reference_rows_per_class"] = int((CONFIG or {}).get("training", {}).get("quantile_reference_rows_per_class", 8192))  # Preserve reference resolution for checkpoint safety.
-    identity = {"source_path": str(source) if source else None, "source_size": source_stat.st_size if source_stat else None, "source_mtime_ns": source_stat.st_mtime_ns if source_stat else None, "preprocessing": "class_conditional_mixed_structural_v654_full_class_tail_knots", "preprocessing_parameters": {key: (CONFIG or {}).get("quality", {}).get(key, default) for key, default in (("n_quantiles", 512), ("fit_sample_rows", 50000), ("class_sampling_exponent", 0.5))}, "settings": settings}  # Record source metadata and effective hyperparameters.
+    settings["moment_fidelity_weight"] = float(provenance_config.get("training", {}).get("moment_fidelity_weight", 0.10))  # Ensure changed loss settings invalidate checkpoints.
+    settings["correlation_fidelity_weight"] = float(provenance_config.get("training", {}).get("correlation_fidelity_weight", 2.0))  # Track joint-fidelity training policy.
+    settings["correlation_reference_rows_per_class"] = int(provenance_config.get("training", {}).get("correlation_reference_rows_per_class", 4096))
+    settings["generator_leaky_relu_alpha"] = float(provenance_config.get("generator", {}).get("leaky_relu_alpha", 0.2))  # Track the activation actually used by model construction.
+    settings["discriminator_leaky_relu_alpha"] = float(provenance_config.get("discriminator", {}).get("leaky_relu_alpha", 0.2))  # Track the critic activation actually used by training.
+    settings["remove_zero_variance"] = bool(provenance_config.get("dataset", {}).get("remove_zero_variance", True))  # Bind the selected source schema to provenance.
+    settings["categorical_temperature"] = float(provenance_config.get("generation", {}).get("categorical_temperature", 1.25))  # Bind the shared training and inference categorical distribution to provenance.
+    settings["moment_reference_rows_per_class"] = int(provenance_config.get("training", {}).get("moment_reference_rows_per_class", 4096))
+    settings["quantile_fidelity_weight"] = float(provenance_config.get("training", {}).get("quantile_fidelity_weight", 0.15))  # Preserve the extra training objective in checkpoint provenance.
+    settings["quantile_reference_rows_per_class"] = int(provenance_config.get("training", {}).get("quantile_reference_rows_per_class", 8192))  # Preserve reference resolution for checkpoint safety.
+    identity = {"source_path": str(source) if source else None, "source_size": source_stat.st_size if source_stat else None, "source_mtime_ns": source_stat.st_mtime_ns if source_stat else None, "preprocessing": "class_conditional_mixed_structural_v654_full_class_tail_knots", "preprocessing_parameters": {key: provenance_config.get("quality", {}).get(key, default) for key, default in (("n_quantiles", 512), ("fit_sample_rows", 50000), ("class_sampling_exponent", 0.5))}, "settings": settings}  # Record source metadata and effective hyperparameters.
     digest = hashlib.sha256(json.dumps(identity, sort_keys=True, default=str).encode("utf-8")).hexdigest()  # Produce a stable comparable identity.
 
     return {"identity": identity, "sha256": digest}  # Return provenance for checkpoints and output sidecars.
@@ -6585,12 +6587,21 @@ def normalize_args_and_load_checkpoint(args, config: Dict) -> tuple:
     device = select_wgangp_device(args)  # Honor --gpu when loading a checkpoint and generating samples.
     file_progress_prefix = getattr(args, "file_progress_prefix", f"{BackgroundColors.CYAN}[1/1]{Style.RESET_ALL}")  # Build colored prefix (default single-file)
     send_telegram_message(TELEGRAM_BOT, f"{file_progress_prefix} Starting WGAN-GP generation from {Path(args.checkpoint).name} | requested_gpu={getattr(args, 'gpu', None)} | device={device}")  # Include the selected CUDA device in generation telemetry.
-    ckpt = torch.load(args.checkpoint, map_location=device, weights_only=False)  # Load checkpoint from disk with sklearn objects
+    checkpoint_path = Path(args.checkpoint)
+    before = checkpoint_path.stat()
+    args._generation_checkpoint_digest = file_sha256(checkpoint_path)
+    ckpt = torch.load(args.checkpoint, map_location=device, weights_only=False)  # Load trusted local checkpoint.
+    after = checkpoint_path.stat()
+    if (before.st_ino, before.st_size, before.st_mtime_ns) != (after.st_ino, after.st_size, after.st_mtime_ns):
+        raise RuntimeError("Generator checkpoint changed during loading; retry with a stable checkpoint")
     args_ck = ckpt.get("args", {})  # Retrieve saved arguments from checkpoint
     args._generation_epoch = int(ckpt.get("epoch", 0))  # Store checkpoint epoch for generation diagnostics
     if not getattr(args, "csv_path", None) and isinstance(args_ck, dict) and args_ck.get("csv_path"):  # Recover source CSV path from saved training arguments
         args.csv_path = args_ck.get("csv_path")  # Store recovered source CSV path on live args
+    if getattr(args, "mode", "gen") == "gen":
+        restore_generation_training_settings(args, config, ckpt)
     verify_wgangp_provenance(ckpt.get("provenance"), args, str(args.checkpoint))  # Reject mismatched checkpoint source and configuration before generation.
+    restore_generation_training_time(args, config, ckpt)
     scaler = ckpt.get("scaler", None)  # Try to get scaler from checkpoint
     label_encoder = ckpt.get("label_encoder", None)  # Try to get label encoder from checkpoint
     feature_cols = ckpt.get("feature_cols", None)  # Try to get feature column names from checkpoint
@@ -6615,9 +6626,13 @@ def reconstruct_missing_preprocessing_objects(args, scaler: Optional[Any], label
             raise RuntimeError(
                 "Checkpoint missing scaler/label_encoder/feature_cols/class_distribution. Provide --csv_path to reconstruct them."
             )  # Raise error if not
-        tmp_ds = CSVFlowDataset(
-            args.csv_path, label_col=args.label_col, feature_cols=args.feature_cols
-        )  # Rebuild dataset to get scaler, encoder, feature names, and class distribution
+        global CONFIG
+        original_config = CONFIG
+        try:
+            CONFIG = getattr(args, "_generation_provenance_config", None) or original_config
+            tmp_ds = CSVFlowDataset(args.csv_path, label_col=args.label_col, feature_cols=args.feature_cols)
+        finally:
+            CONFIG = original_config
         scaler = tmp_ds.scaler  # Use scaler from rebuilt dataset
         label_encoder = tmp_ds.label_encoder  # Use label encoder from rebuilt dataset
         feature_cols = tmp_ds.feature_cols  # Use feature column names from rebuilt dataset
@@ -9331,6 +9346,9 @@ def execute_generation_with_verification(args: Any, config: Dict) -> None:
     :return: None
     """
 
+    if getattr(args, "mode", None) == "gen":
+        generate(args, config)  # Load/restore checkpoint first, then verify the existing output inside the output lock.
+        return
     if verify_data_augmentation_file(args, config):  # Verify if generation is necessary according to existing output and configuration
         generate(args, config)  # Execute synthetic sample generation when output is absent or insufficient
     else:  # Skip generation when configured n_samples already satisfied by existing output
