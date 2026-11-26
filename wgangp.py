@@ -76,8 +76,9 @@ import matplotlib.pyplot as plt  # For plotting training metrics
 import numpy as np  # Numerical operations
 import os  # For running a command in the terminal
 import pandas as pd
-from utils.wgangp_generation_resume import recovery_draw_budget  # For CSV handling
-import platform  # For getting the operating system name
+from utils.wgangp_generation_resume import (GenerationJournal, adaptive_refill_limit, recovery_draw_budget, file_sha256, locked_generation)  # For CSV handling
+import platform
+import pickle  # For getting the operating system name
 import random  # For reproducibility
 import re  # Identify CSV-generated index features during preprocessing
 import shutil  # For disk space queries when psutil is unavailable
@@ -7961,93 +7962,139 @@ def recover_generated_flow_quality(args: Any, config: Dict, generated: pd.DataFr
             uniqueness["total_candidate_draws_including_recovery"] = int(uniqueness.get("candidate_draws", 0)) + int(record["candidate_draws"])  # Record total generator work accurately.
         return chosen  # Private candidate snapshots and matching quality references are removed by TemporaryDirectory on exit.
 
-def generate_unique_decoded_samples(args, config: Dict, G: nn.Module, device: torch.device, labels: np.ndarray, scaler: Any, label_encoder: Any, feature_cols: List[str]) -> tuple:
-    """Draw until every requested class has the exact count of unique *decoded* flow records.
+def generation_rng_state(device):
+    return {"python": random.getstate(), "numpy": np.random.get_state(),
+            "torch": torch.get_rng_state(),
+            "cuda": torch.cuda.get_rng_state(device).cpu() if device.type == "cuda" else None}
 
-    Deduplicate after inverse quantiles, discrete-domain projection, and flow-rule
-    reconstruction: different latent samples can become equal only at that stage.
-    Fail without publishing a partial CSV if the learned support is insufficient.
-    Training/checkpoint parameters remain untouched.
-    """
+
+def restore_generation_rng(state, device):
+    random.setstate(state["python"])
+    np.random.set_state(state["numpy"])
+    torch.set_rng_state(state["torch"].cpu())
+    if device.type == "cuda":
+        torch.cuda.set_rng_state(state["cuda"].cpu(), device)
+
+
+def generation_journal_identity(args, G, scaler, requested, feature_cols, device):
+    checkpoint_digest = getattr(args, "_generation_checkpoint_digest", None)
+    if not checkpoint_digest:
+        digest = hashlib.sha256(pickle.dumps(scaler, protocol=pickle.HIGHEST_PROTOCOL))
+        for name, tensor in unwrap_flow_model(G).state_dict().items():
+            digest.update(name.encode())
+            digest.update(str(tensor.dtype).encode())
+            digest.update(str(tuple(tensor.shape)).encode())
+            digest.update(tensor.detach().cpu().contiguous().numpy().tobytes())
+        checkpoint_digest = digest.hexdigest()
+    return {"schema": "first_unique_blocks_v2", "release": WGANGP_RELEASE_VERSION,
+            "checkpoint": checkpoint_digest, "provenance": build_wgangp_provenance(args)["sha256"],
+            "labels": hashlib.sha256(requested.tobytes()).hexdigest(), "features": list(feature_cols),
+            "label_col": args.label_col, "seed": int(args.seed), "gen_batch_size": int(args.gen_batch_size),
+            "device": str(device), "gpu_name": torch.cuda.get_device_name(device) if device.type == "cuda" else None,
+            "torch": str(torch.__version__), "numpy": np.__version__, "pandas": pd.__version__}
+
+
+def cleanup_unique_generation_journal(args):
+    directory = getattr(args, "_unique_generation_journal_dir", None)
+    if directory:
+        try:
+            shutil.rmtree(directory)
+        except OSError as exc:
+            print(f"[GENERATION] Could not remove completed private journal: {exc}")
+        args._unique_generation_journal_dir = None
+
+
+def generate_unique_decoded_samples(args, config: Dict, G: nn.Module, device: torch.device, labels: np.ndarray, scaler: Any, label_encoder: Any, feature_cols: List[str]) -> tuple:
+    """Fill exact decoded class quotas using bounded incremental, restartable blocks."""
     if not isinstance(scaler, ClassConditionalFlowScaler):
         raise ValueError("Strict unique generation requires a fitted class-conditional flow scaler")
     requested = np.asarray(labels, dtype=np.int64).reshape(-1)
     if not len(requested):
         raise ValueError("Cannot generate an empty unique synthetic dataset")
-    generation_settings = config.get("generation", {})
-    max_rounds = int(generation_settings.get("max_duplicate_refill_rounds", 25))
-    draw_multiplier = float(generation_settings.get("max_duplicate_draw_multiplier", 5.0))
-    refill_batch_rows = int(generation_settings.get("duplicate_refill_batch_rows", 32768))
-    if max_rounds < 1 or refill_batch_rows < 1 or not np.isfinite(draw_multiplier) or draw_multiplier < 1.0:
-        raise ValueError("Unique refill settings require positive rounds/batch rows and draw multiplier >= 1")
+    settings = config.get("generation", {})
+    resolve_quality_selection_settings(config)
+    resolve_quality_recovery_settings(config)
+    base_rounds = int(settings.get("max_duplicate_refill_rounds", 64))
+    multiplier = float(settings.get("max_duplicate_draw_multiplier", 5.0))
+    refill_batch_rows = int(settings.get("duplicate_refill_batch_rows", 32768))
+    if base_rounds < 1 or refill_batch_rows < 1 or not np.isfinite(multiplier) or multiplier < 1.0:
+        raise ValueError("Unique refill settings require positive rounds/batch rows and finite draw multiplier >= 1")
     if not feature_cols or len(set(feature_cols)) != len(feature_cols) or args.label_col in feature_cols:
         raise ValueError("Unique flow generation requires nonoverlapping, distinct numeric feature names")
-
     classes, totals = np.unique(requested, return_counts=True)
-    target_by_id = {int(class_id): int(total) for class_id, total in zip(classes, totals)}
-    names = {class_id: str(label_encoder.inverse_transform([class_id])[0]) for class_id in target_by_id}
-    identity_cols = list(feature_cols) + [args.label_col]  # Never count label or hardware metadata as substitute numeric diversity.
-    max_draws = max(len(requested), int(math.ceil(len(requested) * draw_multiplier)))
+    target_by_id = {int(k): int(v) for k, v in zip(classes, totals)}
+    names = {k: str(label_encoder.inverse_transform([k])[0]) for k in target_by_id}
+    identity_cols = list(feature_cols) + [args.label_col]
+    max_draws = max(len(requested), math.ceil(len(requested) * multiplier))
+    # Align initial blocks to the GPU batch boundaries to preserve the initial latent draw stream.
+    gen_batch = int(args.gen_batch_size)
+    if gen_batch < 1:
+        raise ValueError("Generation batch size must be positive")
+    initial_block_rows = max(gen_batch, (65536 // gen_batch) * gen_batch)
     started = time.time()
-    total_draws = 0
-    total_duplicates = 0
-    refill_rounds = 0
-    stagnant_rounds = 0
-    accepted = None
-    deficit = target_by_id.copy()
-    first_round = True
-    print(f"[{WGANGP_RELEASE_VERSION}] Exact decoded-row uniqueness enabled: {len(requested)} target rows, "
-          f"up to {max_draws} candidate draws in {max_rounds} refill rounds")
-
-    while any(deficit.values()):
-        if first_round:
-            draw_labels = requested
+    enabled = bool(settings.get("resume_unique_generation", True))
+    journal = GenerationJournal(args.out_file, generation_journal_identity(args, G, scaler, requested, feature_cols, device) if enabled else {}, enabled)
+    args._unique_generation_journal_dir = journal.directory if enabled else None
+    state = journal.state or {"cursor": 0, "counts": dict.fromkeys(target_by_id, 0), "draws": 0, "duplicates": 0,
+                              "rounds": 0, "elapsed": 0.0}
+    counts = dict(state["counts"])
+    cursor, total_draws, total_duplicates, refill_rounds = (state[k] for k in ("cursor", "draws", "duplicates", "rounds"))
+    if set(counts) != set(target_by_id) or any(not 0 <= counts[k] <= target_by_id[k] for k in counts) or not 0 <= cursor <= len(requested) or total_draws < cursor or total_draws - total_duplicates != sum(counts.values()):
+        raise RuntimeError("Invalid saved generation counters")
+    if journal.state is not None:
+        restore_generation_rng(state["rng"], device)
+        print(f"[GENERATION] Resuming {sum(counts.values())}/{len(requested)} accepted rows; {total_draws} committed draws")
+    started -= float(state["elapsed"])  # Include committed work, not downtime, in the reported generation duration.
+    stagnant = 0  # A new invocation may retry a previously stagnant stream within the remaining hard draw budget.
+    max_rounds = base_rounds
+    print(f"[{WGANGP_RELEASE_VERSION}] Exact decoded-row uniqueness enabled: {len(requested)} target rows, up to {max_draws} candidate draws; adaptive refill floor={base_rounds}")
+    while cursor < len(requested) or any(counts[k] < target_by_id[k] for k in counts):
+        initial = cursor < len(requested)
+        deficit = {k: target_by_id[k] - counts[k] for k in counts}
+        if initial:
+            draw_labels = requested[cursor:cursor + initial_block_rows]
+            if total_draws + len(draw_labels) > max_draws:
+                raise RuntimeError("Generation draw budget is smaller than the remaining initial population")
         else:
-            if refill_rounds >= max_rounds or total_draws >= max_draws:
+            max_rounds = adaptive_refill_limit(base_rounds, refill_batch_rows, sum(deficit.values()), total_draws, total_duplicates, refill_rounds, max_draws)
+            if total_draws >= max_draws or refill_rounds >= max_rounds:
                 pending = {names[k]: v for k, v in deficit.items() if v}
-                raise RuntimeError(f"Generator exhausted the unique-row refill budget; missing by class: {pending}. "
-                                   f"Accepted {len(accepted) if accepted is not None else 0}/{len(requested)} "
-                                   f"after {total_draws} draws. Previous accepted CSV remains unchanged.")
-            allowance = min(refill_batch_rows, max_draws - total_draws)
-            remaining = allowance
+                raise RuntimeError(f"Generator exhausted the unique-row refill budget; missing by class: {pending}. Accepted {sum(counts.values())}/{len(requested)} after {total_draws} draws. Previous accepted CSV remains unchanged; committed generation blocks retained.")
+            remaining = min(refill_batch_rows, max_draws - total_draws)
             portions = []
-            for class_id, missing in deficit.items():
+            for k, missing in deficit.items():
                 count = min(missing, remaining)
                 if count:
-                    portions.append(np.full(count, class_id, dtype=np.int64))
+                    portions.append(np.full(count, k, dtype=np.int64))
                     remaining -= count
-            draw_labels = np.concatenate(portions) if portions else np.empty(0, dtype=np.int64)
+            draw_labels = np.concatenate(portions)
             refill_rounds += 1
-        draw_count = len(draw_labels)
-        if not draw_count:
-            raise RuntimeError("Unique-row refill could not allocate any further candidate draws")
-        frame = decode_candidate_frame(args, G, device, draw_labels, scaler, label_encoder, feature_cols)  # Generate and decode this round's labeled candidates.
-        previous_count = len(accepted) if accepted is not None else 0
-        combined = frame if accepted is None else pd.concat((accepted, frame), ignore_index=True, copy=False)
-        # pandas duplicated uses exact field values, not tolerance or rounded values.
-        # This runs on the decoded float32 CSV feature representation across all classes.
-        accepted = combined.drop_duplicates(subset=identity_cols, keep="first").reset_index(drop=True)
-        total_draws += draw_count
-        gained = len(accepted) - previous_count
-        total_duplicates += draw_count - gained
-        observed = accepted[args.label_col].value_counts(dropna=False).to_dict()
-        deficit = {class_id: target - int(observed.get(names[class_id], 0))
-                   for class_id, target in target_by_id.items()}
-        if any(missing < 0 for missing in deficit.values()):
-            raise RuntimeError("Unique refill exceeded a class-specific target")
-        print(f"[{WGANGP_RELEASE_VERSION}] Unique generation: accepted={len(accepted)}/{len(requested)}, "
-              f"new={gained}/{draw_count}, rejected duplicates={total_duplicates}, "
-              f"refill_round={refill_rounds}/{max_rounds}")
-        if gained == 0:
-            stagnant_rounds += 1
-            if stagnant_rounds >= 3:
-                pending = {names[k]: v for k, v in deficit.items() if v}
-                raise RuntimeError(f"Generator produced no new unique rows in three successive rounds; "
-                                   f"unfilled class quotas: {pending}. Previous accepted CSV remains unchanged.")
-        else:
-            stagnant_rounds = 0
-        first_round = False
-
+        frame = decode_candidate_frame(args, G, device, draw_labels, scaler, label_encoder, feature_cols)
+        # A conservative hash collision can reject an extra row, but cannot admit a duplicate.
+        # The original exact pandas final audit remains mandatory.
+        unique, signatures = journal.select(frame, hash_canonical_decoded_rows(frame, identity_cols))
+        gained = len(unique)
+        observed = unique[args.label_col].value_counts().to_dict()
+        for k in counts:
+            counts[k] += int(observed.get(names[k], 0))
+        if sum(counts.values()) != len(journal.seen) or any(counts[k] > target_by_id[k] for k in counts):
+            raise RuntimeError("Unique generation exceeded a class quota or encountered an unknown label")
+        total_draws += len(draw_labels)
+        total_duplicates += len(draw_labels) - gained
+        if initial:
+            cursor += len(draw_labels)
+        state = {"cursor": cursor, "counts": counts.copy(), "draws": total_draws, "duplicates": total_duplicates,
+                 "rounds": refill_rounds, "elapsed": time.time() - started, "rng": generation_rng_state(device)}
+        journal.commit(unique, signatures, state)
+        if not initial or cursor == len(requested) or len(journal.blocks) % 16 == 0:
+            print(f"[{WGANGP_RELEASE_VERSION}] Unique generation: accepted={sum(counts.values())}/{len(requested)}, new={gained}/{len(draw_labels)}, rejected duplicates={total_duplicates}, refill_round={refill_rounds}/{max_rounds}")
+        if not initial:
+            stagnant = stagnant + 1 if gained == 0 else 0
+            if stagnant >= 3:
+                raise RuntimeError("Generator produced no new unique rows in three successive refill rounds; committed generation blocks retained; previous accepted CSV remains unchanged.")
+    accepted = journal.materialize(identity_cols)
+    del journal  # Free the compact index before quality selection and exact final audit.
+    max_rounds = max(base_rounds, refill_rounds)
     selection_settings = resolve_quality_selection_settings(config)  # Resolve the validated candidate selection policy.
     selection_record: Dict[str, Any] = {"policy": selection_settings["policy"], "settings": selection_settings, "applied": False, "classes": {}}  # Record first-unique publication by default.
     if selection_settings["enabled"]:  # Select class quotas from bounded extra candidates when enabled.
