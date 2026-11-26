@@ -8764,6 +8764,7 @@ def handle_generate_top_level_exception(e: Exception) -> None:
     raise e  # Re-raise the exception to propagate
 
 
+@locked_generation
 def generate(args, config: Optional[Dict] = None):
     """
     Generate synthetic samples from a saved generator checkpoint.
@@ -8776,7 +8777,12 @@ def generate(args, config: Optional[Dict] = None):
     try:
         if config is None:  # If no config provided
             config = CONFIG or get_default_config()  # Use global or default config
+        if getattr(args, "mode", "gen") == "gen":
+            config = copy.deepcopy(config)
         ckpt, args_ck, scaler, label_encoder, feature_cols, class_distribution, device, file_progress_prefix = normalize_args_and_load_checkpoint(args, config)  # Normalize args, select device, and load checkpoint
+        if getattr(args, "mode", "gen") == "gen" and Path(args.out_file).exists() and not verify_data_augmentation_file(args, config):
+            print("[GENERATION] Existing verified augmented output already satisfies the requested quota")
+            return
         scaler, label_encoder, feature_cols, class_distribution = reconstruct_missing_preprocessing_objects(args, scaler, label_encoder, feature_cols, class_distribution)  # Reconstruct missing preprocessing objects from CSV if needed
         feature_dim, n_classes = determine_feature_dim_and_n_classes(args, scaler, label_encoder)  # Determine feature dimensionality and class count
         args._mixed_categorical_groups = list(scaler.categorical_groups)  # Use checkpoint-saved group positions during reconstruction.
@@ -8796,11 +8802,16 @@ def generate(args, config: Optional[Dict] = None):
         record_testing_timing(args, testing_start_time)  # Record post-generation verification and quality-output elapsed time
         generated_n = int(safe_float(getattr(args, "_last_generated_num_samples", n), n))  # Resolve actual synthetic row count for result persistence
         prepare_and_write_results_csv_row(args, config, args_ck, ckpt, generated_n, device)  # Persist each generated file immediately; surface errors.
+        cleanup_unique_generation_journal(args)
         notify_generation_finish_via_telegram(args, generated_n, file_progress_prefix)  # Announce completion only after the results row is committed.
     except Exception as e:
         handle_generate_top_level_exception(e)  # Handle top-level exception by logging and re-raising
+    finally:
+        if hasattr(args, "_generation_provenance_config"):
+            delattr(args, "_generation_provenance_config")
 
 
+@locked_generation
 def generate_from_in_memory_generator(args, config: Dict, G: nn.Module, dataset: Any, device: torch.device) -> None:
     """
     Generate synthetic samples using an in-memory trained generator when no checkpoint is available on disk.
@@ -8819,6 +8830,7 @@ def generate_from_in_memory_generator(args, config: Dict, G: nn.Module, dataset:
 
         file_progress_prefix = getattr(args, "file_progress_prefix", f"{BackgroundColors.CYAN}[1/1]{Style.RESET_ALL}")  # Retrieve colored progress prefix from args or use default
 
+        args._generation_checkpoint_digest = None  # In-memory identity is derived from the actual weights and fitted scaler.
         scaler = dataset.scaler  # Extract fitted scaler from dataset for inverse transform
         label_encoder = dataset.label_encoder  # Extract fitted label encoder from dataset for label decoding
         feature_cols = dataset.feature_cols  # Extract feature column names from dataset for DataFrame reconstruction
@@ -8852,6 +8864,7 @@ def generate_from_in_memory_generator(args, config: Dict, G: nn.Module, dataset:
             "args": vars(args),
         }
         prepare_and_write_results_csv_row(args, config, vars(args), in_memory_ckpt, generated_n, device)
+        cleanup_unique_generation_journal(args)
         notify_generation_finish_via_telegram(args, generated_n, file_progress_prefix)  # Announce completion only after the results row is committed.
 
     except Exception as e:
