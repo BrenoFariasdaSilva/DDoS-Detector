@@ -4,7 +4,7 @@ import unittest  # Provide the repository-standard focused test runner.
 from unittest import mock  # Supply deterministic CLI arguments.
 
 import stacking  # Exercise production CLI and merged configuration behavior.
-from utils.skip_combinations import apply_only_combination_rules, apply_skip_combination_rules, build_alias_lookup, compile_only_combination_rules, compile_skip_combination_rules  # Exercise production rule parsing and filtering.
+from utils.skip_combinations import apply_only_combination_rules, apply_skip_combination_rules, build_alias_lookup, compile_only_combination_rules, compile_skip_combination_rules, describe_skip_combination  # Exercise production rule parsing, filtering, and reporting.
 
 
 class OnlyCombinationTests(unittest.TestCase):
@@ -41,6 +41,14 @@ class OnlyCombinationTests(unittest.TestCase):
         self.assertEqual(config["stacking"]["only_combinations"], ["full&random_forest", "pca&stacking"])  # Preserve the exact repeated CLI rule order.
         self.assertEqual(config["stacking"]["only_combinations_source"], "CLI")  # Report CLI as the effective source.
         self.assertEqual([rule.canonical for rule in config["stacking"]["compiled_only_combinations"]], ["Full Features&Random Forest", "PCA Components&StackingClassifier"])  # Compile aliases to canonical runtime identities.
+
+    def test_skipped_augmented_combination_reports_actual_data_roles(self):
+        """Verify skip diagnostics describe training augmentation and the fixed original test split."""
+
+        message = describe_skip_combination("Full Features", False, 0.25, "Random Forest", 1, 1, 1, 1, (1,))
+        self.assertIn("Training Data: Original plus selected synthetic data", message)
+        self.assertIn("Testing Data: Original held-out Data", message)
+        self.assertNotIn("Testing Data: Augmented Data", message)
 
 
 if __name__ == "__main__":

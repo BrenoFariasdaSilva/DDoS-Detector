@@ -241,11 +241,12 @@ def describe_skip_combination(feature_set_name: str, hyperparameters_enabled: bo
     """
 
     hyperparameter_label = "Optimized Hyperparameters" if hyperparameters_enabled else "Default Hyperparameters"  # Resolve canonical hyperparameter label.
-    testing_data_label = "Augmented Data" if augmentation_ratio is not None else "Original Data"  # Resolve testing source label.
+    training_data_label = "Original plus selected synthetic data" if augmentation_ratio is not None else "Original Data"  # Resolve the actual training source.
+    testing_data_label = "Original held-out Data"  # Preserve the fixed original test partition for every training ratio.
     augmentation_state = "On" if augmentation_ratio is not None else "Off"  # Resolve augmentation state label.
     augmentation_percent = normalize_plan_augmentation_ratio(augmentation_ratio)  # Normalize ratio for display.
     matched_rules = ",".join(str(rule_index) for rule_index in matched_rule_indexes)  # Format overlapping rule indexes deterministically.
-    return f"[SKIPPED {index}/{skipped_total} | Global ID {global_id}/{canonical_total}] Experiment Run: {experiment_run} | Feature Set: {feature_set_name} | Classifier: {classifier_name} | Hyperparameters: {hyperparameter_label} | Training Data: Original Data | Testing Data: {testing_data_label} | Data Augmentation: {augmentation_state} | Augmentation Ratio: {augmentation_percent} | Matched Rules: {matched_rules}"  # Return complete skipped combination line.
+    return f"[SKIPPED {index}/{skipped_total} | Global ID {global_id}/{canonical_total}] Experiment Run: {experiment_run} | Feature Set: {feature_set_name} | Classifier: {classifier_name} | Hyperparameters: {hyperparameter_label} | Training Data: {training_data_label} | Testing Data: {testing_data_label} | Data Augmentation: {augmentation_state} | Augmentation Ratio: {augmentation_percent} | Matched Rules: {matched_rules}"  # Return complete skipped combination line.
 
 
 def apply_skip_combination_rules(evaluation_plan: List[Tuple[str, bool, Optional[float], str]], rules: Tuple[SkipCombinationRule, ...], source: str, experiment_run: int = 1) -> Tuple[List[Tuple[str, bool, Optional[float], str]], dict]:  # Filter one canonical plan.
