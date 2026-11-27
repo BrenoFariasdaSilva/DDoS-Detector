@@ -120,7 +120,7 @@ psutil = (
 )  # Import psutil if available, otherwise set to None
 
 SAO_PAULO_TIMEZONE_NAME = "America/Sao_Paulo"  # Use Sao Paulo timezone for ETA finish timestamps
-WGANGP_RELEASE_VERSION = "V6.5.45"  # Correct ETA after checkpoint recovery.
+WGANGP_RELEASE_VERSION = "V6.5.46"  # Group critic forward checks and generator sample/score checks.
 FLOW_PREPROCESSING_CHECKPOINT_TAG = "ConditionalMixedStructuralV654TailKnots"  # Isolate weights trained on the full-class tail-knot representation.
 FLOW_PREPROCESSING_COMPATIBLE_TAGS: tuple[str, ...] = ()  # Earlier V6.5 weights were trained on a different tail encoding and are never resumed.
 QUALITY_SELECTION_POLICY = "priority_moment_swap_v1"  # Identify the bounded mean-first candidate selection policy in output provenance.
@@ -3205,7 +3205,7 @@ def distribute_generated_counts_by_ratio(class_distribution: Dict, total_preproc
     return base_counts  # Return exact per-class synthetic row allocation
 
 
-def gradient_penalty(critic, real_samples, fake_samples, labels, device, config: Optional[Dict] = None, args: Optional[Any] = None, epoch: int = 0, step: int = 0, component: str = "gradient_penalty"):
+def gradient_penalty(critic, real_samples, fake_samples, labels, device, config: Optional[Dict] = None, args: Optional[Any] = None, epoch: int = 0, step: int = 0, component: str = "gradient_penalty", finite_checks: Optional[List[tuple]] = None):
     """
     Compute the WGAN-GP gradient penalty.
 
@@ -3252,11 +3252,15 @@ def gradient_penalty(critic, real_samples, fake_samples, labels, device, config:
         if args is not None:  # Emit context-rich failure at penalty boundary
             # Every intermediate is still validated, in diagnostic order, before
             # returning a penalty or allowing the caller to update any parameters.
-            require_finite_tensor_group([
+            checks = [
                 ("interpolated_samples", interpolates), ("interpolated_scores", d_interpolates),
                 ("interpolated_gradients", grads), ("interpolated_gradient_norms", grad_norm),
                 ("gradient_penalty", gp),
-            ], args, epoch, step, component)
+            ]
+            if finite_checks is None:
+                require_finite_tensor_group(checks, args, epoch, step, component)
+            else:
+                finite_checks.extend(checks)  # Caller checks every value before backward/optimizer execution.
         return gp  # Return scalar gradient penalty
     except Exception as e:
         print(str(e))
@@ -5141,17 +5145,19 @@ def execute_discriminator_training_steps(G, D, opt_D, scaler, real_x, labels, de
         with torch.no_grad(), autocast(device.type, enabled=bool(getattr(args, "use_amp", False))):  # Avoid building generator gradient graphs during critic-only updates.
             z = torch.randn(args.batch_size, args.latent_dim, device=device)  # Sample noise for discriminator step
             fake_x = G(z, labels).detach()  # Generate fake samples and detach for discriminator
-        require_finite_tensor(fake_x, "generated_samples", args, epoch + 1, step + 1, component)  # Reject invalid generated samples before critic reuse
+        forward_checks = [("generated_samples", fake_x)]  # No optimizer update is allowed before validating all forward intermediates.
         with autocast(device.type, enabled=False):  # Keep complete critic objective and backward graph in full precision
             if config.get("training", {}).get("coalesce_critic_forwards", False):
                 d_real, d_fake = D(real_x.float(), labels, fake_x.float())
             else:
                 d_real = D(real_x.float(), labels)
                 d_fake = D(fake_x.float(), labels)
-            require_finite_tensor_group([("real_scores", d_real), ("fake_scores", d_fake)], args, epoch + 1, step + 1, component)  # Same numerical checks with one host synchronization.
-            gp = gradient_penalty(D, real_x.float(), fake_x.float(), labels, device, config, args, epoch + 1, step + 1, component)  # Compute complete gradient penalty in full precision
+            forward_checks.extend([("real_scores", d_real), ("fake_scores", d_fake)])
+            gp = gradient_penalty(D, real_x.float(), fake_x.float(), labels, device, config, args, epoch + 1, step + 1, component, finite_checks=forward_checks)  # Compute complete gradient penalty in full precision
             loss_D = d_fake.float().mean() - d_real.float().mean() + args.lambda_gp * gp  # Calculate full-precision WGAN-GP discriminator loss
-        require_finite_tensor(loss_D, "loss", args, epoch + 1, step + 1, component)  # Reject invalid discriminator loss before backward execution
+        forward_checks.append(("loss", loss_D))
+        require_finite_tensor_group(forward_checks, args, epoch + 1, step + 1, component)  # One synchronization before backward; all prior checks retained.
+        del forward_checks  # Release temporary tensor references before backward.
         opt_D.zero_grad(set_to_none=True)  # Reset discriminator gradients to None for reduced memory overhead
         loss_D.backward()  # Backpropagate complete full-precision critic objective
         require_finite_model_state(D, "gradients", args, epoch + 1, step + 1, component, gradients=True)  # Reject invalid discriminator gradients before optimizer execution
@@ -5251,10 +5257,9 @@ def execute_generator_training_step(G, D, opt_G, scaler, device: torch.device, a
         z = torch.randn(args.batch_size, args.latent_dim, device=device)  # Sample noise for generator step
         gen_labels = real_labels if real_labels is not None else torch.randint(0, n_classes, (args.batch_size,), device=device)  # Align conditioning with real critic classes
         fake_x, log_probability_features = G(z, gen_labels, return_log_probabilities=True)  # Share one forward pass between hard adversarial samples and categorical frequency expectations.
-    require_finite_tensor(fake_x, "generated_samples", args, epoch + 1, step + 1, "generator")  # Reject invalid generated samples before loss calculation
     with autocast(device.type, enabled=False):  # Keep critic scoring in FP32 during generator training
         fake_scores = D(fake_x.float(), gen_labels)  # Preserve differentiability through the precision conversion
-    require_finite_tensor(fake_scores, "fake_scores", args, epoch + 1, step + 1, "generator")  # Reject invalid fake critic scores
+    require_finite_tensor_group([("generated_samples", fake_x), ("fake_scores", fake_scores)], args, epoch + 1, step + 1, "generator")  # Validate before fidelity/backward in one synchronization.
     g_loss = -fake_scores.float().mean()  # Calculate generator loss with full-precision reduction
     class_rows = (prepare_fidelity_class_rows(gen_labels)
                   if V61_REFERENCE_MOMENTS or V6_REFERENCE_CORRELATIONS or V64_REFERENCE_NUMERIC_QUANTILES else None)
