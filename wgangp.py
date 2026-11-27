@@ -120,7 +120,7 @@ psutil = (
 )  # Import psutil if available, otherwise set to None
 
 SAO_PAULO_TIMEZONE_NAME = "America/Sao_Paulo"  # Use Sao Paulo timezone for ETA finish timestamps
-WGANGP_RELEASE_VERSION = "V6.5.33"  # Skip unused categorical expectations in critic-only generator forwards.
+WGANGP_RELEASE_VERSION = "V6.5.34"  # Restrict generator backward to generator parameters.
 FLOW_PREPROCESSING_CHECKPOINT_TAG = "ConditionalMixedStructuralV654TailKnots"  # Isolate weights trained on the full-class tail-knot representation.
 FLOW_PREPROCESSING_COMPATIBLE_TAGS: tuple[str, ...] = ()  # Earlier V6.5 weights were trained on a different tail encoding and are never resumed.
 QUALITY_SELECTION_POLICY = "priority_moment_swap_v1"  # Identify the bounded mean-first candidate selection policy in output provenance.
@@ -5155,13 +5155,13 @@ def execute_generator_training_step(G, D, opt_G, scaler, device: torch.device, a
     require_finite_tensor(g_loss, "loss", args, epoch + 1, step + 1, "generator")  # Reject invalid generator loss before backward execution
     opt_G.zero_grad(set_to_none=True)  # Reset generator gradients to None for reduced memory overhead
     if scaler is not None:  # If using mixed precision
-        scaler.scale(g_loss).backward()  # Scale loss and backpropagate
+        scaler.scale(g_loss).backward(inputs=tuple(G.parameters()))  # Backpropagate only into generator leaves
         scaler.unscale_(opt_G)  # Unscale generator gradients before finite validation
         require_finite_model_state(G, "gradients", args, epoch + 1, step + 1, "generator", gradients=True)  # Reject invalid generator gradients before optimizer execution
         scaler.step(opt_G)  # Update generator parameters with scaled gradients
         scaler.update()  # Update scaler for next iteration
     else:  # Standard precision
-        g_loss.backward()  # Backpropagate generator loss
+        g_loss.backward(inputs=tuple(G.parameters()))  # Propagate through the critic without accumulating its unused parameter gradients
         require_finite_model_state(G, "gradients", args, epoch + 1, step + 1, "generator", gradients=True)  # Reject invalid generator gradients before optimizer execution
         opt_G.step()  # Update generator parameters
     require_finite_model_state(G, "parameters", args, epoch + 1, step + 1, "generator")  # Reject invalid generator parameters immediately after update
