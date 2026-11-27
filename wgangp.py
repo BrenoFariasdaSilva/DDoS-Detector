@@ -120,7 +120,7 @@ psutil = (
 )  # Import psutil if available, otherwise set to None
 
 SAO_PAULO_TIMEZONE_NAME = "America/Sao_Paulo"  # Use Sao Paulo timezone for ETA finish timestamps
-WGANGP_RELEASE_VERSION = "V6.5.37"  # Cache invariant fidelity reference indices and scales outside minibatches.
+WGANGP_RELEASE_VERSION = "V6.5.38"  # Batch optimizer state validation and metric transfers by device.
 FLOW_PREPROCESSING_CHECKPOINT_TAG = "ConditionalMixedStructuralV654TailKnots"  # Isolate weights trained on the full-class tail-knot representation.
 FLOW_PREPROCESSING_COMPATIBLE_TAGS: tuple[str, ...] = ()  # Earlier V6.5 weights were trained on a different tail encoding and are never resumed.
 QUALITY_SELECTION_POLICY = "priority_moment_swap_v1"  # Identify the bounded mean-first candidate selection policy in output provenance.
@@ -3511,10 +3511,21 @@ def require_finite_optimizer_state(optimizer: torch.optim.Optimizer, optimizer_n
     :return: None.
     """
 
-    for parameter_index, parameter_state in enumerate(optimizer.state.values()):  # Iterate restored optimizer parameter states
-        for state_name, state_value in parameter_state.items():  # Iterate each optimizer state value
-            if torch.is_tensor(state_value):  # Inspect only tensor-backed optimizer state
-                require_finite_tensor(state_value, f"{optimizer_name}[{parameter_index}].{state_name}", args, epoch, step, optimizer_name)  # Reject invalid optimizer state before use
+    named_tensors = [(f"{optimizer_name}[{parameter_index}].{state_name}", state_value)
+                     for parameter_index, parameter_state in enumerate(optimizer.state.values())
+                     for state_name, state_value in parameter_state.items() if torch.is_tensor(state_value)]
+    by_device = {}
+    for name, value in named_tensors:
+        by_device.setdefault(value.device, []).append(value)
+    # Adam step counters can reside on CPU even when moments reside on CUDA.
+    # Do not stack tensors from different devices.
+    valid = [bool(torch.stack([torch.isfinite(value.detach()).all() for value in values]).all().item())
+             for values in by_device.values()]
+    if all(valid):
+        return
+    for name, value in named_tensors:
+        require_finite_tensor(value, name, args, epoch, step, optimizer_name)
+    raise FloatingPointError(f"Non-finite optimizer state in {optimizer_name}")
 
 
 def should_scan_optimizer_state(config: Optional[Dict], batch_step: int) -> bool:
@@ -5250,11 +5261,12 @@ def record_training_step_metrics(step: int, args, metrics_history: Dict, loss_D,
     :return: Tuple of cached scalar values (cached_loss_D, cached_g_loss, cached_gp, cached_d_real, cached_d_fake).
     """
 
-    cached_loss_D = loss_D.item()  # Cache discriminator loss as Python float
-    cached_g_loss = g_loss.item()  # Cache generator loss as Python float
-    cached_gp = gp.item()  # Cache gradient penalty as Python float
-    cached_d_real = d_real_score.item()  # Cache average real score as Python float
-    cached_d_fake = d_fake_score.item()  # Cache average fake score as Python float
+    values = (loss_D, g_loss, gp, d_real_score, d_fake_score)
+    if all(value.device == loss_D.device and value.dtype == loss_D.dtype and value.ndim == 0 for value in values):
+        scalars = torch.stack([value.detach() for value in values]).cpu().tolist()
+    else:
+        scalars = [value.item() for value in values]  # Preserve mixed-dtype scalar conversion.
+    cached_loss_D, cached_g_loss, cached_gp, cached_d_real, cached_d_fake = scalars
     wasserstein_dist = cached_d_real - cached_d_fake  # Compute Wasserstein distance from cached values
     
     metrics_history["steps"].append(step)  # Record step number
