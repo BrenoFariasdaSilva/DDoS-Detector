@@ -3864,9 +3864,9 @@ def concat_files_into_combined_files_df(processed_files_with_labels, common_feat
     total_samples = sum(len(df_clean) for _, df_clean, _, _, _ in processed_files_with_labels)  # Calculate total samples across all processed files for percentage reporting
 
     for idx, (f, df_clean, this_target, feat_cols, attack_label) in enumerate(processed_files_with_labels):  # Iterate over processed files with index
-        df_subset = df_clean[common_features_list].copy()  # Select only common features as a copy for safe modification
+        df_subset = df_clean[common_features_list]  # Select only common features as a copy for safe modification
         df_subset[LSTM_SOURCE_FILE_COLUMN] = str(f)  # Preserve source-file grouping for later verified LSTM windows.
-        df_subset[LSTM_ROW_ORDER_COLUMN] = pd.Series(df_clean.index.to_numpy(copy=True), index=df_clean.index).astype(str).values  # Preserve pre-concat row chronology for LSTM only.
+        df_subset[LSTM_ROW_ORDER_COLUMN] = df_clean.index.to_numpy(copy=False) if pd.api.types.is_integer_dtype(df_clean.index.dtype) else df_clean.index.astype(str)  # Preserve pre-concat row chronology for LSTM only.
         df_subset["attack_type"] = df_clean[this_target].values  # Preserve original label column values to maintain benign and attack class integrity
         combined_parts.append(df_subset)  # Append to combined parts list
 
@@ -3880,6 +3880,8 @@ def concat_files_into_combined_files_df(processed_files_with_labels, common_feat
             config=config
         )  # Output samples added message including percentage contribution
 
+    if processed_files_with_labels:
+        del df_clean, df_subset  # Release the final loop aliases before concatenation.
     gc.collect()  # Force garbage collection to reclaim memory from released original dataframes
 
     write_memory_phase_event("before_combined_dataframe_creation", config=config, source_file_count=len(processed_files_with_labels), feature_count=len(common_features_list), attack_scope=sorted(list(attack_types_set)), train_sample_count=total_samples, event_outcome="starting")  # Publish combined dataframe creation start
@@ -6598,6 +6600,7 @@ def scale_and_split(X, y, test_size=0.2, random_state=42, config=None, row_metad
         else:  # If features are already array-like
             X_values = np.asarray(X)  # Normalize features to numpy array
 
+        del X  # The numeric array owns its backing storage; do not keep the frame alive during fitting.
         if X_values.ndim != 2 or X_values.shape[1] == 0:  # If no usable feature columns are available
             raise ValueError(
                 f"{BackgroundColors.RED}No numeric features found in X after filtering.{Style.RESET_ALL}"
@@ -6620,15 +6623,16 @@ def scale_and_split(X, y, test_size=0.2, random_state=42, config=None, row_metad
 
         train_metadata = row_metadata.iloc[train_idx].reset_index(drop=True) if row_metadata is not None else None  # Preserve train row provenance only when requested.
         test_metadata = row_metadata.iloc[test_idx].reset_index(drop=True) if row_metadata is not None else None  # Preserve test row provenance only when requested.
-        del sample_indices, X_values  # Release split helper arrays and base feature view before augmentation/scaling
+        del sample_indices, X_values, train_idx, test_idx  # Release split helper arrays and base feature view before augmentation/scaling
         gc.collect()  # Force garbage collection to reclaim memory from released split helpers
 
         write_memory_phase_event("before_scaling", config=config, train_sample_count=len(y_train), test_sample_count=len(y_test), feature_count=X_train.shape[1], event_outcome="starting")  # Publish scaling start
         scaler = StandardScaler()  # Initialize the StandardScaler
 
-        X_train_scaled = np.asarray(scaler.fit_transform(X_train))  # Fit and transform original training features only.
+        scaler.fit(X_train)  # Same fit and fitted scaler parameters.
+        X_train_scaled = np.asarray(scaler.transform(X_train, copy=False))  # Split owns this array; safely reuse it.
 
-        X_test_scaled = np.asarray(scaler.transform(X_test))  # Transform the testing features (original data only)
+        X_test_scaled = np.asarray(scaler.transform(X_test, copy=False))  # Reuse the private original test array.
         write_memory_phase_event("after_scaling", config=config, train_sample_count=len(y_train), test_sample_count=len(y_test), feature_count=X_train_scaled.shape[1], event_outcome="completed")  # Publish scaling completion
 
         del X_train, X_test, y_series  # Release large pre-scaled matrices and temporary target Series after scaling
@@ -6649,7 +6653,6 @@ def scale_and_split(X, y, test_size=0.2, random_state=42, config=None, row_metad
         )  # Return scaled features, targets, and fitted preprocessing.
         if row_metadata is not None:
             return split_result + (train_metadata, test_metadata)  # Return aligned provenance for verified LSTM windows.
-        del train_idx, test_idx  # Release index arrays only after optional metadata slicing.
         return split_result  # Return the original six-value contract.
     except Exception as e:
         print(str(e))
@@ -13077,12 +13080,11 @@ def prepare_evaluation_data_splits(df, config=None, include_lstm_metadata: bool 
             config = CONFIG  # Use global CONFIG
 
         row_metadata = extract_lstm_row_metadata(df, lstm_source_file) if include_lstm_metadata else None  # Capture row provenance before feature-only views are built.
-        feature_df = df.iloc[:, :-1]  # Build feature view excluding the target column positionally to avoid drop-copy amplification
-        feature_df = feature_df[[column for column in feature_df.columns if not is_lstm_metadata_column(column)]]  # Remove reserved metadata from all classifier features.
-        X_full = feature_df.select_dtypes(include=np.number)  # Select only numeric feature columns from the feature view
+        numeric_columns = [column for column in df.iloc[:0, :-1].select_dtypes(include=np.number).columns
+                           if not is_lstm_metadata_column(column)]
+        X_full = df[numeric_columns]  # Select numeric predictive columns once.
         y = df.iloc[:, -1]  # Extract target column as the last column
-
-        del feature_df  # Release temporary feature DataFrame view reference before split/scaling
+        del df  # Drop the original mixed-type frame before allocating split matrices.
         gc.collect()  # Force garbage collection to reclaim memory from released feature view references
 
         if len(np.unique(y)) < 2:  # Verify if there is more than one class
@@ -13091,9 +13093,11 @@ def prepare_evaluation_data_splits(df, config=None, include_lstm_metadata: bool 
             )  # Output the error message
             return None  # Return None to signal classification is not possible
 
-        split_result = scale_and_split(X_full, y, config=config, row_metadata=row_metadata)  # Split and fit preprocessing on original training data only.
+        feature_input = [X_full]
+        del X_full
+        split_result = scale_and_split(feature_input.pop(), y, config=config, row_metadata=row_metadata)  # Transfer the numeric input so scaling can release it.
 
-        del X_full, y  # Release original split inputs after scale_and_split returns
+        del y  # Release original split inputs after scale_and_split returns
         gc.collect()  # Force garbage collection to reclaim memory from released original split inputs
 
         return split_result  # Return the prepared original-only data splits and preprocessing.
@@ -17372,7 +17376,7 @@ def evaluate_on_dataset(
         else:  # Reuse the complete ordered plan that created the shared full-grid progress bar
             evaluation_plan = grid_progress["evaluation_plan"]  # Reuse the authoritative full-grid plan source
 
-        pca_input_feature_names = feature_columns_without_lstm_metadata([str(column) for column in df.iloc[:, :-1].select_dtypes(include=np.number).columns])  # Capture the exact ordered numeric columns consumed by scaling and PCA.
+        pca_input_feature_names = feature_columns_without_lstm_metadata([str(column) for column in df.iloc[:0, :-1].select_dtypes(include=np.number).columns])  # Capture the exact ordered numeric columns consumed by scaling and PCA.
         target_column_name = str(df.columns[-1])  # Capture the positional target column used by the split flow.
         original_sample_count = int(len(df))  # Record the original sample population before splitting.
         if source_files is not None:  # Use caller-supplied provenance for combined or explicitly sourced evaluation data.
@@ -17528,13 +17532,18 @@ def evaluate_on_dataset(
             return all_results
 
         preprocessing_started_at = time.perf_counter()  # Start preprocessing timer for split, encoding, and scaling.
-        data_splits = prepare_evaluation_data_splits(df, config=config, include_lstm_metadata=True, lstm_source_file=file)  # Prepare original-only training and testing data splits with LSTM provenance.
+        needs_lstm_metadata = any(is_lstm_classifier_name(name) for name in individual_models) or stacking_enabled
+        original_input = [df]
+        del df  # Transfer ownership; split preparation can release the original frame before allocating scaled arrays.
+        data_splits = prepare_evaluation_data_splits(original_input.pop(), config=config, include_lstm_metadata=needs_lstm_metadata, lstm_source_file=file)
         preprocessing_time_s = time.perf_counter() - preprocessing_started_at  # Stop preprocessing timer before feature-selection matrices are materialized.
 
         if data_splits is None:  # If data preparation failed (single-class target)
             return {}  # Return empty dictionary
 
-        X_train_scaled, X_test_scaled, y_train, y_test, scaler, label_encoder, train_row_metadata, test_row_metadata = data_splits  # Unpack original-only splits, preprocessing, and row provenance.
+        X_train_scaled, X_test_scaled, y_train, y_test, scaler, label_encoder = data_splits[:6]
+        train_row_metadata, test_row_metadata = data_splits[6:] if needs_lstm_metadata else (None, None)
+        del data_splits  # Drop duplicate split references before augmenting.
         pca_fit_row_count = None  # Fit PCA on every training row unless synthetic rows are appended below.
         if experiment_mode == "original_training_augmented_training":  # Add synthetic rows only after original split and preprocessing fit.
             if df_augmented_for_training is None or augmentation_ratio is None:  # Require explicit synthetic source and ratio.
@@ -17546,17 +17555,19 @@ def evaluate_on_dataset(
                 raise ValueError(f"Synthetic training data is missing original feature columns: {missing_synthetic_features}")  # Preserve strict schema identity.
             X_synthetic_scaled = np.asarray(scaler.transform(synthetic_features[pca_input_feature_names].to_numpy(copy=False)))  # Transform synthetic rows with scaler fitted only on original training data.
             y_synthetic = np.asarray(label_encoder.transform(selected_synthetic.iloc[:, -1].to_numpy(copy=False)), dtype=np.int64)  # Encode synthetic labels with original-training encoder.
-            synthetic_metadata = pd.DataFrame({"source_file": ["synthetic_training"] * len(y_synthetic), "row_order": np.arange(len(y_synthetic), dtype=np.int64)})  # Preserve source boundary for LSTM windows.
-            pca_fit_row_count = int(X_train_scaled.shape[0])  # Fit PCA only on the original training rows that precede synthetic rows.
+            pca_fit_row_count = int(X_train_scaled.shape[0])  # Fit PCA on original rows only.
             X_train_scaled = np.concatenate((X_train_scaled, X_synthetic_scaled), axis=0)  # Combine original and selected synthetic training features only.
-            y_train = np.concatenate((y_train, y_synthetic), axis=0)  # Combine original and selected synthetic training labels only.
-            train_row_metadata = pd.concat((train_row_metadata, synthetic_metadata), ignore_index=True)  # Preserve row-aligned LSTM metadata after training augmentation.
+            y_train = np.concatenate((y_train, y_synthetic), axis=0)
+            synthetic_metadata = pd.DataFrame({"source_file": "synthetic_training", "row_order": np.arange(len(y_synthetic), dtype=np.int64)}) if needs_lstm_metadata else None
+            if needs_lstm_metadata:
+                train_row_metadata = pd.concat((train_row_metadata, synthetic_metadata), ignore_index=True)  # Preserve row-aligned LSTM metadata.
             pca_cache_context.update({"data_source": "Original Combined Files" if execution_mode_str == "combined_files" else "Original", "experiment_mode": "original_only", "augmentation_ratio": None, "augmented_sample_count": 0, "augmentation_merged_into_training_after_split": False})  # Identify the PCA fit as the original-only fit because synthetic rows are only projected.
             del selected_synthetic, synthetic_features, X_synthetic_scaled, y_synthetic, synthetic_metadata  # Release ratio-local synthetic allocations before feature evaluation.
             gc.collect()  # Reclaim synthetic selection memory before classifier fitting.
-        feature_source_arrays = {"X_train_scaled": X_train_scaled, "X_test_scaled": X_test_scaled, "spilled_to_memmap": False}  # Transfer full source matrices into a mutable lifecycle holder.
-        del data_splits, X_train_scaled, X_test_scaled  # Remove duplicate local references so the holder can truly release or spill the full matrices.
-        del df  # Release the original dataframe after split and scaling before classifier fitting.
+        if feature_source_arrays is None:
+            feature_source_arrays = {"X_train_scaled": X_train_scaled, "X_test_scaled": X_test_scaled, "spilled_to_memmap": False}  # Transfer full source matrices into a mutable lifecycle holder.
+        del X_train_scaled, X_test_scaled  # Remove duplicate local references so the holder can truly release or spill the full matrices.
+        del df_augmented_for_training, df_augmented_for_testing  # Drop evaluator references to raw synthetic data.
         gc.collect()  # Reclaim released dataframe memory before feature-set materialization.
 
         target_feature_mode = feature_mode_name if feature_mode_name is not None else (artifact_recovery_target[0] if artifact_recovery_target is not None else None)  # Resolve the sole feature mode required by this invocation.
