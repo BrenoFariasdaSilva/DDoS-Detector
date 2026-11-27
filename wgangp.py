@@ -120,7 +120,7 @@ psutil = (
 )  # Import psutil if available, otherwise set to None
 
 SAO_PAULO_TIMEZONE_NAME = "America/Sao_Paulo"  # Use Sao Paulo timezone for ETA finish timestamps
-WGANGP_RELEASE_VERSION = "V6.5.35"  # Group gradient penalty and input finite checks before updates.
+WGANGP_RELEASE_VERSION = "V6.5.36"  # Share exact class row indices across reference fidelity losses.
 FLOW_PREPROCESSING_CHECKPOINT_TAG = "ConditionalMixedStructuralV654TailKnots"  # Isolate weights trained on the full-class tail-knot representation.
 FLOW_PREPROCESSING_COMPATIBLE_TAGS: tuple[str, ...] = ()  # Earlier V6.5 weights were trained on a different tail encoding and are never resumed.
 QUALITY_SELECTION_POLICY = "priority_moment_swap_v1"  # Identify the bounded mean-first candidate selection policy in output provenance.
@@ -4288,7 +4288,26 @@ def build_class_reference_moments(features: torch.Tensor, labels: np.ndarray, sa
     return targets
 
 
-def class_reference_moment_loss(fake_x: torch.Tensor, labels: torch.Tensor, targets: Dict[int, tuple], log_probability_features: Optional[torch.Tensor] = None, categorical_groups: Optional[List[tuple]] = None) -> torch.Tensor:  # Separate numeric moments from categorical frequency matching.
+def prepare_fidelity_class_rows(labels: torch.Tensor) -> Dict[int, torch.Tensor]:
+    """Resolve exact minibatch membership once, preserving source row order.
+
+    A single host read replaces repeated CUDA nonzero/count synchronizations.
+    Transfer all indices together; no random numbers or class sampling change.
+    """
+    host_labels = labels.detach().cpu().numpy().reshape(-1)
+    classes = np.unique(host_labels)
+    positions = [np.flatnonzero(host_labels == class_id) for class_id in classes]
+    packed = torch.as_tensor(np.concatenate(positions) if positions else np.empty(0, dtype=np.int64),
+                             dtype=torch.long, device=labels.device)
+    result = {}
+    offset = 0
+    for class_id, rows in zip(classes, positions):
+        result[int(class_id)] = packed[offset:offset + len(rows)]
+        offset += len(rows)
+    return result
+
+
+def class_reference_moment_loss(fake_x: torch.Tensor, labels: torch.Tensor, targets: Dict[int, tuple], log_probability_features: Optional[torch.Tensor] = None, categorical_groups: Optional[List[tuple]] = None, class_rows: Optional[Dict[int, torch.Tensor]] = None) -> torch.Tensor:  # Separate numeric moments from categorical frequency matching.
     """Match numeric moments and categorical marginal probabilities within each class.
 
     :param fake_x: Generated hard mixed-type feature tensor.
@@ -4307,8 +4326,8 @@ def class_reference_moment_loss(fake_x: torch.Tensor, labels: torch.Tensor, targ
 
     for class_id, target in targets.items():  # Compare each generated class against its own real distribution.
         target_mean, target_std = target[:2]  # Resolve fixed reference moments on the training device.
-        selected = labels == int(class_id)  # Select aligned generated class rows.
-        selected_count = int(selected.sum())  # Resolve this class's minibatch population once.
+        selected = labels == int(class_id) if class_rows is None else class_rows.get(int(class_id))
+        selected_count = int(selected.sum()) if class_rows is None else (0 if selected is None else selected.numel())
         if selected_count == 0 or (selected_count < 8 and not categorical_groups):  # Retain categorical frequency learning even for small represented classes.
             continue  # Skip absent classes and unreliable purely numeric moments.
         fake = fake_x[selected].float()  # Promote moment arithmetic before reductions.
@@ -4338,13 +4357,14 @@ def class_reference_moment_loss(fake_x: torch.Tensor, labels: torch.Tensor, targ
     return loss / groups if groups else loss  # Preserve finite zero loss when no class qualifies.
 
 
-def class_reference_correlation_loss(fake_x: torch.Tensor, labels: torch.Tensor, reference_targets: Dict[int, tuple]) -> torch.Tensor:
+def class_reference_correlation_loss(fake_x: torch.Tensor, labels: torch.Tensor, reference_targets: Dict[int, tuple], class_rows: Optional[Dict[int, torch.Tensor]] = None) -> torch.Tensor:
     """Match synthetic per-class correlations to stable, independent real-data reservoirs."""
     loss = fake_x.float().new_zeros(())
     groups = 0
     for class_id, (feature_indices, correlation) in reference_targets.items():
-        selected = labels == int(class_id)
-        if int(selected.sum()) < 16:
+        selected = labels == int(class_id) if class_rows is None else class_rows.get(int(class_id))
+        count = int(selected.sum()) if class_rows is None else (0 if selected is None else selected.numel())
+        if count < 16:
             continue
         x = fake_x[selected].float().index_select(1, feature_indices)
         centered = x - x.mean(dim=0, keepdim=True)
@@ -4397,7 +4417,7 @@ def build_class_reference_numeric_quantiles(features: torch.Tensor, labels: np.n
     return targets  # Return only immutable numeric target values.
 
 
-def class_reference_numeric_quantile_loss(fake_x: torch.Tensor, labels: torch.Tensor, targets: Dict[int, tuple], numeric_feature_count: int, minimum_class_rows: int = 32) -> torch.Tensor:
+def class_reference_numeric_quantile_loss(fake_x: torch.Tensor, labels: torch.Tensor, targets: Dict[int, tuple], numeric_feature_count: int, minimum_class_rows: int = 32, class_rows: Optional[Dict[int, torch.Tensor]] = None) -> torch.Tensor:
     """Match central class quantiles and smoothly estimated 99th-percentile excess.
 
     :param fake_x: Differentiable generator output in the encoded model space.
@@ -4412,8 +4432,8 @@ def class_reference_numeric_quantile_loss(fake_x: torch.Tensor, labels: torch.Te
     levels = torch.tensor([0.10, 0.50, 0.90], dtype=torch.float32, device=fake_x.device)  # Match central distribution landmarks without relying on unstable minibatch p99.
 
     for class_id, reference_target in targets.items():  # Match each generated class to its own real traffic distribution.
-        selected = labels == int(class_id)  # Preserve class-conditional separation throughout the loss.
-        count = int(selected.sum())  # Resolve current class sample size before estimating statistics.
+        selected = labels == int(class_id) if class_rows is None else class_rows.get(int(class_id))
+        count = int(selected.sum()) if class_rows is None else (0 if selected is None else selected.numel())
 
         if count < minimum_class_rows or numeric_feature_count == 0:  # Require a configured minimum of real-class-aligned generator rows.
             continue  # Skip classes without enough current synthetic observations.
@@ -5121,6 +5141,8 @@ def execute_generator_training_step(G, D, opt_G, scaler, device: torch.device, a
         fake_scores = D(fake_x.float(), gen_labels)  # Preserve differentiability through the precision conversion
     require_finite_tensor(fake_scores, "fake_scores", args, epoch + 1, step + 1, "generator")  # Reject invalid fake critic scores
     g_loss = -fake_scores.float().mean()  # Calculate generator loss with full-precision reduction
+    class_rows = (prepare_fidelity_class_rows(gen_labels)
+                  if V61_REFERENCE_MOMENTS or V6_REFERENCE_CORRELATIONS or V64_REFERENCE_NUMERIC_QUANTILES else None)
     moment_weight = float((config or {}).get("training", {}).get("moment_fidelity_weight", 0.10))
     if not np.isfinite(moment_weight) or moment_weight < 0:
         raise ValueError("moment_fidelity_weight must be finite and nonnegative")
@@ -5128,7 +5150,7 @@ def execute_generator_training_step(G, D, opt_G, scaler, device: torch.device, a
         if real_labels is None or real_x.shape != fake_x.shape:
             raise ValueError("Moment matching requires aligned real features and labels")
         if V61_REFERENCE_MOMENTS:
-            g_loss = g_loss + moment_weight * class_reference_moment_loss(fake_x, gen_labels, V61_REFERENCE_MOMENTS, log_probability_features, getattr(args, "_mixed_categorical_groups", []))  # Match category probabilities without imposing one-hot minibatch variance.
+            g_loss = g_loss + moment_weight * class_reference_moment_loss(fake_x, gen_labels, V61_REFERENCE_MOMENTS, log_probability_features, getattr(args, "_mixed_categorical_groups", []), class_rows=class_rows)  # Match category probabilities without imposing one-hot minibatch variance.
         else:
             g_loss = g_loss + moment_weight * class_conditional_moment_loss(real_x, fake_x, gen_labels)
     corr_weight = float((config or {}).get("training", {}).get("correlation_fidelity_weight", 2.0))
@@ -5139,7 +5161,7 @@ def execute_generator_training_step(G, D, opt_G, scaler, device: torch.device, a
             raise ValueError("Correlation matching requires aligned real features and labels")
         stable_targets = V6_REFERENCE_CORRELATIONS
         if stable_targets:
-            g_loss = g_loss + corr_weight * class_reference_correlation_loss(fake_x, gen_labels, stable_targets)
+            g_loss = g_loss + corr_weight * class_reference_correlation_loss(fake_x, gen_labels, stable_targets, class_rows=class_rows)
         else:
             g_loss = g_loss + corr_weight * class_conditional_correlation_loss(real_x, fake_x, gen_labels)
     quantile_weight = float((config or {}).get("training", {}).get("quantile_fidelity_weight", 0.15))  # Resolve independently configurable numeric quantile regularization.
@@ -5148,7 +5170,7 @@ def execute_generator_training_step(G, D, opt_G, scaler, device: torch.device, a
     if quantile_weight and V64_REFERENCE_NUMERIC_QUANTILES:  # Match independent numeric distributions without modifying output CSV rows.
         numeric_feature_count = int(getattr(args, "_mixed_numeric_feature_count", 0))  # Use the exact numeric prefix from the fitted mixed-type scaler.
         quantile_minimum = 16 if resolve_training_class_sampler_policy(config or {}) == "balanced_batch" else 32  # Give three- and four-class 64-row batches useful distribution feedback.
-        g_loss = g_loss + quantile_weight * class_reference_numeric_quantile_loss(fake_x, gen_labels, V64_REFERENCE_NUMERIC_QUANTILES, numeric_feature_count, minimum_class_rows=quantile_minimum)  # Preserve the old 32-row requirement for legacy training.
+        g_loss = g_loss + quantile_weight * class_reference_numeric_quantile_loss(fake_x, gen_labels, V64_REFERENCE_NUMERIC_QUANTILES, numeric_feature_count, minimum_class_rows=quantile_minimum, class_rows=class_rows)  # Preserve the old 32-row requirement for legacy training.
     require_finite_tensor(g_loss, "loss", args, epoch + 1, step + 1, "generator")  # Reject invalid generator loss before backward execution
     opt_G.zero_grad(set_to_none=True)  # Reset generator gradients to None for reduced memory overhead
     if scaler is not None:  # If using mixed precision
