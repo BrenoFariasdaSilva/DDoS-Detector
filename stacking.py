@@ -18876,6 +18876,7 @@ def sequential_combined_reuse_enabled(config):
             and resolve_boolean_value(memory_cfg.get("spill_full_feature_arrays_after_full_eval", True), True)
             and not any(validate_feature_set_workers(config.get("evaluation", {}).get("feature_set_workers")).values())
             and not stacking_cfg.get("model_recovery", False)
+            and not config.get("execution", {}).get("skip_train_if_model_exists", False)
             and not config.get("explainability", {}).get("enabled", False)
             and not stacking_cfg.get("automl_only", False)
             and not stacking_cfg.get("methods", {}).get("automl", True)
@@ -18910,9 +18911,14 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
                 print(f"[MEMORY] Execution-local original dataset snapshot: {directory}")
                 return process_combined_files_evaluation(original_files_list, None, attack_types_list, dataset_name, config=config, _data_session=session)
             finally:
-                if session is not None:
-                    session.close()
-                cleanup_feature_process_directory(directory)
+                try:
+                    if session is not None:
+                        session.close()
+                finally:
+                    try:
+                        cleanup_feature_process_directory(directory)
+                    except OSError as exc:
+                        print(f"[MEMORY][WARNING] Execution-local snapshot cleanup failed: {exc}")
 
         rerun_cached_experiment_count = resolve_cached_rerun_count(config)  # Resolve complete cache-driven rerun count.
         rerun_cached_experiments = rerun_cached_experiment_count > 0  # Resolve cache-driven rerun mode.
@@ -19190,13 +19196,16 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
                     if df_sampled is None and active_ratio != augmentation_ratio:  # Reuse the unchanged candidate population across all ratios, regardless of storage format.
                         if _data_session is not None:
                             memory_cfg = config.get("stacking", {}).get("memory_management", {})
+                            pool_already_available = _data_session.synthetic is not None
                             df_sampled = _data_session.get_synthetic(
                                 augmentation_file_paths,
                                 lambda: combine_files_for_combined_evaluation(augmentation_file_paths, config=config)[0],
                                 feature_names, int(memory_cfg.get("spill_min_array_nbytes", 1073741824) or 0),
                                 max(1, int(memory_cfg.get("process_memmap_chunk_rows", 100000))))
                             if df_sampled is not None:
-                                print("[MEMORY] Execution-local synthetic candidate pool available (reused across runs and ratios)")
+                                storage = "Disk-backed" if isinstance(df_sampled, DiskSyntheticSource) else "In-memory"
+                                action = "reused" if pool_already_available else "created"
+                                print(f"[MEMORY] {storage} synthetic candidate pool {action}: {_data_session.directory}")
                             active_ratio = augmentation_ratio
                         else:
                             combined_augmented_df, _, _ = combine_files_for_combined_evaluation(augmentation_file_paths, config=config)  # Load the unchanged candidate population only when first needed.
