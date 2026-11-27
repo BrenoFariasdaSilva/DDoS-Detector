@@ -120,7 +120,7 @@ psutil = (
 )  # Import psutil if available, otherwise set to None
 
 SAO_PAULO_TIMEZONE_NAME = "America/Sao_Paulo"  # Use Sao Paulo timezone for ETA finish timestamps
-WGANGP_RELEASE_VERSION = "V6.5.38"  # Batch optimizer state validation and metric transfers by device.
+WGANGP_RELEASE_VERSION = "V6.5.39"  # Throttle detached progress writes without changing recorded metrics.
 FLOW_PREPROCESSING_CHECKPOINT_TAG = "ConditionalMixedStructuralV654TailKnots"  # Isolate weights trained on the full-class tail-knot representation.
 FLOW_PREPROCESSING_COMPATIBLE_TAGS: tuple[str, ...] = ()  # Earlier V6.5 weights were trained on a different tail encoding and are never resumed.
 QUALITY_SELECTION_POLICY = "priority_moment_swap_v1"  # Identify the bounded mean-first candidate selection policy in output provenance.
@@ -5036,11 +5036,14 @@ def create_epoch_progress_bar(dataloader, args, epoch: int) -> tuple:
     :return: Tuple of (pbar, total_steps)
     """
 
+    # Detached Makefile logs should not receive a progress-bar write per batch.
+    interactive = bool(getattr(sys.stdout, "isatty", lambda: False)())
     pbar = tqdm(
         dataloader,
         desc=f"{BackgroundColors.CYAN}Epoch {epoch+1}/{args.epochs}{Style.RESET_ALL}",
         unit="batch",
         file=sys.stdout,  # Use stdout before Logger redirection
+        mininterval=0.2 if interactive else 2.0,  # Keep terminal responsive and detached logging bounded.
         ncols=None,  # Auto-detect terminal width
         bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]"  # Custom format
     )  # Create tqdm progress bar for epoch batches
@@ -5309,6 +5312,9 @@ def run_batch_training_loop(G, D, opt_G, opt_D, scaler, device: torch.device, ar
     _cached_d_real = 0.0  # Cached real score scalar for progress display without CUDA sync
     _cached_d_fake = 0.0  # Cached fake score scalar for progress display without CUDA sync
 
+    progress_interval = int(config.get("training", {}).get("progress_description_interval", 25))
+    if progress_interval < 1:
+        raise ValueError("training.progress_description_interval must be >= 1")
     reference_cache = None  # Local to this epoch; never serialized or reused across source files.
     for batch_idx, (real_x_batch, labels_batch) in enumerate(pbar):  # Enumerate batches to obtain current batch index
         real_x = real_x_batch.to(device, non_blocking=True)  # Move real features to device with non_blocking when pinned
@@ -5323,9 +5329,6 @@ def run_batch_training_loop(G, D, opt_G, opt_D, scaler, device: torch.device, ar
         if step % args.log_interval == 0:  # Extract scalar metrics only at log interval to avoid per-batch CUDA synchronization
             _cached_loss_D, _cached_g_loss, _cached_gp, _cached_d_real, _cached_d_fake = record_training_step_metrics(step, args, metrics_history, loss_D, g_loss, gp, d_real_score, d_fake_score)  # Record metrics and cache scalar values
 
-        progress_interval = int(config.get("training", {}).get("progress_description_interval", 25))
-        if progress_interval < 1:
-            raise ValueError("training.progress_description_interval must be >= 1")
         if batch_idx == 0 or (batch_idx + 1) % progress_interval == 0 or batch_idx + 1 == total_steps:
             completed_global_steps = (epoch * total_steps) + (batch_idx + 1)  # Count completed training batches across all epochs
             total_global_steps = max(1, int(args.epochs) * int(total_steps))  # Resolve total training batches across all epochs
@@ -5343,7 +5346,8 @@ def run_batch_training_loop(G, D, opt_G, opt_D, scaler, device: torch.device, ar
                 + f"{BackgroundColors.GREEN}loss_G: {_cached_g_loss:.4f}{Style.RESET_ALL} | "  # Generator loss from cached value
                 + f"gp: {_cached_gp:.4f} | "  # Gradient penalty from cached value
                 + f"D(real): {_cached_d_real:.4f} | "  # Average critic score on real from cached value
-                + f"D(fake): {_cached_d_fake:.4f}{get_cached_training_resource_suffix()}{finish_suffix}"  # Append cached CPU/RAM/GPU telemetry before the unchanged finish timestamp.
+                + f"D(fake): {_cached_d_fake:.4f}{get_cached_training_resource_suffix()}{finish_suffix}",  # Append cached CPU/RAM/GPU telemetry before the unchanged finish timestamp.
+                refresh=(batch_idx == 0 or batch_idx + 1 == total_steps),
             )
 
         step += 1  # Increment global step counter
