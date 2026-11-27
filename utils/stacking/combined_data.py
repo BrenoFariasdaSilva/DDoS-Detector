@@ -6,9 +6,10 @@ result caches and must never be used to authorize recovery of classifier metrics
 from pathlib import Path
 import shutil
 
+import numpy as np
 from joblib import dump, load
 
-from utils.stacking.disk_arrays import DiskSyntheticSource
+from utils.stacking.disk_arrays import DiskSyntheticSource, close_matrix, copy_matrix, merge_scaled_training
 
 
 def source_signatures(paths):
@@ -88,6 +89,7 @@ class CombinedDatasetSession:
             self.synthetic = frame
         self.synthetic_paths = paths
         self.synthetic_signatures = signatures
+        self.assert_synthetic_sources(paths)
         return self.synthetic
 
     def close(self):
@@ -117,6 +119,9 @@ class CombinedRunSplits:
         self.metadata_path = self.directory / 'metadata.joblib'
         self.prepared = False
         self.invalid = False
+        self.ratio_directory = self.directory / 'active-ratio'
+        self.active_ratio = None
+        self.ratio_shapes = None
 
     def get(self, prepare, include_metadata):
         if include_metadata and not self.include_metadata:
@@ -147,6 +152,51 @@ class CombinedRunSplits:
         if include_metadata:
             result += load(self.metadata_path, mmap_mode='c')
         return result
+
+    def get_disk_augmented(self, ratio, original_train, original_test, source, scaler, select, chunk_rows):
+        """Keep exactly one ratio's full matrices, isolated from every evaluator.
+
+        The same selection and chunked scaler functions used by the uncached
+        path are called on a miss. The active ratio is replaced only after the
+        prior evaluator has returned, and never crosses a run boundary.
+        """
+        if source is not self.session.synthetic or not isinstance(source, DiskSyntheticSource):
+            raise ValueError('Augmented split reuse requires the session-owned disk candidate pool')
+        if self.active_ratio != ratio:
+            self.active_ratio = None
+            self.ratio_shapes = None
+            if self.ratio_directory.exists():
+                shutil.rmtree(self.ratio_directory)
+            self.ratio_directory.mkdir(mode=0o700)
+            train = test = None
+            try:
+                positions, labels = select()
+                train = merge_scaled_training(original_train, source.matrix, positions, scaler,
+                                              self.ratio_directory / 'train.dat', chunk_rows)
+                del positions
+                test = copy_matrix(original_test, self.ratio_directory / 'test.dat', chunk_rows=chunk_rows)
+                dump(labels, self.ratio_directory / 'synthetic-labels.joblib', compress=0)
+                self.ratio_shapes = ((train.shape, train.dtype), (test.shape, test.dtype))
+            finally:
+                close_matrix(train)
+                close_matrix(test)
+            # A failed write never publishes a usable ratio. The outer run owner
+            # removes the partial directory on exceptions/cancellation.
+            self.active_ratio = ratio
+            print(f'[MEMORY] Run {self.run}: saved augmented matrices for {ratio:.0%}')
+        else:
+            print(f'[MEMORY] Run {self.run}: reusing augmented matrices for {ratio:.0%}')
+        train = test = None
+        try:
+            (train_shape, train_dtype), (test_shape, test_dtype) = self.ratio_shapes
+            train = np.memmap(self.ratio_directory / 'train.dat', mode='c', dtype=train_dtype, shape=train_shape)
+            test = np.memmap(self.ratio_directory / 'test.dat', mode='c', dtype=test_dtype, shape=test_shape)
+            labels = load(self.ratio_directory / 'synthetic-labels.joblib', mmap_mode='c')
+            return train, test, labels
+        except BaseException:
+            close_matrix(train)
+            close_matrix(test)
+            raise
 
     def close(self):
         shutil.rmtree(self.directory)

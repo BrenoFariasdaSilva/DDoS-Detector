@@ -17421,6 +17421,14 @@ def evaluate_single_feature_set(
     return individual_results, stacking_result_entry, current_combination  # Return per-model results and updated combination counter to the caller
 
 
+def select_disk_synthetic_training_rows(source, y_train, label_encoder, augmentation_ratio, config):
+    """Use the established deterministic class quotas and ordered row selection."""
+    candidate_labels = encode_known_synthetic_labels(source.labels, label_encoder.classes_)
+    selected_positions = select_synthetic_training_indices(candidate_labels, y_train, augmentation_ratio, config=config, class_labels=label_encoder.classes_)
+    y_synthetic = np.asarray(label_encoder.transform(source.labels[selected_positions]), dtype=np.int64)
+    return selected_positions, y_synthetic
+
+
 def evaluate_on_dataset(
     file,
     df,
@@ -17718,18 +17726,21 @@ def evaluate_on_dataset(
                 source = df_augmented_for_training
                 if list(source.columns) != pca_input_feature_names:
                     raise ValueError("Disk synthetic source feature order differs from original schema")
-                candidate_labels = encode_known_synthetic_labels(source.labels, label_encoder.classes_)
-                selected_positions = select_synthetic_training_indices(candidate_labels, y_train, augmentation_ratio, config=config, class_labels=label_encoder.classes_)
-                y_synthetic = np.asarray(label_encoder.transform(source.labels[selected_positions]), dtype=np.int64)
-                del candidate_labels
-                spill_dir = create_feature_process_temp_directory(file, config=config)
-                feature_source_arrays = {"X_train_scaled": None, "X_test_scaled": None, "spilled_to_memmap": True, "spill_temp_dir": spill_dir}
                 chunk_rows = max(1, int(config.get("stacking", {}).get("memory_management", {}).get("process_memmap_chunk_rows", 100000)))
-                feature_source_arrays["X_train_scaled"] = merge_scaled_training(X_train_scaled, source.matrix, selected_positions, scaler, Path(spill_dir) / "train.dat", chunk_rows)
-                X_train_scaled = feature_source_arrays["X_train_scaled"]
-                del selected_positions
-                feature_source_arrays["X_test_scaled"] = copy_matrix(X_test_scaled, Path(spill_dir) / "test.dat", chunk_rows=chunk_rows)
-                X_test_scaled = feature_source_arrays["X_test_scaled"]
+                if prepared_original_splits is not None:
+                    X_train_scaled, X_test_scaled, y_synthetic = prepared_original_splits.get_disk_augmented(
+                        augmentation_ratio, X_train_scaled, X_test_scaled, source, scaler,
+                        lambda: select_disk_synthetic_training_rows(source, y_train, label_encoder, augmentation_ratio, config), chunk_rows)
+                    feature_source_arrays = {"X_train_scaled": X_train_scaled, "X_test_scaled": X_test_scaled, "spilled_to_memmap": True}
+                else:
+                    selected_positions, y_synthetic = select_disk_synthetic_training_rows(source, y_train, label_encoder, augmentation_ratio, config)
+                    spill_dir = create_feature_process_temp_directory(file, config=config)
+                    feature_source_arrays = {"X_train_scaled": None, "X_test_scaled": None, "spilled_to_memmap": True, "spill_temp_dir": spill_dir}
+                    feature_source_arrays["X_train_scaled"] = merge_scaled_training(X_train_scaled, source.matrix, selected_positions, scaler, Path(spill_dir) / "train.dat", chunk_rows)
+                    X_train_scaled = feature_source_arrays["X_train_scaled"]
+                    del selected_positions
+                    feature_source_arrays["X_test_scaled"] = copy_matrix(X_test_scaled, Path(spill_dir) / "test.dat", chunk_rows=chunk_rows)
+                    X_test_scaled = feature_source_arrays["X_test_scaled"]
                 del source
             else:
                 selected_synthetic = select_synthetic_training_samples(df_augmented_for_training, y_train, label_encoder, augmentation_ratio, config=config)  # Select exact per-class synthetic rows from fixed training counts.
