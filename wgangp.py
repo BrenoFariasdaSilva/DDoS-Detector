@@ -120,7 +120,7 @@ psutil = (
 )  # Import psutil if available, otherwise set to None
 
 SAO_PAULO_TIMEZONE_NAME = "America/Sao_Paulo"  # Use Sao Paulo timezone for ETA finish timestamps
-WGANGP_RELEASE_VERSION = "V6.5.41"  # Add opt-in paired critic forwards to reduce multi-gpu coordination.
+WGANGP_RELEASE_VERSION = "V6.5.42"  # Pack finite state scans into bounded same-device tensors.
 FLOW_PREPROCESSING_CHECKPOINT_TAG = "ConditionalMixedStructuralV654TailKnots"  # Isolate weights trained on the full-class tail-knot representation.
 FLOW_PREPROCESSING_COMPATIBLE_TAGS: tuple[str, ...] = ()  # Earlier V6.5 weights were trained on a different tail encoding and are never resumed.
 QUALITY_SELECTION_POLICY = "priority_moment_swap_v1"  # Identify the bounded mean-first candidate selection policy in output provenance.
@@ -3469,6 +3469,48 @@ def require_finite_tensor(tensor: torch.Tensor, tensor_name: str, args: Any, epo
 
 
 
+def all_finite_tensor_values(tensors: List[torch.Tensor], max_pack_elements: int = 1048576) -> bool:
+    """Check every value exactly; pack compatible CUDA tensors to reduce kernel launches.
+
+    No casts, approximate norms, skipped values or cross-device stacks. Large
+    tensors are scanned directly. CPU keeps its ordinary per-tensor scans.
+    """
+    groups = {}
+    for tensor in tensors:
+        value = tensor.detach()
+        groups.setdefault((value.device, value.dtype), []).append(value)
+    valid = True
+    for (device, _), values in groups.items():
+        checks = []
+        pending = []
+        count = 0
+
+        def flush():
+            nonlocal count
+            if pending:
+                packed = pending[0] if len(pending) == 1 else torch.cat(pending)
+                checks.append(torch.isfinite(packed).all())
+                pending.clear()
+                count = 0
+
+        for value in values:
+            # Production models have dense, contiguous gradients and parameters.
+            # Non-contiguous or unusual layouts retain the original direct scan.
+            if (device.type != "cuda" or value.layout != torch.strided or not value.is_contiguous()
+                    or value.numel() > max_pack_elements):
+                flush()
+                checks.append(torch.isfinite(value).all())
+                continue
+            if count + value.numel() > max_pack_elements:
+                flush()
+            pending.append(value.view(-1))
+            count += value.numel()
+        flush()
+        if checks and not bool(torch.stack(checks).all().item()):
+            valid = False
+    return valid
+
+
 def require_finite_tensor_group(named_tensors: List[tuple], args: Any, epoch: int, step: int, component: str) -> None:
     """Validate several already-computed CUDA tensors with a single host synchronization.
 
@@ -3478,8 +3520,7 @@ def require_finite_tensor_group(named_tensors: List[tuple], args: Any, epoch: in
     """
     if not named_tensors:
         return
-    checks = [torch.isfinite(value.detach()).all() for _, value in named_tensors]
-    if bool(torch.stack(checks).all().item()):
+    if all_finite_tensor_values([value for _, value in named_tensors]):
         return
     for name, value in named_tensors:
         require_finite_tensor(value, name, args, epoch, step, component)
@@ -3504,8 +3545,7 @@ def require_finite_model_state(model: nn.Module, state_name: str, args: Any, epo
     named_tensors = [(parameter_name, tensor) for parameter_name, tensor in named_tensors if tensor is not None]  # Remove unavailable gradients
     if not named_tensors:  # Return when no model tensors are available
         return  # Preserve valid empty-state behavior
-    finite_states = torch.stack([torch.isfinite(tensor.detach()).all() for _, tensor in named_tensors])  # Combine tensor validity flags before device synchronization
-    if bool(finite_states.all().item()):  # Return after one synchronization when all model tensors are finite
+    if all_finite_tensor_values([tensor for _, tensor in named_tensors]):  # Pack compatible state checks without skipping values
         return  # Preserve valid model behavior
     for parameter_name, tensor in named_tensors:  # Identify exact invalid model tensor only after aggregate failure
         require_finite_tensor(tensor, f"{state_name}.{parameter_name}", args, epoch, step, component)  # Raise precise diagnostic for invalid model state
@@ -3526,14 +3566,7 @@ def require_finite_optimizer_state(optimizer: torch.optim.Optimizer, optimizer_n
     named_tensors = [(f"{optimizer_name}[{parameter_index}].{state_name}", state_value)
                      for parameter_index, parameter_state in enumerate(optimizer.state.values())
                      for state_name, state_value in parameter_state.items() if torch.is_tensor(state_value)]
-    by_device = {}
-    for name, value in named_tensors:
-        by_device.setdefault(value.device, []).append(value)
-    # Adam step counters can reside on CPU even when moments reside on CUDA.
-    # Do not stack tensors from different devices.
-    valid = [bool(torch.stack([torch.isfinite(value.detach()).all() for value in values]).all().item())
-             for values in by_device.values()]
-    if all(valid):
+    if all_finite_tensor_values([value for _, value in named_tensors]):
         return
     for name, value in named_tensors:
         require_finite_tensor(value, name, args, epoch, step, optimizer_name)
