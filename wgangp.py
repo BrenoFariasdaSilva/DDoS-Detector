@@ -120,7 +120,7 @@ psutil = (
 )  # Import psutil if available, otherwise set to None
 
 SAO_PAULO_TIMEZONE_NAME = "America/Sao_Paulo"  # Use Sao Paulo timezone for ETA finish timestamps
-WGANGP_RELEASE_VERSION = "V6.5.44"  # Add training equivalence regression tests and bounded performance benchmarking.
+WGANGP_RELEASE_VERSION = "V6.5.45"  # Correct ETA after checkpoint recovery.
 FLOW_PREPROCESSING_CHECKPOINT_TAG = "ConditionalMixedStructuralV654TailKnots"  # Isolate weights trained on the full-class tail-knot representation.
 FLOW_PREPROCESSING_COMPATIBLE_TAGS: tuple[str, ...] = ()  # Earlier V6.5 weights were trained on a different tail encoding and are never resumed.
 QUALITY_SELECTION_POLICY = "priority_moment_swap_v1"  # Identify the bounded mean-first candidate selection policy in output provenance.
@@ -5338,6 +5338,11 @@ def record_training_step_metrics(step: int, args, metrics_history: Dict, loss_D,
     return cached_loss_D, cached_g_loss, cached_gp, cached_d_real, cached_d_fake  # Return cached scalar values
 
 
+def estimate_remaining_training_seconds(elapsed_seconds: float, session_completed: int, remaining: int) -> float:
+    """Estimate only from work performed since the current training session began."""
+    return max(0.0, float(elapsed_seconds)) * max(0, remaining) / session_completed if session_completed > 0 else 0.0
+
+
 def run_batch_training_loop(G, D, opt_G, opt_D, scaler, device: torch.device, args, config: Dict, n_classes: int, pbar, step: int, metrics_history: Dict, total_steps: int, epoch: int, training_start_time: float, file_progress_prefix: str) -> int:
     """
     Execute one full epoch of batch training steps for generator and discriminator.
@@ -5388,7 +5393,8 @@ def run_batch_training_loop(G, D, opt_G, opt_D, scaler, device: torch.device, ar
             completed_global_steps = (epoch * total_steps) + (batch_idx + 1)  # Count completed training batches across all epochs
             total_global_steps = max(1, int(args.epochs) * int(total_steps))  # Resolve total training batches across all epochs
             elapsed_seconds = max(0.0, time.time() - float(training_start_time))  # Measure total elapsed wall-clock training time
-            remaining_seconds = ((elapsed_seconds / float(completed_global_steps)) * float(total_global_steps - completed_global_steps)) if completed_global_steps > 0 and total_global_steps > completed_global_steps else 0.0  # Estimate remaining wall-clock time from completed global batch progress
+            session_completed_steps = max(0, completed_global_steps - int(getattr(args, "_training_session_start_epoch", 0)) * int(total_steps))
+            remaining_seconds = estimate_remaining_training_seconds(elapsed_seconds, session_completed_steps, total_global_steps - completed_global_steps)
             finish_suffix = format_estimated_finish_time_suffix(remaining_seconds)  # Format overall estimated finish timestamp once per displayed update
             pbar.set_description(  # Update tqdm description using cached scalars to avoid CUDA synchronization
                 (
@@ -5972,7 +5978,8 @@ def send_epoch_telegram_notifications(args, telegram_enabled: bool, epoch: int, 
             completed_epochs = max(1, epoch + 1)  # Keep epoch-based elapsed and ETA math valid after first completed epoch
             elapsed_seconds = max(0.0, time.time() - float(training_start_time))  # Measure total elapsed training time at notification boundary
             remaining_epochs = max(0, int(args.epochs) - completed_epochs)  # Compute remaining epochs for linear ETA estimate
-            eta_seconds = (elapsed_seconds / float(completed_epochs)) * float(remaining_epochs) if remaining_epochs > 0 else 0.0  # Estimate remaining wall-clock time from completed epochs
+            session_completed_epochs = completed_epochs - int(getattr(args, "_training_session_start_epoch", 0))
+            eta_seconds = estimate_remaining_training_seconds(elapsed_seconds, session_completed_epochs, remaining_epochs)
             elapsed_label = calculate_execution_time(elapsed_seconds)  # Reuse existing human-readable duration formatter
             eta_label = calculate_execution_time(eta_seconds)  # Reuse existing human-readable duration formatter for ETA
             prefix = file_progress_prefix if file_progress_prefix is not None else getattr(args, "file_progress_prefix", f"{BackgroundColors.CYAN}[1/1]{Style.RESET_ALL}")  # Determine prefix from parameter or args fallback
@@ -6168,6 +6175,7 @@ def train(args, config: Optional[Dict] = None):
         require_finite_optimizer_state(opt_D, "discriminator_optimizer", args, start_epoch, step)  # Reject invalid discriminator optimizer state before training
         telegram_enabled, next_notify, progress_pct = init_telegram_progress(args, config, start_epoch)  # Initialize telegram progress tracking
 
+        args._training_session_start_epoch = start_epoch  # ETA excludes epochs completed before this session.
         training_start_time = time.time()  # Start persisted training duration immediately before the epoch loop
         for epoch in range(start_epoch, args.epochs):  # Loop over epochs starting from resume point
             dataloader.sampler.epoch = epoch  # Continue deterministic class sampling at the restored epoch.
