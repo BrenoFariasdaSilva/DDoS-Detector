@@ -986,6 +986,7 @@ training:
   epochs: 60 # Number of training epochs
   batch_size: 64 # Training batch size
   critic_steps: 5 # Number of discriminator updates per generator update
+  critic_execution: legacy # Experimental primary critic requires separate CUDA and quality validation
   coalesce_critic_forwards: false # Experimental: paired critic forwards; validate CUDA quality before enabling
   lr: 0.0001 # Learning rate for both networks
   beta1: 0.5 # Adam optimizer beta1 parameter

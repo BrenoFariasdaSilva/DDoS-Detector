@@ -120,7 +120,7 @@ psutil = (
 )  # Import psutil if available, otherwise set to None
 
 SAO_PAULO_TIMEZONE_NAME = "America/Sao_Paulo"  # Use Sao Paulo timezone for ETA finish timestamps
-WGANGP_RELEASE_VERSION = "V6.5.46"  # Group critic forward checks and generator sample/score checks.
+WGANGP_RELEASE_VERSION = "V6.5.47"  # Experimental primary critic, retaining generator DataParallel.
 FLOW_PREPROCESSING_CHECKPOINT_TAG = "ConditionalMixedStructuralV654TailKnots"  # Isolate weights trained on the full-class tail-knot representation.
 FLOW_PREPROCESSING_COMPATIBLE_TAGS: tuple[str, ...] = ()  # Earlier V6.5 weights were trained on a different tail encoding and are never resumed.
 QUALITY_SELECTION_POLICY = "priority_moment_swap_v1"  # Identify the bounded mean-first candidate selection policy in output provenance.
@@ -1584,6 +1584,9 @@ def build_wgangp_provenance(args: Any) -> Dict:
     settings["moment_reference_rows_per_class"] = int(provenance_config.get("training", {}).get("moment_reference_rows_per_class", 4096))
     settings["quantile_fidelity_weight"] = float(provenance_config.get("training", {}).get("quantile_fidelity_weight", 0.15))  # Preserve the extra training objective in checkpoint provenance.
     settings["quantile_reference_rows_per_class"] = int(provenance_config.get("training", {}).get("quantile_reference_rows_per_class", 8192))  # Preserve reference resolution for checkpoint safety.
+    critic_execution = resolve_critic_execution(provenance_config)
+    if critic_execution != "legacy":
+        settings["critic_execution"] = critic_execution  # Different reduction topology must not silently reuse legacy training checkpoints.
     if provenance_config.get("training", {}).get("coalesce_critic_forwards", False):
         settings["coalesce_critic_forwards"] = True  # Different gradient reduction grouping requires an explicit provenance boundary.
     identity = {"source_path": str(source) if source else None, "source_size": source_stat.st_size if source_stat else None, "source_mtime_ns": source_stat.st_mtime_ns if source_stat else None, "preprocessing": "class_conditional_mixed_structural_v654_full_class_tail_knots", "preprocessing_parameters": {key: provenance_config.get("quality", {}).get(key, default) for key, default in (("n_quantiles", 512), ("fit_sample_rows", 50000), ("class_sampling_exponent", 0.5))}, "settings": settings}  # Record source metadata and effective hyperparameters.
@@ -2096,6 +2099,7 @@ def build_default_training_and_model_config() -> Dict:
             "log_interval": 50,  # Log metrics every N steps
             "optimizer_state_check_interval": 128,  # Scan complete Adam state once per 128 minibatches and at every epoch boundary; leave loss/gradient checks eager.
             "coalesce_critic_forwards": False,  # Experimental: benchmark gradient-reduction grouping before enabling.
+            "critic_execution": "legacy",  # Experimental primary-GPU critic requires independent validation.
             "progress_description_interval": 25,  # Reformat progress messages periodically; leave optimizer and losses unchanged.
             "sample_batch": 16,  # Number of samples for fixed noise generation
             "use_amp": False,  # Use automatic mixed precision
@@ -2606,6 +2610,8 @@ def parse_args():
         p.add_argument("--gpu", type=int, default=None, metavar="N", help="Pin this process to visible CUDA GPU N (zero-based); unavailable N falls back to GPU 0, or CPU if no CUDA")
         p.add_argument("--use_amp", action="store_true", help="Use automatic mixed precision")  # Add use_amp argument
         p.add_argument("--compile", action="store_true", help="Use torch.compile()")  # Add compile argument
+        p.add_argument("--critic-execution", choices=["legacy", "primary"], default=None, help="Experimental: keep generator DataParallel but run critic on primary GPU; default legacy")
+        p.add_argument("--coalesce-critic-forwards", action=argparse.BooleanOptionalAction, default=None, help="Experimental paired critic forwards; benchmark before use")
         p.add_argument("--from_scratch", action="store_true", help="Train from scratch")  # Add from_scratch argument
         
         p.add_argument("--latent_dim", type=int, default=None, help="Noise vector dimensionality")  # Add latent_dim argument
@@ -2708,6 +2714,10 @@ def apply_training_and_model_cli_overrides(args, overrides: Dict) -> None:
     :return: None
     """
 
+    for key in ("critic_execution", "coalesce_critic_forwards"):
+        value = getattr(args, key, None)
+        if value is not None:
+            overrides.setdefault("training", {})[key] = value
     if args.epochs is not None:  # If epochs specified
         overrides.setdefault("training", {})["epochs"] = args.epochs  # Set epochs
     if args.batch_size is not None:  # If batch_size specified
@@ -2818,6 +2828,9 @@ def args_to_config_overrides(args):
         for option, field in (("g_embed_dim", "embed_dim"), ("g_leaky_relu_alpha", "generator_leaky_relu_alpha"), ("d_leaky_relu_alpha", "discriminator_leaky_relu_alpha")):
             if getattr(args, option, None) is not None:
                 explicit.append(field)
+        for key in ("critic_execution", "coalesce_critic_forwards"):
+            if getattr(args, key, None) is not None:
+                explicit.append(key)
         if getattr(args, "use_amp", False):
             explicit.append("use_amp")
         if getattr(args, "remove_zero_variance", False) or getattr(args, "no_remove_zero_variance", False):
@@ -4771,6 +4784,30 @@ def init_results_csv_and_feature_dims(args, config: Dict, dataset) -> tuple:
     return results_csv_file, results_csv_writer, results_cols_cfg, feature_dim, n_classes  # Return CSV handles and feature dimensions
 
 
+def resolve_critic_execution(config: Dict) -> str:
+    """Explicit experimental topology; the historical DataParallel critic is the default."""
+    mode = config.get("training", {}).get("critic_execution", "legacy")
+    if mode not in ("legacy", "primary"):
+        raise ValueError("training.critic_execution must be legacy or primary")
+    return mode
+
+
+def wrap_training_parallel_models(G, D, args, config: Dict, device: torch.device):
+    mode = resolve_critic_execution(config)
+    parallel = device.type == "cuda" and getattr(args, "gpu", None) is None and torch.cuda.device_count() > 1
+    if mode == "primary" and not parallel:
+        raise ValueError("Experimental primary critic requires automatic multi-GPU CUDA training; do not pass --gpu")
+    if not parallel:
+        return G, D
+    G = torch.nn.DataParallel(G)
+    if mode == "legacy":
+        D = torch.nn.DataParallel(D)
+        print(f"Wrapped models using DataParallel across {torch.cuda.device_count()} GPUs")
+    else:
+        print("[PERFORMANCE][EXPERIMENTAL] Generator=DataParallel; critic=primary GPU; global batch unchanged; validate numerical and generated-data quality before production use")
+    return G, D
+
+
 def create_models_and_optimizers(args, config: Dict, device: torch.device, feature_dim: int, n_classes: int) -> tuple:
     """
     Create generator and discriminator models, optimizers, and initialize training state.
@@ -4807,10 +4844,7 @@ def create_models_and_optimizers(args, config: Dict, device: torch.device, featu
         device
     )  # Initialize discriminator model
 
-    if device.type == "cuda" and getattr(args, "gpu", None) is None and torch.cuda.device_count() > 1:  # Preserve DataParallel only for automatic multi-GPU runs.
-        G = torch.nn.DataParallel(G)  # Wrap generator in DataParallel to utilize multiple GPUs
-        D = torch.nn.DataParallel(D)  # Wrap discriminator in DataParallel to utilize multiple GPUs
-        print(f"{BackgroundColors.GREEN}Wrapped models using DataParallel across {torch.cuda.device_count()} GPUs{Style.RESET_ALL}")  # Notify wrapping
+    G, D = wrap_training_parallel_models(G, D, args, config, device)
 
     if args.compile and not isinstance(G, torch.nn.DataParallel):  # Only compile when not using DataParallel
         try:  # Try compiling models, but catch exceptions if torch.compile() is not available or fails
@@ -6820,6 +6854,7 @@ def restore_generation_training_settings(args, config: Dict, ckpt: Dict) -> None
                   "moment_reference_rows_per_class", "quantile_fidelity_weight", "quantile_reference_rows_per_class"):
         restore(field, "training", field)
     if settings:
+        restore("critic_execution", "training", "critic_execution", values={"critic_execution": settings.get("critic_execution", "legacy")})
         restore("coalesce_critic_forwards", "training", "coalesce_critic_forwards", values={"coalesce_critic_forwards": settings.get("coalesce_critic_forwards", False)})
         restore("class_sampler_policy", "training", "class_sampler_policy", values={"class_sampler_policy": settings.get("class_sampler_policy", "weighted_random")})
     restore("generator_leaky_relu_alpha", "generator", "leaky_relu_alpha")
@@ -9348,7 +9383,7 @@ def build_config_overrides_from_kwargs(kwargs: Dict) -> Dict:
                 cli_style_overrides.setdefault("wgangp", {})[key] = value
             elif key in ["out_dir", "logs_dir"]:  # Path params
                 cli_style_overrides.setdefault("paths", {})[key] = value
-            elif key in ["epochs", "batch_size", "critic_steps", "lr", "beta1", "beta2", "lambda_gp", "save_every", "log_interval", "sample_batch", "use_amp", "compile"]:  # Training params
+            elif key in ["epochs", "batch_size", "critic_steps", "lr", "beta1", "beta2", "lambda_gp", "save_every", "log_interval", "sample_batch", "use_amp", "compile", "critic_execution", "coalesce_critic_forwards"]:  # Training params
                 cli_style_overrides.setdefault("training", {})[key] = value
                 if key == "batch_size":  # If direct call sets batch size
                     cli_style_overrides.setdefault("training", {})["batch_size_cli_override"] = True  # Preserve direct-call batch-size precedence
@@ -9377,7 +9412,7 @@ def build_config_overrides_from_kwargs(kwargs: Dict) -> Dict:
                 cli_style_overrides.setdefault("sound", {})["enabled"] = value
             else:  # Unknown parameter
                 print(f"{BackgroundColors.YELLOW}Warning: Unknown parameter '{key}' will be ignored{Style.RESET_ALL}")
-        explicit = set(kwargs).intersection({"seed", "label_col", "feature_cols", "batch_size", "critic_steps", "lr", "beta1", "beta2", "lambda_gp", "latent_dim", "g_hidden", "d_hidden", "n_resblocks", "use_amp", "remove_zero_variance"})
+        explicit = set(kwargs).intersection({"seed", "label_col", "feature_cols", "batch_size", "critic_steps", "lr", "beta1", "beta2", "lambda_gp", "latent_dim", "g_hidden", "d_hidden", "n_resblocks", "use_amp", "remove_zero_variance", "critic_execution", "coalesce_critic_forwards"})
         if "g_embed_dim" in kwargs:
             explicit.add("embed_dim")
         if "leaky_relu_alpha" in kwargs:
