@@ -1030,7 +1030,7 @@ generation:
   small_class_min_samples: 10 # Minimum samples for small classes
 
 dataloader:
-  gpu_source_cache_max_fraction: 0.40 # Raise only after checking available VRAM; exact source copies
+  gpu_source_cache_max_fraction: 0.60 # Exact source copies; reserve at least 3 GiB of free VRAM
   gpu_source_cache_reserve_mib: 3072 # Minimum reserved GPU memory for models and training
   num_workers: 8 # Number of workers for data loading
   pin_memory: true # Use pinned memory for faster GPU transfer
