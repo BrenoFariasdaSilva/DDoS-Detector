@@ -120,7 +120,7 @@ psutil = (
 )  # Import psutil if available, otherwise set to None
 
 SAO_PAULO_TIMEZONE_NAME = "America/Sao_Paulo"  # Use Sao Paulo timezone for ETA finish timestamps
-WGANGP_RELEASE_VERSION = "V6.5.49"  # Regression coverage for deferred validation and experimental critic topology.
+WGANGP_RELEASE_VERSION = "V6.5.50"  # Clarify resumed training progress and timing without changing model execution.
 FLOW_PREPROCESSING_CHECKPOINT_TAG = "ConditionalMixedStructuralV654TailKnots"  # Isolate weights trained on the full-class tail-knot representation.
 FLOW_PREPROCESSING_COMPATIBLE_TAGS: tuple[str, ...] = ()  # Earlier V6.5 weights were trained on a different tail encoding and are never resumed.
 QUALITY_SELECTION_POLICY = "priority_moment_swap_v1"  # Identify the bounded mean-first candidate selection policy in output provenance.
@@ -3850,7 +3850,8 @@ def send_file_saved_and_timing_messages(args: Any, config: Dict) -> None:
 
     if file_exists:  # Only print generated file path and size when the file exists with content
         print(f"{file_progress_prefix} {BackgroundColors.GREEN}Saved generated file to {BackgroundColors.CYAN}{gen_file} {BackgroundColors.GREEN}({size_str}){Style.RESET_ALL}")  # Print saved file path and human-readable size
-    print(f"{file_progress_prefix} {BackgroundColors.GREEN}Training time: {BackgroundColors.CYAN}{training_time}s{Style.RESET_ALL}")  # Print total training elapsed seconds
+    training_time_display = "unknown" if training_time in (None, "") else f"{training_time}s"
+    print(f"{file_progress_prefix} {BackgroundColors.GREEN}Training time: {BackgroundColors.CYAN}{training_time_display}{Style.RESET_ALL}")  # Print total training elapsed seconds
     print(f"{file_progress_prefix} {BackgroundColors.GREEN}File processing time: {BackgroundColors.CYAN}{file_time}s{Style.RESET_ALL}")  # Print per-file processing elapsed seconds
     if model_save_time != "":  # Only print model save time when available
         print(f"{file_progress_prefix} {BackgroundColors.GREEN}Model save time: {BackgroundColors.CYAN}{model_save_time}s{Style.RESET_ALL}")  # Print model save elapsed seconds
@@ -3858,7 +3859,7 @@ def send_file_saved_and_timing_messages(args: Any, config: Dict) -> None:
         print(f"{file_progress_prefix} {BackgroundColors.GREEN}Generation time: {BackgroundColors.CYAN}{generation_time}s{Style.RESET_ALL}")  # Print sample generation elapsed seconds
 
     try:  # Attempt to notify via Telegram with a compact summary message
-        training_time_str = calculate_execution_time(training_time)  # Convert training_time to human-readable duration string
+        training_time_str = "unknown" if training_time in (None, "") else calculate_execution_time(training_time)
         generation_time_str = calculate_execution_time(generation_time) if generation_time != "" else ""  # Convert generation_time when present otherwise empty
         if file_exists:  # Only include file info in Telegram when the generated file exists with content
             display_path = os.path.relpath(gen_file) if gen_file else "unknown"  # Compute relative path for generated file or 'unknown'
@@ -4209,7 +4210,7 @@ def normalize_args_and_setup_hardware(args: Any, config: Dict) -> tuple:
     args.num_workers = int(args.num_workers)  # Ensure num_workers is int
 
     device = select_wgangp_device(args)  # Honor --gpu for training and in-memory generation.
-    training_start_time = time.time()  # Record training session start timestamp
+    training_start_time = training_elapsed_clock()  # Monotonic elapsed-time clock
     file_start_time = training_start_time  # Record this file processing start timestamp
     set_seed(args.seed)  # Set random seed for reproducibility
 
@@ -5051,7 +5052,7 @@ def resume_from_checkpoint(args, config: Dict, device: torch.device, G, D, opt_G
                     args._last_completed_epoch = start_epoch
                     if (g_checkpoint.get("args") or {}).get("_last_epoch_time") not in (None, ""):
                         args._last_epoch_time = g_checkpoint["args"]["_last_epoch_time"]
-                    args._training_elapsed_before_session = float(old_duration) if old_duration not in (None, "", 0) and math.isfinite(float(old_duration)) and float(old_duration) > 0 else None
+                    args._training_elapsed_before_session = normalize_recorded_training_duration(old_duration)
                     metrics_history, step, metrics_loaded = restore_metrics_from_checkpoint_or_json(g_checkpoint, checkpoint_dir, checkpoint_prefix, metrics_history, step)  # Restore metrics from saved state or JSON fallback
                     load_and_restore_discriminator_state(d_checkpoint_path, device, D, opt_D)  # Load and restore discriminator state from saved pair
                     regenerate_missing_training_plot(  # Regenerate plot
@@ -5107,12 +5108,13 @@ def init_telegram_progress(args, config: Dict, start_epoch: int) -> tuple:
 
     next_notify = progress_pct  # Initialize next notification threshold
     try:  # Calculate percent complete at resume point
-        percent_done = int((start_epoch / float(max(1, args.epochs))) * 100)  # Percent complete at resume point
+        percent_done = start_epoch * 100 // max(1, int(args.epochs))  # Percent complete at resume point
     except Exception:  # If calculation fails
         percent_done = 0  # Assume 0% done on failure
     while percent_done >= next_notify and next_notify <= 100:  # Advance next_notify past already-completed thresholds
         next_notify += progress_pct  # Skip thresholds already passed when resuming
 
+    next_notify = 101 if start_epoch >= args.epochs else min(100, next_notify)
     return telegram_enabled, next_notify, progress_pct  # Return telegram progress state
 
 
@@ -5377,9 +5379,61 @@ def record_training_step_metrics(step: int, args, metrics_history: Dict, loss_D,
     return cached_loss_D, cached_g_loss, cached_gp, cached_d_real, cached_d_fake  # Return cached scalar values
 
 
+def training_elapsed_clock() -> float:
+    """Monotonic clock for training durations (not a calendar timestamp)."""
+    return time.monotonic()
+
+
 def estimate_remaining_training_seconds(elapsed_seconds: float, session_completed: int, remaining: int) -> float:
     """Estimate only from work performed since the current training session began."""
     return max(0.0, float(elapsed_seconds)) * max(0, remaining) / session_completed if session_completed > 0 else 0.0
+
+
+def normalize_recorded_training_duration(value) -> Optional[float]:
+    """A missing or invalid historical duration must not be treated as zero."""
+    try:
+        duration = float(value)
+        return duration if math.isfinite(duration) and duration > 0 else None
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def recorded_training_elapsed(args, session_elapsed: float) -> Optional[float]:
+    """Add recorded checkpoint time, not an extrapolation of earlier epochs."""
+    if int(getattr(args, "_training_session_start_epoch", 0)) == 0:
+        return session_elapsed
+    prior = normalize_recorded_training_duration(getattr(args, "_training_elapsed_before_session", None))
+    return None if prior is None else prior + session_elapsed
+
+
+def format_training_progress_timing(args, completed_work: int, units_per_epoch: int,
+                                    session_elapsed: float, min_eta_work: int = 1) -> str:
+    """Use one session-relative ETA for both batch and epoch progress reporting."""
+    total_work = int(args.epochs) * units_per_epoch
+    recovered_epochs = int(getattr(args, "_training_session_start_epoch", 0))
+    recovered_work = recovered_epochs * units_per_epoch
+    completed_work = min(total_work, max(recovered_work, completed_work))
+    session_done = completed_work - recovered_work
+    session_total = total_work - recovered_work
+    remaining = total_work - completed_work
+    session_pct = 100.0 * session_done / session_total if session_total else 100.0
+    unit = "epochs" if units_per_epoch == 1 else "batches"
+    cumulative = recorded_training_elapsed(args, session_elapsed)
+    total_label = "unknown (checkpoint timing unavailable)" if cumulative is None else calculate_execution_time(cumulative)
+    if remaining == 0:
+        eta = 0.0
+    elif session_done >= min_eta_work and session_elapsed > 0:
+        eta = estimate_remaining_training_seconds(session_elapsed, session_done, remaining)
+    else:
+        eta = None
+    eta_label = "estimating" if eta is None else calculate_execution_time(eta)
+    finish_suffix = (" | Estimated Finish Time: estimating" if eta is None
+                     else format_estimated_finish_time_suffix(eta))
+    return (f" | Resumed at epoch: {recovered_epochs}/{args.epochs}"
+            f" | Session progress: {session_pct:.1f}% ({session_done}/{session_total} {unit})"
+            f" | Session elapsed: {calculate_execution_time(session_elapsed)}"
+            f" | Recorded total training elapsed: {total_label}"
+            f" | ETA: {eta_label}{finish_suffix}")
 
 
 def run_batch_training_loop(G, D, opt_G, opt_D, scaler, device: torch.device, args, config: Dict, n_classes: int, pbar, step: int, metrics_history: Dict, total_steps: int, epoch: int, training_start_time: float, file_progress_prefix: str) -> int:
@@ -5400,7 +5454,7 @@ def run_batch_training_loop(G, D, opt_G, opt_D, scaler, device: torch.device, ar
     :param metrics_history: metrics dictionary to append to in-place
     :param total_steps: number of batches per epoch for display
     :param epoch: current epoch index (zero-based)
-    :param training_start_time: wall-clock timestamp marking start of training loop
+    :param training_start_time: monotonic timestamp marking start of training loop
     :param file_progress_prefix: colored prefix string for progress display
     :return: Updated global step counter
     """
@@ -5430,11 +5484,11 @@ def run_batch_training_loop(G, D, opt_G, opt_D, scaler, device: torch.device, ar
 
         if batch_idx == 0 or (batch_idx + 1) % progress_interval == 0 or batch_idx + 1 == total_steps:
             completed_global_steps = (epoch * total_steps) + (batch_idx + 1)  # Count completed training batches across all epochs
-            total_global_steps = max(1, int(args.epochs) * int(total_steps))  # Resolve total training batches across all epochs
-            elapsed_seconds = max(0.0, time.time() - float(training_start_time))  # Measure total elapsed wall-clock training time
-            session_completed_steps = max(0, completed_global_steps - int(getattr(args, "_training_session_start_epoch", 0)) * int(total_steps))
-            remaining_seconds = estimate_remaining_training_seconds(elapsed_seconds, session_completed_steps, total_global_steps - completed_global_steps)
-            finish_suffix = format_estimated_finish_time_suffix(remaining_seconds)  # Format overall estimated finish timestamp once per displayed update
+            elapsed_seconds = max(0.0, training_elapsed_clock() - training_start_time)
+            timing_suffix = format_training_progress_timing(
+                args, completed_global_steps, total_steps, elapsed_seconds,
+                min_eta_work=min(25, total_steps),  # Avoid a misleading extrapolation from the first CUDA warm-up batch.
+            )
             pbar.set_description(  # Update tqdm description using cached scalars to avoid CUDA synchronization
                 (
                     f"{getattr(args, 'file_progress_prefix', '')} "  # File progress prefix (may include colored index)
@@ -5446,7 +5500,7 @@ def run_batch_training_loop(G, D, opt_G, opt_D, scaler, device: torch.device, ar
                 + f"{BackgroundColors.GREEN}loss_G: {_cached_g_loss:.4f}{Style.RESET_ALL} | "  # Generator loss from cached value
                 + f"gp: {_cached_gp:.4f} | "  # Gradient penalty from cached value
                 + f"D(real): {_cached_d_real:.4f} | "  # Average critic score on real from cached value
-                + f"D(fake): {_cached_d_fake:.4f}{get_cached_training_resource_suffix()}{finish_suffix}",  # Append cached CPU/RAM/GPU telemetry before the unchanged finish timestamp.
+                + f"D(fake): {_cached_d_fake:.4f}{get_cached_training_resource_suffix()}{timing_suffix}",  # Append cached CPU/RAM/GPU telemetry before the unchanged finish timestamp.
                 refresh=(batch_idx == 0 or batch_idx + 1 == total_steps),
             )
 
@@ -5805,7 +5859,7 @@ def write_epoch_csv_row(args, config: Dict, device: torch.device, dataset, epoch
     """
 
     try:  # Safely compute and print epoch elapsed time without interrupting training
-        epoch_elapsed = time.time() - epoch_start_time  # Calculate epoch elapsed seconds
+        epoch_elapsed = max(0.0, training_elapsed_clock() - epoch_start_time)  # Calculate epoch elapsed seconds
         print(f"{BackgroundColors.GREEN}Epoch {epoch+1} elapsed: {BackgroundColors.CYAN}{epoch_elapsed:.2f}s{Style.RESET_ALL}")  # Print epoch elapsed time
         args._last_epoch_time = ceil_seconds(epoch_elapsed)  # Store last epoch elapsed as upward-rounded integer seconds
         args._last_completed_epoch = epoch + 1  # Store the completed epoch number for final generation results
@@ -6006,30 +6060,30 @@ def send_epoch_telegram_notifications(args, telegram_enabled: bool, epoch: int, 
     :param epoch: current epoch index (zero-based).
     :param next_notify: next percentage threshold to trigger notification.
     :param progress_pct: percentage increment between notifications.
-    :param training_start_time: wall-clock timestamp marking start of training loop.
+    :param training_start_time: monotonic timestamp marking start of training loop.
     :param file_progress_prefix: Optional colored prefix string like "[3/11]" to prepend to messages.
     :return: Updated next_notify threshold.
     """
 
     try:  # Guard notification logic to avoid interrupting training
         if telegram_enabled and args.epochs > 0:  # Only notify when enabled and epochs is positive
-            percent = int(((epoch + 1) / float(args.epochs)) * 100)  # Compute percent completed after this epoch
-            completed_epochs = max(1, epoch + 1)  # Keep epoch-based elapsed and ETA math valid after first completed epoch
-            elapsed_seconds = max(0.0, time.time() - float(training_start_time))  # Measure total elapsed training time at notification boundary
-            remaining_epochs = max(0, int(args.epochs) - completed_epochs)  # Compute remaining epochs for linear ETA estimate
-            session_completed_epochs = completed_epochs - int(getattr(args, "_training_session_start_epoch", 0))
-            eta_seconds = estimate_remaining_training_seconds(elapsed_seconds, session_completed_epochs, remaining_epochs)
-            elapsed_label = calculate_execution_time(elapsed_seconds)  # Reuse existing human-readable duration formatter
-            eta_label = calculate_execution_time(eta_seconds)  # Reuse existing human-readable duration formatter for ETA
-            prefix = file_progress_prefix if file_progress_prefix is not None else getattr(args, "file_progress_prefix", f"{BackgroundColors.CYAN}[1/1]{Style.RESET_ALL}")  # Determine prefix from parameter or args fallback
-            while percent >= next_notify and next_notify <= 100:  # Send notifications for each crossed threshold
+            completed_epochs = epoch + 1
+            percent = completed_epochs * 100 // int(args.epochs)
+            if next_notify <= 100 and percent >= next_notify:
+                elapsed_seconds = max(0.0, training_elapsed_clock() - training_start_time)
+                prefix = file_progress_prefix if file_progress_prefix is not None else getattr(args, "file_progress_prefix", f"{BackgroundColors.CYAN}[1/1]{Style.RESET_ALL}")
                 msg = (
-                    f"{prefix} WGAN-GP training progress: {next_notify}% "  # Prepend prefix then short progress message text
-                    f"({epoch+1}/{args.epochs} epochs) on {Path(args.csv_path).name if args.csv_path else 'unknown file'}"  # Include filename and epoch info
-                    f" | Elapsed: {elapsed_label} | ETA: {eta_label}{format_estimated_finish_time_suffix(eta_seconds)}"  # Add overall elapsed time, current ETA estimate, and finish timestamp
-                )  # Compose progress message
-                send_telegram_message(TELEGRAM_BOT, msg)  # Send message via shared function
-                next_notify += progress_pct  # Advance to next threshold to avoid duplicate sends
+                    f"{prefix} WGAN-GP training progress: {percent}% "
+                    f"({completed_epochs}/{args.epochs} epochs) on {Path(args.csv_path).name if args.csv_path else 'unknown file'}"
+                    + format_training_progress_timing(args, completed_epochs, 1, elapsed_seconds)
+                )
+                send_telegram_message(TELEGRAM_BOT, msg)
+                if percent == 100:
+                    next_notify = 101  # Mark the final notification as sent.
+                else:
+                    while next_notify <= percent:
+                        next_notify += progress_pct
+                    next_notify = min(100, next_notify)  # Always notify at completion.
     except Exception as _err:  # Catch any notification errors and continue training
         pass  # Intentionally ignore notification failures to not interrupt training
 
@@ -6047,14 +6101,18 @@ def compute_and_store_final_timing(args, training_start_time: float, file_start_
     """
 
     try:  # Safely compute total training and file elapsed times
-        training_elapsed = time.time() - training_start_time  # Calculate total training elapsed seconds
-        prior = getattr(args, "_training_elapsed_before_session", 0.0)
-        args._last_training_time = ceil_seconds(prior + training_elapsed) if prior is not None else ""
-        if prior is None:
+        now = training_elapsed_clock()
+        training_elapsed = max(0.0, now - training_start_time)
+        if int(getattr(args, "_training_session_start_epoch", 0)) >= int(args.epochs):
+            training_elapsed = 0.0  # A fully recovered checkpoint performed no additional training.
+        cumulative = recorded_training_elapsed(args, training_elapsed)
+        args._last_training_time = ceil_seconds(cumulative)
+        if cumulative is None:
             print("[TIMING] Previous checkpoint has no historical duration; total training time is unknown")
-        file_elapsed = time.time() - file_start_time  # Calculate file processing elapsed seconds
+        file_elapsed = max(0.0, now - file_start_time)  # Calculate file processing elapsed seconds
         args._last_file_time = ceil_seconds(file_elapsed)  # Store file elapsed as upward-rounded integer seconds for console reporting
-        print(f"{BackgroundColors.GREEN}Training finished! Total training elapsed: {BackgroundColors.CYAN}{training_elapsed:.2f}s{Style.RESET_ALL}")  # Print total training elapsed message
+        total_label = "unknown" if cumulative is None else f"{cumulative:.2f}s"
+        print(f"{BackgroundColors.GREEN}Training finished! Session training elapsed: {BackgroundColors.CYAN}{training_elapsed:.2f}s{Style.RESET_ALL} | Recorded total training elapsed: {total_label}")
         print(f"{BackgroundColors.GREEN}File processing elapsed: {BackgroundColors.CYAN}{file_elapsed:.2f}s{Style.RESET_ALL}")  # Print per-file elapsed message
     except Exception as _tt:  # If timing calculation fails, warn but do not interrupt
         print(f"{BackgroundColors.YELLOW}Warning: failed to compute final training/file elapsed times: {_tt}{Style.RESET_ALL}")  # Warn on failure
@@ -6215,10 +6273,10 @@ def train(args, config: Optional[Dict] = None):
         telegram_enabled, next_notify, progress_pct = init_telegram_progress(args, config, start_epoch)  # Initialize telegram progress tracking
 
         args._training_session_start_epoch = start_epoch  # ETA excludes epochs completed before this session.
-        training_start_time = time.time()  # Start persisted training duration immediately before the epoch loop
+        training_start_time = training_elapsed_clock()  # Start elapsed-time measurement immediately before the epoch loop
         for epoch in range(start_epoch, args.epochs):  # Loop over epochs starting from resume point
             dataloader.sampler.epoch = epoch  # Continue deterministic class sampling at the restored epoch.
-            epoch_start_time = time.time()  # Record epoch start timestamp
+            epoch_start_time = training_elapsed_clock()  # Record epoch start timestamp
             pbar, total_steps = create_epoch_progress_bar(dataloader, args, epoch)  # Create progress bar for epoch
             
             step = run_batch_training_loop(G, D, opt_G, opt_D, scaler, device, args, config, n_classes, pbar, step, metrics_history, total_steps, epoch, training_start_time, file_progress_prefix)  # Execute batch training loop
@@ -6228,15 +6286,12 @@ def train(args, config: Optional[Dict] = None):
             require_finite_optimizer_state(opt_D, "discriminator_optimizer_epoch_end", args, epoch + 1, step)
             args._training_step = step  # Persist the completed batch count before serializing this epoch.
             write_epoch_csv_row(args, config, device, dataset, epoch, epoch_start_time, epoch_milestones, results_csv_writer, results_csv_file, results_cols_cfg, metrics_history, opt_G, opt_D)  # Write epoch CSV row
-            prior = args._training_elapsed_before_session
-            args._last_training_time = ceil_seconds(prior + time.time() - training_start_time) if prior is not None else ""
+            args._last_training_time = ceil_seconds(recorded_training_elapsed(
+                args, max(0.0, training_elapsed_clock() - training_start_time)))
             save_training_checkpoint(args, config, device, G, D, opt_G, opt_D, scaler, dataset, epoch, metrics_history)  # Save checkpoint if due
             next_notify = send_epoch_telegram_notifications(args, telegram_enabled, epoch, next_notify, progress_pct, training_start_time, file_progress_prefix)  # Send epoch telegram notifications with file progress prefix and timing
 
         write_final_timing_and_csv_row(args, config, device, dataset, training_start_time, file_start_time, results_csv_writer, results_csv_file, results_cols_cfg, metrics_history, opt_G, opt_D)  # Compute final training timing state
-        if start_epoch >= args.epochs:
-            prior = args._training_elapsed_before_session
-            args._last_training_time = ceil_seconds(prior) if prior is not None else ""
         persist_checkpoint_training_duration(args)
         args._last_metrics_history = metrics_history  # Store metrics history for in-memory generation result rows
         generate_training_plots(args, config, metrics_history, file_progress_prefix)  # Generate training plots
@@ -10057,7 +10112,7 @@ def setup_per_file_output(args: Any, config: Dict, file: str, results_suffix: st
                            "_last_generated_num_samples", "_last_total_num_samples_after_augmentation",
                            "_last_sample_generation_time", "_last_testing_time", "_last_epoch_time",
                            "_last_completed_epoch", "_last_metrics_history", "_last_file_time", "_last_model_save_time",
-                           "_training_elapsed_before_session", "_last_saved_generator_path"):
+                           "_training_elapsed_before_session", "_training_session_start_epoch", "_last_saved_generator_path"):
         if hasattr(args, previous_field):
             delattr(args, previous_field)
     args._last_training_time = 0.0
