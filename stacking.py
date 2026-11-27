@@ -1351,6 +1351,11 @@ def parse_cli_args():
             help="Disable historical persisted-model recovery (default)",
         )
         parser.set_defaults(enable_model_recovery=False)  # Disable historical model recovery unless explicitly enabled.
+        retention_group = parser.add_mutually_exclusive_group()
+        retention_group.add_argument("--keep-trained-models", dest="keep_trained_models", action="store_true", help="Retain completed classifier models for later inference or analysis")
+        retention_group.add_argument("--discard-completed-models", dest="keep_trained_models", action="store_false", help="Avoid unnecessary completed classifier exports when no configured consumer needs them (default)")
+        parser.set_defaults(keep_trained_models=None)
+        parser.add_argument("--prune-completed-models", choices=("preview", "apply"), default=None, help="Offline maintenance only: preview or delete verified completed classifier binaries for one explicit --dataset-path; stop all other jobs first")
         parser.add_argument("--n-jobs", dest="n_jobs", type=int, default=None, help="Override evaluation.n_jobs for estimators that support parallel fitting (-1 uses all processors; 1 is memory-safe)",)
         parser.add_argument("--feature-extraction-n-jobs", dest="feature_extraction_n_jobs", type=int, default=None, help="Override evaluation.feature_extraction_n_jobs for feature extraction/transformation stages such as PCA, not classifier training (-1 uses available CPUs; 1 is memory-safe)")  # Add the independent feature extraction thread override
         parser.add_argument("--feature-set-workers", dest="feature_set_workers", type=str, default=None, help="Persistent process counts by feature set, for example full=1,ga=1,pca=1,rfe=1,extra_trees=1; only 0 or 1 is supported")  # Add the persistent feature-set process override
@@ -1397,6 +1402,8 @@ def parse_cli_args():
         parser.add_argument("--enable-memory-tracemalloc", dest="enable_memory_tracemalloc", action="store_true", default=False, help="Enable optional tracemalloc reports at selected phase boundaries")  # Enable optional Python allocation reports
         
         parsed_args = parser.parse_args()  # Parse CLI arguments before cross-option validation.
+        if parsed_args.prune_completed_models and not parsed_args.dataset_path:
+            parser.error("--prune-completed-models requires an explicit --dataset-path (one CSV or one combined dataset directory)")
         max_without_rerun = parsed_args.max_cached_experiments is not None  # Track cached-run maximum usage.
         max_without_rerun = max_without_rerun and parsed_args.rerun_cached_experiments is None  # Require rerun mode.
         if max_without_rerun:  # Reject cached-run maximum without rerun mode.
@@ -1456,6 +1463,7 @@ def get_default_stacking_config():
             "combined_files_evaluation": True,  # Default: combined files evaluation enabled; False = separate files evaluation
             "sort_pending_by_elapsed_time": False,  # Keep pending queue ordering unchanged unless runtime sorting is enabled
             "model_recovery": False,  # Disable historical persisted-model recovery unless explicitly enabled.
+            "keep_trained_models": False,  # Avoid persistent classifier binaries after complete evaluation unless a consumer needs them.
             "rerun_cached_experiments": 0,  # Keep normal cache resume behavior unless read-only cache-driven rerun mode is requested
             "max_cached_experiments": None,  # Leave cached-run creation unlimited unless rerun mode sets a cap.
             "experiment_runs": 1,  # Require one completed run per logical experiment by default
@@ -2831,6 +2839,8 @@ def merge_configs(defaults, file_config, cli_args):
             _LEGACY_MODES = {"binary": "separate_files", "multiclass": "combined_files", "multi-class": "combined_files"}  # Backward compatibility map for legacy execution mode names
             config["execution"]["execution_mode"] = _LEGACY_MODES.get(classification_mode, classification_mode)  # Normalize legacy mode name to canonical value before assigning
         
+        if not isinstance(config.get("stacking", {}).get("keep_trained_models", False), bool):
+            raise ValueError("stacking.keep_trained_models must be a boolean")
         if cli_args is None:  # If no CLI args
             config = apply_stacking_only_mode(config)  # Apply a stacking-only setting supplied by config.yaml.
             config = apply_automl_only_mode(config)  # Apply an AutoML-only setting supplied by config.yaml.
@@ -2907,6 +2917,8 @@ def merge_configs(defaults, file_config, cli_args):
         if hasattr(cli_args, "enable_explainability") and cli_args.enable_explainability is not None:  # Explainability pipeline CLI override
             config.setdefault("explainability", {})["enabled"] = cli_args.enable_explainability  # Apply explainability toggle without changing method-level settings
 
+        if getattr(cli_args, "keep_trained_models", None) is not None:
+            config.setdefault("stacking", {})["keep_trained_models"] = cli_args.keep_trained_models
         if hasattr(cli_args, "enable_model_recovery"):  # Historical model recovery CLI state.
             config.setdefault("stacking", {})["model_recovery"] = bool(  # Apply default-off CLI control.
                 cli_args.enable_model_recovery
@@ -8149,6 +8161,59 @@ def cleanup_incomplete_stacking_model_transactions(models_directory: str, config
             print(f"{BackgroundColors.YELLOW}[WARNING] Failed to remove incomplete stacking transaction marker {temporary_marker}: {exc}{Style.RESET_ALL}")  # Keep recovery best-effort
 
 
+def completed_classifier_requires_retention(config: dict, experiment_mode: str, *, requires_model_artifact: bool = False) -> bool:
+    """Fail closed for unknown modes or configured fitted-model consumers.
+
+    The current grid fits each augmented ratio independently. Legacy augmented
+    testing and explicit artifact reconstruction retain their required models.
+    AutoML's separate best-model export is deliberately outside this policy.
+    """
+    stacking_cfg = config.get("stacking", {})
+    return (
+        experiment_mode not in {"original_only", "original_training_augmented_training"}
+        or requires_model_artifact
+        or stacking_cfg.get("keep_trained_models", False) is not False
+        or stacking_cfg.get("model_recovery", False)
+        or config.get("execution", {}).get("skip_train_if_model_exists", False)
+        or (experiment_mode == "original_only" and config.get("explainability", {}).get("enabled", False))
+    )
+
+
+def should_export_completed_classifier(config: dict, result_entry: dict, confusion_matrix_prefix: Optional[str], *, requires_model_artifact: bool = False) -> bool:
+    """Call only after the existing primary/backup cache persistence succeeds.
+
+    On missing scientific evidence, retain the model for recovery. Never remove
+    an existing shared artifact here: another run may have loaded it already.
+    """
+    if completed_classifier_requires_retention(config, result_entry.get("experiment_mode", ""), requires_model_artifact=requires_model_artifact):
+        return True
+    if not confusion_matrix_prefix:
+        print("[MODEL RETENTION] Retaining fitted model: per-run confusion-matrix persistence was not confirmed.")
+        return True
+    # All new metrics must be present before treating the model as disposable.
+    for metric in ("accuracy", "weighted_precision", "weighted_recall", "weighted_f1_score", "macro_f1_score", "fpr", "fnr"):
+        value = resolve_result_metric_float(result_entry, metric)
+        if value is None or not math.isfinite(value) or not 0 <= value <= 1:
+            print(f"[MODEL RETENTION] Retaining fitted model: missing or invalid {metric}.")
+            return True
+    try:
+        per_class = normalize_artifact_identity_value(result_entry.get("per_class_f1_scores"))
+        if not isinstance(per_class, list) or not per_class:
+            raise ValueError("empty per-class F1")
+        labels = set()
+        for item in per_class:
+            label = json.dumps(item["class_label"], sort_keys=True, allow_nan=False)
+            score = float(item["f1_score"])
+            if label in labels or not math.isfinite(score) or not 0 <= score <= 1:
+                raise ValueError("invalid or duplicate per-class F1")
+            labels.add(label)
+    except (TypeError, ValueError, KeyError, OverflowError):
+        print("[MODEL RETENTION] Retaining fitted model: per-class F1 evidence is missing or invalid.")
+        return True
+    print(f"[MODEL RETENTION] No persistent classifier export needed: {format_historical_model_recovery_identity(result_entry)}.")
+    return False
+
+
 def export_model_and_scaler(model, scaler, dataset_name, model_name, feature_set=None, dataset_csv_path=None, config=None, artifact_context=None, label_encoder=None, transformer=None, force_replace_incompatible=False):
     """
     Export model, scaler and metadata for stacking evaluations.
@@ -9545,7 +9610,9 @@ def run_explainability_process(status_queue: Any, model: Any, model_name: str, X
 
     global CONFIG  # Allow the child process to reuse the standard CONFIG fallback.
     global logger  # Allow child logger initialization to update the module logger.
+    retention_lock = None
     try:  # Initialize child-side runtime state before reporting startup.
+        retention_lock = acquire_model_retention_session_lock(exclusive=False)
         if runtime_process_name is not None:  # Re-apply parent-selected runtime title inside spawned explainability children.
             set_runtime_process_name(runtime_process_name)  # Prevent spawn import fallback names from leaking into htop.
         CONFIG = config  # Set child CONFIG so existing fallback logic remains valid.
@@ -9569,6 +9636,9 @@ def run_explainability_process(status_queue: Any, model: Any, model_name: str, X
                 logger.flush()  # Flush child log writes.
         except Exception:  # Avoid masking child process status during logger flush.
             pass  # Preserve the original child process status.
+        finally:
+            if retention_lock is not None:
+                retention_lock.close()
 
 
 def drain_explainability_status_queue(status_queue: Any) -> List[dict]:
@@ -16790,17 +16860,18 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
             log_training_phase(name, model_name, "Cache persistence", "Started", hyperparameters_enabled, augmentation_ratio)  # Mark contextual result cache persistence separately from training.
             persist_cache_result_entry(cache_ref_file, result_entry, cache_dict, config=config)  # Persist this atomic classifier result immediately and register its resume identity
             remove_eta_pending_run_experiment_task(active_pending_duration_tasks, current_combination)  # Remove persisted work from future pending-run ETA.
-            persist_per_run_confusion_matrix_artifacts_safely(result_entry, model_y_test, metrics[7], label_encoder.classes_, cache_ref_file, config)  # Persist all four per-run matrices from the existing prediction vector.
+            retention_matrix_prefix = persist_per_run_confusion_matrix_artifacts_safely(result_entry, model_y_test, metrics[7], label_encoder.classes_, cache_ref_file, config)  # Persist all four per-run matrices from the existing prediction vector.
             notify_new_best_result_if_applicable(result_entry, model_y_test, metrics[7], label_encoder.classes_, cache_ref_file, config)  # Persist exact evaluation evidence only after durable cache and authoritative new-best comparison.
             log_training_phase(name, model_name, "Cache persistence", "Completed", hyperparameters_enabled, augmentation_ratio)  # Mark contextual durable cache completion before artifact export.
             write_memory_phase_event("after_cache_persist", config=config, **phase_metadata, event_outcome="persisted")  # Publish cache persistence completion
 
             results_dict[(name, model_name)] = result_entry  # Store result keyed by feature set and model only after durable cache verification
 
-            log_training_phase(name, model_name, "Model export", "Started", hyperparameters_enabled, augmentation_ratio)  # Mark contextual fitted artifact export separately from cache persistence.
-            exported_model_path = export_model_and_scaler(active_model, scaler, dataset_name, model_name, feature_set=artifact_feature_set, dataset_csv_path=file, config=config, artifact_context=artifact_context, label_encoder=label_encoder, transformer=transformer)  # Atomically persist the original-trained classifier and fitted preprocessing.
-            persist_exported_model_filename(cache_ref_file, result_entry, cache_dict, exported_model_path, config=config)  # Atomically replace the exact persisted row with the successful export basename.
-            log_training_phase(name, model_name, "Model export", "Completed", hyperparameters_enabled, augmentation_ratio)  # Mark contextual model export completion before explainability scheduling.
+            if should_export_completed_classifier(config, result_entry, retention_matrix_prefix):
+                log_training_phase(name, model_name, "Model export", "Started", hyperparameters_enabled, augmentation_ratio)  # Mark contextual fitted artifact export separately from cache persistence.
+                exported_model_path = export_model_and_scaler(active_model, scaler, dataset_name, model_name, feature_set=artifact_feature_set, dataset_csv_path=file, config=config, artifact_context=artifact_context, label_encoder=label_encoder, transformer=transformer)  # Atomically persist the original-trained classifier and fitted preprocessing.
+                persist_exported_model_filename(cache_ref_file, result_entry, cache_dict, exported_model_path, config=config)  # Atomically replace the exact persisted row with the successful export basename.
+                log_training_phase(name, model_name, "Model export", "Completed", hyperparameters_enabled, augmentation_ratio)  # Mark contextual model export completion before explainability scheduling.
             pass  # Verify removal of duplicate individual model accuracy print
             progress_bar.update(1)  # Advance progress bar by one step
 
@@ -17000,7 +17071,7 @@ def run_stacking_evaluation_for_feature_set(name, stacking_model, X_train_df, y_
         log_training_phase(name, "StackingClassifier", "Cache persistence", "Started", hyperparameters_enabled, augmentation_ratio)  # Mark contextual stacking cache persistence separately from training.
         persist_cache_result_entry(cache_ref_file, stacking_result_entry, cache_dict, config=config)  # Persist this atomic stacking result immediately and register its resume identity
         remove_eta_pending_run_experiment_task(active_pending_duration_tasks, current_combination)  # Remove persisted stacking work from future pending-run ETA.
-        persist_per_run_confusion_matrix_artifacts_safely(stacking_result_entry, y_test, s_y_pred, label_encoder.classes_, cache_ref_file, config)  # Persist all four per-run matrices from the existing stacking prediction vector.
+        retention_matrix_prefix = persist_per_run_confusion_matrix_artifacts_safely(stacking_result_entry, y_test, s_y_pred, label_encoder.classes_, cache_ref_file, config)  # Persist all four per-run matrices from the existing stacking prediction vector.
         notify_new_best_result_if_applicable(stacking_result_entry, y_test, s_y_pred, label_encoder.classes_, cache_ref_file, config)  # Persist exact stacking evidence only after durable cache and authoritative new-best comparison.
         log_training_phase(name, "StackingClassifier", "Cache persistence", "Completed", hyperparameters_enabled, augmentation_ratio)  # Mark contextual durable stacking cache completion before artifact export.
         write_memory_phase_event("after_cache_persist", config=config, **phase_metadata, event_outcome="persisted")  # Publish stacking cache persistence completion
@@ -17008,10 +17079,11 @@ def run_stacking_evaluation_for_feature_set(name, stacking_model, X_train_df, y_
         dataset_name = build_filename_safe_dataset_identity(resolve_canonical_dataset_identity(str(file), True)) if execution_mode_str == "combined_files" else os.path.basename(os.path.dirname(file))  # Resolve stacking export dataset folder by execution mode.
         artifact_feature_set = f"{name} - {'Optimized Hyperparameters' if hyperparameters_enabled else 'Default Hyperparameters'}" + (f" - TrainAugmented@{int(augmentation_ratio * 100)}%" if experiment_mode == "original_training_augmented_training" and augmentation_ratio is not None else "")  # Isolate augmented-training stacking artifacts by exact ratio.
         artifact_context = build_stacking_model_artifact_context(file, source_files, execution_mode_str, attack_types_combined, target_column, "StackingClassifier", active_stacking_model, artifact_feature_set, input_feature_names, subset_feature_names, list(label_encoder.classes_), transformer, hyperparameters_enabled, get_current_experiment_run(config), config.get("evaluation", {}).get("random_state", 42))  # Build run-specific original-training artifact identity.
-        log_training_phase(name, "StackingClassifier", "Model export", "Started", hyperparameters_enabled, augmentation_ratio)  # Mark contextual fitted stacking export separately from cache persistence.
-        exported_model_path = export_model_and_scaler(active_stacking_model, scaler, dataset_name, "StackingClassifier", feature_set=artifact_feature_set, dataset_csv_path=file, config=config, artifact_context=artifact_context, label_encoder=label_encoder, transformer=transformer)  # Atomically persist fitted stacking and preprocessing.
-        persist_exported_model_filename(cache_ref_file, stacking_result_entry, cache_dict, exported_model_path, config=config)  # Atomically replace the exact persisted stacking row with the successful export basename.
-        log_training_phase(name, "StackingClassifier", "Model export", "Completed", hyperparameters_enabled, augmentation_ratio)  # Mark contextual stacking export completion before explainability scheduling.
+        if should_export_completed_classifier(config, stacking_result_entry, retention_matrix_prefix):
+            log_training_phase(name, "StackingClassifier", "Model export", "Started", hyperparameters_enabled, augmentation_ratio)  # Mark contextual fitted stacking export separately from cache persistence.
+            exported_model_path = export_model_and_scaler(active_stacking_model, scaler, dataset_name, "StackingClassifier", feature_set=artifact_feature_set, dataset_csv_path=file, config=config, artifact_context=artifact_context, label_encoder=label_encoder, transformer=transformer)  # Atomically persist fitted stacking and preprocessing.
+            persist_exported_model_filename(cache_ref_file, stacking_result_entry, cache_dict, exported_model_path, config=config)  # Atomically replace the exact persisted stacking row with the successful export basename.
+            log_training_phase(name, "StackingClassifier", "Model export", "Completed", hyperparameters_enabled, augmentation_ratio)  # Mark contextual stacking export completion before explainability scheduling.
         pass  # Verify removal of duplicate stacking classifier accuracy print
         progress_bar.update(1)  # Advance progress bar after stacking evaluation
         current_combination += 1  # Advance the global combination counter
@@ -17407,6 +17479,10 @@ def evaluate_on_dataset(
     try:
         if config is None:  # If no config provided
             config = CONFIG  # Use global CONFIG
+
+        if artifact_recovery_target is not None:
+            config = copy.deepcopy(config)  # Do not mutate the caller's retention policy.
+            config.setdefault("stacking", {})["keep_trained_models"] = True  # Legacy inference needs the reconstructed artifact.
 
         if hyperparameters_enabled is None:  # If caller did not provide an explicit HP mode flag
             hyperparameters_enabled = bool(hyperparams_map)  # Preserve legacy inference for older callers
@@ -20627,8 +20703,13 @@ def evaluate_feature_process_original_task(task: dict, process_payload: dict, re
     result_entry = build_classifier_result_entry(active_model.__class__.__name__, process_payload["file"], process_payload["execution_mode"], process_payload["attack_types_combined"], task["feature_set"], "Individual", task["classifier_name"], task["data_source_label"], task["experiment_id"], task["experiment_mode"], None, task["expected_n_features"], len(model_y_train), len(model_y_test), metrics, task["expected_feature_names"], hyperparams_map=process_payload["optimized_params"] if task["hyperparameters_enabled"] else {}, hyperparameters_enabled=task["hyperparameters_enabled"], effective_hyperparameters=serialize_effective_estimator_parameters(active_model), experiment_run=task["experiment_run"], phase_runtime_fields=phase_runtime_fields)  # Build the run-scoped cache and export result payload
     log_feature_process_combination(task, status_state, "Persistence started")  # Announce the atomic result transaction
     persist_cache_result_entry(process_payload["cache_ref_file"], result_entry, cache_dict, config=process_payload["config"])  # Persist and verify this completed result immediately through the process-safe cache transaction
-    exported_model_path = export_model_and_scaler(active_model, resources["scaler"], dataset_name, task["classifier_name"], feature_set=artifact_feature_set, dataset_csv_path=process_payload["file"], config=process_payload["config"], artifact_context=artifact_context, label_encoder=resources["label_encoder"], transformer=resources["transformer"])  # Persist the fitted model and preprocessing through the existing process-safe model transaction
-    persist_exported_model_filename(process_payload["cache_ref_file"], result_entry, cache_dict, exported_model_path, config=process_payload["config"])  # Atomically replace the exact persisted worker row with the successful export basename.
+    retention_matrix_prefix = None
+    if not completed_classifier_requires_retention(process_payload["config"], task["experiment_mode"], requires_model_artifact=task.get("requires_model_artifact", False)):
+        retention_matrix_prefix = persist_per_run_confusion_matrix_artifacts_safely(result_entry, model_y_test, metrics[7], resources["label_encoder"].classes_, process_payload["cache_ref_file"], process_payload["config"])
+        task["_retention_matrix_persisted"] = bool(retention_matrix_prefix)
+    if should_export_completed_classifier(process_payload["config"], result_entry, retention_matrix_prefix, requires_model_artifact=task.get("requires_model_artifact", False)):
+        exported_model_path = export_model_and_scaler(active_model, resources["scaler"], dataset_name, task["classifier_name"], feature_set=artifact_feature_set, dataset_csv_path=process_payload["file"], config=process_payload["config"], artifact_context=artifact_context, label_encoder=resources["label_encoder"], transformer=resources["transformer"])  # Persist the fitted model and preprocessing through the existing process-safe model transaction
+        persist_exported_model_filename(process_payload["cache_ref_file"], result_entry, cache_dict, exported_model_path, config=process_payload["config"])  # Atomically replace the exact persisted worker row with the successful export basename.
     log_feature_process_combination(task, status_state, "Persistence completed")  # Confirm result and model durability before completion counting
     exact_predictions = metrics[7]  # Retain exact predictions only until coordinator resolves existing new-best semantics.
     label_classes = resources["label_encoder"].classes_  # Retain fitted encoder order for scientifically interpretable artifacts.
@@ -20676,8 +20757,13 @@ def evaluate_feature_process_augmented_training_task(task: dict, process_payload
         phase_runtime_fields = build_runtime_phase_fields(process_payload["config"], task["feature_set"], task["classifier_name"], task["hyperparameters_enabled"], process_payload.get("preprocessing_time_s"), training_ram_stats)  # Preserve phase timing persistence.
         result_entry = build_classifier_result_entry(active_model.__class__.__name__, process_payload["file"], process_payload["execution_mode"], process_payload["attack_types_combined"], task["feature_set"], "Individual", task["classifier_name"], task["data_source_label"], task["experiment_id"], task["experiment_mode"], task["augmentation_ratio"], task["expected_n_features"], raw_training_rows, raw_test_rows, metrics, task["expected_feature_names"], hyperparams_map=process_payload["optimized_params"] if task["hyperparameters_enabled"] else {}, hyperparameters_enabled=task["hyperparameters_enabled"], effective_hyperparameters=serialize_effective_estimator_parameters(active_model), experiment_run=task["experiment_run"], phase_runtime_fields=phase_runtime_fields)  # Persist actual original-plus-synthetic rows and fixed original held-out rows.
         persist_cache_result_entry(process_payload["cache_ref_file"], result_entry, cache_dict, config=process_payload["config"])  # Persist ratio-specific metric result atomically.
-        exported_path = export_model_and_scaler(active_model, resources["scaler"], dataset_name, task["classifier_name"], feature_set=artifact_feature_set, dataset_csv_path=process_payload["file"], config=process_payload["config"], artifact_context=artifact_context, label_encoder=resources["label_encoder"], transformer=resources["transformer"])  # Persist fresh compatible ratio-trained artifact atomically.
-        persist_exported_model_filename(process_payload["cache_ref_file"], result_entry, cache_dict, exported_path, config=process_payload["config"])  # Persist exported artifact reference atomically.
+        retention_matrix_prefix = None
+        if not completed_classifier_requires_retention(process_payload["config"], task["experiment_mode"], requires_model_artifact=task.get("requires_model_artifact", False)):
+            retention_matrix_prefix = persist_per_run_confusion_matrix_artifacts_safely(result_entry, model_y_test, metrics[7], resources["label_encoder"].classes_, process_payload["cache_ref_file"], process_payload["config"])
+            task["_retention_matrix_persisted"] = bool(retention_matrix_prefix)
+        if should_export_completed_classifier(process_payload["config"], result_entry, retention_matrix_prefix, requires_model_artifact=task.get("requires_model_artifact", False)):
+            exported_path = export_model_and_scaler(active_model, resources["scaler"], dataset_name, task["classifier_name"], feature_set=artifact_feature_set, dataset_csv_path=process_payload["file"], config=process_payload["config"], artifact_context=artifact_context, label_encoder=resources["label_encoder"], transformer=resources["transformer"])  # Persist fresh compatible ratio-trained artifact atomically.
+            persist_exported_model_filename(process_payload["cache_ref_file"], result_entry, cache_dict, exported_path, config=process_payload["config"])  # Persist exported artifact reference atomically.
         return result_entry, model_y_test, metrics[7], resources["label_encoder"].classes_  # Return original test evidence for coordinator artifact reporting.
     finally:  # Release ratio-specific resources after result persistence or failure.
         if active_model is not None:  # Release the fitted estimator when clone construction completed.
@@ -21282,7 +21368,7 @@ def process_feature_process_task(task: dict, process_payload: dict, model_maps: 
         else:  # Preserve focused tests and alternate evaluator targets returning only a result row.
             result_entry = cast(dict, evaluation_output)  # Retain legacy small result-only behavior outside production evaluation.
             artifact_y_true = artifact_y_pred = artifact_label_classes = None  # Mark exact evaluation evidence unavailable.
-        if artifact_y_true is not None and artifact_y_pred is not None and artifact_label_classes is not None:  # Require complete exact worker-local evidence.
+        if not task.pop("_retention_matrix_persisted", False) and artifact_y_true is not None and artifact_y_pred is not None and artifact_label_classes is not None:  # Require complete exact worker-local evidence; do not repeat a confirmed publication.
             persist_per_run_confusion_matrix_artifacts_safely(result_entry, artifact_y_true, artifact_y_pred, artifact_label_classes, process_payload["cache_ref_file"], process_payload["config"])  # Publish per-run matrices without vector transport or another prediction.
         transition_feature_process_status(status_state, task, "computed")  # Count durably persisted successful computation exactly once before noncritical cleanup
         finish_eta_pending_run_experiment(process_payload.get("eta_pending_run_experiments_state"), task)  # Remove persisted work from future pending-run estimates.
@@ -21336,7 +21422,9 @@ def run_feature_set_process_worker(process_payload: dict, status_queue: Any, sta
     augmented_capacity_gate: Any = process_payload.get("augmented_capacity_gate")  # Resolve the coordinator-owned augmented artifact admission gate
     acquired_capacity_gate: Any = None  # Track the exact phase gate owned for exception-safe release
     capacity_acquired = False  # Track admission ownership for exception-safe release
+    retention_lock = None
     try:  # Surface every child failure through both status queue and nonzero exit code
+        retention_lock = acquire_model_retention_session_lock(exclusive=False)
         if worker_process_name is not None:  # Re-apply parent-selected runtime title inside spawned feature workers.
             set_runtime_process_name(worker_process_name)  # Prevent spawn import fallback names from leaking into htop and identify idle feature workers.
         configure_feature_process_parent_death(process_payload["coordinator_pid"])  # Prevent spawned work from surviving a killed detached coordinator
@@ -21434,6 +21522,12 @@ def run_feature_set_process_worker(process_payload: dict, status_queue: Any, sta
                 logger.close()  # Close this process's append-only file handle
         except Exception:  # Keep logger cleanup from replacing a child failure
             pass  # Preserve the worker outcome
+        finally:
+            try:
+                cleanup_tracked_feature_source_directories(config=process_payload.get("config"))
+            finally:
+                if retention_lock is not None:
+                    retention_lock.close()
 
 
 def validate_feature_process_payload(value: Any, path: str = "payload") -> None:  # Reject full matrices, frames, labels, or estimators from process payloads
@@ -23067,6 +23161,7 @@ def log_resolved_configuration(config: dict) -> None:
             f"{BackgroundColors.GREEN}[INFO] Historical model recovery: "
             f"{BackgroundColors.CYAN}{model_recovery_state}{Style.RESET_ALL}"
         )
+        print(f"[INFO] Completed model retention: {'Keep all' if config.get('stacking', {}).get('keep_trained_models', False) else 'Automatic (retain only for configured consumers or incomplete evidence)'}")
         skip_rules = tuple(config.get("stacking", {}).get("compiled_skip_combinations", ()))  # Read compiled skip rules for display.
         skip_source = config.get("stacking", {}).get("skip_combinations_source", "Default")  # Read resolved skip-rule source.
         for skip_line in format_skip_rules_for_info(skip_rules, skip_source):  # Emit resolved skip-rule startup INFO lines.
@@ -23204,6 +23299,262 @@ def build_telegram_pipeline_summary(config: Optional[dict], dataset_path: Option
         raise
 
 
+def acquire_model_retention_session_lock(exclusive: bool) -> Any:
+    """Coordinate maintenance with updated top-level runs in this checkout.
+
+    An exclusive maintenance lock is deliberately nonblocking. Older versions,
+    direct library callers and external model readers must be stopped manually.
+    Do not remove the lock file: that would split flock coordination.
+    """
+    lock_path = Path(__file__).resolve().parent / "Logs" / ".stacking-model-retention.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock = open(lock_path, "a+", encoding="utf-8")
+    try:
+        fcntl.flock(lock.fileno(), (fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH) | fcntl.LOCK_NB)
+        return lock
+    except BaseException:
+        lock.close()
+        raise
+
+
+def validate_retirement_matrix_evidence(row: dict, cache_directory: Path, class_names: List[str]) -> None:
+    """Require all four artifacts and an exact count-derived metric fingerprint."""
+    run = parse_persisted_experiment_run_value(row.get("experiment_run"))
+    directory = cache_directory / f"Run-{run}-Confusion-Matrix"
+    if directory.is_symlink() or not directory.is_dir():
+        raise ValueError("canonical per-run confusion-matrix directory unavailable")
+    prefix = build_confusion_matrix_artifact_prefix(row)
+    paths = [directory / f"{prefix}-{suffix}" for suffix in ("confusion_matrix_raw.csv", "confusion_matrix_raw.png", "confusion_matrix_normalized_true.csv", "confusion_matrix_normalized_true.png")]
+    if any(path.is_symlink() or not path.is_file() for path in paths):
+        raise ValueError("complete non-symlink confusion-matrix artifact set required")
+    counts = load_validated_confusion_matrix_counts(paths[0], class_names)
+    if int(counts.sum()) != row.get("n_samples_test"):
+        raise ValueError("confusion-matrix sample count differs from the saved result")
+    support = counts.sum(axis=1, keepdims=True)
+    normalized = np.divide(counts.astype(float), support, out=np.zeros_like(counts, dtype=float), where=support != 0)
+    if not confusion_matrix_artifact_set_is_current(directory, prefix, counts, normalized, class_names):
+        raise ValueError("confusion-matrix artifacts are incomplete or inconsistent")
+    macro, per_class, fingerprint = load_confusion_matrix_recovery(paths[0], class_names)
+    validate_recovered_aggregate_fingerprint(row, fingerprint)
+    saved_macro = resolve_result_metric_float(row, "macro_f1_score")
+    if saved_macro is None or not math.isclose(saved_macro, macro, rel_tol=1e-12, abs_tol=1e-12):
+        raise ValueError("macro F1 is missing or inconsistent")
+    saved_per_class = normalize_artifact_identity_value(row.get("per_class_f1_scores"))
+    derived_per_class = json.loads(per_class)
+    if not isinstance(saved_per_class, list) or len(saved_per_class) != len(derived_per_class):
+        raise ValueError("per-class F1 is missing or inconsistent")
+    for saved, derived in zip(saved_per_class, derived_per_class):
+        if not isinstance(saved, dict) or str(saved.get("class_label")) != str(derived["class_label"]) or not math.isclose(float(saved["f1_score"]), float(derived["f1_score"]), rel_tol=1e-12, abs_tol=1e-12):
+            raise ValueError("per-class F1 is inconsistent")
+
+
+def validate_retirement_context(row: dict, reference: str, metadata: dict, config: dict) -> Tuple[dict, dict]:
+    """Prove exact row-to-artifact identity without deserializing a fitted model."""
+    context = extract_stacking_model_artifact_context(metadata)
+    mode = row.get("experiment_mode")
+    feature_slot = f"{row['feature_set']} - {row['hyperparameter_mode']}"
+    if mode == "original_only":
+        if not stacking_model_context_matches_result(row, reference, metadata, context):
+            raise ValueError("original classifier provenance does not match the result")
+    elif mode == "original_training_augmented_training":
+        ratio = float(row["augmentation_ratio"])
+        if not math.isfinite(ratio) or not 0 < ratio <= 1:
+            raise ValueError("invalid augmentation ratio")
+        feature_slot += f" - TrainAugmented@{int(ratio * 100)}%"
+        if context.get("artifact_type") == "stacking_augmented_training_classifier":
+            # Worker artifacts hash additional synthetic and split provenance.
+            for key in ("experiment_mode", "augmentation_ratio", "synthetic_source_files", "original_split_identity"):
+                context[key] = metadata[key]
+            if context["experiment_mode"] != mode or context["augmentation_ratio"] != ratio or context["training_data"] != "original_training_plus_synthetic" or not context["synthetic_source_files"] or not context["original_split_identity"]:
+                raise ValueError("worker augmented provenance is incomplete or differs")
+            if context["feature_set"] != feature_slot.rsplit(" - TrainAugmented@", 1)[0]:
+                raise ValueError("worker feature identity differs")
+        elif context.get("artifact_type") == "stacking_original_trained_classifier" and context.get("training_data") == "original_only":
+            # The supplied sequential implementation uses a legacy baseline-shaped
+            # context with a ratio suffix. Require that exact historical convention.
+            if context.get("feature_set") != feature_slot:
+                raise ValueError("sequential augmented feature/ratio identity differs")
+        else:
+            raise ValueError("unknown augmented classifier artifact format")
+        hp = {"Default Hyperparameters": "default", "Optimized Hyperparameters": "optimized"}.get(row["hyperparameter_mode"])
+        params = normalize_artifact_identity_value(row.get("hyperparameters"))
+        if not isinstance(params, dict):
+            raise ValueError("missing effective model parameters")
+        params = dict(params)
+        params.pop("effective_training_configuration", None)
+        if (context.get("schema_version") != 1 or context.get("dataset_path") != str(Path(reference).resolve())
+                or context.get("execution_mode") != row.get("execution_mode")
+                or context.get("experiment_run") != row.get("experiment_run")
+                or context.get("model_name") != row.get("model_name")
+                or context.get("model_class", "").rsplit(".", 1)[-1] != row.get("model")
+                or context.get("hyperparameter_mode") != hp or hp is None
+                or context.get("model_params") != normalize_metadata_for_json(params)
+                or context.get("model_feature_names") != parse_historical_feature_names(row)
+                or context.get("attack_types") != normalize_artifact_identity_value(row.get("attack_types_combined"))):
+            raise ValueError("augmented classifier provenance does not match the result")
+        if row.get("execution_mode") not in ("combined_files", "separate_files"):
+            raise ValueError("unsupported execution mode")
+        if row.get("classifier_type") != ("Stacking" if row.get("model_name") == "StackingClassifier" else "Individual"):
+            raise ValueError("classifier type differs")
+        if len(context["model_feature_names"]) != row.get("n_features"):
+            raise ValueError("model feature count differs")
+        combined = row.get("execution_mode") == "combined_files"
+        source_entries = context.get("source_files")
+        if not isinstance(source_entries, list) or not source_entries:
+            raise ValueError("missing original source provenance")
+        for index, source in enumerate(source_entries):
+            source_path = Path(source["path"]).resolve(strict=True)
+            stat = source_path.stat()
+            if source.get("index") != index or not source_path.is_file() or source.get("size") != stat.st_size or source.get("mtime_ns") != stat.st_mtime_ns:
+                raise ValueError("original source provenance differs")
+            resolved_reference = Path(reference).resolve()
+            if (combined and resolved_reference not in source_path.parents) or (not combined and (len(source_entries) != 1 or source_path != resolved_reference)):
+                raise ValueError("source path differs from the dataset reference")
+        for source in context.get("synthetic_source_files", []):
+            source_path = Path(source["path"]).resolve(strict=True)
+            stat = source_path.stat()
+            if not source_path.is_file() or source.get("size") != stat.st_size or source.get("mtime_ns") != stat.st_mtime_ns:
+                raise ValueError("synthetic source provenance differs")
+        expected_source = f"TrainingAugmented@{int(ratio * 100)}%" + ("_CombinedFiles" if combined else "")
+        if row.get("dataset") != resolve_canonical_dataset_identity(reference, combined) or row.get("data_source") != expected_source or not row.get("data_augmentation_enabled"):
+            raise ValueError("augmented result identity differs")
+    else:
+        raise ValueError("legacy or unsupported experiment may still share a model")
+    digest = hashlib.sha256(json.dumps(context, sort_keys=True, allow_nan=False).encode("utf-8")).hexdigest()
+    if metadata.get("artifact_identity") != digest:
+        raise ValueError("artifact context digest differs")
+    dataset_name = build_filename_safe_dataset_identity(resolve_canonical_dataset_identity(reference, True)) if row["execution_mode"] == "combined_files" else os.path.basename(os.path.dirname(reference))
+    paths = resolve_stacking_model_artifact_paths(dataset_name, reference, row["model_name"], feature_slot, context, config)
+    if Path(paths["model_path"]).name != row.get("exported_model_filename") or metadata.get("model_artifact") != row.get("exported_model_filename"):
+        raise ValueError("model basename does not match the exact deterministic identity")
+    return context, paths
+
+
+def prune_completed_classifier_models(reference: str, config: dict, *, apply: bool = False) -> dict:
+    """Offline, explicit, fail-closed pruning of previously exported binaries.
+
+    Caller must hold the exclusive session lock and stop older/other readers.
+    Only uniquely linked, fully evaluated models with matching primary/backup
+    rows and validated confusion matrices qualify. Preserve original metadata
+    under a retired name and keep every CSV, backup, PCA and AutoML artifact.
+    """
+    if completed_classifier_requires_retention(config, "original_only"):
+        raise ValueError("Pruning requires model retention, historical recovery, skip-train and explainability to be disabled")
+    reference_path = Path(reference).expanduser()
+    resolved_reference = reference_path.resolve(strict=True)
+    reference = str(reference_path.absolute())  # Preserve cache identity's lexical path convention; provenance checks resolve separately.
+    if not (resolved_reference.is_dir() or resolved_reference.is_file()):
+        raise ValueError("Pruning requires a dataset directory or source file")
+    legacy_path = get_cache_file_path(reference, config=config, experiment_run=1, legacy=True)
+    cache_directory = Path(legacy_path).parent
+    if cache_directory.is_symlink():
+        raise ValueError("Refusing symlinked cache directory")
+    # Do not migrate or repair historical files during destructive maintenance.
+    discovered = discover_result_storage_files(legacy_path)
+    run_numbers = sorted({run for _, run, legacy in discovered if not legacy})
+    summary = {"eligible": 0, "deleted": 0, "bytes": 0, "retained": 0}
+    # Include every discovered primary/backup/legacy reference in the ambiguity
+    # index. If any snapshot cannot be parsed, do not delete anything.
+    all_references = {}
+    verified_rows = []
+    snapshots = {}
+    for path, run, legacy in discovered:
+        if path.is_symlink():
+            raise ValueError(f"Refusing symlinked result storage: {path}")
+        _, rows = read_validated_cache_file(str(path), config=config, expected_experiment_run=run)
+        if len(pd.read_csv(path)) != len(rows):
+            raise ValueError(f"Refusing ambiguous duplicate cache rows: {path}")
+        snapshots[str(path)] = rows
+        for key, row in rows.items():
+            filename = row.get("exported_model_filename")
+            if isinstance(filename, str) and filename:
+                all_references.setdefault(filename, set()).add((run, key))
+    # The final CSV family can contain a legacy shared-model reference absent
+    # from current cache snapshots. Treat those references as consumers too.
+    final_config = copy.deepcopy(config)
+    if Path(reference).is_dir():
+        final_config.setdefault("stacking", {})["results_filename"] = final_config.get("stacking", {}).get("combined_files_results_filename", "Stacking_Classifiers_CombinedFiles_Results.csv")
+    final_legacy = get_stacking_results_file_path(reference, config=final_config, experiment_run=1, legacy=True)
+    for final_path, run, _ in discover_result_storage_files(str(final_legacy)):
+        if final_path.is_symlink():
+            raise ValueError(f"Refusing symlinked final result storage: {final_path}")
+        frame = read_validated_final_results_file(str(final_path), config=final_config, expected_experiment_run=run)
+        if len(pd.read_csv(final_path)) != len(frame):
+            raise ValueError(f"Refusing ambiguous duplicate final result rows: {final_path}")
+        for _, final_row in frame.iterrows():
+            filename = final_row.get("exported_model_filename")
+            if isinstance(filename, str) and filename:
+                key = build_cache_identity_from_row(final_row)
+                all_references.setdefault(filename, set()).add((run, key))
+    for run in run_numbers:
+        cache_path = get_cache_file_path(reference, config=config, experiment_run=run)
+        primary, backup = snapshots.get(cache_path), snapshots.get(get_cache_backup_path(cache_path))
+        if primary is None or backup is None:
+            print(f"[MODEL PRUNE] Run {run}: retained; matching primary and backup are required.")
+            continue
+        for key, row in primary.items():
+            if row == backup.get(key) and isinstance(row.get("exported_model_filename"), str):
+                verified_rows.append((run, key, row))
+    root = Path(get_stacking_output_dir(reference, config)) / "Models"
+    if root.is_symlink():
+        raise ValueError("Refusing symlinked Models directory")
+    seen = set()
+    for run, key, row in verified_rows:
+        filename = row["exported_model_filename"]
+        if filename in seen:
+            continue
+        seen.add(filename)
+        try:
+            if Path(filename).name != filename or not filename.endswith("_model.joblib") or all_references.get(filename) != {(run, key)}:
+                raise ValueError("unsafe basename or shared/ambiguous result reference")
+            validate_cache_result_payload(row, config=config)
+            candidates = [directory / filename for directory in root.iterdir() if directory.is_dir() and (directory / filename).exists()] if root.is_dir() else []
+            if len(candidates) != 1:
+                raise ValueError("no unique existing classifier binary")
+            model_path = candidates[0]
+            metadata_path = model_path.with_name(filename[:-len("_model.joblib")] + "_meta.json")
+            retired_path = metadata_path.with_suffix(".retired.json")
+            if model_path.parent.is_symlink() or model_path.is_symlink() or metadata_path.is_symlink() or not model_path.is_file() or not metadata_path.is_file() or retired_path.is_symlink():
+                raise ValueError("unsafe, incomplete or already retired artifact pair")
+            # A model writer or loader also uses this exact directory lock.
+            with acquire_stacking_artifact_lock(str(model_path.parent / ".artifacts.lock"), exclusive=True):
+                pending_path = model_path.parent / f".{filename}.pending.json"
+                if pending_path.exists() or pending_path.is_symlink():
+                    raise ValueError("unresolved model export transaction")
+                metadata = load_exact_artifact_json(metadata_path)
+                if retired_path.exists() and (not retired_path.is_file() or load_exact_artifact_json(retired_path) != metadata):
+                    raise ValueError("existing retirement receipt differs from the current artifact")
+                context, paths = validate_retirement_context(row, reference, metadata, config)
+                if Path(paths["model_path"]) != model_path.resolve() or Path(paths["metadata_path"]) != metadata_path.resolve():
+                    raise ValueError("artifact is outside its exact expected directory")
+                class_names = [str(label) for label in context["label_classes"]]
+                validate_retirement_matrix_evidence(row, cache_directory, class_names)
+                if not stacking_model_artifact_pair_is_valid(paths, context):
+                    raise ValueError("model/metadata size or SHA-256 validation failed")
+                size = model_path.stat().st_size
+                summary["eligible"] += 1
+                if apply:
+                    # Keep a small immutable provenance record. Publish it first;
+                    # interruption cannot erase both model and metadata evidence.
+                    if not retired_path.exists():
+                        write_stacking_pca_artifact_atomically(metadata, str(retired_path), "json")
+                    sync_cache_parent_directory(str(retired_path))
+                    model_path.unlink()
+                    sync_cache_parent_directory(str(model_path))
+                    summary["deleted"] += 1
+                    summary["bytes"] += size
+                    metadata_path.unlink()
+                    sync_cache_parent_directory(str(metadata_path))
+                else:
+                    summary["bytes"] += size
+                print(f"[MODEL PRUNE] {'Deleted' if apply else 'Would delete'} {model_path} ({size / 1024**3:.3f} GiB)")
+        except Exception as exc:
+            summary["retained"] += 1
+            print(f"[MODEL PRUNE] Not fully retired: {filename}: {exc}")
+    print(f"[MODEL PRUNE] {'APPLY' if apply else 'PREVIEW'} | {summary['eligible']} eligible | {summary['deleted']} deleted | {summary['bytes'] / 1024**3:.3f} GiB {'released logically' if apply else 'eligible'} | {summary['retained']} candidate(s) not fully retired")
+    return summary
+
+
 def main(config=None):
     """
     Main function.
@@ -23213,6 +23564,7 @@ def main(config=None):
     """
     
     normal_completion = False  # Track whether the program reached successful explainability finalization.
+    retention_lock = acquire_model_retention_session_lock(exclusive=False)
     try:
         if config is None:  # If no config provided
             config = CONFIG  # Use global CONFIG
@@ -23302,7 +23654,10 @@ def main(config=None):
                     TELEGRAM_BOT.stop_inbound_listener()  # Stop long-polling before final cleanup leaves main
             except Exception:  # Keep shutdown cleanup from changing pipeline outcome
                 pass  # Preserve original main result
-            cleanup_tracked_feature_source_directories(config=config)  # Retry exact current-run spill cleanup after every normal, failed, or interrupted execution
+            try:
+                cleanup_tracked_feature_source_directories(config=config)  # Retry exact current-run spill cleanup after every normal, failed, or interrupted execution
+            finally:
+                retention_lock.close()
 
 
 if __name__ == "__main__":
@@ -23318,6 +23673,10 @@ if __name__ == "__main__":
         config = initialize_config(config_path=cli_args.config, cli_args=cli_args)  # Merge configuration from file and CLI
         set_runtime_process_name(cli_args.process_name, script_path=__file__, config=config)  # Re-apply with merged config so config.yaml can override only when CLI omitted the process name.
         CURRENT_RUNTIME_PROCESS_NAME = resolve_runtime_process_name(cli_args.process_name, script_path=__file__, config=config)  # Preserve one exact resolved runtime title for spawned children.
+        if getattr(cli_args, "prune_completed_models", None):
+            with acquire_model_retention_session_lock(exclusive=True):
+                prune_completed_classifier_models(cli_args.dataset_path, config, apply=cli_args.prune_completed_models == "apply")
+            raise SystemExit(0)  # Maintenance never starts training or truncates its log.
         initialize_logger(config=config)  # Initialize logger and redirect stdout/stderr to logger
         try:  # Run main and handle user interrupts separately
             main(config=config)  # Invoke main business logic for stacking pipeline
