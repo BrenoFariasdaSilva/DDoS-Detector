@@ -392,6 +392,7 @@ stacking: # Stacking experiment settings
   skip_combinations: [] # Runtime skip rules for feature/classifier/hyperparameter/augmentation combinations. Empty keeps all generated combinations eligible.
   only_combinations: [] # Runtime allowlist rules using skip-rule syntax. Empty permits every generated combination.
   auto_restart_on_oom: true # Automatically relaunch with an exact skip rule after confirmed persistent-worker OOM.
+  keep_trained_models: false # Export completed classifier models only when a configured consumer needs them; true retains every completed model for later use.
 
   methods: # Method toggles for stacking pipeline (overridable via CLI)
     augmentation: true # Enable data augmentation combination in pipeline

@@ -377,6 +377,24 @@ Useful `stacking.py` CLI controls include `--combined-files`, `--separate-files`
 
 Large compatible sequential augmented Random Forest fits can store completed trees in a self-contained ZIP64 artifact while retaining the existing `.joblib` filename. These artifacts are intentionally not direct `joblib.load` files; production consumers must use `utils.stacking.disk_forest.load_classifier_bundle`, which also remains compatible with legacy joblib bundles. Set `stacking.memory_management.disk_forest_min_train_nbytes` to a negative value to disable this storage mode.
 
+### Completed model retention
+
+By default, completed classifier binaries are omitted only after their cache row and per-run confusion-matrix evidence are durable, all metrics validate, and no configured consumer requires the fitted artifact. The fitted instance is still used for prediction and metrics. PCA and AutoML artifacts are unaffected. Use `--keep-trained-models` (or `stacking.keep_trained_models: true`) to retain completed classifiers; `--discard-completed-models` restores the default. Historical model recovery, skip-train reuse, baseline explainability, explicit artifact requirements, unknown modes, and incomplete evidence retain the model.
+
+To retire already exported classifier binaries, stop **all** training, explainability, inference, and artifact readers/writers for that dataset, including older script versions and other checkouts. The session lock coordinates only this version in this checkout. Preview first, then apply only after reviewing every candidate:
+
+```bash
+python stacking.py --dataset-path ./Datasets/CICDDoS2019/01-12/ \
+  --disable-model-recovery --disable-explainability \
+  --discard-completed-models --prune-completed-models preview
+
+python stacking.py --dataset-path ./Datasets/CICDDoS2019/01-12/ \
+  --disable-model-recovery --disable-explainability \
+  --discard-completed-models --prune-completed-models apply
+```
+
+Pruning is fail-closed: it preserves results, caches, backups, matrices, PCA, and AutoML artifacts, and deletes only uniquely referenced, hash-verified classifier binaries with matching primary/backup rows and complete evidence. A receipt is retained before deletion. Artifact-dependent analysis after pruning may require retraining.
+
 ## Results
 
 Major results below use only the CICDDoS2019 `01-12` combined-files multi-class Run 1 stacking cache, with 13 labels: BENIGN, DrDoS_DNS, DrDoS_LDAP, DrDoS_MSSQL, DrDoS_NTP, DrDoS_NetBIOS, DrDoS_SNMP, DrDoS_SSDP, DrDoS_UDP, Syn, TFTP, UDP-lag, and WebDDoS.
