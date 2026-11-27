@@ -56,8 +56,10 @@ def trial(module, device, parallel, seed, count, warmup=0, paired=False, large=F
     config=module.get_default_config(); config['training']['coalesce_critic_forwards']=paired
     args=SimpleNamespace(batch_size=batch,latent_dim=100 if large else 12,critic_steps=5,lambda_gp=10.,use_amp=False,_mixed_categorical_groups=groups,_mixed_numeric_feature_count=numeric,csv_path='benchmark.csv',epochs=1,log_interval=1)
     hist={key:[] for key in ('steps','loss_D','loss_G','gp','D_real','D_fake','wasserstein')}
+    # Older baselines take a wall-clock timestamp; V6.5.50+ uses a monotonic clock.
+    training_clock = getattr(module, 'training_elapsed_clock', time.time)
     def run(selected,step):
-        return module.run_batch_training_loop(G,D,optG,optD,None,device,args,config,2,SilentProgress(selected),step,hist,len(selected),0,time.time(),'')
+        return module.run_batch_training_loop(G,D,optG,optD,None,device,args,config,2,SilentProgress(selected),step,hist,len(selected),0,training_clock(),'')
     if latam:
         batches=[(x.to(device),y.to(device)) for x,y in batches]  # Match the production GPU-resident source path.
         args.log_interval=50  # Match production logging cadence.
