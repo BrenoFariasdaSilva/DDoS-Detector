@@ -114,6 +114,7 @@ import yaml  # Import YAML library
 from colorama import Style  # For terminal text styling
 from fractions import Fraction  # For exact class-proportional synthetic quota arithmetic
 from joblib import dump, load  # For exporting and loading trained models and scalers
+from utils.stacking.disk_arrays import DiskSyntheticSource, allocate_matrix, copy_matrix, merge_scaled_training
 from lime.lime_tabular import LimeTabularExplainer  # Import LIME library
 from Logger import Logger, SAO_PAULO_TIMEZONE_NAME  # For process-safe São Paulo timestamped runtime logging
 from pathlib import Path  # For handling file paths
@@ -7729,7 +7730,7 @@ def spill_array_to_memmap(array: Any, temp_dir: str, name: str) -> Tuple[np.memm
     file_path = os.path.join(temp_dir, f"{name}_{uuid.uuid4().hex}.dat")  # Build collision-resistant backing file path
     memmap_array = None  # Track a partial mapping for explicit failure cleanup
     try:
-        memmap_array = np.memmap(file_path, dtype=source.dtype, mode="w+", shape=source.shape, order="C")  # Allocate disk-backed C-contiguous matrix
+        memmap_array = allocate_matrix(file_path, source.shape, source.dtype)  # Reserve physical space for disk-backed matrix
         memmap_array[:] = source  # Copy exact source values into the memmap without dtype conversion
         memmap_array.flush()  # Flush backing bytes before releasing the source array
         return memmap_array, file_path  # Return memmap and backing file path
@@ -16654,9 +16655,21 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
             model_X_test = X_test_values  # Default non-LSTM testing matrix remains row-wise 2D.
             model_y_test = y_test  # Default non-LSTM testing labels remain row-aligned.
             sequence_metadata = None  # Store LSTM generation evidence only for sequence models.
-            if type(active_model) is RandomForestClassifier:  # Match sklearn 1.7.0 dense forest validation dtype before fitting.
-                model_X_train = np.asarray(model_X_train, dtype=np.float32, order="C")  # Materialize sklearn's required float32 training layout once.
-                model_X_test = np.asarray(model_X_test, dtype=np.float32, order="C")  # Materialize sklearn's required float32 test layout once.
+            rf_array_dir = None
+            rf_owned_arrays = []
+            if type(active_model) is RandomForestClassifier:  # Match sklearn's dense forest validation dtype before fitting.
+                memory_cfg = config.get("stacking", {}).get("memory_management", {})
+                if (experiment_mode == "original_training_augmented_training"
+                        and memory_cfg.get("spill_full_feature_arrays_after_full_eval", True)
+                        and get_array_nbytes(model_X_train) >= int(memory_cfg.get("spill_min_array_nbytes", 1073741824) or 0)):
+                    rf_array_dir = create_feature_process_temp_directory(file, config=config)
+                    model_X_train = copy_matrix(model_X_train, Path(rf_array_dir) / "train.dat", dtype=np.float32)
+                    rf_owned_arrays.append(model_X_train)
+                    model_X_test = copy_matrix(model_X_test, Path(rf_array_dir) / "test.dat", dtype=np.float32)
+                    rf_owned_arrays.append(model_X_test)
+                else:
+                    model_X_train = np.asarray(model_X_train, dtype=np.float32, order="C")
+                    model_X_test = np.asarray(model_X_test, dtype=np.float32, order="C")
             if is_lstm_classifier_name(model_name):  # Convert only LSTM inputs after split, scaling, and feature selection.
                 model_X_train, model_y_train, model_X_test, model_y_test, sequence_metadata = prepare_lstm_sequence_evaluation_inputs(active_model, X_train_values, y_train, X_test_values, y_test, train_row_metadata, test_row_metadata)  # Build verified partition-local sequence tensors.
             artifact_feature_set = f"{name} - {'Optimized Hyperparameters' if hyperparameters_enabled else 'Default Hyperparameters'}" + (f" - TrainAugmented@{int(augmentation_ratio * 100)}%" if experiment_mode == "original_training_augmented_training" and augmentation_ratio is not None else "")  # Isolate augmented-training model artifacts by exact ratio.
@@ -16763,6 +16776,9 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
 
             current_combination += 1  # Advance the global combination counter
             write_memory_phase_event("before_memory_cleanup", config=config, **phase_metadata, event_outcome="starting")  # Publish per-classifier cleanup start
+            if rf_array_dir is not None:
+                cleanup_feature_process_directory(rf_array_dir, rf_owned_arrays)
+                rf_array_dir = None
             del active_model, artifact_context, metrics, training_ram_stats, model_X_train, model_X_test  # Release fitted estimator, RF float32 inputs, metadata, metrics, and RAM stats.
             gc.collect()  # Reclaim estimator-owned memory before the next atomic classifier
             write_memory_phase_event("after_memory_cleanup", config=config, **phase_metadata, event_outcome="completed")  # Publish per-classifier cleanup completion
@@ -16771,6 +16787,8 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
         return (results_dict, current_combination)  # Return accumulated results and updated combination counter
     except Exception as e:
         try:
+            if locals().get("rf_array_dir") is not None:
+                cleanup_feature_process_directory(rf_array_dir, rf_owned_arrays)
             if "active_model" in locals():  # Release any partially fitted estimator before re-raising
                 del active_model
             if "metrics" in locals():  # Release metric tuple if the failure happened after evaluation
@@ -17548,21 +17566,40 @@ def evaluate_on_dataset(
         if experiment_mode == "original_training_augmented_training":  # Add synthetic rows only after original split and preprocessing fit.
             if df_augmented_for_training is None or augmentation_ratio is None:  # Require explicit synthetic source and ratio.
                 raise ValueError("Training augmentation requires synthetic data and an augmentation ratio")  # Reject incomplete train-time augmentation setup.
-            selected_synthetic = select_synthetic_training_samples(df_augmented_for_training, y_train, label_encoder, augmentation_ratio, config=config)  # Select exact per-class synthetic rows from fixed training counts.
-            synthetic_features = selected_synthetic.iloc[:, :-1].select_dtypes(include=np.number)  # Preserve numeric feature preprocessing convention.
-            missing_synthetic_features = [feature for feature in pca_input_feature_names if feature not in synthetic_features.columns]  # Validate original feature schema before transformation.
-            if missing_synthetic_features:  # Reject incompatible synthetic samples before fitting any classifier.
-                raise ValueError(f"Synthetic training data is missing original feature columns: {missing_synthetic_features}")  # Preserve strict schema identity.
-            X_synthetic_scaled = np.asarray(scaler.transform(synthetic_features[pca_input_feature_names].to_numpy(copy=False)))  # Transform synthetic rows with scaler fitted only on original training data.
-            y_synthetic = np.asarray(label_encoder.transform(selected_synthetic.iloc[:, -1].to_numpy(copy=False)), dtype=np.int64)  # Encode synthetic labels with original-training encoder.
             pca_fit_row_count = int(X_train_scaled.shape[0])  # Fit PCA on original rows only.
-            X_train_scaled = np.concatenate((X_train_scaled, X_synthetic_scaled), axis=0)  # Combine original and selected synthetic training features only.
+            if isinstance(df_augmented_for_training, DiskSyntheticSource):
+                source = df_augmented_for_training
+                if list(source.columns) != pca_input_feature_names:
+                    raise ValueError("Disk synthetic source feature order differs from original schema")
+                candidate_labels = encode_known_synthetic_labels(source.labels, label_encoder.classes_)
+                selected_positions = select_synthetic_training_indices(candidate_labels, y_train, augmentation_ratio, config=config, class_labels=label_encoder.classes_)
+                y_synthetic = np.asarray(label_encoder.transform(source.labels[selected_positions]), dtype=np.int64)
+                del candidate_labels
+                spill_dir = create_feature_process_temp_directory(file, config=config)
+                feature_source_arrays = {"X_train_scaled": None, "X_test_scaled": None, "spilled_to_memmap": True, "spill_temp_dir": spill_dir}
+                chunk_rows = max(1, int(config.get("stacking", {}).get("memory_management", {}).get("process_memmap_chunk_rows", 100000)))
+                feature_source_arrays["X_train_scaled"] = merge_scaled_training(X_train_scaled, source.matrix, selected_positions, scaler, Path(spill_dir) / "train.dat", chunk_rows)
+                X_train_scaled = feature_source_arrays["X_train_scaled"]
+                del selected_positions
+                feature_source_arrays["X_test_scaled"] = copy_matrix(X_test_scaled, Path(spill_dir) / "test.dat", chunk_rows=chunk_rows)
+                X_test_scaled = feature_source_arrays["X_test_scaled"]
+                del source
+            else:
+                selected_synthetic = select_synthetic_training_samples(df_augmented_for_training, y_train, label_encoder, augmentation_ratio, config=config)  # Select exact per-class synthetic rows from fixed training counts.
+                synthetic_features = selected_synthetic.iloc[:, :-1].select_dtypes(include=np.number)  # Preserve numeric feature preprocessing convention.
+                missing_synthetic_features = [feature for feature in pca_input_feature_names if feature not in synthetic_features.columns]  # Validate original feature schema before transformation.
+                if missing_synthetic_features:  # Reject incompatible synthetic samples before fitting any classifier.
+                    raise ValueError(f"Synthetic training data is missing original feature columns: {missing_synthetic_features}")  # Preserve strict schema identity.
+                X_synthetic_scaled = np.asarray(scaler.transform(synthetic_features[pca_input_feature_names].to_numpy(copy=False)))  # Transform synthetic rows with scaler fitted only on original training data.
+                y_synthetic = np.asarray(label_encoder.transform(selected_synthetic.iloc[:, -1].to_numpy(copy=False)), dtype=np.int64)  # Encode synthetic labels with original-training encoder.
+                X_train_scaled = np.concatenate((X_train_scaled, X_synthetic_scaled), axis=0)  # Combine original and selected synthetic training features only.
+                del selected_synthetic, synthetic_features, X_synthetic_scaled
             y_train = np.concatenate((y_train, y_synthetic), axis=0)
             synthetic_metadata = pd.DataFrame({"source_file": "synthetic_training", "row_order": np.arange(len(y_synthetic), dtype=np.int64)}) if needs_lstm_metadata else None
             if needs_lstm_metadata:
                 train_row_metadata = pd.concat((train_row_metadata, synthetic_metadata), ignore_index=True)  # Preserve row-aligned LSTM metadata.
             pca_cache_context.update({"data_source": "Original Combined Files" if execution_mode_str == "combined_files" else "Original", "experiment_mode": "original_only", "augmentation_ratio": None, "augmented_sample_count": 0, "augmentation_merged_into_training_after_split": False})  # Identify the PCA fit as the original-only fit because synthetic rows are only projected.
-            del selected_synthetic, synthetic_features, X_synthetic_scaled, y_synthetic, synthetic_metadata  # Release ratio-local synthetic allocations before feature evaluation.
+            del y_synthetic, synthetic_metadata  # Release ratio-local synthetic allocations before feature evaluation.
             gc.collect()  # Reclaim synthetic selection memory before classifier fitting.
         if feature_source_arrays is None:
             feature_source_arrays = {"X_train_scaled": X_train_scaled, "X_test_scaled": X_test_scaled, "spilled_to_memmap": False}  # Transfer full source matrices into a mutable lifecycle holder.
@@ -17570,6 +17607,8 @@ def evaluate_on_dataset(
         del df_augmented_for_training, df_augmented_for_testing  # Drop evaluator references to raw synthetic data.
         gc.collect()  # Reclaim released dataframe memory before feature-set materialization.
 
+        if experiment_mode == "original_training_augmented_training":
+            maybe_spill_feature_source_arrays(feature_source_arrays, file, config=config)  # Spill before the first/full classifier, not after it.
         target_feature_mode = feature_mode_name if feature_mode_name is not None else (artifact_recovery_target[0] if artifact_recovery_target is not None else None)  # Resolve the sole feature mode required by this invocation.
         feature_sets_iter = iterate_feature_sets_sequentially(feature_source_arrays, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, extra_trees_selected_features, file, feature_sets_config, config, scaler=scaler, source_files=pca_source_files, pca_cache_context=pca_cache_context, pca_input_feature_names=pca_input_feature_names, target_feature_mode=target_feature_mode, pca_fit_row_count=pca_fit_row_count)  # Create the lazy feature-set iterator with exact PCA source, feature, scaler, split, and fit-population provenance.
         for idx, (name, X_train_subset, X_test_subset, subset_feature_names_list, transformer) in enumerate(feature_sets_iter, start=1):  # Evaluate one materialized feature set at a time
@@ -18926,7 +18965,7 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
                         all_grid_results.extend(cached_group_list)  # Preserve cached results in canonical export order.
                         ratio_results_by_hp[hyperparameters_enabled].setdefault(augmentation_ratio, {}).update(cached_group_results)  # Retain cached group for comparison export.
                         continue  # Advance without opening current ratio data.
-                    if active_ratio != augmentation_ratio:  # Load and sample only when canonical execution enters a new ratio.
+                    if active_ratio != augmentation_ratio and not isinstance(df_sampled, DiskSyntheticSource):  # Reuse the identical disk-backed candidate pool across ratios.
                         if df_sampled is not None:  # Release completed prior-ratio sample before next ratio load.
                             del df_sampled  # Drop prior-ratio DataFrame reference.
                             gc.collect()  # Reclaim prior-ratio memory before loading next source.
@@ -18935,22 +18974,36 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
                         if combined_augmented_df is None:  # Skip current ratio when augmented recombination fails.
                             active_ratio = augmentation_ratio  # Prevent repeated failed reloads inside same ratio group.
                             continue  # Advance to next canonical group.
-                        df_sampled = combined_augmented_df  # Retain every cleaned synthetic row for class-proportional selection after the original split.
+                        memory_cfg = config.get("stacking", {}).get("memory_management", {})
+                        if (memory_cfg.get("spill_full_feature_arrays_after_full_eval", True)
+                                and int(combined_augmented_df.memory_usage(deep=False).sum()) >= int(memory_cfg.get("spill_min_array_nbytes", 1073741824) or 0)):
+                            source_directory = create_feature_process_temp_directory(combined_dataset_reference, config=config)
+                            df_sampled = DiskSyntheticSource(combined_augmented_df, feature_names, source_directory, max(1, int(memory_cfg.get("process_memmap_chunk_rows", 100000))))
+                            print(f"[MEMORY] Disk-backed synthetic candidate pool: {source_directory}")
+                        else:
+                            df_sampled = combined_augmented_df
                         del combined_augmented_df  # Drop the duplicate reference while the selection source remains available.
                         active_ratio = augmentation_ratio  # Record reusable current ratio identity.
                     if df_sampled is None or df_sampled.empty:  # Skip unusable current-ratio samples.
                         continue  # Advance to next canonical slice.
-                    ratio_original_df, _, _ = combine_files_for_combined_evaluation(original_files_list, config=config)  # Rebuild original training source for current ratio.
+                    if combined_files_df_holder:
+                        ratio_original_df = combined_files_df_holder.pop()  # Reuse the initial original population when baseline groups are skipped.
+                    else:
+                        ratio_original_df, _, _ = combine_files_for_combined_evaluation(original_files_list, config=config)
                     if ratio_original_df is None:  # Skip ratio when original reconstruction fails.
+                        if isinstance(df_sampled, DiskSyntheticSource):
+                            df_sampled.close()
                         df_sampled = None  # Release current ratio sample while keeping the lifecycle variable defined for later groups.
                         gc.collect()  # Reclaim skipped ratio data.
                         continue  # Advance to next canonical slice.
-                    results_ratio = evaluate_on_dataset(combined_dataset_reference, ratio_original_df, feature_names, ga_selected_features, pca_n_components, rfe_selected_features, group_models, data_source_label=f"TrainingAugmented@{int(augmentation_ratio * 100)}%_CombinedFiles", hyperparams_map=hp_params_map, experiment_id=generate_experiment_id(combined_dataset_reference, "combined_files_original_training_augmented_training", augmentation_ratio), experiment_mode="original_training_augmented_training", augmentation_ratio=augmentation_ratio, execution_mode_str="combined_files", attack_types_combined=attack_types_list, df_augmented_for_training=df_sampled, config=config, hyperparameters_enabled=hyperparameters_enabled, grid_progress=grid_progress, source_files=original_files_list, feature_mode_name=feature_mode_name, extra_trees_selected_features=extra_trees_selected_features, planned_classifier_names=planned_classifier_names)  # Train current canonical feature group with synthetic rows and fixed original test data.
+                    ratio_original_holder = [ratio_original_df]
+                    del ratio_original_df
+                    results_ratio = evaluate_on_dataset(combined_dataset_reference, ratio_original_holder.pop(), feature_names, ga_selected_features, pca_n_components, rfe_selected_features, group_models, data_source_label=f"TrainingAugmented@{int(augmentation_ratio * 100)}%_CombinedFiles", hyperparams_map=hp_params_map, experiment_id=generate_experiment_id(combined_dataset_reference, "combined_files_original_training_augmented_training", augmentation_ratio), experiment_mode="original_training_augmented_training", augmentation_ratio=augmentation_ratio, execution_mode_str="combined_files", attack_types_combined=attack_types_list, df_augmented_for_training=df_sampled, config=config, hyperparameters_enabled=hyperparameters_enabled, grid_progress=grid_progress, source_files=original_files_list, feature_mode_name=feature_mode_name, extra_trees_selected_features=extra_trees_selected_features, planned_classifier_names=planned_classifier_names)  # Train current canonical feature group with synthetic rows and fixed original test data.
                     ratio_results_list = list(results_ratio.values())  # Convert current ratio results for annotation and export.
                     annotate_results_with_combination_flags(ratio_results_list, methods_cfg.get("feature_selection", True), hyperparameters_enabled, True)  # Mark active grid dimensions.
                     all_grid_results.extend(ratio_results_list)  # Preserve canonical augmented result order.
                     ratio_results_by_hp[hyperparameters_enabled].setdefault(augmentation_ratio, {}).update(results_ratio)  # Accumulate every feature result under matching ratio and hyperparameter mode.
-                    del ratio_original_df  # Release current group original-data reconstruction after evaluation.
+                    del ratio_original_holder  # The evaluator owned and released the original frame.
                     gc.collect()  # Reclaim current group original-data memory while retaining ratio sample.
                     continue  # Advance to next canonical slice.
                 if combined_files_df_holder:  # Use the initially combined dataframe for the first original-only slice.
@@ -18980,7 +19033,9 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
                 all_grid_results.extend(original_results_list)  # Preserve baseline rows beside later grid slices
                 results_original_by_hp.setdefault(hyperparameters_enabled, {}).update(results_original)  # Accumulate every original feature result for matching comparisons.
             if df_sampled is not None:  # Release final ratio sample after its last canonical group.
-                del df_sampled  # Drop final augmented sample reference.
+                if isinstance(df_sampled, DiskSyntheticSource):
+                    df_sampled.close()
+                df_sampled = None  # Drop final augmented sample reference.
                 gc.collect()  # Reclaim final ratio memory before comparison generation.
             for hyperparameters_enabled, _, _ in hp_runs:  # Generate comparisons in established hyperparameter order.
                 ratio_results = ratio_results_by_hp[hyperparameters_enabled]  # Resolve current mode ratio results.
@@ -18991,6 +19046,8 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
                         comparison_row["hyperparameter_mode"] = hp_label  # Store active hyperparameter mode.
                     all_comparison_results.extend(comparison_results)  # Preserve comparison output order.
         finally:  # Close shared grid progress even if a classifier evaluation fails
+            if isinstance(locals().get("df_sampled"), DiskSyntheticSource):
+                df_sampled.close()
             grid_progress["progress_bar"].close()  # Close the one full-grid progress bar
 
         feature_analysis_dir = save_combined_files_results_to_csv(combined_dataset_reference, all_grid_results, config=config)  # Save the complete grid using directory identity.
