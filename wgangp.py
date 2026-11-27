@@ -120,7 +120,7 @@ psutil = (
 )  # Import psutil if available, otherwise set to None
 
 SAO_PAULO_TIMEZONE_NAME = "America/Sao_Paulo"  # Use Sao Paulo timezone for ETA finish timestamps
-WGANGP_RELEASE_VERSION = "V6.5.39"  # Throttle detached progress writes without changing recorded metrics.
+WGANGP_RELEASE_VERSION = "V6.5.40"  # Expose safe gpu source cache memory budgets.
 FLOW_PREPROCESSING_CHECKPOINT_TAG = "ConditionalMixedStructuralV654TailKnots"  # Isolate weights trained on the full-class tail-knot representation.
 FLOW_PREPROCESSING_COMPATIBLE_TAGS: tuple[str, ...] = ()  # Earlier V6.5 weights were trained on a different tail encoding and are never resumed.
 QUALITY_SELECTION_POLICY = "priority_moment_swap_v1"  # Identify the bounded mean-first candidate selection policy in output provenance.
@@ -2147,6 +2147,8 @@ def build_default_training_and_model_config() -> Dict:
             "persistent_workers": True,  # Keep workers alive between epochs
             "prefetch_factor": 2,  # Number of batches to prefetch
             "fast_in_memory_batches": True,  # Gather complete tensor batches; avoid dozens of DataLoader workers on already-resident data.
+            "gpu_source_cache_max_fraction": 0.40,  # Optional exact-copy VRAM budget.
+            "gpu_source_cache_reserve_mib": 3072,  # Minimum free VRAM preserved for training.
             "gpu_resident_batches": "auto",  # Cache the exact training tensors on a selected CUDA card only when conservative VRAM headroom permits.
         },
     }  # End training and model configuration dictionary
@@ -4516,7 +4518,7 @@ def class_reference_numeric_quantile_loss(fake_x: torch.Tensor, labels: torch.Te
 
 
 
-def gpu_resident_cache_fits(free_bytes: int, required_bytes: int, reserve_bytes: int = 3 * 1024 ** 3) -> bool:
+def gpu_resident_cache_fits(free_bytes: int, required_bytes: int, reserve_bytes: int = 3 * 1024 ** 3, max_fraction: float = 0.40) -> bool:
     """Conservatively keep free VRAM for models, gradients, Adam, and generation.
 
     The source cache only changes where existing float32/long tensors reside;
@@ -4524,7 +4526,9 @@ def gpu_resident_cache_fits(free_bytes: int, required_bytes: int, reserve_bytes:
     """
     free = int(free_bytes)
     required = int(required_bytes)
-    return required > 0 and free > reserve_bytes and required <= min(int(free * 0.40), free - reserve_bytes)
+    if not math.isfinite(max_fraction) or not 0 < max_fraction <= 1 or reserve_bytes < 0:
+        raise ValueError("Invalid GPU source-cache memory budget")
+    return required > 0 and free > reserve_bytes and required <= min(int(free * max_fraction), free - reserve_bytes)
 
 
 def maybe_cache_training_tensors_on_gpu(dataset: CSVFlowDataset, device: torch.device, config: Dict, num_workers: int) -> bool:
@@ -4545,9 +4549,14 @@ def maybe_cache_training_tensors_on_gpu(dataset: CSVFlowDataset, device: torch.d
         return False
     required = (dataset.X.numel() * dataset.X.element_size() +
                 dataset._labels_tensor.numel() * dataset._labels_tensor.element_size())
+    settings = config.get("dataloader", {})
+    fraction = float(settings.get("gpu_source_cache_max_fraction", 0.40))
+    reserve_mib = int(settings.get("gpu_source_cache_reserve_mib", 3072))
+    if not math.isfinite(fraction) or not 0 < fraction <= 1 or reserve_mib < 3072:
+        raise ValueError("GPU source cache requires 0 < max_fraction <= 1 and a reserve of at least 3072 MiB")
     try:
         free_bytes, _ = torch.cuda.mem_get_info(device)
-        if not gpu_resident_cache_fits(free_bytes, required):
+        if not gpu_resident_cache_fits(free_bytes, required, reserve_mib * 2**20, fraction):
             print(f"[PERFORMANCE] GPU batch cache skipped: required={required / 2**20:.1f} MiB, "
                   f"free={free_bytes / 2**20:.1f} MiB; keeping original CPU batches")
             return False
