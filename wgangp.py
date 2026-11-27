@@ -120,7 +120,7 @@ psutil = (
 )  # Import psutil if available, otherwise set to None
 
 SAO_PAULO_TIMEZONE_NAME = "America/Sao_Paulo"  # Use Sao Paulo timezone for ETA finish timestamps
-WGANGP_RELEASE_VERSION = "V6.5.31"  # Resumable, adaptive unique generation; unchanged training representation.
+WGANGP_RELEASE_VERSION = "V6.5.32"  # Preserve generation journal identity across training-only releases.
 FLOW_PREPROCESSING_CHECKPOINT_TAG = "ConditionalMixedStructuralV654TailKnots"  # Isolate weights trained on the full-class tail-knot representation.
 FLOW_PREPROCESSING_COMPATIBLE_TAGS: tuple[str, ...] = ()  # Earlier V6.5 weights were trained on a different tail encoding and are never resumed.
 QUALITY_SELECTION_POLICY = "priority_moment_swap_v1"  # Identify the bounded mean-first candidate selection policy in output provenance.
@@ -8180,7 +8180,7 @@ def generation_journal_identity(args, G, scaler, requested, feature_cols, device
             digest.update(str(tuple(tensor.shape)).encode())
             digest.update(tensor.detach().cpu().contiguous().numpy().tobytes())
         checkpoint_digest = digest.hexdigest()
-    return {"schema": "first_unique_blocks_v2", "release": WGANGP_RELEASE_VERSION,
+    return {"schema": "first_unique_blocks_v2", "release": "V6.5.31",  # Inference protocol version; unchanged by training-only releases.
             "checkpoint": checkpoint_digest, "provenance": build_wgangp_provenance(args)["sha256"],
             "labels": hashlib.sha256(requested.tobytes()).hexdigest(), "features": list(feature_cols),
             "label_col": args.label_col, "seed": int(args.seed), "gen_batch_size": int(args.gen_batch_size),
