@@ -375,6 +375,8 @@ make wgangp CSV_PATH=./Datasets/CICDDoS2019/01-12/DrDoS_DNS.csv MODE=train EPOCH
 
 Useful `stacking.py` CLI controls include `--combined-files`, `--separate-files`, `--both`, `--feature-sets full,pca,rfe,ga,extra_trees`, `--enable-hyperparameters`, `--disable-hyperparameters`, `--enable-automl`, `--disable-automl`, `--enable-stacking`, `--disable-stacking`, `--experiment-runs`, `--rerun-cached-experiments`, `--skip-combination`, `--only-combination`, and `--disable-explainability`.
 
+Large compatible sequential augmented Random Forest fits can store completed trees in a self-contained ZIP64 artifact while retaining the existing `.joblib` filename. These artifacts are intentionally not direct `joblib.load` files; production consumers must use `utils.stacking.disk_forest.load_classifier_bundle`, which also remains compatible with legacy joblib bundles. Set `stacking.memory_management.disk_forest_min_train_nbytes` to a negative value to disable this storage mode.
+
 ## Results
 
 Major results below use only the CICDDoS2019 `01-12` combined-files multi-class Run 1 stacking cache, with 13 labels: BENIGN, DrDoS_DNS, DrDoS_LDAP, DrDoS_MSSQL, DrDoS_NTP, DrDoS_NetBIOS, DrDoS_SNMP, DrDoS_SSDP, DrDoS_UDP, Syn, TFTP, UDP-lag, and WebDDoS.

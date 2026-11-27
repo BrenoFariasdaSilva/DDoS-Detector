@@ -410,6 +410,7 @@ stacking: # Stacking experiment settings
 
   memory_management: # Memory lifecycle controls for large feature-selection grids
     spill_full_feature_arrays_after_full_eval: true # Spill full scaled train/test matrices to temporary disk-backed memmaps after Full Features when later feature modes remain.
+    disk_forest_min_train_nbytes: 1073741824 # Large compatible sequential augmented RF float32 inputs use ZIP64 tree storage; negative disables. The .joblib artifact must be loaded through stacking's production loader, not joblib.load directly.
     spill_min_array_nbytes: 1073741824 # Minimum combined train/test matrix bytes before spilling is used (1 GiB).
     spill_directory: null # Optional directory for temporary spill files (null = dataset Stacking/Array_Cache directory).
 

@@ -111,10 +111,12 @@ import traceback  # For formatting and printing exception tracebacks
 import tracemalloc  # Capture optional Python allocation snapshots at phase boundaries
 import uuid  # Generate collision-resistant watcher run identifiers
 import yaml  # Import YAML library
+import zipfile  # Stream fitted Random Forest trees to a lossless ZIP64 archive
 from colorama import Style  # For terminal text styling
 from fractions import Fraction  # For exact class-proportional synthetic quota arithmetic
 from joblib import dump, load  # For exporting and loading trained models and scalers
 from utils.stacking.disk_arrays import DiskSyntheticSource, allocate_matrix, copy_matrix, merge_scaled_training
+from utils.stacking.disk_forest import DiskForestTrees, append_tree, is_disk_forest, load_classifier_bundle, write_disk_forest_bundle
 from lime.lime_tabular import LimeTabularExplainer  # Import LIME library
 from Logger import Logger, SAO_PAULO_TIMEZONE_NAME  # For process-safe São Paulo timestamped runtime logging
 from pathlib import Path  # For handling file paths
@@ -544,7 +546,7 @@ def get_random_forest_tree_memory(model: RandomForestClassifier) -> dict:
     :return: Completed-tree memory summary.
     """
 
-    completed_trees = list(getattr(model, "estimators_", []))  # Read completed public estimator objects only after each fit returns.
+    completed_trees = getattr(model, "estimators_", [])  # Read completed public estimator objects only after each fit returns.
     node_count = 0  # Accumulate retained fitted tree nodes.
     tree_nbytes = 0  # Accumulate actual exposed tree-array storage.
     for estimator in completed_trees:  # Visit each completed fitted tree.
@@ -555,7 +557,7 @@ def get_random_forest_tree_memory(model: RandomForestClassifier) -> dict:
     return {"completed_trees": len(completed_trees), "node_count": node_count, "tree_nbytes": tree_nbytes}  # Return compact factual tree memory data.
 
 
-def fit_classifier_with_progress(model: Any, X_train: Any, y_train: Any, feature_set: Optional[str], classifier_name: str, config: Optional[dict] = None, fit_kwargs: Optional[dict] = None, hyperparameters_enabled: Optional[bool] = None, augmentation_ratio: Optional[float] = None, eta_callback: Optional[Callable[[str, Optional[float]], None]] = None, estimated_total_seconds: Optional[float] = None, cancellation_checker: Optional[Callable[[], bool]] = None, local_combination_index: Optional[int] = None, local_combination_total: Optional[int] = None, active_workers_callback: Optional[Callable[[], str]] = None, previous_run_duration_label: str = "unavailable", eta_pending_run_experiments_label: str = "unavailable") -> Any:  # Fit one estimator with safe progress reporting
+def fit_classifier_with_progress(model: Any, X_train: Any, y_train: Any, feature_set: Optional[str], classifier_name: str, config: Optional[dict] = None, fit_kwargs: Optional[dict] = None, hyperparameters_enabled: Optional[bool] = None, augmentation_ratio: Optional[float] = None, eta_callback: Optional[Callable[[str, Optional[float]], None]] = None, estimated_total_seconds: Optional[float] = None, cancellation_checker: Optional[Callable[[], bool]] = None, local_combination_index: Optional[int] = None, local_combination_total: Optional[int] = None, active_workers_callback: Optional[Callable[[], str]] = None, previous_run_duration_label: str = "unavailable", eta_pending_run_experiments_label: str = "unavailable", forest_dataset_file: Optional[str] = None) -> Any:  # Fit one estimator with safe progress reporting
     """
     Fit one estimator with public training-unit callbacks or heartbeat reporting.
 
@@ -649,13 +651,42 @@ def fit_classifier_with_progress(model: Any, X_train: Any, y_train: Any, feature
     if model_type is RandomForestClassifier and int(model.n_jobs or 1) == 1 and not model.warm_start and not model.oob_score:  # Grow one sequential tree per exact warm-start increment.
         original_estimators = int(model.n_estimators)  # Preserve the configured forest size.
         progress = build_training_progress(feature_set, classifier_name, original_estimators, "Tree", heartbeat=False, config=config, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio, eta_callback=eta_callback, estimated_total_seconds=estimated_total_seconds, local_combination_index=local_combination_index, local_combination_total=local_combination_total, active_workers_callback=active_workers_callback, previous_run_duration_label=previous_run_duration_label, eta_pending_run_experiments_label=eta_pending_run_experiments_label)  # Create factual per-tree progress reporting.
+        # Only switch storage for large augmented sequential forests; other fit paths remain unchanged.
+        memory_cfg = (config or {}).get("stacking", {}).get("memory_management", {})
+        disk_threshold = int(memory_cfg.get("disk_forest_min_train_nbytes", 1073741824))
+        original_seed = model.random_state
+        use_disk = (forest_dataset_file is not None and augmentation_ratio is not None
+                    and model.n_jobs == 1 and isinstance(original_seed, (int, np.integer))
+                    and getattr(X_train, "dtype", None) == np.dtype(np.float32)
+                    and disk_threshold >= 0 and get_array_nbytes(X_train) >= disk_threshold)
+        forest_directory = None
+        archive = None
+        total_nodes = total_bytes = 0
         try:  # Restore public estimator parameters after successful or failed tree growth.
+            if use_disk:
+                forest_directory = create_feature_process_temp_directory(forest_dataset_file, config=config)
+                archive_path = os.path.join(forest_directory, "trees.zip")
+                archive = zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=1, allowZip64=True)
+                # Each sklearn one-tree fit consumes exactly the next tree seed from this RNG.
+                tree_rng = np.random.RandomState(int(original_seed))
+                print(f"[MEMORY] Disk-backed Random Forest enabled: {archive_path}")
             with progress:  # Scope tree progress to the complete forest fit.
                 for tree_count in range(1, original_estimators + 1):  # Grow deterministic sklearn tree prefixes sequentially.
                     raise_if_cancelled()  # Honor cancellation between completed trees.
-                    model.set_params(n_estimators=tree_count, warm_start=tree_count > 1)  # Preserve sklearn's documented random-state skip for prior trees.
+                    if use_disk:
+                        model.set_params(n_estimators=1, warm_start=False, random_state=tree_rng)
+                    else:
+                        model.set_params(n_estimators=tree_count, warm_start=tree_count > 1)  # Preserve sklearn's documented random-state skip for prior trees.
                     model.fit(X_train, y_train, **options)  # Fit exactly one additional sklearn tree.
-                    tree_memory = get_random_forest_tree_memory(model)  # Measure only completed retained tree arrays.
+                    tree_memory = get_random_forest_tree_memory(model)  # Measure completed tree arrays.
+                    if use_disk:
+                        if len(model.estimators_) != 1:
+                            raise RuntimeError("Expected exactly one fitted tree")
+                        total_nodes += tree_memory["node_count"]
+                        total_bytes += tree_memory["tree_nbytes"]
+                        append_tree(archive, tree_count - 1, model.estimators_[0])
+                        model.estimators_.clear()  # Release the tree before fitting the next one.
+                        tree_memory = {"completed_trees": tree_count, "node_count": total_nodes, "tree_nbytes": total_bytes}
                     process_memory = psutil.Process(os.getpid()).memory_info()  # Read current process memory after tree retention.
                     system_memory = psutil.virtual_memory()  # Read current system RAM state.
                     try:  # Preserve tree fitting when platform swap statistics are unavailable.
@@ -663,12 +694,21 @@ def fit_classifier_with_progress(model: Any, X_train: Any, y_train: Any, feature
                         swap_used_label = f"{swap_memory.used / (1024 ** 3):.2f} GiB"  # Format available swap usage.
                     except (OSError, PermissionError):  # Tolerate restricted platform memory access.
                         swap_used_label = "unavailable"  # Report unavailable swap usage without failing training.
-                    print(f"[RANDOM FOREST] Feature Set: {format_training_feature_set(feature_set)} | Trees: {tree_memory['completed_trees']}/{original_estimators} | Nodes: {tree_memory['node_count']:,} | Tree Storage: {tree_memory['tree_nbytes'] / (1024 ** 3):.2f} GiB | RSS: {process_memory.rss / (1024 ** 3):.2f} GiB | VMS: {process_memory.vms / (1024 ** 3):.2f} GiB | RAM Available: {system_memory.available / (1024 ** 3):.2f} GiB | Swap Used: {swap_used_label}")  # Report retained-tree and process memory after each completed tree.
-                    write_memory_phase_event("random_forest_tree_completed", config=config, feature_set_name=feature_set, classifier_name=classifier_name, tree_count=tree_memory["completed_trees"], tree_total=original_estimators, cumulative_node_count=tree_memory["node_count"], retained_tree_nbytes=tree_memory["tree_nbytes"], event_outcome="completed")  # Publish tree-retention memory evidence through existing watcher.
+                    print(f"[RANDOM FOREST] Feature Set: {format_training_feature_set(feature_set)} | Trees: {tree_memory['completed_trees']}/{original_estimators} | Nodes: {tree_memory['node_count']:,} | Tree Storage: {tree_memory['tree_nbytes'] / (1024 ** 3):.2f} GiB | Storage: {'disk' if use_disk else 'RAM'} | RSS: {process_memory.rss / (1024 ** 3):.2f} GiB | VMS: {process_memory.vms / (1024 ** 3):.2f} GiB | RAM Available: {system_memory.available / (1024 ** 3):.2f} GiB | Swap Used: {swap_used_label}")  # Report retained-tree and process memory after each completed tree.
+                    write_memory_phase_event("random_forest_tree_completed", config=config, feature_set_name=feature_set, classifier_name=classifier_name, tree_count=tree_memory["completed_trees"], tree_total=original_estimators, cumulative_node_count=tree_memory["node_count"], retained_tree_nbytes=0 if use_disk else tree_memory["tree_nbytes"], disk_tree_uncompressed_nbytes=tree_memory["tree_nbytes"] if use_disk else 0, tree_storage="disk" if use_disk else "ram", event_outcome="completed")  # Publish tree-retention memory evidence through existing watcher.
                     progress.report_unit(tree_count)  # Publish exact completed tree progress.
+            if use_disk:
+                archive.close()
+                archive = None
+                model.estimators_ = DiskForestTrees(archive_path, original_estimators, owned_directory=forest_directory)
+                forest_directory = None  # Ownership transferred to the fitted estimator.
             return model  # Return the fully fitted forest.
         finally:  # Restore configured public parameters without discarding fitted trees.
-            model.set_params(n_estimators=original_estimators, warm_start=False)  # Preserve persisted estimator parameter identity.
+            if archive is not None:
+                archive.close()
+            if forest_directory is not None:
+                cleanup_feature_process_directory(forest_directory)
+            model.set_params(n_estimators=original_estimators, warm_start=False, random_state=original_seed)  # Preserve persisted estimator parameter identity.
 
     if model_type in (AutoencoderClassifier, FTTransformerClassifier, LSTMClassifier, ResNet18Classifier, TabularResNetClassifier):  # Use neural estimators' internal epoch callback for exact epoch progress.
         total_epochs = int(model.get_params(deep=False).get("epochs", 1))  # Read the configured neural epoch total.
@@ -1444,6 +1484,7 @@ def get_default_stacking_config():
             },  # Configurable feature set strategies for evaluation
             "memory_management": {
                 "spill_full_feature_arrays_after_full_eval": True,  # Spill full scaled source matrices to disk-backed memmaps after the full-feature baseline when later feature modes remain.
+                "disk_forest_min_train_nbytes": 1073741824,  # Lossless disk-backed augmented forest threshold; negative disables.
                 "spill_min_array_nbytes": 1073741824,  # Minimum combined train/test source matrix bytes before spilling is used.
                 "spill_directory": None,  # Optional directory for temporary spill files; null uses the dataset Stacking/Array_Cache directory.
             },  # Memory lifecycle controls for large feature-selection grids
@@ -7261,10 +7302,15 @@ def write_stacking_pca_artifact_atomically(value: Any, destination_path: str, ar
     os.close(temporary_fd)  # Close the raw descriptor before opening it through the selected serializer.
     try:  # Ensure temporary files are removed after success or failure.
         if artifact_format == "joblib":  # Serialize fitted estimators with the existing joblib dependency.
-            with open(temporary_path, "wb") as file_obj:  # Open the temporary artifact for binary serialization.
-                dump(value, file_obj, compress=3)  # Serialize the fitted artifact with lossless Joblib compression.
-                file_obj.flush()  # Flush Python buffers before publishing the artifact.
-                os.fsync(file_obj.fileno())  # Flush artifact bytes to the filesystem before replacement.
+            if isinstance(value, dict) and is_disk_forest(value.get("model")):
+                write_disk_forest_bundle(value, temporary_path)
+                with open(temporary_path, "rb+") as file_obj:
+                    os.fsync(file_obj.fileno())
+            else:
+                with open(temporary_path, "wb") as file_obj:  # Open the temporary artifact for binary serialization.
+                    dump(value, file_obj, compress=3)  # Serialize the fitted artifact with lossless Joblib compression.
+                    file_obj.flush()  # Flush Python buffers before publishing the artifact.
+                    os.fsync(file_obj.fileno())  # Flush artifact bytes to the filesystem before replacement.
         elif artifact_format == "json":  # Serialize provenance metadata as readable JSON.
             with open(temporary_path, "w", encoding="utf-8") as file_obj:  # Open the temporary metadata file with explicit encoding.
                 json.dump(value, file_obj, indent=2, sort_keys=True, allow_nan=False)  # Serialize deterministic standards-compliant metadata.
@@ -8159,6 +8205,8 @@ def export_model_and_scaler(model, scaler, dataset_name, model_name, feature_set
         model_size = int(os.path.getsize(artifact_paths["model_path"]))
         scaler_state = normalize_metadata_for_json({"mean_": scaler.mean_, "scale_": scaler.scale_, "var_": scaler.var_, "n_samples_seen_": scaler.n_samples_seen_})
         metadata = dict(artifact_context)
+        if is_disk_forest(model):
+            metadata["model_storage_format"] = "disk_forest_zip64_v1"
         metadata.update({
             "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "artifact_identity": artifact_paths["artifact_identity"],
@@ -8305,7 +8353,7 @@ def load_existing_model_if_available(model_name, dataset_file, dataset_name, fea
                 return None, "classifier artifact size is incompatible"
             if metadata.get("model_sha256") != calculate_file_sha256(model_path):
                 return None, "classifier artifact SHA-256 is incompatible"
-            bundle = load(model_path)
+            bundle = load_classifier_bundle(model_path, legacy_loader=load)
         except Exception as exc:
             return None, f"classifier artifact is unreadable: {exc}"
         if not isinstance(bundle, dict):
@@ -8431,7 +8479,7 @@ def evaluate_individual_classifier(model, model_name, X_train, y_train, X_test, 
             training_ram_monitor = start_training_ram_monitor(TRAINING_RAM_SAMPLE_INTERVAL_SECONDS)  # Start RAM monitoring immediately before classifier fit.
             training_started_at = time.perf_counter()  # Start fit-only phase timer.
             try:  # Ensure RAM monitoring stops even when classifier fit fails.
-                fit_classifier_with_progress(model, X_train, y_train, feature_set, model_name, config=config, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio, eta_callback=training_eta_callback, estimated_total_seconds=estimated_training_seconds, cancellation_checker=cancellation_checker, local_combination_index=local_combination_index, local_combination_total=local_combination_total, active_workers_callback=active_workers_callback, previous_run_duration_label=previous_run_duration_label, eta_pending_run_experiments_label=eta_pending_run_experiments_label)  # Fit once with contextual public callbacks or heartbeat reporting.
+                fit_classifier_with_progress(model, X_train, y_train, feature_set, model_name, config=config, hyperparameters_enabled=hyperparameters_enabled, augmentation_ratio=augmentation_ratio, eta_callback=training_eta_callback, estimated_total_seconds=estimated_training_seconds, cancellation_checker=cancellation_checker, local_combination_index=local_combination_index, local_combination_total=local_combination_total, active_workers_callback=active_workers_callback, previous_run_duration_label=previous_run_duration_label, eta_pending_run_experiments_label=eta_pending_run_experiments_label, forest_dataset_file=dataset_file)  # Fit once with contextual public callbacks or heartbeat reporting.
             finally:  # Stop RAM monitoring immediately after classifier fit exits.
                 training_time_seconds = time.perf_counter() - training_started_at  # Stop fit-only phase timer.
                 classifier_ram_stats = stop_training_ram_monitor(training_ram_monitor)  # Summarize RAM usage across this classifier fit.
@@ -16776,6 +16824,8 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
 
             current_combination += 1  # Advance the global combination counter
             write_memory_phase_event("before_memory_cleanup", config=config, **phase_metadata, event_outcome="starting")  # Publish per-classifier cleanup start
+            if is_disk_forest(active_model):
+                active_model.estimators_.close()
             if rf_array_dir is not None:
                 cleanup_feature_process_directory(rf_array_dir, rf_owned_arrays)
                 rf_array_dir = None
@@ -16790,6 +16840,8 @@ def run_individual_classifiers_for_feature_set(name, individual_models, X_train_
             if locals().get("rf_array_dir") is not None:
                 cleanup_feature_process_directory(rf_array_dir, rf_owned_arrays)
             if "active_model" in locals():  # Release any partially fitted estimator before re-raising
+                if is_disk_forest(active_model):
+                    active_model.estimators_.close()
                 del active_model
             if "metrics" in locals():  # Release metric tuple if the failure happened after evaluation
                 del metrics
@@ -20590,6 +20642,8 @@ def evaluate_feature_process_augmented_training_task(task: dict, process_payload
         return result_entry, model_y_test, metrics[7], resources["label_encoder"].classes_  # Return original test evidence for coordinator artifact reporting.
     finally:  # Release ratio-specific resources after result persistence or failure.
         if active_model is not None:  # Release the fitted estimator when clone construction completed.
+            if is_disk_forest(active_model):
+                active_model.estimators_.close()
             del active_model  # Release ratio-specific fitted model.
         cleanup_feature_process_augmented_training_data(training_data)  # Release worker-owned combined training memmaps.
         gc.collect()  # Reclaim model and metric temporaries before next worker task.
