@@ -16592,7 +16592,17 @@ def recover_cached_individual_classifier_result(cache_dict, execution_mode_str, 
 
     if not all((feature_count_matches, feature_names_match, train_count_matches, test_count_matches)):  # Reject stale cache rows that share a broad resume key but represent different evaluated data.
         del cache_dict[resume_key]  # Remove the stale in-memory identity so the recomputed result can be persisted.
-        print(f"{BackgroundColors.YELLOW}[RESUME] Ignored incompatible cached combination for {BackgroundColors.CYAN}{feature_set_name} - {model_name}{BackgroundColors.YELLOW}: active shape or feature identity differs from saved partial progress.{Style.RESET_ALL}")  # Explain why this classifier will be recomputed.
+        differences = []
+        for matches, label, saved, active in (
+            (feature_count_matches, "feature count", cached_n_features, expected_n_features),
+            (train_count_matches, "training rows", cached_n_samples_train, expected_n_samples_train),
+            (test_count_matches, "test rows", cached_n_samples_test, expected_n_samples_test),
+        ):
+            if not matches:
+                differences.append(f"{label}: saved={saved!r}, active={active!r}")
+        if not feature_names_match:
+            differences.append(f"ordered feature names: saved={normalized_cached_features!r}, active={normalized_expected_features!r}")
+        print(f"{BackgroundColors.YELLOW}[RESUME] Ignored incompatible cached combination for {BackgroundColors.CYAN}{feature_set_name} - {model_name}{BackgroundColors.YELLOW}: active shape or feature identity differs from saved partial progress ({'; '.join(differences)}).{Style.RESET_ALL}")  # Explain exactly which evidence failed, without changing the acceptance policy.
         return (False, current_combination)  # Signal cache rejection without advancing the progress counter.
 
     results_dict[(feature_set_name, model_name)] = cached_result  # Reuse cached entry without recomputation
