@@ -22718,7 +22718,7 @@ def orchestrate_all_combinations(input_path, dataset_name=None, config=None):
                         del df_sampled  # Drop prior-ratio DataFrame reference.
                         gc.collect()  # Reclaim prior-ratio memory before loading next source.
                         df_sampled = None  # Restore empty lifecycle state before current ratio construction.
-                    df_augmented = load_and_validate_augmented_data(file, df_original, config=config)  # Load the unchanged candidate population only when first needed.
+                    df_augmented = load_and_validate_augmented_data(file, df_original, config=config)  # Load augmented contents once for current ratio group.
                     if df_augmented is None:  # Skip current ratio when augmented loading or validation fails.
                         active_ratio = augmentation_ratio  # Prevent repeated failed reloads within same ratio group.
                         continue  # Advance without retaining augmented data.

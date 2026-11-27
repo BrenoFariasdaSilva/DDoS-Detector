@@ -449,3 +449,16 @@ Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for commit sta
 ### Apache License 2.0
 
 This project is licensed under the [Apache License 2.0](LICENSE).
+
+### Execution-local combined dataset reuse
+
+The default `stacking.memory_management.reuse_combined_preprocessing: true` avoids repeated CSV parsing in the sequential combined-files classifier grid when model recovery, model reuse, explainability, AutoML, cached-rerun mode and feature-set workers are disabled and spilling is enabled. Specialized modes continue to use their existing data lifecycles. Set the option to `false` to restore per-group original data preparation.
+
+- The original cleaned population is snapshotted once in a private, uncompressed joblib file. The synthetic candidate population is loaded lazily once for all experiment runs. Large synthetic populations use the existing disk-backed candidate source; smaller ones remain in memory.
+- The original split, scaler and label encoder are prepared once per run using its established seed. Each group opens private copy-on-write numeric mappings. LSTM row metadata is included only if the run plan requires it.
+- For a disk-backed synthetic source, full augmented matrices and selected encoded labels are prepared once per active ratio and run. The preceding ratio is removed on transition; the run snapshot is removed at run completion. Feature-specific transformations and classifier training remain separate.
+- Snapshots live under the existing process-owned `FeatureSource_*` spill directory (normally `Stacking/Array_Cache`, or configured `spill_directory`). They are removed at session close and are not a durable restart cache. Existing stale-directory ownership checks apply after abnormal termination.
+- Keep original and synthetic source files unchanged during a run. Ordered source path, inode, size and modification/change timestamps are checked before/after creation and at group boundaries. No cross-execution dataset cache is trusted. The result cache, backups, model retention, PCA provenance and resume acceptance rules remain unchanged.
+- Disk storage increases during execution; check available space on the spill filesystem, including space for one original snapshot, one candidate population, one run split, one active augmented matrix pair, transient feature arrays and model artifacts. Initial CSV preprocessing/concatenation still requires memory. Memory mapping reduces anonymous allocations but does not impose a hard RSS or swap limit.
+
+The existing `stacking-full` command is unchanged. For regression testing, run `OMP_NUM_THREADS=1 venv/bin/python -m unittest discover -s tests -p 'test_stacking_combined_data_reuse.py' -v`.
