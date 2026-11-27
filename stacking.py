@@ -18746,6 +18746,21 @@ def compute_class_distribution(combined_df: pd.DataFrame, target_col: str) -> Li
         raise
 
 
+def order_sequential_combined_tasks_by_runtime(sort_tasks: List[dict], cache_dict: dict, process_payload: dict) -> List[tuple]:
+    """Reorder classifiers inside canonical feature/HP/ratio groups only."""
+
+    sort_groups = {}
+    for task in sort_tasks:
+        group_key = (task["feature_set"], task["hyperparameters_enabled"], task["augmentation_ratio"])
+        sort_groups.setdefault(group_key, []).append(task)
+    sort_pending_feature_process_tasks_by_elapsed_time(sort_groups, cache_dict, process_payload)
+    return [
+        (*group_key, task["classifier_name"])
+        for group_key, queue in sort_groups.items()
+        for task in sorted(queue, key=lambda item: item["classifier_name"] == "StackingClassifier")
+    ]
+
+
 def process_combined_files_evaluation(original_files_list, combined_files_df, attack_types_list, dataset_name, config=None):
     """
     Process evaluation for combined files evaluation mode with optional data augmentation.
@@ -18974,12 +18989,16 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
             except Exception:  # Keep a cleanup failure from invalidating safely exported results
                 pass  # Preserve the established combined-grid cache cleanup behavior
             return  # Skip the established sequential grid after successful persistent execution
+        orchestration_cache = load_cache_results(combined_dataset_reference, config=config, notify_discovery=False)  # Recover cache identities before any sequential augmentation load.
+        if (not rerun_cached_experiments and resolve_boolean_value(config.get("stacking", {}).get("sort_pending_by_elapsed_time", False), False)
+                and all(name in feature_metadata_by_name for name in feature_mode_names)):
+            sort_tasks = build_feature_process_plan(evaluation_plan, feature_metadata_by_name, original_sample_count, combined_dataset_reference, "combined_files", get_current_experiment_run(config), skip_summary["global_ids"], skip_summary["canonical_total"])
+            evaluation_plan = order_sequential_combined_tasks_by_runtime(sort_tasks, orchestration_cache, {"config": config, "file": combined_dataset_reference, "execution_mode": "combined_files", "attack_types_combined": attack_types_list})
         total_steps = len(evaluation_plan)  # Use the ordered runtime plan as the exact full-grid denominator
         grid_progress = create_grid_progress(total_steps, f"{dataset_name} Combined Grid")  # Share one counter across HP and augmentation modes
         grid_progress["evaluation_plan"] = evaluation_plan  # Reuse the authoritative plan in every evaluation section sharing this progress bar
         all_grid_results = []  # Accumulate every result row for a single consolidated export
         all_comparison_results = []  # Accumulate augmentation comparisons across both HP modes
-        orchestration_cache = load_cache_results(combined_dataset_reference, config=config, notify_discovery=False)  # Recover cache identities before any sequential augmentation load.
         fully_cached_ratios = {ratio for ratio in augmentation_ratios if all(build_resume_cache_key("combined_files", f"TrainingAugmented@{int(ratio * 100)}%_CombinedFiles", "original_training_augmented_training", ratio, attack_types_list, feature_set, classifier, hyperparameters_enabled) in orchestration_cache for feature_set, hyperparameters_enabled, planned_ratio, classifier in evaluation_plan if planned_ratio == ratio)}  # Identify ratio groups requiring no synthetic source loading.
         if all(name in feature_metadata_by_name for name in feature_mode_names):  # Use cache-aware grouping only for feature modes with compact descriptors.
             tasks = build_feature_process_plan(evaluation_plan, feature_metadata_by_name, original_sample_count, combined_dataset_reference, "combined_files", get_current_experiment_run(config), skip_summary["global_ids"], skip_summary["canonical_total"])  # Reuse authoritative global IDs and expected original-data shapes for plan reporting
