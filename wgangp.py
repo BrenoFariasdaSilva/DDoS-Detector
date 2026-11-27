@@ -120,7 +120,7 @@ psutil = (
 )  # Import psutil if available, otherwise set to None
 
 SAO_PAULO_TIMEZONE_NAME = "America/Sao_Paulo"  # Use Sao Paulo timezone for ETA finish timestamps
-WGANGP_RELEASE_VERSION = "V6.5.34"  # Restrict generator backward to generator parameters.
+WGANGP_RELEASE_VERSION = "V6.5.35"  # Group gradient penalty and input finite checks before updates.
 FLOW_PREPROCESSING_CHECKPOINT_TAG = "ConditionalMixedStructuralV654TailKnots"  # Isolate weights trained on the full-class tail-knot representation.
 FLOW_PREPROCESSING_COMPATIBLE_TAGS: tuple[str, ...] = ()  # Earlier V6.5 weights were trained on a different tail encoding and are never resumed.
 QUALITY_SELECTION_POLICY = "priority_moment_swap_v1"  # Identify the bounded mean-first candidate selection policy in output provenance.
@@ -3221,11 +3221,7 @@ def gradient_penalty(critic, real_samples, fake_samples, labels, device, config:
         alpha = alpha.expand_as(real_samples)  # Expand alpha to match feature shape
         interpolates = alpha * real_samples + ((1 - alpha) * fake_samples)  # Create interpolated samples
         interpolates.requires_grad_(True)  # Enable gradients for interpolated samples
-        if args is not None:  # Emit context-rich failure at interpolation boundary
-            require_finite_tensor(interpolates, "interpolated_samples", args, epoch, step, component)  # Reject invalid interpolation before critic evaluation
         d_interpolates = critic(interpolates, labels)  # Get critic scores for interpolated samples
-        if args is not None:  # Emit context-rich failure at critic-score boundary
-            require_finite_tensor(d_interpolates, "interpolated_scores", args, epoch, step, component)  # Reject invalid interpolation critic scores
         grad_outputs = torch.ones_like(d_interpolates, device=device)  # Create gradient outputs tensor
 
         grads = autograd.grad(  # Compute gradients of critic outputs with respect to interpolates
@@ -3239,14 +3235,16 @@ def gradient_penalty(critic, real_samples, fake_samples, labels, device, config:
             0
         ]  # Get gradients tensor
         grads = grads.view(batch_size, -1)  # Flatten gradients per sample
-        if args is not None:  # Emit context-rich failure at autograd boundary
-            require_finite_tensor(grads, "interpolated_gradients", args, epoch, step, component)  # Reject invalid interpolation gradients
         grad_norm = torch.hypot(torch.linalg.vector_norm(grads, ord=2, dim=1), torch.full((batch_size,), math.sqrt(epsilon), device=device, dtype=grads.dtype))  # Compute stable L2 norm with existing epsilon semantics
-        if args is not None:  # Emit context-rich failure at norm boundary
-            require_finite_tensor(grad_norm, "interpolated_gradient_norms", args, epoch, step, component)  # Reject invalid interpolation gradient norms
         gp = ((grad_norm - 1) ** 2).mean()  # Calculate gradient penalty term
         if args is not None:  # Emit context-rich failure at penalty boundary
-            require_finite_tensor(gp, "gradient_penalty", args, epoch, step, component)  # Reject invalid gradient penalty scalar
+            # Every intermediate is still validated, in diagnostic order, before
+            # returning a penalty or allowing the caller to update any parameters.
+            require_finite_tensor_group([
+                ("interpolated_samples", interpolates), ("interpolated_scores", d_interpolates),
+                ("interpolated_gradients", grads), ("interpolated_gradient_norms", grad_norm),
+                ("gradient_penalty", gp),
+            ], args, epoch, step, component)
         return gp  # Return scalar gradient penalty
     except Exception as e:
         print(str(e))
@@ -5001,8 +4999,7 @@ def execute_discriminator_training_steps(G, D, opt_D, scaler, real_x, labels, de
     # The previous critic's post-step validation already guarantees finite D parameters
     # and optimizer state before the following critic; avoid rescanning them beforehand.
     first_component = "discriminator[1]"
-    require_finite_tensor(real_x, "real_samples", args, epoch + 1, step + 1, first_component)
-    require_finite_tensor(labels, "labels", args, epoch + 1, step + 1, first_component)
+    require_finite_tensor_group([("real_samples", real_x), ("labels", labels)], args, epoch + 1, step + 1, first_component)
     require_finite_model_state(D, "parameters", args, epoch + 1, step + 1, first_component)
     scan_optimizer = should_scan_optimizer_state(config, step)
     if scan_optimizer:
@@ -5235,7 +5232,6 @@ def run_batch_training_loop(G, D, opt_G, opt_D, scaler, device: torch.device, ar
     for batch_idx, (real_x_batch, labels_batch) in enumerate(pbar):  # Enumerate batches to obtain current batch index
         real_x = real_x_batch.to(device, non_blocking=True)  # Move real features to device with non_blocking when pinned
         labels = labels_batch.to(device, dtype=torch.long, non_blocking=True)  # Move labels to device with non_blocking when pinned
-        require_finite_tensor(real_x, "real_samples", args, epoch + 1, step + 1, "input")  # Reject invalid input samples before model execution
 
         loss_D, gp, d_real_score, d_fake_score = execute_discriminator_training_steps(G, D, opt_D, scaler, real_x, labels, device, args, config, n_classes, epoch, step)  # Execute discriminator training steps with gradient penalty
         g_loss = execute_generator_training_step(G, D, opt_G, scaler, device, args, n_classes, epoch, step, real_labels=labels, real_x=real_x, config=config)  # Match class labels and moments to the actual real batch
