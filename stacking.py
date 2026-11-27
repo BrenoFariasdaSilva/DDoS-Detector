@@ -116,6 +116,7 @@ from colorama import Style  # For terminal text styling
 from fractions import Fraction  # For exact class-proportional synthetic quota arithmetic
 from joblib import dump, load  # For exporting and loading trained models and scalers
 from utils.stacking.disk_arrays import DiskSyntheticSource, allocate_matrix, copy_matrix, merge_scaled_training
+from utils.stacking.combined_data import CombinedDatasetSession, source_signatures
 from utils.stacking.disk_forest import DiskForestTrees, append_tree, is_disk_forest, load_classifier_bundle, write_disk_forest_bundle
 from lime.lime_tabular import LimeTabularExplainer  # Import LIME library
 from Logger import Logger, SAO_PAULO_TIMEZONE_NAME  # For process-safe São Paulo timestamped runtime logging
@@ -1491,6 +1492,7 @@ def get_default_stacking_config():
                 "explicit_features": [],  # Optional explicit feature list; when non-empty, added as an additional "Explicit Features" set alongside all enabled strategies. Use this carefully, as when analyzing multiple datasets, you must put features common between the datasets.
             },  # Configurable feature set strategies for evaluation
             "memory_management": {
+                "reuse_combined_preprocessing": True,  # Reuse execution-local combined populations in the sequential grid.
                 "spill_full_feature_arrays_after_full_eval": True,  # Spill full scaled source matrices to disk-backed memmaps after the full-feature baseline when later feature modes remain.
                 "disk_forest_min_train_nbytes": 1073741824,  # Lossless disk-backed augmented forest threshold; negative disables.
                 "spill_min_array_nbytes": 1073741824,  # Minimum combined train/test source matrix bytes before spilling is used.
@@ -18837,7 +18839,20 @@ def order_sequential_combined_tasks_by_runtime(sort_tasks: List[dict], cache_dic
     ]
 
 
-def process_combined_files_evaluation(original_files_list, combined_files_df, attack_types_list, dataset_name, config=None):
+def sequential_combined_reuse_enabled(config):
+    """Keep specialized worker, recovery, cached-rerun and AutoML lifecycles unchanged."""
+    stacking_cfg = config.get("stacking", {})
+    memory_cfg = stacking_cfg.get("memory_management", {})
+    return (resolve_boolean_value(memory_cfg.get("reuse_combined_preprocessing", True), True)
+            and resolve_boolean_value(memory_cfg.get("spill_full_feature_arrays_after_full_eval", True), True)
+            and not any(validate_feature_set_workers(config.get("evaluation", {}).get("feature_set_workers")).values())
+            and not stacking_cfg.get("model_recovery", False)
+            and not stacking_cfg.get("automl_only", False)
+            and not stacking_cfg.get("methods", {}).get("automl", True)
+            and resolve_cached_rerun_count(config) == 0)
+
+
+def process_combined_files_evaluation(original_files_list, combined_files_df, attack_types_list, dataset_name, config=None, _data_session=None, _original_signatures=None):
     """
     Process evaluation for combined files evaluation mode with optional data augmentation.
     
@@ -18852,6 +18867,21 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
     try:
         if config is None:  # If no config provided
             config = CONFIG  # Use global CONFIG
+
+        if _data_session is None and sequential_combined_reuse_enabled(config):
+            reference = resolve_combined_files_dataset_identity(original_files_list).rstrip("/")
+            directory = create_feature_process_temp_directory(reference, config=config)
+            session = None
+            try:
+                session = CombinedDatasetSession(combined_files_df, original_files_list, directory, _original_signatures)
+                combined_files_df = None  # Release the outermost large dataframe before any run starts.
+                gc.collect()
+                print(f"[MEMORY] Execution-local original dataset snapshot: {directory}")
+                return process_combined_files_evaluation(original_files_list, None, attack_types_list, dataset_name, config=config, _data_session=session)
+            finally:
+                if session is not None:
+                    session.close()
+                cleanup_feature_process_directory(directory)
 
         rerun_cached_experiment_count = resolve_cached_rerun_count(config)  # Resolve complete cache-driven rerun count.
         rerun_cached_experiments = rerun_cached_experiment_count > 0  # Resolve cache-driven rerun mode.
@@ -18887,9 +18917,12 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
             for experiment_run in range(1, experiment_runs + 1):  # Execute every requested run independently.
                 run_config = build_experiment_run_config(config, experiment_run)  # Build isolated run-specific seeds and paths.
                 print(f"{BackgroundColors.BOLD}{BackgroundColors.CYAN}[EXPERIMENT RUN {experiment_run}/{experiment_runs}] Combined files dataset: {dataset_name}{Style.RESET_ALL}")  # Report run-specific combined-files progress.
-                process_combined_files_evaluation(original_files_list, combined_files_df, attack_types_list, dataset_name, config=run_config)  # Execute one run with run-specific persistence.
+                process_combined_files_evaluation(original_files_list, combined_files_df, attack_types_list, dataset_name, config=run_config, _data_session=_data_session)  # Execute one run with run-specific persistence.
             return  # Avoid re-entering the same logical grid after run expansion.
         
+        if _data_session is not None:
+            combined_files_df = _data_session.load_original()
+
         verbose_output(
             f"{BackgroundColors.GREEN}Processing combined files evaluation for dataset: {BackgroundColors.CYAN}{dataset_name}{Style.RESET_ALL}",
             config=config
@@ -19095,6 +19128,9 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
             active_ratio = None  # Track one sequential augmented ratio across every compatible feature and hyperparameter group.
             df_sampled = None  # Retain only current ratio sample until its final canonical group completes.
             for feature_mode_name, hyperparameters_enabled, augmentation_ratio in dict.fromkeys((item[0], item[1], item[2]) for item in evaluation_plan):  # Execute feature, hyperparameter, and ratio groups in canonical plan order.
+                if _data_session is not None:
+                    _data_session.assert_original_sources()
+                    _data_session.assert_synthetic_sources(augmentation_file_paths)
                 _, base_models, hp_params_map = next(run for run in hp_runs if run[0] == hyperparameters_enabled)  # Resolve models for current canonical slice.
                 group_models, _, planned_classifier_names = filter_models_for_plan_group(base_models, evaluation_plan, feature_mode_name, hyperparameters_enabled, augmentation_ratio)  # Restrict current group to eligible classifiers.
                 hp_label = "Optimized Hyperparameters" if hyperparameters_enabled else "Default Hyperparameters"  # Build active HP label
@@ -19114,28 +19150,39 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
                         ratio_results_by_hp[hyperparameters_enabled].setdefault(augmentation_ratio, {}).update(cached_group_results)  # Retain cached group for comparison export.
                         continue  # Advance without opening current ratio data.
                     if df_sampled is None and active_ratio != augmentation_ratio:  # Reuse the unchanged candidate population across all ratios, regardless of storage format.
-                        combined_augmented_df, _, _ = combine_files_for_combined_evaluation(augmentation_file_paths, config=config)  # Load the unchanged candidate population only when first needed.
-                        if combined_augmented_df is None:  # Skip current ratio when augmented recombination fails.
-                            active_ratio = augmentation_ratio  # Prevent repeated failed reloads inside same ratio group.
-                            continue  # Advance to next canonical group.
-                        memory_cfg = config.get("stacking", {}).get("memory_management", {})
-                        if (memory_cfg.get("spill_full_feature_arrays_after_full_eval", True)
-                                and int(combined_augmented_df.memory_usage(deep=False).sum()) >= int(memory_cfg.get("spill_min_array_nbytes", 1073741824) or 0)):
-                            source_directory = create_feature_process_temp_directory(combined_dataset_reference, config=config)
-                            df_sampled = DiskSyntheticSource(combined_augmented_df, feature_names, source_directory, max(1, int(memory_cfg.get("process_memmap_chunk_rows", 100000))))
-                            print(f"[MEMORY] Disk-backed synthetic candidate pool: {source_directory}")
+                        if _data_session is not None:
+                            memory_cfg = config.get("stacking", {}).get("memory_management", {})
+                            df_sampled = _data_session.get_synthetic(
+                                augmentation_file_paths,
+                                lambda: combine_files_for_combined_evaluation(augmentation_file_paths, config=config)[0],
+                                feature_names, int(memory_cfg.get("spill_min_array_nbytes", 1073741824) or 0),
+                                max(1, int(memory_cfg.get("process_memmap_chunk_rows", 100000))))
+                            if df_sampled is not None:
+                                print("[MEMORY] Execution-local synthetic candidate pool available (reused across runs and ratios)")
+                            active_ratio = augmentation_ratio
                         else:
-                            df_sampled = combined_augmented_df
-                        del combined_augmented_df  # Drop the duplicate reference while the selection source remains available.
-                        active_ratio = augmentation_ratio  # Record reusable current ratio identity.
+                            combined_augmented_df, _, _ = combine_files_for_combined_evaluation(augmentation_file_paths, config=config)  # Load the unchanged candidate population only when first needed.
+                            if combined_augmented_df is None:  # Skip current ratio when augmented recombination fails.
+                                active_ratio = augmentation_ratio  # Prevent repeated failed reloads inside same ratio group.
+                                continue  # Advance to next canonical group.
+                            memory_cfg = config.get("stacking", {}).get("memory_management", {})
+                            if (memory_cfg.get("spill_full_feature_arrays_after_full_eval", True)
+                                    and int(combined_augmented_df.memory_usage(deep=False).sum()) >= int(memory_cfg.get("spill_min_array_nbytes", 1073741824) or 0)):
+                                source_directory = create_feature_process_temp_directory(combined_dataset_reference, config=config)
+                                df_sampled = DiskSyntheticSource(combined_augmented_df, feature_names, source_directory, max(1, int(memory_cfg.get("process_memmap_chunk_rows", 100000))))
+                                print(f"[MEMORY] Disk-backed synthetic candidate pool: {source_directory}")
+                            else:
+                                df_sampled = combined_augmented_df
+                            del combined_augmented_df  # Drop the duplicate reference while the selection source remains available.
+                            active_ratio = augmentation_ratio  # Record reusable current ratio identity.
                     if df_sampled is None or df_sampled.empty:  # Skip unusable current-ratio samples.
                         continue  # Advance to next canonical slice.
                     if combined_files_df_holder:
                         ratio_original_df = combined_files_df_holder.pop()  # Reuse the initial original population when baseline groups are skipped.
                     else:
-                        ratio_original_df, _, _ = combine_files_for_combined_evaluation(original_files_list, config=config)
+                        ratio_original_df = _data_session.load_original() if _data_session is not None else combine_files_for_combined_evaluation(original_files_list, config=config)[0]
                     if ratio_original_df is None:  # Skip ratio when original reconstruction fails.
-                        if isinstance(df_sampled, DiskSyntheticSource):
+                        if _data_session is None and isinstance(df_sampled, DiskSyntheticSource):
                             df_sampled.close()
                         df_sampled = None  # Release current ratio sample while keeping the lifecycle variable defined for later groups.
                         gc.collect()  # Reclaim skipped ratio data.
@@ -19153,7 +19200,7 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
                 if combined_files_df_holder:  # Use the initially combined dataframe for the first original-only slice.
                     original_df_for_run = combined_files_df_holder.pop()  # Consume the initially combined dataframe exactly once.
                 else:  # Rebuild the original combined dataframe only for later HP slices that need it.
-                    original_df_for_run, _, _ = combine_files_for_combined_evaluation(original_files_list, config=config)  # Recombine from the same ordered input files for this HP slice.
+                    original_df_for_run = _data_session.load_original() if _data_session is not None else combine_files_for_combined_evaluation(original_files_list, config=config)[0]
                     if original_df_for_run is None:  # Abort this HP slice when recombination fails.
                         raise RuntimeError("Failed to rebuild original combined files dataframe for later HP slice")  # Raise explicit failure instead of fitting on missing data.
                 original_df_for_run_holder = [original_df_for_run]  # Transfer this HP slice dataframe into evaluation without retaining a caller reference.
@@ -19177,7 +19224,7 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
                 all_grid_results.extend(original_results_list)  # Preserve baseline rows beside later grid slices
                 results_original_by_hp.setdefault(hyperparameters_enabled, {}).update(results_original)  # Accumulate every original feature result for matching comparisons.
             if df_sampled is not None:  # Release final ratio sample after its last canonical group.
-                if isinstance(df_sampled, DiskSyntheticSource):
+                if _data_session is None and isinstance(df_sampled, DiskSyntheticSource):
                     df_sampled.close()
                 df_sampled = None  # Drop final augmented sample reference.
                 gc.collect()  # Reclaim final ratio memory before comparison generation.
@@ -19190,7 +19237,7 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
                         comparison_row["hyperparameter_mode"] = hp_label  # Store active hyperparameter mode.
                     all_comparison_results.extend(comparison_results)  # Preserve comparison output order.
         finally:  # Close shared grid progress even if a classifier evaluation fails
-            if isinstance(locals().get("df_sampled"), DiskSyntheticSource):
+            if _data_session is None and isinstance(locals().get("df_sampled"), DiskSyntheticSource):
                 df_sampled.close()
             grid_progress["progress_bar"].close()  # Close the one full-grid progress bar
 
@@ -22709,6 +22756,7 @@ def execute_both_mode_pipeline(files_to_process, local_dataset_name, config=None
             f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}{'='*100}{Style.RESET_ALL}\n"
         )  # Print closing separator
 
+        original_signatures = source_signatures(files_to_process) if sequential_combined_reuse_enabled(config) else None
         combined_files_df, attack_types_list, target_col_name = combine_files_for_combined_evaluation(files_to_process, config=config)  # Combine files for combined files evaluation
 
         if combined_files_df is None:  # If combination failed
@@ -22720,7 +22768,7 @@ def execute_both_mode_pipeline(files_to_process, local_dataset_name, config=None
             combined_files_df = None  # Release caller-side combined dataframe reference before nested model evaluation.
             gc.collect()  # Reclaim caller-side dataframe references before combined evaluation starts.
             process_combined_files_evaluation(
-                files_to_process, combined_files_df_holder.pop(), attack_types_list, local_dataset_name, config=config
+                files_to_process, combined_files_df_holder.pop(), attack_types_list, local_dataset_name, config=config, _original_signatures=original_signatures
             )  # Process combined files evaluation workflow
             del combined_files_df_holder  # Release the empty transfer holder after combined evaluation returns.
 
@@ -22780,6 +22828,7 @@ def execute_combined_files_mode_pipeline(files_to_process, local_dataset_name, c
 
         ordered_files_to_process = order_files_by_size_descending(files_to_process, config=config)  # Order combined files by filesystem size before loading
         write_memory_phase_event("after_combined_file_discovery", config=config, dataset_identity=local_dataset_name, source_file_count=len(ordered_files_to_process), source_files=[os.path.basename(str(path)) for path in ordered_files_to_process], event_outcome="ordered_largest_to_smallest")  # Publish ordered combined-file list
+        original_signatures = source_signatures(ordered_files_to_process) if sequential_combined_reuse_enabled(config) else None
         combined_files_df, attack_types_list, target_col_name = combine_files_for_combined_evaluation(ordered_files_to_process, config=config)  # Combine files for combined files evaluation
 
         if combined_files_df is None:  # If combination failed
@@ -22792,7 +22841,7 @@ def execute_combined_files_mode_pipeline(files_to_process, local_dataset_name, c
         combined_files_df = None  # Release caller-side combined dataframe reference before entering model evaluation.
         gc.collect()  # Reclaim caller-side dataframe references before nested evaluation starts.
         process_combined_files_evaluation(
-            ordered_files_to_process, combined_files_df_holder.pop(), attack_types_list, local_dataset_name, config=config
+            ordered_files_to_process, combined_files_df_holder.pop(), attack_types_list, local_dataset_name, config=config, _original_signatures=original_signatures
         )  # Process combined files evaluation workflow with ordered files preserved.
         del combined_files_df_holder  # Release the empty transfer holder after evaluation returns.
 
