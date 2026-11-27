@@ -18999,9 +18999,10 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
         grid_progress["evaluation_plan"] = evaluation_plan  # Reuse the authoritative plan in every evaluation section sharing this progress bar
         all_grid_results = []  # Accumulate every result row for a single consolidated export
         all_comparison_results = []  # Accumulate augmentation comparisons across both HP modes
-        fully_cached_ratios = {ratio for ratio in augmentation_ratios if all(build_resume_cache_key("combined_files", f"TrainingAugmented@{int(ratio * 100)}%_CombinedFiles", "original_training_augmented_training", ratio, attack_types_list, feature_set, classifier, hyperparameters_enabled) in orchestration_cache for feature_set, hyperparameters_enabled, planned_ratio, classifier in evaluation_plan if planned_ratio == ratio)}  # Identify ratio groups requiring no synthetic source loading.
-        if all(name in feature_metadata_by_name for name in feature_mode_names):  # Use cache-aware grouping only for feature modes with compact descriptors.
-            tasks = build_feature_process_plan(evaluation_plan, feature_metadata_by_name, original_sample_count, combined_dataset_reference, "combined_files", get_current_experiment_run(config), skip_summary["global_ids"], skip_summary["canonical_total"])  # Reuse authoritative global IDs and expected original-data shapes for plan reporting
+        cache_tasks = build_feature_process_plan(evaluation_plan, feature_metadata_by_name, original_sample_count, combined_dataset_reference, "combined_files", get_current_experiment_run(config), skip_summary["global_ids"], skip_summary["canonical_total"]) if all(name in feature_metadata_by_name for name in feature_mode_names) else []  # Build complete validation descriptors only when every active feature mode is known.
+        fully_cached_ratios = resolve_fully_cached_ratios(cache_tasks, orchestration_cache, attack_types_list)  # Skip source loading only when the normal provenance policy accepts every ratio task.
+        if cache_tasks:  # Use cache-aware grouping only for feature modes with compact descriptors.
+            tasks = cache_tasks  # Reuse the same validated descriptors for plan reporting.
             cached_results, pending_by_feature = partition_evaluation_plan_by_cache(tasks, orchestration_cache, feature_mode_names, attack_types_list)  # Reuse existing cache matching before plan reporting
             pending_header_tasks = [task for queue_tasks in pending_by_feature.values() for task in queue_tasks]  # Read only cache-miss tasks for startup ETA.
             if pending_header_tasks:  # Avoid unnecessary historical cache reads for an already completed plan.
@@ -19449,6 +19450,25 @@ def feature_process_cache_result(task: dict, cache_dict: Optional[dict], attack_
     test_count_compatible = is_lstm_classifier_name(task.get("classifier_name")) or expected_test_count is None or int(cached_result.get("n_samples_test", -1)) == int(expected_test_count)  # Avoid opening augmentation rows solely to validate cached ratio cardinality
     compatible = int(cached_result.get("n_features", -1)) == int(task["expected_n_features"]) and [str(name) for name in (cached_feature_names if isinstance(cached_feature_names, list) else [])] == [str(name) for name in task["expected_feature_names"]] and sample_counts_compatible and test_count_compatible  # Require exact active shape and ordered feature identity
     return cached_result if compatible else None  # Return only a fully compatible cached result
+
+
+def resolve_fully_cached_ratios(tasks: List[dict], cache_dict: dict, attack_types_combined: Any) -> set:
+    """Use the normal cache policy before skipping synthetic source validation."""
+
+    ratio_tasks = {}
+    for task in tasks:
+        ratio = task.get("augmentation_ratio")
+        if ratio is not None:
+            ratio_tasks.setdefault(ratio, []).append(task)
+    return {
+        ratio
+        for ratio, planned_tasks in ratio_tasks.items()
+        if planned_tasks
+        and all(
+            feature_process_cache_result(task, cache_dict, attack_types_combined) is not None
+            for task in planned_tasks
+        )
+    }
 
 
 def format_previous_run_duration_label(duration_seconds: Optional[float]) -> str:
@@ -22442,9 +22462,10 @@ def orchestrate_all_combinations(input_path, dataset_name=None, config=None):
             all_grid_results = []  # Accumulate every grid result for one consolidated export
             all_comparison_results = []  # Accumulate augmentation comparisons across both HP modes
             orchestration_cache = load_cache_results(file, config=config, notify_discovery=False)  # Recover cache identities before any sequential augmentation load.
-            fully_cached_ratios = {ratio for ratio in augmentation_ratios if all(build_resume_cache_key("separate_files", f"TrainingAugmented@{int(ratio * 100)}%", "original_training_augmented_training", ratio, None, feature_set, classifier, hyperparameters_enabled) in orchestration_cache for feature_set, hyperparameters_enabled, planned_ratio, classifier in evaluation_plan if planned_ratio == ratio)}  # Identify ratio groups requiring no synthetic source loading.
-            if all(name in feature_metadata_by_name for name in feature_mode_names):  # Use cache-aware grouping only for feature modes with compact descriptors.
-                tasks = build_feature_process_plan(evaluation_plan, feature_metadata_by_name, len(df_original), file, "separate_files", get_current_experiment_run(config), skip_summary["global_ids"], skip_summary["canonical_total"])  # Reuse authoritative global IDs and expected original-data shapes for plan reporting
+            cache_tasks = build_feature_process_plan(evaluation_plan, feature_metadata_by_name, len(df_original), file, "separate_files", get_current_experiment_run(config), skip_summary["global_ids"], skip_summary["canonical_total"]) if all(name in feature_metadata_by_name for name in feature_mode_names) else []  # Build complete validation descriptors only when every active feature mode is known.
+            fully_cached_ratios = resolve_fully_cached_ratios(cache_tasks, orchestration_cache, None)  # Skip source loading only when the normal provenance policy accepts every ratio task.
+            if cache_tasks:  # Use cache-aware grouping only for feature modes with compact descriptors.
+                tasks = cache_tasks  # Reuse the same validated descriptors for plan reporting.
                 cached_results, pending_by_feature = partition_evaluation_plan_by_cache(tasks, orchestration_cache, feature_mode_names, None)  # Reuse existing cache matching before plan reporting
                 pending_header_tasks = [task for queue_tasks in pending_by_feature.values() for task in queue_tasks]  # Read only cache-miss tasks for startup ETA.
                 if pending_header_tasks:  # Avoid unnecessary historical cache reads for an already completed plan.
