@@ -116,7 +116,7 @@ from colorama import Style  # For terminal text styling
 from fractions import Fraction  # For exact class-proportional synthetic quota arithmetic
 from joblib import dump, load  # For exporting and loading trained models and scalers
 from utils.stacking.disk_arrays import DiskSyntheticSource, allocate_matrix, copy_matrix, merge_scaled_training
-from utils.stacking.combined_data import CombinedDatasetSession, source_signatures
+from utils.stacking.combined_data import CombinedDatasetSession, CombinedRunSplits, source_signatures
 from utils.stacking.disk_forest import DiskForestTrees, append_tree, is_disk_forest, load_classifier_bundle, write_disk_forest_bundle
 from lime.lime_tabular import LimeTabularExplainer  # Import LIME library
 from Logger import Logger, SAO_PAULO_TIMEZONE_NAME  # For process-safe São Paulo timestamped runtime logging
@@ -17447,6 +17447,7 @@ def evaluate_on_dataset(
     feature_mode_name=None,
     extra_trees_selected_features=None,  # Preserve optional Extra Trees feature selection artifact without breaking legacy positional calls.
     planned_classifier_names=None,  # Restrict sequential skip-filtered groups to exact eligible classifiers.
+    prepared_original_splits=None,  # Private run-local split owner for normal sequential combined evaluation only.
 ):
     """
     Train on fixed original data, optionally augmented only after the original split.
@@ -17524,9 +17525,20 @@ def evaluate_on_dataset(
         else:  # Reuse the complete ordered plan that created the shared full-grid progress bar
             evaluation_plan = grid_progress["evaluation_plan"]  # Reuse the authoritative full-grid plan source
 
-        pca_input_feature_names = feature_columns_without_lstm_metadata([str(column) for column in df.iloc[:0, :-1].select_dtypes(include=np.number).columns])  # Capture the exact ordered numeric columns consumed by scaling and PCA.
-        target_column_name = str(df.columns[-1])  # Capture the positional target column used by the split flow.
-        original_sample_count = int(len(df))  # Record the original sample population before splitting.
+        if prepared_original_splits is not None:
+            if (df is not None or execution_mode_str != "combined_files"
+                    or experiment_mode not in ("original_only", "original_training_augmented_training")
+                    or artifact_recovery_target is not None
+                    or prepared_original_splits.run != get_current_experiment_run(config)
+                    or prepared_original_splits.seed != config.get("evaluation", {}).get("random_state", 42)):
+                raise ValueError("Incompatible run-local original split owner")
+            pca_input_feature_names = list(prepared_original_splits.numeric_columns)
+            target_column_name = prepared_original_splits.target_column
+            original_sample_count = prepared_original_splits.sample_count
+        else:
+            pca_input_feature_names = feature_columns_without_lstm_metadata([str(column) for column in df.iloc[:0, :-1].select_dtypes(include=np.number).columns])  # Capture the exact ordered numeric columns consumed by scaling and PCA.
+            target_column_name = str(df.columns[-1])  # Capture the positional target column used by the split flow.
+            original_sample_count = int(len(df))  # Record the original sample population before splitting.
         if source_files is not None:  # Use caller-supplied provenance for combined or explicitly sourced evaluation data.
             pca_source_files = [str(source_file) for source_file in source_files]  # Preserve the caller's source order for deterministic combined-row provenance.
         elif not resolve_path_represents_directory(str(file)):  # Infer the unambiguous original single-file source.
@@ -17681,9 +17693,14 @@ def evaluate_on_dataset(
 
         preprocessing_started_at = time.perf_counter()  # Start preprocessing timer for split, encoding, and scaling.
         needs_lstm_metadata = any(is_lstm_classifier_name(name) for name in individual_models) or stacking_enabled
-        original_input = [df]
-        del df  # Transfer ownership; split preparation can release the original frame before allocating scaled arrays.
-        data_splits = prepare_evaluation_data_splits(original_input.pop(), config=config, include_lstm_metadata=needs_lstm_metadata, lstm_source_file=file)
+        if prepared_original_splits is not None:
+            data_splits = prepared_original_splits.get(
+                lambda frame_holder, metadata: prepare_evaluation_data_splits(frame_holder.pop(), config=config, include_lstm_metadata=metadata, lstm_source_file=file),
+                needs_lstm_metadata)
+        else:
+            original_input = [df]
+            del df  # Transfer ownership; split preparation can release the original frame before allocating scaled arrays.
+            data_splits = prepare_evaluation_data_splits(original_input.pop(), config=config, include_lstm_metadata=needs_lstm_metadata, lstm_source_file=file)
         preprocessing_time_s = time.perf_counter() - preprocessing_started_at  # Stop preprocessing timer before feature-selection matrices are materialized.
 
         if data_splits is None:  # If data preparation failed (single-class target)
@@ -17732,7 +17749,8 @@ def evaluate_on_dataset(
             del y_synthetic, synthetic_metadata  # Release ratio-local synthetic allocations before feature evaluation.
             gc.collect()  # Reclaim synthetic selection memory before classifier fitting.
         if feature_source_arrays is None:
-            feature_source_arrays = {"X_train_scaled": X_train_scaled, "X_test_scaled": X_test_scaled, "spilled_to_memmap": False}  # Transfer full source matrices into a mutable lifecycle holder.
+            feature_source_arrays = {"X_train_scaled": X_train_scaled, "X_test_scaled": X_test_scaled,
+                                     "spilled_to_memmap": isinstance(X_train_scaled, np.memmap) and isinstance(X_test_scaled, np.memmap)}  # Private group mappings may be closed independently.
         del X_train_scaled, X_test_scaled  # Remove duplicate local references so the holder can truly release or spill the full matrices.
         del df_augmented_for_training, df_augmented_for_testing  # Drop evaluator references to raw synthetic data.
         gc.collect()  # Reclaim released dataframe memory before feature-set materialization.
@@ -18847,6 +18865,7 @@ def sequential_combined_reuse_enabled(config):
             and resolve_boolean_value(memory_cfg.get("spill_full_feature_arrays_after_full_eval", True), True)
             and not any(validate_feature_set_workers(config.get("evaluation", {}).get("feature_set_workers")).values())
             and not stacking_cfg.get("model_recovery", False)
+            and not config.get("explainability", {}).get("enabled", False)
             and not stacking_cfg.get("automl_only", False)
             and not stacking_cfg.get("methods", {}).get("automl", True)
             and resolve_cached_rerun_count(config) == 0)
@@ -18873,7 +18892,8 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
             directory = create_feature_process_temp_directory(reference, config=config)
             session = None
             try:
-                session = CombinedDatasetSession(combined_files_df, original_files_list, directory, _original_signatures)
+                session = CombinedDatasetSession(combined_files_df, original_files_list, directory, _original_signatures,
+                                                 distribution=compute_class_distribution(combined_files_df, "attack_type"))
                 combined_files_df = None  # Release the outermost large dataframe before any run starts.
                 gc.collect()
                 print(f"[MEMORY] Execution-local original dataset snapshot: {directory}")
@@ -18921,7 +18941,7 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
             return  # Avoid re-entering the same logical grid after run expansion.
         
         if _data_session is not None:
-            combined_files_df = _data_session.load_original()
+            _data_session.assert_original_sources()
 
         verbose_output(
             f"{BackgroundColors.GREEN}Processing combined files evaluation for dataset: {BackgroundColors.CYAN}{dataset_name}{Style.RESET_ALL}",
@@ -18986,7 +19006,7 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
         print(
             f"{BackgroundColors.BOLD}{BackgroundColors.GREEN}Processing combined files evaluation dataset: {BackgroundColors.CYAN}{dataset_name}{Style.RESET_ALL}"
         )  # Print dataset header
-        distribution = compute_class_distribution(combined_files_df, 'attack_type')  # Compute distribution from combined dataframe
+        distribution = _data_session.distribution if _data_session is not None else compute_class_distribution(combined_files_df, 'attack_type')
         print(f"{BackgroundColors.GREEN}Attack types:{Style.RESET_ALL}")  # Print attack types header
         for label, count, percentage in distribution:  # Iterate over distribution entries sorted by count
             print(f"- {BackgroundColors.CYAN}{label}{BackgroundColors.GREEN}: {BackgroundColors.CYAN}{count:,}{BackgroundColors.GREEN} ({percentage:.2f}% of total){Style.RESET_ALL}")  # Print each class name, sample count, and percentage
@@ -19010,15 +19030,16 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
             rfe_selected_features = None  # Suppress RFE features when feature selection is disabled
             extra_trees_selected_features = None  # Suppress Extra Trees features when feature selection is disabled
         
-        feature_names = feature_columns_without_lstm_metadata([column for column in combined_files_df.columns if column != "attack_type"])  # Exclude reserved sequence metadata from classifier feature identities.
+        original_columns = _data_session.columns if _data_session is not None else combined_files_df.columns
+        feature_names = feature_columns_without_lstm_metadata([column for column in original_columns if column != "attack_type"])  # Exclude reserved sequence metadata from classifier feature identities.
         ga_selected_features, rfe_selected_features, extra_trees_selected_features = sanitize_and_verify_feature_selections(ga_selected_features, rfe_selected_features, extra_trees_selected_features, feature_names, config=config)  # Normalize artifacts before grid counting so the denominator matches assembled feature modes
         
         verbose_output(
             f"{BackgroundColors.GREEN}Combined files evaluation classifier feature list: {BackgroundColors.CYAN}{json.dumps(feature_names, ensure_ascii=False)}{Style.RESET_ALL}",
             config=config
         )  # Output all classifier features excluding reserved LSTM metadata
-        original_sample_count = int(len(combined_files_df))  # Preserve original row count for augmentation sampling after dataframe release.
-        combined_files_df_holder = [combined_files_df]  # Transfer the original combined dataframe so later calls can consume it without caller retention.
+        original_sample_count = _data_session.sample_count if _data_session is not None else int(len(combined_files_df))
+        combined_files_df_holder = [] if _data_session is not None else [combined_files_df]  # Transfer the original combined dataframe so later calls can consume it without caller retention.
         combined_files_df = None  # Release this frame's direct original combined dataframe reference before classifier fitting.
         gc.collect()  # Reclaim the released direct dataframe reference before the first evaluation slice.
 
@@ -19122,7 +19143,13 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
             print_dataset_evaluation_header("Original Combined Files", evaluation_plan, "combined_files", attack_types_list, skip_summary=skip_summary)  # Preserve skip-aware plan reporting without compact descriptors.
         grid_progress["plan_printed"] = True  # Prevent nested evaluation calls from reprinting the full grid plan
 
+        prepared_original_splits = None
         try:  # Ensure the shared progress bar is closed after the complete grid
+            if _data_session is not None:
+                prepared_original_splits = CombinedRunSplits(
+                    _data_session, get_current_experiment_run(config), config.get("evaluation", {}).get("random_state", 42),
+                    feature_columns_without_lstm_metadata([str(column) for column in _data_session.numeric_columns]),
+                    any(item[3] == "StackingClassifier" or is_lstm_classifier_name(item[3]) for item in evaluation_plan))
             results_original_by_hp = {}  # Retain each baseline mapping for later ratio comparisons.
             ratio_results_by_hp = {enabled: {} for enabled, _, _ in hp_runs}  # Retain ratio mappings by hyperparameter mode.
             active_ratio = None  # Track one sequential augmented ratio across every compatible feature and hyperparameter group.
@@ -19177,11 +19204,13 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
                             active_ratio = augmentation_ratio  # Record reusable current ratio identity.
                     if df_sampled is None or df_sampled.empty:  # Skip unusable current-ratio samples.
                         continue  # Advance to next canonical slice.
-                    if combined_files_df_holder:
+                    if prepared_original_splits is not None:
+                        ratio_original_df = None  # The evaluator uses the run-local source/split owner.
+                    elif combined_files_df_holder:
                         ratio_original_df = combined_files_df_holder.pop()  # Reuse the initial original population when baseline groups are skipped.
                     else:
-                        ratio_original_df = _data_session.load_original() if _data_session is not None else combine_files_for_combined_evaluation(original_files_list, config=config)[0]
-                    if ratio_original_df is None:  # Skip ratio when original reconstruction fails.
+                        ratio_original_df, _, _ = combine_files_for_combined_evaluation(original_files_list, config=config)
+                    if ratio_original_df is None and prepared_original_splits is None:  # Skip ratio when original reconstruction fails.
                         if _data_session is None and isinstance(df_sampled, DiskSyntheticSource):
                             df_sampled.close()
                         df_sampled = None  # Release current ratio sample while keeping the lifecycle variable defined for later groups.
@@ -19189,7 +19218,7 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
                         continue  # Advance to next canonical slice.
                     ratio_original_holder = [ratio_original_df]
                     del ratio_original_df
-                    results_ratio = evaluate_on_dataset(combined_dataset_reference, ratio_original_holder.pop(), feature_names, ga_selected_features, pca_n_components, rfe_selected_features, group_models, data_source_label=f"TrainingAugmented@{int(augmentation_ratio * 100)}%_CombinedFiles", hyperparams_map=hp_params_map, experiment_id=generate_experiment_id(combined_dataset_reference, "combined_files_original_training_augmented_training", augmentation_ratio), experiment_mode="original_training_augmented_training", augmentation_ratio=augmentation_ratio, execution_mode_str="combined_files", attack_types_combined=attack_types_list, df_augmented_for_training=df_sampled, config=config, hyperparameters_enabled=hyperparameters_enabled, grid_progress=grid_progress, source_files=original_files_list, feature_mode_name=feature_mode_name, extra_trees_selected_features=extra_trees_selected_features, planned_classifier_names=planned_classifier_names)  # Train current canonical feature group with synthetic rows and fixed original test data.
+                    results_ratio = evaluate_on_dataset(combined_dataset_reference, ratio_original_holder.pop(), feature_names, ga_selected_features, pca_n_components, rfe_selected_features, group_models, data_source_label=f"TrainingAugmented@{int(augmentation_ratio * 100)}%_CombinedFiles", hyperparams_map=hp_params_map, experiment_id=generate_experiment_id(combined_dataset_reference, "combined_files_original_training_augmented_training", augmentation_ratio), experiment_mode="original_training_augmented_training", augmentation_ratio=augmentation_ratio, execution_mode_str="combined_files", attack_types_combined=attack_types_list, df_augmented_for_training=df_sampled, config=config, hyperparameters_enabled=hyperparameters_enabled, grid_progress=grid_progress, source_files=original_files_list, feature_mode_name=feature_mode_name, extra_trees_selected_features=extra_trees_selected_features, planned_classifier_names=planned_classifier_names, prepared_original_splits=prepared_original_splits)  # Train current canonical feature group with synthetic rows and fixed original test data.
                     ratio_results_list = list(results_ratio.values())  # Convert current ratio results for annotation and export.
                     annotate_results_with_combination_flags(ratio_results_list, methods_cfg.get("feature_selection", True), hyperparameters_enabled, True)  # Mark active grid dimensions.
                     all_grid_results.extend(ratio_results_list)  # Preserve canonical augmented result order.
@@ -19197,10 +19226,12 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
                     del ratio_original_holder  # The evaluator owned and released the original frame.
                     gc.collect()  # Reclaim current group original-data memory while retaining ratio sample.
                     continue  # Advance to next canonical slice.
-                if combined_files_df_holder:  # Use the initially combined dataframe for the first original-only slice.
+                if prepared_original_splits is not None:
+                    original_df_for_run = None
+                elif combined_files_df_holder:  # Use the initially combined dataframe for the first original-only slice.
                     original_df_for_run = combined_files_df_holder.pop()  # Consume the initially combined dataframe exactly once.
                 else:  # Rebuild the original combined dataframe only for later HP slices that need it.
-                    original_df_for_run = _data_session.load_original() if _data_session is not None else combine_files_for_combined_evaluation(original_files_list, config=config)[0]
+                    original_df_for_run, _, _ = combine_files_for_combined_evaluation(original_files_list, config=config)
                     if original_df_for_run is None:  # Abort this HP slice when recombination fails.
                         raise RuntimeError("Failed to rebuild original combined files dataframe for later HP slice")  # Raise explicit failure instead of fitting on missing data.
                 original_df_for_run_holder = [original_df_for_run]  # Transfer this HP slice dataframe into evaluation without retaining a caller reference.
@@ -19216,6 +19247,7 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
                     feature_mode_name=feature_mode_name,  # Evaluate only current canonical original feature group.
                     extra_trees_selected_features=extra_trees_selected_features,  # Preserve Extra Trees feature order for this combined slice.
                     planned_classifier_names=planned_classifier_names,  # Evaluate only eligible classifiers in this group.
+                    prepared_original_splits=prepared_original_splits,
                 )  # Evaluate the no-augmentation feature/classifier slice
                 del original_df_for_run_holder  # Release the empty HP slice transfer holder after evaluation returns.
                 gc.collect()  # Reclaim any released original-only dataframe references before augmentation handling.
@@ -19239,6 +19271,11 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
         finally:  # Close shared grid progress even if a classifier evaluation fails
             if _data_session is None and isinstance(locals().get("df_sampled"), DiskSyntheticSource):
                 df_sampled.close()
+            if prepared_original_splits is not None:
+                try:
+                    prepared_original_splits.close()
+                except OSError as exc:
+                    print(f"[MEMORY][WARNING] Run-local split cleanup will be retried at session close: {exc}")
             grid_progress["progress_bar"].close()  # Close the one full-grid progress bar
 
         feature_analysis_dir = save_combined_files_results_to_csv(combined_dataset_reference, all_grid_results, config=config)  # Save the complete grid using directory identity.

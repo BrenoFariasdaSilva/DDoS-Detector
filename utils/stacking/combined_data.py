@@ -34,8 +34,13 @@ class CombinedDatasetSession:
     copy-on-write mappings. Pandas dtypes, index, labels and row order are retained.
     The directory is created/tracked/removed by stacking's existing spill owner.
     """
-    def __init__(self, frame, paths, directory, expected_signatures=None):
+    def __init__(self, frame, paths, directory, expected_signatures=None, distribution=None):
         self.directory = Path(directory)
+        self.sample_count = len(frame)
+        self.columns = tuple(frame.columns)
+        self.numeric_columns = tuple(frame.iloc[:0, :-1].select_dtypes(include='number').columns)
+        self.target_column = str(frame.columns[-1])
+        self.distribution = distribution
         self.original_path = self.directory / 'original.joblib'
         self.paths = tuple(paths)
         self.signatures = (source_signatures(self.paths) if expected_signatures is None
@@ -89,3 +94,59 @@ class CombinedDatasetSession:
         if isinstance(self.synthetic, DiskSyntheticSource):
             self.synthetic.close()
         self.synthetic = None
+
+
+class CombinedRunSplits:
+    """Private, run-local split snapshots; never share writable estimator inputs.
+
+    The caller supplies the established split/scale function. Its exact output is
+    serialized once. Numeric arrays reopen as private copy-on-write mappings,
+    so closing or modifying one group's arrays cannot affect a later group.
+    """
+    def __init__(self, session, run, seed, numeric_columns, include_metadata):
+        self.session = session
+        self.run = run
+        self.seed = seed
+        self.numeric_columns = tuple(numeric_columns)
+        self.include_metadata = include_metadata
+        self.sample_count = session.sample_count
+        self.target_column = session.target_column
+        self.directory = session.directory / f'run-{run}'
+        self.directory.mkdir(mode=0o700)
+        self.base_path = self.directory / 'split.joblib'
+        self.metadata_path = self.directory / 'metadata.joblib'
+        self.prepared = False
+        self.invalid = False
+
+    def get(self, prepare, include_metadata):
+        if include_metadata and not self.include_metadata:
+            raise RuntimeError('LSTM metadata was not requested by the run plan')
+        if self.invalid:
+            return None
+        if not self.prepared:
+            result = prepare([self.session.load_original()], self.include_metadata)
+            if result is None:
+                self.invalid = True
+                return None
+            if len(result) != (8 if self.include_metadata else 6):
+                raise ValueError('Unexpected original split tuple')
+            required = sum(value.nbytes for value in result[:4])
+            if self.include_metadata:
+                required += sum(int(value.memory_usage(deep=False).sum()) for value in result[6:])
+            if shutil.disk_usage(self.directory).free < required:
+                raise OSError('Insufficient disk space for run-local original split')
+            dump(result[:6], self.base_path, compress=0)
+            if self.include_metadata:
+                dump(result[6:], self.metadata_path, compress=0)
+            del result  # No resident train/test arrays retained by the cache owner.
+            self.prepared = True
+            print(f'[MEMORY] Run {self.run}: saved original split and fitted scaler (seed={self.seed})')
+        else:
+            print(f'[MEMORY] Run {self.run}: reusing original split and fitted scaler (seed={self.seed})')
+        result = load(self.base_path, mmap_mode='c')
+        if include_metadata:
+            result += load(self.metadata_path, mmap_mode='c')
+        return result
+
+    def close(self):
+        shutil.rmtree(self.directory)
