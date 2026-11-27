@@ -3918,7 +3918,7 @@ def concat_files_into_combined_files_df(processed_files_with_labels, common_feat
     total_samples = sum(len(df_clean) for _, df_clean, _, _, _ in processed_files_with_labels)  # Calculate total samples across all processed files for percentage reporting
 
     for idx, (f, df_clean, this_target, feat_cols, attack_label) in enumerate(processed_files_with_labels):  # Iterate over processed files with index
-        df_subset = df_clean[common_features_list]  # Select only common features as a copy for safe modification
+        df_subset = df_clean[common_features_list].copy(deep=False)  # Own the column container without duplicating numeric buffers; only metadata/target columns are assigned below.
         df_subset[LSTM_SOURCE_FILE_COLUMN] = str(f)  # Preserve source-file grouping for later verified LSTM windows.
         df_subset[LSTM_ROW_ORDER_COLUMN] = df_clean.index.to_numpy(copy=False) if pd.api.types.is_integer_dtype(df_clean.index.dtype) else df_clean.index.astype(str)  # Preserve pre-concat row chronology for LSTM only.
         df_subset["attack_type"] = df_clean[this_target].values  # Preserve original label column values to maintain benign and attack class integrity
@@ -19113,12 +19113,8 @@ def process_combined_files_evaluation(original_files_list, combined_files_df, at
                         all_grid_results.extend(cached_group_list)  # Preserve cached results in canonical export order.
                         ratio_results_by_hp[hyperparameters_enabled].setdefault(augmentation_ratio, {}).update(cached_group_results)  # Retain cached group for comparison export.
                         continue  # Advance without opening current ratio data.
-                    if active_ratio != augmentation_ratio and not isinstance(df_sampled, DiskSyntheticSource):  # Reuse the identical disk-backed candidate pool across ratios.
-                        if df_sampled is not None:  # Release completed prior-ratio sample before next ratio load.
-                            del df_sampled  # Drop prior-ratio DataFrame reference.
-                            gc.collect()  # Reclaim prior-ratio memory before loading next source.
-                            df_sampled = None  # Restore empty lifecycle state before current ratio construction.
-                        combined_augmented_df, _, _ = combine_files_for_combined_evaluation(augmentation_file_paths, config=config)  # Load augmented contents once for current ratio group.
+                    if df_sampled is None and active_ratio != augmentation_ratio:  # Reuse the unchanged candidate population across all ratios, regardless of storage format.
+                        combined_augmented_df, _, _ = combine_files_for_combined_evaluation(augmentation_file_paths, config=config)  # Load the unchanged candidate population only when first needed.
                         if combined_augmented_df is None:  # Skip current ratio when augmented recombination fails.
                             active_ratio = augmentation_ratio  # Prevent repeated failed reloads inside same ratio group.
                             continue  # Advance to next canonical group.
@@ -22608,7 +22604,7 @@ def orchestrate_all_combinations(input_path, dataset_name=None, config=None):
                         del df_sampled  # Drop prior-ratio DataFrame reference.
                         gc.collect()  # Reclaim prior-ratio memory before loading next source.
                         df_sampled = None  # Restore empty lifecycle state before current ratio construction.
-                    df_augmented = load_and_validate_augmented_data(file, df_original, config=config)  # Load augmented contents once for current ratio group.
+                    df_augmented = load_and_validate_augmented_data(file, df_original, config=config)  # Load the unchanged candidate population only when first needed.
                     if df_augmented is None:  # Skip current ratio when augmented loading or validation fails.
                         active_ratio = augmentation_ratio  # Prevent repeated failed reloads within same ratio group.
                         continue  # Advance without retaining augmented data.
