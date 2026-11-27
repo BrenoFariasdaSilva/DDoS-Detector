@@ -109,7 +109,7 @@ from telegram_bot import TelegramBot, send_exception_via_telegram, send_telegram
 from torch import autograd  # For gradient penalty
 from torch.utils.data import DataLoader, Dataset, Sampler  # Dataset, dataloader and bounded class-aware sampling
 from tqdm import tqdm  # For progress bar visualization
-from typing import Any, Dict, Iterator, List, Optional, Union, cast  # For type hints, tail-statistic iterators, and cast
+from typing import Any, Collection, Dict, Hashable, Iterator, List, Optional, Union, cast  # For type hints, tail-statistic iterators, and cast
 from utils.wgangp_generation_resume import (GenerationJournal, adaptive_refill_limit,
     recovery_draw_budget, file_sha256, locked_generation)
 from utils.process_name import set_runtime_process_name  # Apply optional htop-visible process identities.
@@ -120,9 +120,10 @@ psutil = (
 )  # Import psutil if available, otherwise set to None
 
 SAO_PAULO_TIMEZONE_NAME = "America/Sao_Paulo"  # Use Sao Paulo timezone for ETA finish timestamps
-WGANGP_RELEASE_VERSION = "V6.5.50"  # Clarify resumed training progress and timing without changing model execution.
+WGANGP_RELEASE_VERSION = "V6.5.51"  # Resolve the original label schema during generation without changing checkpoints or journal identity.
 FLOW_PREPROCESSING_CHECKPOINT_TAG = "ConditionalMixedStructuralV654TailKnots"  # Isolate weights trained on the full-class tail-knot representation.
 FLOW_PREPROCESSING_COMPATIBLE_TAGS: tuple[str, ...] = ()  # Earlier V6.5 weights were trained on a different tail encoding and are never resumed.
+QUALITY_REPORT_SCHEMA_VERSION = 7  # Current strict quality report format; use the same version when verifying published output.
 QUALITY_SELECTION_POLICY = "priority_moment_swap_v1"  # Identify the bounded mean-first candidate selection policy in output provenance.
 QUALITY_SELECTION_WEIGHTS = (1.0, 1.0, 0.25, 0.001, 1.0)  # Weight standardized mean, correlation, deviation, tail-rate, and tail-floor errors in priority order.
 QUALITY_SELECTION_MAX_ITERATIONS = 128  # Bound accepted and rejected swap iterations for every class.
@@ -1747,7 +1748,8 @@ def assess_generated_flow_quality(args: Any, config: Dict, generated: pd.DataFra
     source_category_counts = {}  # Retain exact source counts for every modeled categorical feature.
     category_columns = [scaler.feature_cols[index] for index in scaler.categorical_indices] if isinstance(scaler, ClassConditionalFlowScaler) else []  # Resolve validated empirical categorical supports.
     if getattr(args, "csv_path", None):  # Resolve the source file used by the unchanged class-specific quality measurements.
-        required_columns = numeric_columns + [label]  # Preserve the original label and numeric schema.
+        source_label = resolve_generation_source_label(args, numeric_columns)  # The detected source label may differ from the journal label.
+        required_columns = numeric_columns + [source_label]  # Read the real label and exact numeric schema.
         source_file = Path(args.csv_path)  # Identify the real source file for this generation run.
         source_stat = source_file.stat()  # Invalidate references if the source file changes during execution.
         cache_key = (str(source_file.resolve()), int(source_stat.st_size), int(source_stat.st_mtime_ns), tuple(required_columns), tuple(category_columns), int(sample_limit), int(getattr(args, "seed", 42)))  # Identify one exact statistical reference policy.
@@ -1760,9 +1762,9 @@ def assess_generated_flow_quality(args: Any, config: Dict, generated: pd.DataFra
         else:  # Build the original reference once with the existing unchanged sampling algorithm.
             for chunk in pd.read_csv(args.csv_path, usecols=lambda col: col.strip() in required_columns, chunksize=8192, low_memory=False):
                 chunk.columns = chunk.columns.str.strip()
-                if label not in chunk.columns:
-                    raise ValueError(f"Missing original label column {label} for quality evaluation")
-                for class_label, group in chunk.groupby(label, sort=False):
+                if source_label not in chunk.columns:
+                    raise ValueError(f"Missing original label column {source_label} for quality evaluation")
+                for class_label, group in chunk.groupby(source_label, sort=False):
                     class_key = str(class_label)
                     candidates = group[numeric_columns].to_numpy(dtype=np.float32, copy=True)
                     reference_valid = np.isfinite(candidates).all(axis=1)
@@ -2032,7 +2034,7 @@ def assess_generated_flow_quality(args: Any, config: Dict, generated: pd.DataFra
     if persist_report:  # Defer on-disk reports until final acceptance or exhausted recovery.
         report_path.parent.mkdir(parents=True, exist_ok=True)  # Ensure the audit destination exists for the final report.
     accepted = invalid_total == 0 and not rejecting_classes
-    result = {"schema_version": 7, "accepted": accepted, "quality_policy_sha256": build_quality_policy_fingerprint(config), "sampling_note": "Bounded screening statistics do not prove synthetic fidelity or downstream classifier utility", "sample_rows_per_class": sample_limit, "nearest_reference_rows": near_limit, "invalid_feature_values": invalid_total, "rejected_classes": rejecting_classes, "classes": reports}  # Version the expanded diagnostics and preserve strict acceptance decisions.
+    result = {"schema_version": QUALITY_REPORT_SCHEMA_VERSION, "accepted": accepted, "quality_policy_sha256": build_quality_policy_fingerprint(config), "sampling_note": "Bounded screening statistics do not prove synthetic fidelity or downstream classifier utility", "sample_rows_per_class": sample_limit, "nearest_reference_rows": near_limit, "invalid_feature_values": invalid_total, "rejected_classes": rejecting_classes, "classes": reports}  # Version the expanded diagnostics and preserve strict acceptance decisions.
     if persist_report:  # Leave the final quality report untouched during failed or intermediate probes.
         with report_path.open("w", encoding="utf-8") as stream:  # Persist the exact existing report format.
             json.dump(result, stream, indent=2, allow_nan=False)  # Preserve the original metrics and acceptance thresholds.
@@ -2390,6 +2392,29 @@ def detect_label_column(columns, config: Optional[Dict] = None):
         print(str(e))
         send_exception_via_telegram(type(e), e, e.__traceback__)
         raise
+
+
+def resolve_generation_source_label(args: Any, feature_cols: Collection[Hashable]) -> str:
+    """Resolve the actual CSV label using training's header normalization and detection.
+
+    Keep args.label_col unchanged: it belongs to the saved training provenance and
+    first-unique journal schema. The real source label is used for reference reads
+    and the published CSV. Never substitute a modeled feature for a class label.
+    """
+    configured_label = str(args.label_col)
+    source = getattr(args, "csv_path", None)
+    if not source:
+        return configured_label
+    columns = pd.read_csv(source, nrows=0).columns.str.strip().tolist()
+    if len(columns) != len(set(columns)):
+        raise ValueError(f"Generation source {source} has ambiguous column names after stripping whitespace")
+    source_label = configured_label if configured_label in columns else detect_label_column(columns)
+    missing = [column for column in feature_cols if column not in columns]
+    if source_label is None or source_label in feature_cols or missing:
+        raise ValueError(f"Generation source {source} does not match the generator schema: "
+                         f"configured label={configured_label!r}, detected label={source_label!r}, "
+                         f"missing features={missing!r}")
+    return str(source_label)
 
 
 def preprocess_dataframe(df, label_col, remove_zero_variance=None, config: Optional[Dict] = None):
@@ -5944,6 +5969,7 @@ def build_generator_checkpoint_payload(G, opt_G, scaler, dataset, epoch: int, me
         "categorical_class_masks": dataset.scaler.categorical_class_masks,  # Preserve exact class-conditional categorical domains.
         "label_encoder": dataset.label_encoder,  # Save label encoder for mapping
         "feature_cols": dataset.feature_cols,  # Save feature column names for generation
+        "source_label_col": dataset.label_col,  # Record the detected original label separately from configured provenance.
         "class_distribution": class_distribution,  # Save class distribution for percentage-based generation
         "metrics_history": metrics_history,  # Save metrics history for resume
         "args": vars(args),  # Save training arguments
@@ -6819,7 +6845,8 @@ def verify_data_augmentation_file(args, config: Optional[Dict] = None) -> bool:
             existing_quality = json.loads(existing_quality_path.read_text(encoding="utf-8"))  # Read class-specific output validation evidence.
             unique_record = existing_manifest.get("generation_uniqueness") or {}
             verified_output = (existing_manifest.get("sha256") == build_wgangp_provenance(args)["sha256"]
-                               and existing_quality.get("schema_version") == 4 and existing_quality.get("accepted") is True
+                               and existing_quality.get("schema_version") == QUALITY_REPORT_SCHEMA_VERSION and existing_quality.get("accepted") is True
+                               and resolve_generation_source_label(args, []) in pd.read_csv(out_path, nrows=0).columns
                                and existing_quality.get("quality_policy_sha256") == build_quality_policy_fingerprint(config)
                                and unique_record.get("policy") == "exact_decoded_numeric_rows_v1"
                                and unique_record.get("verified") is True
@@ -7295,7 +7322,7 @@ def build_quality_selection_references(args: Any, feature_cols: List[str], class
     if not source_path or not Path(source_path).is_file():  # Generation without source data cannot compare decoded statistics.
         return {}  # Report no available references.
 
-    label = args.label_col  # Resolve the original class label column.
+    label = resolve_generation_source_label(args, feature_cols)  # Read the detected original class label, not the private journal alias.
     wanted = set(feature_cols) | {label}  # Read only generator features and labels.
     rng = np.random.default_rng(int(getattr(args, "seed", 42)) + 977)  # Isolate reservoir sampling from generation random streams.
     pools: Dict[str, List[Any]] = {name: [None, None, None, None] for name in class_names}  # Hold target values, target priorities, acceptance values, and acceptance priorities.
@@ -8464,6 +8491,10 @@ def generate_unique_decoded_samples(args, config: Dict, G: nn.Module, device: to
         raise ValueError("Unique refill settings require positive rounds/batch rows and finite draw multiplier >= 1")
     if not feature_cols or len(set(feature_cols)) != len(feature_cols) or args.label_col in feature_cols:
         raise ValueError("Unique flow generation requires nonoverlapping, distinct numeric feature names")
+    if getattr(args, "csv_path", None):
+        source_label = resolve_generation_source_label(args, feature_cols)  # Fail before drawing or opening the journal if the source schema is wrong.
+        if source_label != args.label_col:
+            print(f"[GENERATION] Source label {source_label!r}; retaining checkpoint/journal label {args.label_col!r}; publishing source label")
     classes, totals = np.unique(requested, return_counts=True)
     target_by_id = {int(k): int(v) for k, v in zip(classes, totals)}
     names = {k: str(label_encoder.inverse_transform([k])[0]) for k in target_by_id}
@@ -8598,16 +8629,17 @@ def generate_generation_quality_outputs(args: Any, config: Dict, df_generated: p
 
     try:  # Bound source and synthetic plot inputs independently of the full CSV population.
         sample_limit = max(32, int(config.get("quality", {}).get("plot_samples_per_class", 512)))  # Configure a representative bounded plotting sample per class.
-        label = args.label_col  # Resolve the class label used by this generator.
+        label = args.label_col  # Resolve the internal class label used by this generator.
+        source_label = resolve_generation_source_label(args, feature_cols)  # Use the actual original label for source reads.
         rng = np.random.default_rng(int(getattr(args, "seed", 42)) + 1)  # Keep plot sampling reproducible without reusing quality reservoirs.
         sample_values = {}  # Accumulate sampled original features by class.
         sample_priorities = {}  # Retain uniform sampling priorities across source chunks.
-        columns = list(feature_cols) + [label]  # Read only original labels and model features.
+        columns = list(feature_cols) + [source_label]  # Read only original labels and model features.
         for chunk in pd.read_csv(args.csv_path, usecols=lambda value: value.strip() in columns, chunksize=8192, low_memory=False):  # Stream original source data without loading the entire CSV.
             chunk.columns = chunk.columns.str.strip()  # Normalize column names like the training preprocessor.
-            if label not in chunk.columns:  # Require aligned original attack labels.
-                raise ValueError(f"t-SNE source is missing label column: {label}")  # Stop mislabelled visualizations.
-            for class_name, group in chunk.groupby(label, sort=False):  # Uniformly sample each real class over the complete source file.
+            if source_label not in chunk.columns:  # Require aligned original attack labels.
+                raise ValueError(f"t-SNE source is missing label column: {source_label}")  # Stop mislabelled visualizations.
+            for class_name, group in chunk.groupby(source_label, sort=False):  # Uniformly sample each real class over the complete source file.
                 key = str(class_name)  # Preserve the exact displayed class identity.
                 values = group[feature_cols].to_numpy(dtype=np.float32, copy=True)  # Materialize only one bounded source chunk.
                 ranks = rng.random(len(values))  # Assign uniformly distributed sampling priorities.
@@ -8677,6 +8709,9 @@ def postprocess_generated_arrays_to_dataframe(args, config: Dict, all_fake: List
         if hasattr(args, "_generation_quality_reference_cache"):  # The final full-quality audit has now consumed its source references.
             delattr(args, "_generation_quality_reference_cache")  # Discard transient source statistics after the final report has been written.
     output_df, original_count = build_augmented_output_dataframe(args, df_generated)  # Build output
+    source_label = resolve_generation_source_label(args, feature_cols)  # Match the original dataset schema at publication only.
+    if source_label != args.label_col:
+        output_df = output_df.rename(columns={args.label_col: source_label})  # Preserve private journal and audited in-memory label names.
 
     if config.get("hardware_tracking", False):  # If enabled in config
         try:  # Guard hardware population to avoid breaking generation
@@ -8695,6 +8730,7 @@ def postprocess_generated_arrays_to_dataframe(args, config: Dict, all_fake: List
         if stale_file.exists():  # Leave unrelated user data untouched.
             stale_file.unlink()  # Remove stale recovery and quarantine evidence from an earlier failed execution.
     output_provenance = build_wgangp_provenance(args)  # Keep the original training/checkpoint fingerprint unchanged.
+    output_provenance["generation_output_label_col"] = source_label  # Document the actual published label without changing the training fingerprint.
     output_provenance["generation_uniqueness"] = getattr(args, "_last_generation_uniqueness", None)  # Record the post-decoding deduplication policy separately from model identity.
     output_provenance["generation_selection"] = getattr(args, "_last_generation_selection", None)  # Record the candidate selection policy and per-class evidence separately from model identity.
     output_provenance["generation_quality_recovery"] = getattr(args, "_last_generation_quality_recovery", None)  # Preserve post-audit recovery evidence independently of the compatible model checkpoint.
@@ -9033,6 +9069,9 @@ def generate(args, config: Optional[Dict] = None):
             print("[GENERATION] Existing verified augmented output already satisfies the requested quota")
             return
         scaler, label_encoder, feature_cols, class_distribution = reconstruct_missing_preprocessing_objects(args, scaler, label_encoder, feature_cols, class_distribution)  # Reconstruct missing preprocessing objects from CSV if needed
+        source_label = resolve_generation_source_label(args, feature_cols)  # Validate the source before model inference.
+        if ckpt.get("source_label_col") is not None and ckpt["source_label_col"] != source_label:
+            raise ValueError("Generation source label differs from the label recorded in the checkpoint")
         feature_dim, n_classes = determine_feature_dim_and_n_classes(args, scaler, label_encoder)  # Determine feature dimensionality and class count
         args._mixed_categorical_groups = list(scaler.categorical_groups)  # Use checkpoint-saved group positions during reconstruction.
         args._mixed_categorical_class_masks = scaler.categorical_class_masks
@@ -9083,6 +9122,8 @@ def generate_from_in_memory_generator(args, config: Dict, G: nn.Module, dataset:
         scaler = dataset.scaler  # Extract fitted scaler from dataset for inverse transform
         label_encoder = dataset.label_encoder  # Extract fitted label encoder from dataset for label decoding
         feature_cols = dataset.feature_cols  # Extract feature column names from dataset for DataFrame reconstruction
+        if resolve_generation_source_label(args, feature_cols) != dataset.label_col:
+            raise ValueError("Generation source label differs from the in-memory training dataset label")
 
         unique_labels, label_counts = np.unique(dataset.labels, return_counts=True)  # Compute class distribution from training dataset labels
         class_distribution = dict(zip(unique_labels.tolist(), label_counts.tolist()))  # Build label-to-count mapping for percentage-based generation
@@ -9860,7 +9901,8 @@ def skip_both_mode_when_augmented_output_sufficient(args: Any, config: Dict, csv
         quality = json.loads(quality_path.read_text(encoding="utf-8"))
         unique_record = existing_provenance.get("generation_uniqueness") or {}
         provenance_valid = (existing_provenance.get("sha256") == build_wgangp_provenance(args)["sha256"]
-                            and quality.get("schema_version") == 4 and quality.get("accepted") is True
+                            and quality.get("schema_version") == QUALITY_REPORT_SCHEMA_VERSION and quality.get("accepted") is True
+                            and resolve_generation_source_label(args, []) in pd.read_csv(out_path, nrows=0).columns
                             and quality.get("quality_policy_sha256") == build_quality_policy_fingerprint(config)
                             and unique_record.get("policy") == "exact_decoded_numeric_rows_v1"
                             and unique_record.get("verified") is True
