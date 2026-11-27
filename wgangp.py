@@ -120,7 +120,7 @@ psutil = (
 )  # Import psutil if available, otherwise set to None
 
 SAO_PAULO_TIMEZONE_NAME = "America/Sao_Paulo"  # Use Sao Paulo timezone for ETA finish timestamps
-WGANGP_RELEASE_VERSION = "V6.5.40"  # Expose safe gpu source cache memory budgets.
+WGANGP_RELEASE_VERSION = "V6.5.41"  # Add opt-in paired critic forwards to reduce multi-gpu coordination.
 FLOW_PREPROCESSING_CHECKPOINT_TAG = "ConditionalMixedStructuralV654TailKnots"  # Isolate weights trained on the full-class tail-knot representation.
 FLOW_PREPROCESSING_COMPATIBLE_TAGS: tuple[str, ...] = ()  # Earlier V6.5 weights were trained on a different tail encoding and are never resumed.
 QUALITY_SELECTION_POLICY = "priority_moment_swap_v1"  # Identify the bounded mean-first candidate selection policy in output provenance.
@@ -1106,7 +1106,7 @@ class Discriminator(nn.Module):
         layers.append(nn.Linear(prev, 1))  # Output layer producing scalar score
         self.net = nn.Sequential(*layers)  # Create critic network
 
-    def forward(self, x, y):  # Compute critic score
+    def forward(self, x, y, paired_x=None):  # Compute one or two critic scores per replica
         """
         Compute critic score for input features conditioned on labels.
 
@@ -1117,7 +1117,14 @@ class Discriminator(nn.Module):
 
         y_e = self.embed(y)  # Convert label to embedding
         inp = torch.cat([x, y_e], dim=1)  # Join features with embedding
-        return self.net(inp).squeeze(1)  # Produce scalar score
+        score = self.net(inp).squeeze(1)
+        if paired_x is None:
+            return score
+        # Keep both GEMM shapes and the original class order. Do not concatenate
+        # batches or change generator/BatchNorm topology. Only the label embedding
+        # and DataParallel replication/scatter/gather are shared.
+        paired = self.net(torch.cat([paired_x, y_e], dim=1)).squeeze(1)
+        return score, paired
 
 
 class ConfigNamespace:
@@ -1577,6 +1584,8 @@ def build_wgangp_provenance(args: Any) -> Dict:
     settings["moment_reference_rows_per_class"] = int(provenance_config.get("training", {}).get("moment_reference_rows_per_class", 4096))
     settings["quantile_fidelity_weight"] = float(provenance_config.get("training", {}).get("quantile_fidelity_weight", 0.15))  # Preserve the extra training objective in checkpoint provenance.
     settings["quantile_reference_rows_per_class"] = int(provenance_config.get("training", {}).get("quantile_reference_rows_per_class", 8192))  # Preserve reference resolution for checkpoint safety.
+    if provenance_config.get("training", {}).get("coalesce_critic_forwards", False):
+        settings["coalesce_critic_forwards"] = True  # Different gradient reduction grouping requires an explicit provenance boundary.
     identity = {"source_path": str(source) if source else None, "source_size": source_stat.st_size if source_stat else None, "source_mtime_ns": source_stat.st_mtime_ns if source_stat else None, "preprocessing": "class_conditional_mixed_structural_v654_full_class_tail_knots", "preprocessing_parameters": {key: provenance_config.get("quality", {}).get(key, default) for key, default in (("n_quantiles", 512), ("fit_sample_rows", 50000), ("class_sampling_exponent", 0.5))}, "settings": settings}  # Record source metadata and effective hyperparameters.
     digest = hashlib.sha256(json.dumps(identity, sort_keys=True, default=str).encode("utf-8")).hexdigest()  # Produce a stable comparable identity.
 
@@ -2086,6 +2095,7 @@ def build_default_training_and_model_config() -> Dict:
             "save_every": 5,  # Save checkpoints every N epochs
             "log_interval": 50,  # Log metrics every N steps
             "optimizer_state_check_interval": 128,  # Scan complete Adam state once per 128 minibatches and at every epoch boundary; leave loss/gradient checks eager.
+            "coalesce_critic_forwards": False,  # Experimental: benchmark gradient-reduction grouping before enabling.
             "progress_description_interval": 25,  # Reformat progress messages periodically; leave optimizer and losses unchanged.
             "sample_batch": 16,  # Number of samples for fixed noise generation
             "use_amp": False,  # Use automatic mixed precision
@@ -5100,8 +5110,11 @@ def execute_discriminator_training_steps(G, D, opt_D, scaler, real_x, labels, de
             fake_x = G(z, labels).detach()  # Generate fake samples and detach for discriminator
         require_finite_tensor(fake_x, "generated_samples", args, epoch + 1, step + 1, component)  # Reject invalid generated samples before critic reuse
         with autocast(device.type, enabled=False):  # Keep complete critic objective and backward graph in full precision
-            d_real = D(real_x.float(), labels)  # Compute real critic scores in full precision
-            d_fake = D(fake_x.float(), labels)  # Compute fake critic scores in full precision
+            if config.get("training", {}).get("coalesce_critic_forwards", False):
+                d_real, d_fake = D(real_x.float(), labels, fake_x.float())
+            else:
+                d_real = D(real_x.float(), labels)
+                d_fake = D(fake_x.float(), labels)
             require_finite_tensor_group([("real_scores", d_real), ("fake_scores", d_fake)], args, epoch + 1, step + 1, component)  # Same numerical checks with one host synchronization.
             gp = gradient_penalty(D, real_x.float(), fake_x.float(), labels, device, config, args, epoch + 1, step + 1, component)  # Compute complete gradient penalty in full precision
             loss_D = d_fake.float().mean() - d_real.float().mean() + args.lambda_gp * gp  # Calculate full-precision WGAN-GP discriminator loss
@@ -6761,6 +6774,7 @@ def restore_generation_training_settings(args, config: Dict, ckpt: Dict) -> None
                   "moment_reference_rows_per_class", "quantile_fidelity_weight", "quantile_reference_rows_per_class"):
         restore(field, "training", field)
     if settings:
+        restore("coalesce_critic_forwards", "training", "coalesce_critic_forwards", values={"coalesce_critic_forwards": settings.get("coalesce_critic_forwards", False)})
         restore("class_sampler_policy", "training", "class_sampler_policy", values={"class_sampler_policy": settings.get("class_sampler_policy", "weighted_random")})
     restore("generator_leaky_relu_alpha", "generator", "leaky_relu_alpha")
     restore("discriminator_leaky_relu_alpha", "discriminator", "leaky_relu_alpha")
