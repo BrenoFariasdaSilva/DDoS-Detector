@@ -120,7 +120,7 @@ psutil = (
 )  # Import psutil if available, otherwise set to None
 
 SAO_PAULO_TIMEZONE_NAME = "America/Sao_Paulo"  # Use Sao Paulo timezone for ETA finish timestamps
-WGANGP_RELEASE_VERSION = "V6.5.32"  # Preserve generation journal identity across training-only releases.
+WGANGP_RELEASE_VERSION = "V6.5.33"  # Skip unused categorical expectations in critic-only generator forwards.
 FLOW_PREPROCESSING_CHECKPOINT_TAG = "ConditionalMixedStructuralV654TailKnots"  # Isolate weights trained on the full-class tail-knot representation.
 FLOW_PREPROCESSING_COMPATIBLE_TAGS: tuple[str, ...] = ()  # Earlier V6.5 weights were trained on a different tail encoding and are never resumed.
 QUALITY_SELECTION_POLICY = "priority_moment_swap_v1"  # Identify the bounded mean-first candidate selection policy in output provenance.
@@ -1032,14 +1032,19 @@ class Generator(nn.Module):
                 for group_id, (start, stop) in enumerate(self.categorical_groups):
                     if offset < start:
                         chunks.append(out[:, offset:start])
-                        log_probability_chunks.append(out[:, offset:start])  # Preserve numeric features in the expectation representation.
+                        if return_log_probabilities:
+                            log_probability_chunks.append(out[:, offset:start])  # Preserve numeric features in the expectation representation.
                     logits = out[:, start:stop]
                     class_mask = getattr(self, f"categorical_allowed_{group_id}", None)
                     if class_mask is not None:
                         logits = logits.masked_fill(~class_mask[y], -torch.inf)  # Give unsupported categories zero probability at every finite sampling temperature.
                     scaled_logits = logits.float() / self.categorical_temperature  # Use identical categorical probabilities during training and inference.
-                    log_probabilities = torch.log_softmax(scaled_logits, dim=1)  # Preserve gradients for extremely unlikely supported categories.
-                    log_probability_chunks.append(log_probabilities)  # Keep log-probability gradients independent of the straight-through estimator.
+                    # Critic-only training forwards never consume the expectation tensor.
+                    # Evaluation still samples from the exact same categorical probabilities.
+                    if return_log_probabilities or not self.training:
+                        log_probabilities = torch.log_softmax(scaled_logits, dim=1)
+                        if return_log_probabilities:
+                            log_probability_chunks.append(log_probabilities)
                     if self.training:
                         choice = F.gumbel_softmax(scaled_logits, tau=1.0, hard=True, dim=1).to(logits.dtype)  # Draw hard categories from the inference distribution with a unit relaxation temperature.
                     else:
@@ -1050,7 +1055,8 @@ class Generator(nn.Module):
                     offset = stop
                 if offset < out.shape[1]:
                     chunks.append(out[:, offset:])
-                    log_probability_chunks.append(out[:, offset:])  # Preserve any trailing numeric features.
+                    if return_log_probabilities:
+                        log_probability_chunks.append(out[:, offset:])  # Preserve any trailing numeric features.
                 out = torch.cat(chunks, dim=1)
         if return_log_probabilities:  # Expose expectations only to callers requesting the frequency objective.
             return out, torch.cat(log_probability_chunks, dim=1) if log_probability_chunks else out  # Keep default generator output and DataParallel tensor gathering compatible.
