@@ -146,6 +146,34 @@ class TableImagesTests(unittest.TestCase):
             self.assertEqual(images.render_table_image(self.styled, self.output), backend)
         images._verify_png(self.output)
 
+    @unittest.skipUnless(shutil.which('chromium'), 'System Chromium is unavailable')
+    def test_unsupported_managed_platform_uses_real_system_chromium(self):
+        backend = f'executable:{shutil.which("chromium")}'
+        real_probe = images._probe
+
+        def probe(candidate):
+            if candidate == 'managed':
+                raise RuntimeError('Managed Chromium is unavailable')
+            real_probe(candidate)
+
+        with patch.object(images, 'browser_directory', return_value=self.directory / 'browsers'), \
+                patch.object(images, '_probe', side_effect=probe), \
+                patch.object(images, '_install_chromium', side_effect=RuntimeError(
+                    'Playwright does not support chromium on ubuntu26.04-x64')) as install, \
+                patch.object(images, '_system_backends', return_value=iter([backend])):
+            self.assertEqual(images.ensure_table_images(), backend)
+            install.assert_called_once()
+            self.assertEqual(images.render_table_image(self.styled, self.output), backend)
+        images._verify_png(self.output)
+
+    @unittest.skipUnless(os.environ.get('DDOS_TEST_PORTABLE_BROWSER') == '1', 'Requires real Chromium on a rolling runner')
+    def test_real_portable_browser_install_and_render(self):
+        backend = images.ensure_table_images()
+        self.assertTrue(backend == 'managed' or backend.startswith(('channel:', 'executable:')),
+                        f'Expected a working Chromium browser, got {backend!r}')
+        self.assertEqual(images.render_table_image(self.styled, self.output), backend)
+        images._verify_png(self.output)
+
     @unittest.skipUnless(os.environ.get('DDOS_TEST_MANAGED_BROWSER') == '1', 'Requires managed browser download')
     def test_real_managed_browser_install_and_render(self):
         self.assertEqual(images.ensure_table_images(), 'managed')
