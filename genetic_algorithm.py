@@ -68,6 +68,11 @@ import hashlib  # For generating state identifiers
 import json  # For structured JSON output and parsing
 import math  # For mathematical operations
 import matplotlib.pyplot as plt  # For plotting graphs
+from concurrent.futures import ProcessPoolExecutor
+from importlib.metadata import version as package_version
+import tempfile
+from threadpoolctl import threadpool_limits
+from utils.ga_execution import FitnessStore, array_digest, atomic_pickle, evaluate_batch, file_digest, identity
 import multiprocessing  # For parallel fitness evaluation
 import numpy as np  # For numerical operations
 import os  # For running a command in the terminal
@@ -89,7 +94,7 @@ import yaml  # For system-specific parameters and functions
 from colorama import Style  # For coloring the terminal
 from deap import algorithms, base, creator, tools  # For the genetic algorithm
 from dotenv import dotenv_values  # Import dotenv parser
-from functools import partial  # For creating partial functions
+from functools import lru_cache, partial  # For creating partial functions
 from joblib import dump, load  # For exporting and importing models
 from Logger import Logger  # For logging output to both terminal and file
 from pathlib import Path  # For handling file paths
@@ -139,6 +144,14 @@ TELEGRAM_BOT = None  # Global Telegram bot instance (initialized in setup_telegr
 
 # Logger Setup:
 logger = None  # Global logger instance (initialized in initialize_logger)
+
+GA_FITNESS_ID = None
+GA_RUN_ID = None
+GA_STORE = None
+GA_WORKER_DATA = None
+GA_CV_SPLITS = None
+GA_ACTIVE_WORKERS = None
+GA_WORKER_LIMIT = None
 
 LAST_RESOLVED_N_JOBS = None  # Cache the last resolved n_jobs to avoid noisy repeated prints during GA loops
 
@@ -334,65 +347,12 @@ def build_resource_monitor_defaults():
 
 
 def resolve_n_jobs(log=False):
-    """
-    Resolve the effective n_jobs value for the fitness estimator from configuration.
-
-    When the GA runs with multiple worker processes (cpu_processes > 1) each worker
-    already occupies a CPU core, so the estimator must use n_jobs=1 to avoid CPU
-    oversubscription.  When the GA runs in a single process the full n_jobs value
-    from the multiprocessing config section is used, defaulting to -1 (all CPUs).
-
-    :parameter log: If True, print the resolved n_jobs and reasoning to the terminal (only on change or when verbose)
-    :return: Integer n_jobs value safe for the current parallelism mode.
-    """
-
-    try:
-        global LAST_RESOLVED_N_JOBS  # Update module-level cache when value changes
-        ga_mp_cfg = CONFIG.get("genetic_algorithm", {}).get("multiprocessing", {})  # Read GA multiprocessing sub-section from config
-        configured_n_jobs = ga_mp_cfg.get("n_jobs", -1)  # Read configured n_jobs; default -1 (all CPUs)
-
-        try:  # Safely coerce configured_n_jobs to int
-            configured_n_jobs = int(configured_n_jobs)  # Convert to integer for downstream use
-        except Exception:  # If coercion fails, fall back to -1
-            configured_n_jobs = -1  # Fall back to all-CPUs default
-
-        with global_state_lock:  # Read live CPU_PROCESSES under the lock for thread safety
-            live_cpu_processes = CPU_PROCESSES  # Capture live worker-process count set by resource monitor
-
-        try:  # Safely coerce live_cpu_processes to int
-            cpu_processes_int = int(live_cpu_processes) if live_cpu_processes is not None else 1  # Convert; treat None as 1
-        except Exception:  # If coercion fails, treat as single process
-            cpu_processes_int = 1  # Fall back to single-process mode
-
-        if cpu_processes_int > 1:  # GA pool is running with multiple worker processes
-            effective_n_jobs = 1  # Force estimator to single-threaded to avoid nested parallelism
-        else:  # GA is running in single-process mode
-            effective_n_jobs = configured_n_jobs  # Use the configured value directly
-
-        try:  # Safely read verbose flag from config; default to False if any issue occurs to avoid noisy output
-            verbose_flag = CONFIG.get("execution", {}).get("verbose", False)  # Read verbose flag from config
-        except Exception:  # If config access fails, default to non-verbose to avoid noisy output
-            verbose_flag = False  # Default to non-verbose when config inaccessible
-
-        if log:  # Only print if logging is requested (e.g., during fitness evaluation) to avoid unnecessary prints during GA setup
-            if LAST_RESOLVED_N_JOBS != effective_n_jobs or verbose_flag:  # Print only on change or when verbose
-                if cpu_processes_int > 1:  # Describe forced single-threaded mode when applicable
-                    print(
-                        f"resolve_n_jobs: GA uses {cpu_processes_int} worker processes — "
-                        f"forcing estimator n_jobs=1 to prevent CPU oversubscription"
-                    )  # Log change to n_jobs behavior
-                else:  # Describe the configured n_jobs when running single-process
-                    print(
-                        f"resolve_n_jobs: GA runs in single-process mode — "
-                        f"using configured estimator n_jobs={effective_n_jobs}"
-                    )  # Log resolved n_jobs
-                LAST_RESOLVED_N_JOBS = effective_n_jobs  # Update cached value to avoid repeated prints
-
-        return effective_n_jobs  # Return resolved n_jobs for estimator instantiation
-    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
-        print(str(e))  # Print error to terminal for server logs
-        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
-        raise  # Re-raise to preserve original failure semantics
+    """Use one RF job per mask worker; never multiply worker and RF counts."""
+    configured = int(CONFIG.get("genetic_algorithm", {}).get("multiprocessing", {}).get("n_jobs", -1))
+    if configured == 0 or configured < -1:
+        raise ValueError("--n-jobs must be -1 or positive")
+    workers = GA_ACTIVE_WORKERS if GA_ACTIVE_WORKERS is not None else CPU_PROCESSES
+    return 1 if workers is not None and workers > 1 else configured
 
 
 def get_default_config():
@@ -409,7 +369,7 @@ def get_default_config():
             "skip_train_if_model_exists": False,  # If True, try loading exported models instead of retraining
             "runs": 5,  # Number of runs for Genetic Algorithm analysis
             "resume_progress": True,  # When True, attempt to resume progress from saved state files
-            "progress_save_interval": 10,  # Save progress every N generations
+            "progress_save_interval": 10,  # Legacy setting: GA now checkpoints every generation
             "play_sound": True,  # Set to True to play a sound when the program finishes
         },
         "telegram": {
@@ -1602,6 +1562,7 @@ def prepare_test_data_for_loaded_model(csv_path, features):
     """
 
     try:  # Wrap full function logic to ensure production-safe execution
+        source_digest = file_digest(csv_path)
         df = load_dataset(csv_path)  # Load raw dataset from CSV
         if df is None:  # Verify if loading failed
             return None  # Exit early on load failure
@@ -1610,7 +1571,7 @@ def prepare_test_data_for_loaded_model(csv_path, features):
         if cleaned_df is None or cleaned_df.empty:  # Verify if preprocessing failed or resulted in empty data
             return None  # Exit early on preprocessing failure
 
-        split_data = split_dataset(cleaned_df, csv_path, test_size=CONFIG["dataset"]["test_size"])  # Split into train/test sets
+        split_data = split_dataset(cleaned_df, csv_path, test_size=CONFIG["dataset"]["test_size"], source_digest=source_digest)  # Split into train/test sets
         if split_data is None or split_data[0] is None:  # Verify if splitting failed
             return None  # Exit early on split failure
 
@@ -1784,8 +1745,8 @@ def cache_preprocessed_data(result, cache_file, csv_path):
         if len(result) < 5:  # Verify result contains at least the 5 required elements
             raise ValueError(f"Preprocessing result has {len(result)} element(s), expected at least 5")  # Raise with clear message
 
-        safe_result = result[:5]  # Extract only the first 5 expected elements, ignoring any extras
-        X_train_scaled, X_test_scaled, y_train_np, y_test_np, X_columns = safe_result  # Unpack the first 5 elements safely
+        safe_result = result[:6]  # Include scaling duration when present
+        X_train_scaled, X_test_scaled, y_train_np, y_test_np, X_columns = safe_result[:5]  # Unpack arrays and names
 
         if X_train_scaled is None or X_test_scaled is None or y_train_np is None or y_test_np is None or X_columns is None:  # Verify none of the 5 required elements are None
             raise ValueError("One or more preprocessed elements are None; cache data cannot be safely written")  # Fail before dereferencing missing arrays
@@ -1805,8 +1766,7 @@ def cache_preprocessed_data(result, cache_file, csv_path):
             )  # Output warning message
             return  # Return without saving
         else:  # If there is enough space
-            with open(cache_file, "wb") as f:  # Open cache file for writing
-                pickle.dump(safe_result, f)  # Dump only the first 5 elements to preserve cache compatibility
+            atomic_pickle(cache_file, safe_result)
             verbose_output(
                 f"{BackgroundColors.GREEN}Saved preprocessed data to cache {cache_file}.{Style.RESET_ALL}"
             )  # Output the verbose message
@@ -1828,7 +1788,7 @@ def cache_preprocessed_data(result, cache_file, csv_path):
         raise  # Re-raise to preserve original failure semantics
 
 
-def split_dataset(df, csv_path, test_size=0.2):
+def split_dataset(df, csv_path, test_size=0.2, source_digest=None):
     """
     Split dataset into training and testing sets.
 
@@ -1852,11 +1812,13 @@ def split_dataset(df, csv_path, test_size=0.2):
             f"{BackgroundColors.GREEN}Splitting dataset into training and testing sets with test size = {test_size}.{Style.RESET_ALL}"
         )  # Output the verbose message
 
-        cache_file = csv_path.replace(
-            ".csv", f"_cache_test{test_size}.pkl"
-        )  # Cache file path, including test_size for uniqueness
+        source_digest = source_digest or file_digest(csv_path)
+        if file_digest(csv_path) != source_digest:
+            raise RuntimeError("Source CSV changed during preprocessing")
+        split_id = identity(source_digest, CONFIG["dataset"], test_size, ga_software_identity())
+        cache_file = str(Path(csv_path).with_suffix("")) + f"_cache_test{test_size}_{split_id}.pkl"
 
-        if verify_filepath_exists(cache_file):  # If cache exists
+        if os.path.isfile(cache_file):  # Only use the content-addressed cache
             verbose_output(
                 f"{BackgroundColors.GREEN}Loading cached preprocessed data from {cache_file}.{Style.RESET_ALL}"
             )  # Output loading message
@@ -1895,6 +1857,8 @@ def split_dataset(df, csv_path, test_size=0.2):
         y_test_np = np.array(y_test)  # Convert y_train and y_test to numpy arrays for fast indexing
 
         result = X_train_scaled, X_test_scaled, y_train_np, y_test_np, X.columns, round(float(scaling_time), 6)  # Prepare result tuple (include scaling time)
+        if file_digest(csv_path) != source_digest:
+            raise RuntimeError("Source CSV changed during preprocessing")
         cache_preprocessed_data(result, cache_file, csv_path)  # Cache the preprocessed data with size comparison
         return result  # Return the splits and feature names
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
@@ -1921,11 +1885,11 @@ def print_ga_parameters(min_pop, max_pop, n_generations, feature_count, runs):
         print(f"  {BackgroundColors.GREEN}Generations per run: {BackgroundColors.CYAN}{n_generations}{Style.RESET_ALL}")
         print(f"  {BackgroundColors.GREEN}Number of features: {BackgroundColors.CYAN}{feature_count}{Style.RESET_ALL}")
         print(f"  {BackgroundColors.GREEN}Number of runs: {BackgroundColors.CYAN}{runs}{Style.RESET_ALL}")
-        print(f"  {BackgroundColors.GREEN}Crossover probability: {BackgroundColors.CYAN}0.5{Style.RESET_ALL}")
-        print(f"  {BackgroundColors.GREEN}Mutation probability: {BackgroundColors.CYAN}0.05{Style.RESET_ALL}")
-        print(f"  {BackgroundColors.GREEN}Tournament size: {BackgroundColors.CYAN}3{Style.RESET_ALL}")
+        print(f"  {BackgroundColors.GREEN}Crossover probability: {BackgroundColors.CYAN}{CONFIG['genetic_algorithm']['cxpb']}{Style.RESET_ALL}")
+        print(f"  {BackgroundColors.GREEN}Mutation probability (individual): {BackgroundColors.CYAN}{CONFIG['genetic_algorithm']['mutpb']}{Style.RESET_ALL}")
+        print(f"  {BackgroundColors.GREEN}Mutation per-bit probability: {BackgroundColors.CYAN}0.05; selection: NSGA-II{Style.RESET_ALL}")
         print(
-            f"  {BackgroundColors.GREEN}Fitness evaluation: {BackgroundColors.CYAN}10-fold Stratified CV on training set{Style.RESET_ALL}"
+            f"  {BackgroundColors.GREEN}Fitness evaluation: {BackgroundColors.CYAN}{CONFIG['genetic_algorithm']['cross_validation']['n_folds']}-fold Stratified CV on training set{Style.RESET_ALL}"
         )
         print(
             f"  {BackgroundColors.GREEN}Base estimator: {BackgroundColors.CYAN}RandomForestClassifier (n_estimators=100, n_jobs={resolve_n_jobs(log=False)}){Style.RESET_ALL}"
@@ -1956,6 +1920,7 @@ def prepare_sweep_data(csv_path, dataset_name, min_pop, max_pop, n_generations, 
             f"{BackgroundColors.GREEN}Preparing dataset '{dataset_name}' for Genetic Algorithm sweep.{Style.RESET_ALL}"
         )  # Output the verbose message
 
+        source_digest = file_digest(csv_path)
         df = load_dataset(csv_path)  # Load dataset
         if df is None:  # If loading failed
             return None  # Exit early
@@ -1966,7 +1931,7 @@ def prepare_sweep_data(csv_path, dataset_name, min_pop, max_pop, n_generations, 
             print(f"{BackgroundColors.RED}Dataset empty after preprocessing. Exiting.{Style.RESET_ALL}")
             return None  # Exit early
 
-        split_res = split_dataset(cleaned_df, csv_path, test_size=CONFIG["dataset"]["test_size"])  # Split dataset (may include scaling time)
+        split_res = split_dataset(cleaned_df, csv_path, test_size=CONFIG["dataset"]["test_size"], source_digest=source_digest)  # Split dataset (may include scaling time)
         if split_res is None or split_res[0] is None:  # If splitting failed
             return None  # Exit early
         if isinstance(split_res, (list, tuple)) and len(split_res) == 6:
@@ -2037,6 +2002,44 @@ def compute_progress_state(min_pop, max_pop, n_generations, runs, progress_bar, 
         raise  # Re-raise to preserve original failure semantics
 
 
+@lru_cache(maxsize=1)
+def ga_software_identity():
+    return identity(Path(__file__).read_text(encoding="utf-8"),
+                    Path(__file__).with_name("utils").joinpath("ga_execution.py").read_text(encoding="utf-8"),
+                    sys.version, platform.system(), platform.machine(),
+                    {name: package_version(name) for name in ("numpy", "pandas", "scikit-learn", "scipy", "deap", "joblib", "threadpoolctl")})
+
+
+def ga_worker_init(config, runtime_name, x_path, y_path, expected_software):
+    global CONFIG, GA_WORKER_DATA, GA_ACTIVE_WORKERS, GA_WORKER_LIMIT, GA_CV_SPLITS
+    if ga_software_identity() != expected_software:
+        raise RuntimeError("GA source or dependencies changed before worker startup; restart the sweep")
+    CONFIG = config
+    GA_ACTIVE_WORKERS = 2  # resolve_n_jobs always returns one in a mask worker
+    GA_WORKER_LIMIT = threadpool_limits(limits=1)
+    GA_WORKER_DATA = (np.load(x_path, mmap_mode="r"), np.load(y_path, mmap_mode="r"))
+    GA_CV_SPLITS = None
+    init_pool_process_name(runtime_name)
+
+
+def ga_worker_evaluate(mask):
+    try:
+        return evaluate_feature_mask(mask, *GA_WORKER_DATA)
+    finally:
+        fitness_cache.clear()
+
+
+def ga_sweep_identity(data, csv_path):
+    X_train, X_test, y_train, y_test, features = data
+    ga = CONFIG["genetic_algorithm"]
+    # Exclude scheduling/logging options: same fixed estimator seed and CV calculation.
+    fitness_id = identity(ga_software_identity(), file_digest(csv_path),
+                          list(features), array_digest(X_train), array_digest(y_train),
+                          ga["cross_validation"], ga["early_stop"]["acc_threshold"], ga["early_stop"]["folds"])
+    run_id = identity(fitness_id, array_digest(X_test), array_digest(y_test), ga["early_stop"]["generations"])
+    return fitness_id, run_id
+
+
 def compute_state_id(csv_path, pop_size, n_generations, cxpb, mutpb, run, folds, test_frac=None):
     """
     Compute a deterministic short id for a particular run configuration.
@@ -2054,7 +2057,9 @@ def compute_state_id(csv_path, pop_size, n_generations, cxpb, mutpb, run, folds,
 
     try:  # Wrap full function logic to ensure production-safe execution
         try:  # Attempt to compute the state id
-            key = f"{csv_path}|pop{pop_size}|gens{n_generations}|cx{cxpb}|mut{mutpb}|run{run}|folds{folds}|test{test_frac}"  # Create a unique key string from run parameters
+            if GA_RUN_ID is None:  # Standalone calls lack a verified dataset identity.
+                return None
+            key = f"v2|{GA_RUN_ID}|{Path(csv_path).resolve()}|pop{pop_size}|gens{n_generations}|cx{cxpb}|mut{mutpb}|run{run}|folds{folds}"  # Create a unique key string from run parameters
             return hashlib.sha256(
                 key.encode("utf-8")
             ).hexdigest()  # Compute SHA256 hash of the key and return as hex string
@@ -2091,76 +2096,23 @@ def state_file_paths(output_dir, state_id):
 
 
 def load_run_result(output_dir, state_id):
-    """
-    Load a previously saved run result if present.
-
-    :param output_dir: base output directory
-    :param state_id: deterministic id for run
-    :return: deserialized result or None
-    """
-
-    try:  # Wrap full function logic to ensure production-safe execution
-        try:  # Attempt to load the run result
-            _, run_path = state_file_paths(output_dir, state_id)  # Get the path for the run state file
-            if not verify_filepath_exists(run_path):  # Verify if the file exists
-                return None  # Return None if file does not exist
-            with open(run_path, "rb") as f:  # Open the file for reading in binary mode
-                return pickle.load(f)  # Deserialize and return the result
-        except Exception:  # If any error occurs during loading
-            return None  # Return None to indicate failure
-    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
-        print(str(e))  # Print error to terminal for server logs
-        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
-        raise  # Re-raise to preserve original failure semantics
+    _, path = state_file_paths(output_dir, state_id)
+    if not os.path.isfile(path):
+        return None
+    with open(path, "rb") as stream:
+        return pickle.load(stream)
 
 
-def load_cached_run_if_any(
-    output_dir, csv_path, pop_size, n_generations, cxpb, mutpb, run, folds, y_train=None, y_test=None
-):
-    """
-    Verify for and load a previously saved run result for the given parameters.
-
-    :param output_dir: base Feature_Analysis output directory
-    :param csv_path: dataset CSV path
-    :param pop_size: population size
-    :param n_generations: number of generations
-    :param cxpb: crossover probability
-    :param mutpb: mutation probability
-    :param run: run index
-    :param folds: CV folds
-    :param y_train: training labels (optional, used to compute test_frac)
-    :param y_test: testing labels (optional, used to compute test_frac)
-    :return: tuple (result or None, state_id or None)
-    """
-
-    try:  # Wrap full function logic to ensure production-safe execution
-        try:  # Attempt to verify for cached run result
-            n_train = len(y_train) if y_train is not None else 0  # Get number of training samples
-            n_test = len(y_test) if y_test is not None else 0  # Get number of test samples
-            test_frac = (
-                float(n_test) / float(n_train + n_test) if (n_train + n_test) > 0 else None
-            )  # Calculate test fraction
-            state_id = compute_state_id(
-                csv_path or "", pop_size, n_generations, cxpb, mutpb, run, folds, test_frac=test_frac
-            )  # Compute state id for the run
-            if CONFIG["execution"]["resume_progress"] and state_id is not None:  # If resume is enabled and state_id exists
-                prev = load_run_result(output_dir, state_id)  # Load previous run result
-                if prev:  # If previous result exists
-                    try:  # Try to log the cached result message
-                        verbose_output(
-                            f"{BackgroundColors.GREEN}Found cached run result for run {run} (state id {state_id[:8]}). Skipping execution.{Style.RESET_ALL}"
-                        )  # Output cached result message
-                    except Exception:  # If logging fails
-                        pass  # Do nothing
-                    return prev, state_id  # Return the cached result and state_id
-        except Exception:  # If any error occurs during verifying
-            pass  # Do nothing
-
-        return None, None  # Return None for both result and state_id
-    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
-        print(str(e))  # Print error to terminal for server logs
-        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
-        raise  # Re-raise to preserve original failure semantics
+def load_cached_run_if_any(output_dir, csv_path, pop_size, n_generations, cxpb, mutpb, run, folds, y_train=None, y_test=None):
+    state_id = compute_state_id(csv_path or "", pop_size, n_generations, cxpb, mutpb, run, folds)
+    if CONFIG["execution"]["resume_progress"] and state_id:
+        previous = load_run_result(output_dir, state_id)
+        if previous is not None:
+            random.setstate(previous["random_state"])
+            np.random.set_state(previous["numpy_state"])
+            print(f"[GA] Recovered completed run {run} ({state_id[:8]})", flush=True)
+            return previous, state_id
+    return None, state_id
 
 
 def attr_bool() -> int:
@@ -2217,18 +2169,8 @@ def setup_genetic_algorithm(n_features, population_size=None, pool=None):
         toolbox.register("mutate", tools.mutFlipBit, indpb=0.05)  # Mutation operator
         toolbox.register("select", tools.selNSGA2)  # Selection operator using NSGA-II for multi-objective Pareto-based optimization
 
-        if pool is None:  # If no external pool was provided, create one
-            with global_state_lock:  # Thread-safe read of CPU_PROCESSES
-                cpu_procs = CPU_PROCESSES  # Read CPU_PROCESSES value
-            if cpu_procs is None:  # If CPU_PROCESSES is not set
-                pool = multiprocessing.Pool(initializer=init_pool_process_name, initargs=(CURRENT_RUNTIME_PROCESS_NAME,))  # Create a multiprocessing pool with all available CPUs
-            else:  # If CPU_PROCESSES is set
-                pool = multiprocessing.Pool(
-                    processes=cpu_procs,
-                    initializer=init_pool_process_name,
-                    initargs=(CURRENT_RUNTIME_PROCESS_NAME,),
-                )  # Create a multiprocessing pool with specified number of CPUs
-        toolbox.register("map", pool.map)  # Register parallel map for fitness evaluation
+        # The sweep owns the executor; no hidden pool in standalone setup.
+        toolbox.ga_executor = pool
 
         population = toolbox.population(n=population_size)  # Create the initial population
         hof = tools.HallOfFame(1)  # Hall of Fame to store the best individual
@@ -2249,7 +2191,7 @@ def instantiate_estimator(estimator_cls=None):
     """
     
     try:
-        n_jobs_config = CONFIG.get("genetic_algorithm", {}).get("multiprocessing", {}).get("n_jobs", -1)  # Get n_jobs from config with default -1
+        n_jobs_config = resolve_n_jobs()  # Get n_jobs from config with default -1
 
         if estimator_cls is None:  # If no estimator class provided by caller
             return RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=n_jobs_config)  # Return default RandomForest
@@ -2435,11 +2377,14 @@ def evaluate_feature_mask_holdout(X_train_sel, y_train, estimator_cls, mask_tupl
         )  # Split training data into train/validation folds avoiding test-set leakage
         model = instantiate_estimator(estimator_cls)  # Instantiate the model for holdout evaluation
         model.fit(X_train_fold, y_train_fold)  # Fit on train fold
+        if hasattr(model, "n_jobs"):
+            model.n_jobs = 1  # Keep probability accumulation in original serial order.
         y_pred = model.predict(X_val_fold)  # Predict on validation fold (NOT test set)
         acc, prec, rec, f1, fpr, fnr = compute_fold_metrics(y_val_fold, y_pred)  # Compute all six classification metrics for holdout validation
         result = acc, prec, rec, f1, fpr, fnr, 0, 0, 0, 0, 0, 0, num_features_selected  # Validation metrics as CV, placeholder test values, with feature count
-        with fitness_cache_lock:  # Thread-safe cache write
-            fitness_cache[mask_tuple] = result  # Cache the result for this mask
+        if estimator_cls is None and (GA_FITNESS_ID is not None or GA_WORKER_DATA is not None):
+            with fitness_cache_lock:
+                fitness_cache[mask_tuple] = result
         return result  # Return the holdout evaluation result
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
@@ -2473,7 +2418,7 @@ def evaluate_feature_mask(
         mask_tuple = tuple(feature_mask)  # Convert feature mask to tuple for hashing
         
         with fitness_cache_lock:  # Thread-safe cache access
-            if mask_tuple in fitness_cache:  # Verify if already evaluated
+            if estimator_cls is None and (GA_FITNESS_ID is not None or GA_WORKER_DATA is not None) and mask_tuple in fitness_cache:  # Scoped standard RF cache only
                 return fitness_cache[mask_tuple]  # Return cached result
 
         mask = np.array(feature_mask, dtype=bool)  # Create boolean mask from feature mask
@@ -2483,7 +2428,16 @@ def evaluate_feature_mask(
 
         try:  # Try to create StratifiedKFold splits
             skf = StratifiedKFold(n_splits=n_cv_folds, shuffle=True, random_state=42)  # n_cv_folds-fold Stratified CV
-            splits = list(skf.split(X_train_sel, y_train))  # Generate splits
+            global GA_CV_SPLITS
+            if GA_FITNESS_ID is not None or GA_WORKER_DATA is not None:
+                if GA_CV_SPLITS is None:
+                    splits = list(skf.split(X_train_sel, y_train))
+                    if sum(train.nbytes + val.nbytes for train, val in splits) <= 512 * 1024**2:
+                        GA_CV_SPLITS = splits
+                else:
+                    splits = GA_CV_SPLITS
+            else:
+                splits = list(skf.split(X_train_sel, y_train))
         except Exception as e:  # If StratifiedKFold fails (e.g., too few samples per class)
             print(
                 f"{BackgroundColors.YELLOW}Warning: StratifiedKFold failed ({type(e).__name__}: {str(e)}), using simple holdout validation on training data only.{Style.RESET_ALL}"
@@ -2496,8 +2450,9 @@ def evaluate_feature_mask(
 
         if early_stop_triggered:  # When early stopping triggers, return worst-case fitness
             result = 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1, 1, num_features_selected  # Worst possible scores with feature count
-            with fitness_cache_lock:  # Thread-safe cache write
-                fitness_cache[mask_tuple] = result  # Cache the worst-case result for this mask
+            if estimator_cls is None and (GA_FITNESS_ID is not None or GA_WORKER_DATA is not None):
+                with fitness_cache_lock:
+                    fitness_cache[mask_tuple] = result
             return result  # Return the worst-case result due to early stopping
 
         means = np.mean(metrics[:fold_count], axis=0) if fold_count > 0 else np.zeros(6)  # Calculate means for completed folds only
@@ -2507,8 +2462,9 @@ def evaluate_feature_mask(
 
         result = acc, prec, rec, f1, fpr, fnr, test_acc, test_prec, test_rec, test_f1, test_fpr, test_fnr, num_features_selected  # Prepare result tuple with feature count
         
-        with fitness_cache_lock:  # Thread-safe cache write
-            fitness_cache[mask_tuple] = result  # Cache the result
+        if estimator_cls is None and (GA_FITNESS_ID is not None or GA_WORKER_DATA is not None):
+            with fitness_cache_lock:
+                fitness_cache[mask_tuple] = result
         
         return result  # Return vectorized average metrics with feature count for multi-objective optimization
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
@@ -2560,7 +2516,12 @@ def evaluate_feature_mask_with_test(feature_mask, X_train, y_train, X_test, y_te
         if sum(feature_mask) == 0:  # If no features are selected
             return 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1, 1  # Return worst possible scores
 
-        cv_result = evaluate_feature_mask(feature_mask, X_train, y_train, estimator_cls)  # Get CV metrics from the standard feature mask evaluation function (only 4 params)
+        mask_key = tuple(feature_mask)
+        cv_result = GA_STORE.get(mask_key) if GA_STORE is not None and estimator_cls is None else None
+        if cv_result is None:
+            cv_result = evaluate_feature_mask(feature_mask, X_train, y_train, estimator_cls)
+            if GA_STORE is not None and estimator_cls is None:
+                GA_STORE.put(mask_key, cv_result)
         cv_acc, cv_prec, cv_rec, cv_f1, cv_fpr, cv_fnr = cv_result[:6]  # Extract CV metrics
 
         mask = np.array(feature_mask, dtype=bool)  # Create boolean mask from feature mask
@@ -2569,6 +2530,8 @@ def evaluate_feature_mask_with_test(feature_mask, X_train, y_train, X_test, y_te
 
         model = instantiate_estimator(estimator_cls)  # Instantiate model
         model.fit(X_train_sel, y_train)  # Train on full training set
+        if hasattr(model, "n_jobs"):
+            model.n_jobs = 1
         y_pred_test = model.predict(X_test_sel)  # Predict on test set
 
         test_acc = accuracy_score(y_test, y_pred_test)  # Calculate test accuracy
@@ -2585,27 +2548,11 @@ def evaluate_feature_mask_with_test(feature_mask, X_train, y_train, X_test, y_te
 
 
 def load_generation_state(output_dir, state_id):
-    """
-    Load generation state if present, returning the payload or None.
-
-    :param output_dir: base output directory
-    :param state_id: deterministic id for run
-    :return: payload dict or None
-    """
-    
-    try:
-        try:  # Attempt to load the generation state
-            gen_path, _ = state_file_paths(output_dir, state_id)  # Get the path for the generation state file
-            if not verify_filepath_exists(gen_path):  # Verify if the file exists
-                return None  # Return None if file does not exist
-            with open(gen_path, "rb") as f:  # Open the file for reading in binary mode
-                return pickle.load(f)  # Deserialize and return the payload
-        except Exception:  # If any error occurs during loading
-            return None  # Return None to indicate failure
-    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
-        print(str(e))  # Print error to terminal for server logs
-        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
-        raise  # Re-raise to preserve original failure semantics
+    path, _ = state_file_paths(output_dir, state_id)
+    if not os.path.isfile(path):
+        return None
+    with open(path, "rb") as stream:
+        return pickle.load(stream)
 
 
 def recreate_population_from_lists(toolbox, pop_lists):
@@ -2638,95 +2585,39 @@ def recreate_population_from_lists(toolbox, pop_lists):
         raise  # Re-raise to preserve original failure semantics
 
 
-def load_and_apply_generation_state(toolbox, population, output_dir, state_id, run=None):
-    """
-    Load a saved GA generation state and apply it to the provided population.
-
-    :param toolbox: DEAP toolbox used to recreate individuals
-    :param population: population list to modify in-place
-    :param output_dir: directory where generation state files live
-    :param state_id: deterministic id for the run state
-    :param run: optional run index for logging
-    :return: tuple (start_gen:int, fitness_history:list)
-    """
-    
-    try:
-        start_gen = 1  # Initialize starting generation to 1
-        fitness_history = []  # Initialize fitness history as empty list
-        if CONFIG["execution"]["resume_progress"] and state_id is not None:  # Verify if resume is enabled and state_id is provided
-            try:  # Attempt to load and apply the state
-                payload = load_generation_state(output_dir, state_id)  # Load the generation state payload
-                if payload:  # If payload exists
-                    pop_lists = payload.get("population_lists")  # Get the population lists from payload
-                    if pop_lists:  # If population lists exist
-                        recreated = recreate_population_from_lists(toolbox, pop_lists)  # Recreate population from lists
-                        if recreated:  # If recreation succeeded
-                            population[:] = recreated  # Replace the population with recreated one
-
-                        fitness_history_raw = payload.get("fitness_history", [])  # Get fitness history from payload
-                        if isinstance(fitness_history_raw, dict):  # If new format (dict with extended history)
-                            fitness_history = fitness_history_raw  # Use as-is
-                        elif isinstance(fitness_history_raw, list):  # If old format (list of F1 scores only)
-                            fitness_history = {"best_f1": fitness_history_raw}  # Convert to dict format for backward compatibility
-                        else:  # If unexpected format
-                            fitness_history = {}  # Initialize as empty dict
-
-                    loaded_gen = int(payload.get("gen", 0))  # Get the loaded generation number
-                    start_gen = loaded_gen + 1 if loaded_gen >= 1 else 1  # Set start_gen to loaded_gen + 1 or 1
-                    try:  # Try to log the resume message
-                        verbose_output(
-                            f"{BackgroundColors.GREEN}Resuming GA from generation {start_gen} for run {run} (state id {state_id[:8]}){Style.RESET_ALL}"
-                        )  # Output resume message
-                    except Exception:  # If logging fails
-                        pass  # Do nothing
-            except Exception:  # If any error occurs during loading/applying
-                pass  # Do nothing
-
-        return start_gen, fitness_history  # Return the starting generation and fitness history (dict or empty)
-    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
-        print(str(e))  # Print error to terminal for server logs
-        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
-        raise  # Re-raise to preserve original failure semantics
+def load_and_apply_generation_state(toolbox, population, output_dir, state_id, run=None, hof=None):
+    if not CONFIG["execution"]["resume_progress"] or not state_id:
+        return 1, {}
+    payload = load_generation_state(output_dir, state_id)
+    if payload is None:
+        return 1, {}
+    def restore(saved):
+        bits, fitness = saved
+        individual = creator.Individual(bits)
+        if fitness:
+            individual.fitness.values = fitness
+        return individual
+    population[:] = [restore(saved) for saved in payload["population"]]
+    if hof is not None:
+        hof.clear()
+        if payload["hof"] is not None:
+            hof.insert(restore(payload["hof"]))
+    random.setstate(payload["random_state"])
+    np.random.set_state(payload["numpy_state"])
+    start = payload["gen"] + 1
+    print(f"[GA] Recovered generation {payload['gen']} for run {run}; next={start}", flush=True)
+    return start, payload["history"]
 
 
 def save_generation_state(output_dir, state_id, gen, population, hof_best, history_data):
-    """
-    Persist minimal generation state to disk (lists only) including extended history data.
-
-    :param output_dir: base output directory
-    :param state_id: deterministic id for run
-    :param gen: generation number
-    :param population: list of individuals
-    :param hof_best: best individual list or None
-    :param history_data: dict containing all history metrics (best_f1, best_features, etc.) or list for backward compatibility
-    :return: None
-    """
-    
-    try:
-        try:  # Attempt to save the generation state
-            gen_path, _ = state_file_paths(output_dir, state_id)  # Get the path for the generation state file
-
-            if isinstance(history_data, dict):  # If new format (extended history)
-                fitness_history_to_save = history_data  # Save the full dict
-            elif isinstance(history_data, list):  # If old format (just F1 scores)
-                fitness_history_to_save = {"best_f1": history_data}  # Wrap in dict for consistency
-            else:  # If unexpected format
-                fitness_history_to_save = {}  # Save empty dict
-
-            payload = {  # Prepare the payload dictionary
-                "gen": int(gen),  # Current generation number
-                "population_lists": [list(ind) for ind in population],  # List of population individuals as lists
-                "hof_best": list(hof_best) if hof_best is not None else None,  # Best individual from hall of fame
-                "fitness_history": fitness_history_to_save,  # Extended history data (dict format)
-            }  # End of payload dictionary
-            with open(gen_path, "wb") as f:  # Open the file for writing in binary mode
-                pickle.dump(payload, f, protocol=CONFIG["genetic_algorithm"]["caching"]["pickle_protocol"])  # Serialize and save the payload
-        except Exception:  # If any error occurs during saving
-            pass  # Do nothing
-    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
-        print(str(e))  # Print error to terminal for server logs
-        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
-        raise  # Re-raise to preserve original failure semantics
+    path, _ = state_file_paths(output_dir, state_id)
+    def pack(ind):
+        return list(ind), tuple(ind.fitness.values)
+    payload = {"gen": int(gen), "population": [pack(ind) for ind in population],
+               "hof": pack(hof_best) if hof_best is not None else None,
+               "history": history_data, "random_state": random.getstate(),
+               "numpy_state": np.random.get_state()}
+    atomic_pickle(path, payload, CONFIG["genetic_algorithm"]["caching"]["pickle_protocol"])
 
 
 def compute_population_aggregate_metrics(population):
@@ -2930,76 +2821,43 @@ def build_ga_history_data_dict(fitness_history, best_features_history, avg_f1_hi
 
 
 def evaluate_feature_masks_verbose(invalid_feature_masks, toolbox, run=None, runs=None, gen=None, n_generations=None, pop_size=None):
-    """
-    Evaluate feature masks (binary selection vectors) sequentially with a tqdm progress bar (verbose mode only).
+    """Common evaluation path for both logging modes; completion order is not GA order."""
+    verbose = CONFIG.get("execution", {}).get("verbose", False)
+    context = f"[GA][RUN {run}/{runs}][GEN {gen}/{n_generations}][POP {pop_size}]"
+    total = len(invalid_feature_masks)
+    completed_count = 0
+    recovered_count = 0
+    with tqdm(total=total, desc=context + " Evaluating masks", unit="mask", disable=not verbose, leave=False) as bar:
+        def cached(mask):
+            if GA_FITNESS_ID is None:
+                return None  # No cross-batch reuse without a verified sweep identity.
+            result = fitness_cache.get(mask)
+            if result is None and GA_STORE is not None:
+                result = GA_STORE.get(mask)
+                if result is not None:
+                    fitness_cache[mask] = result
+            return result
 
-    :param invalid_feature_masks: List of DEAP Individual instances (feature masks) with invalid fitness.
-    :param toolbox: DEAP toolbox with the registered evaluate operator.
-    :param run: Current run index for structured logging context.
-    :param runs: Total number of runs for structured logging context.
-    :param gen: Current generation index for structured logging context.
-    :param n_generations: Total number of generations for structured logging context.
-    :param pop_size: Population size for structured logging context.
-    :return: List of fitness tuples in the same order as invalid_feature_masks.
-    """
+        def save(mask, result):
+            if GA_STORE is not None:
+                GA_STORE.put(mask, result)
+            fitness_cache[mask] = result
 
-    eval_bar = None  # Initialize progress bar reference before try block for safe cleanup
+        def completed(mask, fit, count, recovered):
+            nonlocal completed_count, recovered_count
+            completed_count += count
+            recovered_count += count if recovered else 0
+            bar.update(count)
+            if verbose:
+                print(f"{context}[MASKS {completed_count}/{total}] "
+                      f"{'Recovered' if recovered else 'Computed'} mask={''.join(map(str, mask))} "
+                      f"fitness={fit[0]} selected_features={-fit[1]} requests={count}", flush=True)
 
-    try:
-        run_label = f"{run}" if run is not None else "?"  # Format run index for structured log label, use ? when unavailable
-        runs_label = f"{runs}" if runs is not None else "?"  # Format total runs for structured log label, use ? when unavailable
-        gen_label = f"{gen}" if gen is not None else "?"  # Format generation index for structured log label, use ? when unavailable
-        gens_label = f"{n_generations}" if n_generations is not None else "?"  # Format total generations for structured log label, use ? when unavailable
-        pop_label = f"{pop_size}" if pop_size is not None else "?"  # Format population size for structured log label, use ? when unavailable
-        total_batch = len(invalid_feature_masks)  # Total number of masks in this evaluation batch
-
-        try:  # Attempt to initialize tqdm progress bar for feature mask evaluation tracking
-            eval_bar = tqdm(
-                total=total_batch,
-                desc=f"[GA][RUN {run_label}/{runs_label}][GEN {gen_label}/{gens_label}][POP {pop_label}][MASKS 0/{total_batch}] Evaluating feature masks batch",
-                unit="mask",
-                leave=False,
-                dynamic_ncols=True,
-            )  # Create tqdm progress bar with structured GA context for per-generation feature mask evaluation
-        except Exception:  # If tqdm initialization fails for any reason
-            eval_bar = None  # Disable progress bar and fall back to plain sequential evaluation
-
-        results = []  # Accumulate fitness results in input order
-
-        total_masks = total_batch  # Reuse pre-computed total masks count for per-mask progress display
-
-        for idx, feature_mask in enumerate(invalid_feature_masks, start=1):  # Iterate with index to report current/total
-            fit = toolbox.evaluate(feature_mask)  # Evaluate feature mask and obtain fitness tuple via registered evaluator
-            results.append(fit)  # Append fitness result to ordered results list
-
-            try:  # Try to extract F1 and feature count from returned fitness tuple safely
-                f1_val = fit[0] if (hasattr(fit, "__len__") and len(fit) > 0) else None  # Extract F1 when available at index 0
-            except Exception:  # On any extraction error
-                f1_val = None  # Fallback to None when F1 cannot be extracted
-
-            try:  # Try to extract feature count from returned fitness tuple safely
-                n_features_val = -int(fit[1]) if (hasattr(fit, "__len__") and len(fit) > 1) else None  # Extract positive feature count from negative second element
-            except Exception:  # On any extraction error
-                n_features_val = None  # Fallback to None when feature count cannot be extracted
-
-            f1_display = f"{f1_val}" if f1_val is not None else "N/A"  # Format F1 for display, use N/A when missing
-            feat_display = f"{n_features_val}" if n_features_val is not None else "N/A"  # Format feature count for display, use N/A when missing
-
-            verbose_output(f"[GA][RUN {run_label}/{runs_label}][GEN {gen_label}/{gens_label}][MASK {idx}/{total_masks}] Fitness evaluated -> fitness={f1_display}, selected_features={feat_display}, population={pop_label}", "")  # Output structured debug line with full GA context when verbose is enabled
-
-            if eval_bar is not None:  # If progress bar was successfully initialized
-                eval_bar.update(1)  # Advance progress bar by one completed feature mask
-
-        if eval_bar is not None:  # If progress bar was created
-            eval_bar.close()  # Close and release progress bar resources
-
-        return results  # Return ordered list of fitness tuples for assignment to feature masks
-    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
-        if eval_bar is not None:  # If progress bar is still open during exception
-            eval_bar.close()  # Close progress bar before propagating the exception
-        print(str(e))  # Print error to terminal for server logs
-        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
-        raise  # Re-raise to preserve original failure semantics
+        executor = getattr(toolbox, "ga_executor", None)
+        evaluator = ga_worker_evaluate if executor is not None else toolbox.ga_metrics
+        results = evaluate_batch(invalid_feature_masks, evaluator, cached, save, completed, executor)
+    print(f"{context} completed={total}, recovered={recovered_count}, unique={len(set(map(tuple, invalid_feature_masks)))}", flush=True)
+    return results
 
 
 def create_and_evaluate_offspring(population, toolbox, cxpb, mutpb, run=None, runs=None, gen=None, n_generations=None, pop_size=None):
@@ -3024,8 +2882,6 @@ def create_and_evaluate_offspring(population, toolbox, cxpb, mutpb, run=None, ru
         invalid_feature_masks = [feature_mask for feature_mask in offspring if not feature_mask.fitness.valid]  # Filter to only feature masks needing evaluation
 
         if invalid_feature_masks:  # If there are feature masks to evaluate
-            verbose = CONFIG.get("execution", {}).get("verbose", False) if CONFIG else False  # Read verbose flag from global config
-
             run_label = f"{run}" if run is not None else "?"  # Format run index for structured evaluation log label
             runs_label = f"{runs}" if runs is not None else "?"  # Format total runs for structured evaluation log label
             gen_label = f"{gen}" if gen is not None else "?"  # Format generation index for structured evaluation log label
@@ -3034,10 +2890,7 @@ def create_and_evaluate_offspring(population, toolbox, cxpb, mutpb, run=None, ru
             n_invalid = len(invalid_feature_masks)  # Number of feature masks requiring fitness evaluation this generation
             verbose_output(f"[GA][RUN {run_label}/{runs_label}][GEN {gen_label}/{gens_label}][POP {pop_label}][MASKS {n_invalid}/{n_invalid}] Evaluating feature masks batch | config: generations={gens_label}, runs={runs_label}, pop_size={pop_label}", "")  # Emit structured evaluation batch log with GA configuration snapshot when verbose is enabled
 
-            if verbose:  # If verbose mode is enabled, use sequential evaluation with progress bar
-                invalid_fits = evaluate_feature_masks_verbose(invalid_feature_masks, toolbox, run=run, runs=runs, gen=gen, n_generations=n_generations, pop_size=pop_size)  # Evaluate feature masks sequentially with tqdm progress bar and structured GA context
-            else:  # If verbose mode is disabled, use parallel map unchanged
-                invalid_fits = list(toolbox.map(toolbox.evaluate, invalid_feature_masks))  # Evaluate only invalid feature masks in parallel
+            invalid_fits = evaluate_feature_masks_verbose(invalid_feature_masks, toolbox, run=run, runs=runs, gen=gen, n_generations=n_generations, pop_size=pop_size)
 
             for feature_mask, fit in zip(invalid_feature_masks, invalid_fits):  # Assign fitness to evaluated feature masks
                 feature_mask.fitness.values = fit  # Set the fitness value
@@ -3111,7 +2964,7 @@ def evaluate_telegram_progress_milestone(gen, n_generations, telegram_enabled, s
         raise  # Re-raise to preserve original failure semantics
 
 
-def setup_ga_loop_state(toolbox, population, X_train, y_train, csv_path, pop_size, n_generations, cxpb, mutpb, run):
+def setup_ga_loop_state(toolbox, population, X_train, y_train, csv_path, pop_size, n_generations, cxpb, mutpb, run, hof=None):
     """
     Register the GA fitness evaluator, read early-stop and fold configuration, resolve the output
     directory, compute a deterministic state ID, optionally restore a generation checkpoint, and
@@ -3137,6 +2990,7 @@ def setup_ga_loop_state(toolbox, population, X_train, y_train, csv_path, pop_siz
         fitness_func = partial(
             evaluate_feature_mask, X_train=X_train, y_train=y_train
         )  # Partial function for feature mask evaluation
+        toolbox.ga_metrics = fitness_func
         toolbox.register("evaluate", partial(ga_fitness, fitness_func=fitness_func))  # Register the global fitness function
 
         early_stop_gens = CONFIG.get("genetic_algorithm", {}).get("early_stop", {}).get("generations", 10)  # Read configured early-stop patience from config
@@ -3149,7 +3003,7 @@ def setup_ga_loop_state(toolbox, population, X_train, y_train, csv_path, pop_siz
         start_gen = 1  # Starting generation index (overridden if checkpoint found)
 
         start_gen, loaded_history = load_and_apply_generation_state(
-            toolbox, population, output_dir, state_id, run=run
+            toolbox, population, output_dir, state_id, run=run, hof=hof
         )  # Load and apply saved generation state if available, updating start generation and history
 
         fitness_history, best_features_history, avg_f1_history, avg_features_history, pareto_size_history, hypervolume_history, diversity_history = initialize_ga_history_lists(loaded_history)  # Initialize seven per-generation history lists from loaded state (or empty)
@@ -3331,14 +3185,9 @@ def persist_generation_state_if_needed(
     :return: None
     """
 
-    try:  # Persist per-generation progress so runs can be resumed (every N gens to reduce I/O)
-        if CONFIG["execution"]["resume_progress"] and state_id is not None and (gen % CONFIG["execution"]["progress_save_interval"] == 0 or gen == n_generations):  # Use configured interval
-            current_history_data = build_ga_history_data_dict(fitness_history, best_features_history, avg_f1_history, avg_features_history, pareto_size_history, hypervolume_history, diversity_history)  # Build consolidated history for state persistence
-            save_generation_state(
-                output_dir, state_id, gen, population, hof[0] if hof and len(hof) > 0 else None, current_history_data
-            )  # Write checkpoint to disk
-    except Exception:  # If saving fails
-        pass  # Do nothing
+    if CONFIG["execution"]["resume_progress"] and state_id:
+        history = build_ga_history_data_dict(fitness_history, best_features_history, avg_f1_history, avg_features_history, pareto_size_history, hypervolume_history, diversity_history)
+        save_generation_state(output_dir, state_id, gen, population, hof[0] if hof else None, history)
 
 
 def update_global_generation_count(gen):
@@ -3536,12 +3385,6 @@ def finalize_generation_and_notify(
     gens_ran = update_global_generation_count(gen)  # Record completed generation count in gens_ran and the global counter
     gens_ran = gen if gens_ran == 0 else gens_ran  # Preserve gens_ran when the loop did not execute any generation
 
-    persist_generation_state_if_needed(
-        output_dir, state_id, gen, n_generations, population, hof,
-        fitness_history, best_features_history, avg_f1_history,
-        avg_features_history, pareto_size_history, hypervolume_history, diversity_history,
-    )  # Checkpoint generation state to disk at configured intervals to enable resume
-
     return gens_ran, last_telegram_block  # Return updated generation counter and last Telegram notification block
 
 
@@ -3613,7 +3456,7 @@ def run_genetic_algorithm_loop(
             hypervolume_history,
             diversity_history,
         ) = setup_ga_loop_state(
-            toolbox, population, X_train, y_train, csv_path, pop_size, n_generations, cxpb, mutpb, run
+            toolbox, population, X_train, y_train, csv_path, pop_size, n_generations, cxpb, mutpb, run, hof=hof
         )  # Register fitness function, read config, resolve output dir, load checkpoint, init history lists
 
         gen_range, telegram_enabled, telegram_progress_pct, last_telegram_block = build_generation_iteration_params(
@@ -3623,7 +3466,16 @@ def run_genetic_algorithm_loop(
         global GA_GENERATIONS_COMPLETED  # To track completed generations
         best_fitness = None  # Track the best fitness value
         gens_without_improvement = 0  # Counter for generations with no improvement
-        gens_ran = 0  # Track how many generations were actually executed
+        gens_ran = start_gen - 1
+        if CONFIG["execution"]["resume_progress"] and state_id and start_gen == 1:
+            save_generation_state(output_dir, state_id, 0, population, None, {})
+        for previous_f1 in fitness_history:
+            if best_fitness is None or previous_f1 > best_fitness:
+                best_fitness, gens_without_improvement = previous_f1, 0
+            else:
+                gens_without_improvement += 1
+        if gens_without_improvement > 0 and gens_without_improvement >= early_stop_gens:
+            gen_range = ()  # Previously completed early-stop generation.
 
         for gen in gen_range:  # Loop for the specified number of generations
             (
@@ -3655,6 +3507,11 @@ def run_genetic_algorithm_loop(
                 current_best_fitness_f1, best_fitness, gens_without_improvement, early_stop_gens, gen
             )  # Evaluate early-stop condition and update best fitness tracking
 
+            persist_generation_state_if_needed(
+                output_dir, state_id, gen, n_generations, population, hof,
+                fitness_history, best_features_history, avg_f1_history, avg_features_history,
+                pareto_size_history, hypervolume_history, diversity_history,
+            )
             if should_stop:  # If early stopping was triggered
                 gens_ran = gen  # Record how many generations were executed before early stopping
                 with global_state_lock:  # Thread-safe update
@@ -4262,53 +4119,15 @@ def generate_convergence_plots(
 
 
 def save_run_result(output_dir, state_id, result):
-    """
-    Save a completed run result so future identical runs can be skipped.
-
-    :param output_dir: base output directory
-    :param state_id: deterministic id for run
-    :param result: serializable run result
-    :return: None
-    """
-    
-    try:
-        try:  # Attempt to save the run result
-            _, run_path = state_file_paths(output_dir, state_id)  # Get the path for the run state file
-            with open(run_path, "wb") as f:  # Open the file for writing in binary mode
-                pickle.dump(result, f, protocol=CONFIG["genetic_algorithm"]["caching"]["pickle_protocol"])  # Serialize and save the result
-        except Exception:  # If any error occurs during saving
-            pass  # Do nothing
-    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
-        print(str(e))  # Print error to terminal for server logs
-        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
-        raise  # Re-raise to preserve original failure semantics
+    _, path = state_file_paths(output_dir, state_id)
+    payload = dict(result, best_ind=list(result["best_ind"]), random_state=random.getstate(), numpy_state=np.random.get_state())
+    atomic_pickle(path, payload, CONFIG["genetic_algorithm"]["caching"]["pickle_protocol"])
 
 
 def cleanup_state_for_id(output_dir, state_id):
-    """
-    Remove progress files for a finished run/generation (best-effort).
-
-    :param output_dir: base output directory
-    :param state_id: deterministic id for run
-    :return: None
-    """
-    
-    try:
-        try:  # Attempt to clean up state files
-            gen_path, run_path = state_file_paths(output_dir, state_id)  # Get paths for generation and run state files
-            for p in (gen_path, run_path):  # Iterate over the file paths
-                try:  # Safe delete without exists() verify to avoid TOCTOU
-                    os.remove(p)  # Try to remove the file directly
-                except FileNotFoundError:  # File already gone
-                    pass  # Success - file doesn't exist
-                except Exception:  # Any other error
-                    pass  # Best-effort, ignore
-        except Exception:  # If any error occurs during cleanup
-            pass  # Do nothing
-    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
-        print(str(e))  # Print error to terminal for server logs
-        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
-        raise  # Re-raise to preserve original failure semantics
+    # Keep the completed run; remove only its intermediate generation file.
+    gen_path, _ = state_file_paths(output_dir, state_id)
+    Path(gen_path).unlink(missing_ok=True)
 
 
 def dispatch_convergence_plots(history_data, csv_path, pop_size, run, dataset_name, n_generations, cxpb, mutpb):
@@ -4528,25 +4347,9 @@ def extract_selected_features(best_ind, feature_names):
 
 
 def cache_iteration_result_if_resumable(output_dir, state_id, result):
-    """
-    Persist the completed iteration result and clean up intermediate state files when resume-progress is enabled.
-
-    Writes the final run result dict via save_run_result and removes the generation-level
-    checkpoint via cleanup_state_for_id.  All failures are silently swallowed to prevent
-    caching errors from aborting GA execution.
-
-    :param output_dir: Directory where result and checkpoint files are stored.
-    :param state_id: Deterministic run identifier used in file names.
-    :param result: Completed run result dict to persist.
-    :return: None
-    """
-
-    try:  # Try to save run result
-        if CONFIG["execution"]["resume_progress"] and state_id is not None:  # If resume is enabled and state_id exists
-            save_run_result(output_dir, state_id, result)  # Save the run result
-            cleanup_state_for_id(output_dir, state_id)  # Cleanup state files
-    except Exception:  # On any saving error
-        pass  # Do nothing
+    if CONFIG["execution"]["resume_progress"] and state_id:
+        save_run_result(output_dir, state_id, result)
+        cleanup_state_for_id(output_dir, state_id)
 
 
 def finalize_and_cache_iteration_result(best_ind, feature_names, metrics, iteration_start_time, history_data, gens_ran, csv_path, pop_size, run, dataset_name, n_generations, cxpb, mutpb, output_dir, state_id):
@@ -7341,35 +7144,27 @@ def log_sweep_start(dataset_name, min_pop, max_pop, n_generations, runs):
         raise  # Re-raise to preserve original failure semantics
 
 
-def create_sweep_results_and_pool(min_pop, max_pop):
-    """
-    Initialise the per-population results dictionary and create the shared multiprocessing pool.
-
-    Creates one entry in the results dict for every population size in [min_pop, max_pop],
-    then spawns a multiprocessing pool sized according to the current CPU_PROCESSES value.
-
-    :param min_pop: Minimum population size (inclusive lower bound of the sweep range).
-    :param max_pop: Maximum population size (inclusive upper bound of the sweep range).
-    :return: Tuple of (results, shared_pool) where results is the initialised dict and
-             shared_pool is the ready-to-use multiprocessing.Pool instance.
-    """
-
-    try:
-        results = {}  # Dictionary to hold results per population size
-
-        for p in range(min_pop, max_pop + 1):  # For each population size in the sweep range
-            results[p] = {"runs": [], "avg_metrics": None, "common_features": set()}  # Initialise results entry with empty run list and metrics placeholders
-
-        with global_state_lock:  # Thread-safe read of CPU_PROCESSES
-            cpu_procs = CPU_PROCESSES  # Read CPU_PROCESSES value
-
-        shared_pool = multiprocessing.Pool(processes=cpu_procs if cpu_procs else None, initializer=init_pool_process_name, initargs=(CURRENT_RUNTIME_PROCESS_NAME,))  # Create a shared multiprocessing pool for parallel GA runs
-
-        return results, shared_pool  # Return initialised results and pool
-    except Exception as e:  # Catch any exception to ensure logging and Telegram alert
-        print(str(e))  # Print error to terminal for server logs
-        send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
-        raise  # Re-raise to preserve original failure semantics
+def create_sweep_results_and_pool(min_pop, max_pop, data, scratch):
+    global GA_ACTIVE_WORKERS
+    results = {p: {"runs": [], "avg_metrics": None, "common_features": set()} for p in range(min_pop, max_pop + 1)}
+    with global_state_lock:
+        requested = CPU_PROCESSES
+    available = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else (os.cpu_count() or 1)
+    if requested is not None and requested < 1:
+        raise ValueError("--cpu-processes must be positive")
+    if os.name == "nt":  # ProcessPoolExecutor Windows limit.
+        available = min(available, 61)
+    GA_ACTIVE_WORKERS = min(requested or available, available, max_pop)
+    print(f"[GA] Mask workers={GA_ACTIVE_WORKERS}, RF n_jobs={resolve_n_jobs()}, verbose={CONFIG['execution']['verbose']}", flush=True)
+    if GA_ACTIVE_WORKERS == 1:
+        return results, None
+    x_path, y_path = Path(scratch) / "X.npy", Path(scratch) / "y.npy"
+    np.save(x_path, data[0], allow_pickle=False)
+    np.save(y_path, data[2], allow_pickle=False)
+    executor = ProcessPoolExecutor(max_workers=GA_ACTIVE_WORKERS,
+        mp_context=multiprocessing.get_context("spawn"), initializer=ga_worker_init,
+        initargs=(CONFIG, CURRENT_RUNTIME_PROCESS_NAME, str(x_path), str(y_path), ga_software_identity()))
+    return results, executor
 
 
 def execute_sweep_iteration_loop(
@@ -7464,22 +7259,8 @@ def execute_sweep_iteration_loop(
 
 
 def close_shared_pool_safely(shared_pool):
-    """
-    Attempt to cleanly shut down a multiprocessing pool, swallowing all errors.
-
-    Calls close() then join() on the pool for a graceful shutdown.  Any exception
-    (e.g. pool already closed, workers still running) is silently ignored to ensure
-    best-effort cleanup that never propagates failures to the caller.
-
-    :param shared_pool: The multiprocessing.Pool instance to shut down.
-    :return: None
-    """
-
-    try:  # Close the shared pool after all GA iterations are complete
-        shared_pool.close()  # Signal no more work will be submitted
-        shared_pool.join()  # Wait for all workers to finish
-    except Exception:  # If closing the pool fails (e.g., if it was already closed or if an error occurred)
-        pass  # Best-effort cleanup
+    if shared_pool is not None:
+        shared_pool.shutdown(wait=True, cancel_futures=True)
 
 
 def generate_sweep_visualization_artifacts(results, csv_path, dataset_name, min_pop, max_pop, n_generations, cxpb, mutpb, feature_names):
@@ -7567,6 +7348,7 @@ def run_population_sweep(
     try:
         runs = log_sweep_start(dataset_name, min_pop, max_pop, n_generations, runs)  # Resolve run count, log start, clear cache, send Telegram start notification
 
+        source_digest = file_digest(csv_path)
         data = prepare_sweep_data(csv_path, dataset_name, min_pop, max_pop, n_generations, runs)  # Prepare dataset
         if data is None:  # If preparation failed
             return {}  # Exit early
@@ -7579,40 +7361,62 @@ def run_population_sweep(
             min_pop, max_pop, n_generations, runs, progress_bar, folds=folds
         )  # Compute progress state for tracking
 
-        results, shared_pool = create_sweep_results_and_pool(min_pop, max_pop)  # Initialise per-population results dict and shared multiprocessing pool
+        global GA_FITNESS_ID, GA_RUN_ID, GA_STORE, GA_CV_SPLITS, GA_ACTIVE_WORKERS
+        if file_digest(csv_path) != source_digest:
+            raise RuntimeError("Source CSV changed during dataset preparation; restart the sweep")
+        GA_FITNESS_ID, GA_RUN_ID = ga_sweep_identity(data, csv_path)
+        GA_RUN_ID = identity(GA_RUN_ID, min_pop, max_pop, runs, n_generations, cxpb, mutpb)
+        GA_CV_SPLITS = None
+        state_dir = Path(resolve_ga_output_dir(csv_path)) / CONFIG["genetic_algorithm"]["progress"]["state_dir_name"]
+        state_dir.mkdir(parents=True, exist_ok=True)
+        start_run_time = time.perf_counter()
+        # Use an exclusive sweep lock: prevent concurrent coordinators overwriting the same checkpoints.
+        from filelock import FileLock
+        try:
+            with FileLock(str(state_dir / "ga-sweep.lock"), timeout=0):
+                if CONFIG["execution"]["resume_progress"] and CONFIG["genetic_algorithm"]["caching"]["enabled"]:
+                    GA_STORE = FitnessStore(state_dir / f"fitness-{GA_FITNESS_ID}.sqlite3")
+                with tempfile.TemporaryDirectory(prefix="ga-worker-", dir=state_dir) as scratch:
+                    results, shared_pool = create_sweep_results_and_pool(min_pop, max_pop, data, scratch)
+                    try:
+                        execute_sweep_iteration_loop(
+                            runs, min_pop, max_pop, n_generations, cxpb, mutpb,
+                            X_train, y_train, X_test, y_test, feature_names,
+                            dataset_name, csv_path, folds, progress_bar, progress_state,
+                            shared_pool, results,
+                        )
+                    finally:
+                        close_shared_pool_safely(shared_pool)
+                GA_ACTIVE_WORKERS = 1  # No mask workers remain during final export/training.
+                best_score, best_result, best_metrics, results = aggregate_sweep_results(
+                    results, min_pop, max_pop, dataset_name
+                )  # Aggregate results and find best
 
-        start_run_time = time.perf_counter()  # Start timing the entire sweep (includes loop, aggregation, and visualisation)
+                generate_sweep_visualization_artifacts(
+                    results, csv_path, dataset_name, min_pop, max_pop, n_generations, cxpb, mutpb, feature_names
+                )  # Generate comparison table, multi-run comparison plots, and feature usage charts
 
-        execute_sweep_iteration_loop(
-            runs, min_pop, max_pop, n_generations, cxpb, mutpb,
-            X_train, y_train, X_test, y_test, feature_names,
-            dataset_name, csv_path, folds, progress_bar, progress_state,
-            shared_pool, results,
-        )  # Run all GA iterations across every (run, pop_size) combination
+                elapsed_run_time = time.perf_counter() - start_run_time  # Calculate elapsed time for the entire run process
 
-        close_shared_pool_safely(shared_pool)  # Cleanly shut down the shared multiprocessing pool
+                if best_result:  # If a best result was found
+                    finalize_sweep_best_result(
+                        best_result, best_metrics, feature_names, X_train, y_train, X_test, y_test,
+                        csv_path, n_generations, cxpb, mutpb, elapsed_run_time,
+                    )  # Process best result: print summary, save results, and run analysis
+                else:  # If no valid result was found
+                    print(f"{BackgroundColors.RED}No valid results found during the sweep.{Style.RESET_ALL}")
 
-        best_score, best_result, best_metrics, results = aggregate_sweep_results(
-            results, min_pop, max_pop, dataset_name
-        )  # Aggregate results and find best
+                send_telegram_message(TELEGRAM_BOT, [f"Population sweep completed for {dataset_name}"])  # Send completion message
 
-        generate_sweep_visualization_artifacts(
-            results, csv_path, dataset_name, min_pop, max_pop, n_generations, cxpb, mutpb, feature_names
-        )  # Generate comparison table, multi-run comparison plots, and feature usage charts
+                return results  # Return the results dictionary
+        finally:
+            if GA_STORE is not None:
+                GA_STORE.close()
+            GA_STORE = None
+            GA_FITNESS_ID = GA_RUN_ID = GA_CV_SPLITS = GA_ACTIVE_WORKERS = None
+            fitness_cache.clear()
 
-        elapsed_run_time = time.perf_counter() - start_run_time  # Calculate elapsed time for the entire run process
 
-        if best_result:  # If a best result was found
-            finalize_sweep_best_result(
-                best_result, best_metrics, feature_names, X_train, y_train, X_test, y_test,
-                csv_path, n_generations, cxpb, mutpb, elapsed_run_time,
-            )  # Process best result: print summary, save results, and run analysis
-        else:  # If no valid result was found
-            print(f"{BackgroundColors.RED}No valid results found during the sweep.{Style.RESET_ALL}")
-
-        send_telegram_message(TELEGRAM_BOT, [f"Population sweep completed for {dataset_name}"])  # Send completion message
-
-        return results  # Return the results dictionary
     except Exception as e:  # Catch any exception to ensure logging and Telegram alert
         print(str(e))  # Print error to terminal for server logs
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram
@@ -7851,7 +7655,7 @@ def initialize_run_ga_config(config, csv_path):
             CONFIG = get_default_config()  # Use defaults
 
         with global_state_lock:  # Thread-safe initialization
-            if CPU_PROCESSES is None or CPU_PROCESSES == 1:  # If not initialized or default
+            if config is not None or CPU_PROCESSES is None:  # Refresh explicit config
                 CPU_PROCESSES = CONFIG["genetic_algorithm"]["multiprocessing"]["cpu_processes"]  # Set from config
 
         if csv_path is None:  # If no path provided
