@@ -7,7 +7,6 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import numpy as np
-import pandas.io.formats.style
 import torch
 import wgangp as wg
 

@@ -5,7 +5,6 @@ from types import SimpleNamespace
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
-import pandas.io.formats.style
 import wgangp as wg
 
 

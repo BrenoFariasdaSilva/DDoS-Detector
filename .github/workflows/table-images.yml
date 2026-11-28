@@ -5,6 +5,7 @@ on:
     paths:
       - 'utils/table_images.py'
       - 'tests/test_table_images.py'
+      - 'tests/test_styler_imports.py'
       - 'Makefile'
       - 'requirements.txt'
       - '*.py'
@@ -13,6 +14,7 @@ on:
     paths:
       - 'utils/table_images.py'
       - 'tests/test_table_images.py'
+      - 'tests/test_styler_imports.py'
       - 'Makefile'
       - 'requirements.txt'
       - '*.py'
@@ -47,5 +49,6 @@ jobs:
           DDOS_TEST_MANAGED_BROWSER: '1'
         run: |
           if [[ "$RUNNER_OS" == Windows ]]; then PY=venv/Scripts/python.exe; else PY=venv/bin/python; fi
+          "$PY" -m unittest discover -s tests -p test_styler_imports.py -v
           "$PY" -m unittest discover -s tests -p test_table_images.py -v
           "$PY" -m utils.table_images

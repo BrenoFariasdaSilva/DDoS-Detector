@@ -8,7 +8,6 @@ from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
-import pandas.io.formats.style
 import torch
 from sklearn.preprocessing import LabelEncoder
 

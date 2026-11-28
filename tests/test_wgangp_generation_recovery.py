@@ -9,7 +9,6 @@ from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
-import pandas.io.formats.style  # Load pandas' optional style namespace for wgangp's annotations.
 import torch
 import yaml
 from sklearn.preprocessing import LabelEncoder
