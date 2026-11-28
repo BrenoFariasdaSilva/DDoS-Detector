@@ -1,0 +1,31 @@
+name: GA execution regression
+on:
+  push:
+    paths: ['genetic_algorithm.py', 'utils/ga_execution.py', 'tests/test_ga_execution.py', 'requirements.txt', '.github/workflows/ga-execution.yml']
+  pull_request:
+    paths: ['genetic_algorithm.py', 'utils/ga_execution.py', 'tests/test_ga_execution.py', 'requirements.txt', '.github/workflows/ga-execution.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  regression:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install pinned GA dependencies
+        run: |
+          python -m venv venv
+          venv/bin/python -c 'from pathlib import Path; names={"numpy","pandas","scikit-learn","scipy","joblib","threadpoolctl","deap","matplotlib","seaborn","colorama","python-dotenv","python-telegram-bot","httpx","pyyaml","psutil","tqdm","setproctitle","filelock","jinja2","pillow"}; Path("venv/ga-requirements.txt").write_text("\n".join(line for line in Path("requirements.txt").read_text().splitlines() if line.split("==",1)[0].lower() in names)+"\n")'
+          venv/bin/python -m pip install --no-user -r venv/ga-requirements.txt
+      - name: Verify full module import and regression tests
+        env:
+          MPLBACKEND: Agg
+          OPENBLAS_NUM_THREADS: '1'
+          OMP_NUM_THREADS: '1'
+        run: |
+          venv/bin/python -c 'import genetic_algorithm'
+          venv/bin/python -m unittest discover -s tests -p test_ga_execution.py -v
