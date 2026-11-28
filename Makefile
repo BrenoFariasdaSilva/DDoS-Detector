@@ -1,6 +1,13 @@
 # Variables
 VENV := venv
-OS := $(shell uname 2>/dev/null || echo Windows)
+ifeq ($(OS),Windows_NT)
+	OS := Windows
+else
+	OS := $(shell uname 2>/dev/null || echo Windows)
+endif
+ifneq ($(filter MINGW% MSYS% CYGWIN%,$(OS)),)
+	OS := Windows
+endif
 
 # Detect correct Python and Pip commands based on OS
 ifeq ($(OS), Windows) # Windows
@@ -154,11 +161,12 @@ wgangp: dependencies
 $(VENV):
 	@echo "Creating virtual environment..."
 	$(PYTHON_CMD) -m venv $(VENV)
-	$(PYTHON) -m pip install --upgrade pip
+	"$(PYTHON)" -m pip install --no-user --upgrade pip
 
 dependencies: $(VENV)
 	@echo "Installing/Updating Python dependencies..."
-	$(PIP) install -r requirements.txt
+	"$(PYTHON)" -m pip install --no-user -r requirements.txt
+	"$(PYTHON)" -m utils.table_images
 
 # Run code quality checks: syntax, lint, and type checking
 check-build: dependencies
