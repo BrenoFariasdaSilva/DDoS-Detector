@@ -334,7 +334,15 @@ Available via Cygwin, MSYS2, or WSL.
    make dependencies
    ```
 
-   This command will create a virtual environment in the `.venv` folder and install all required dependencies listed in the `requirements.txt` file.
+   This command creates the project virtual environment in `venv/`, installs the pinned Python dependencies in that environment, and automatically provisions and checks Chromium for table-image exports. Every existing Make execution target uses this dependency setup; no separate `playwright install chromium` command is required.
+
+   **Automatic table-image setup (Linux, macOS and Windows):** the shared renderer uses the active virtual environment's interpreter and stores Playwright-managed browser binaries in `venv/playwright-browsers/`. A real headless screenshot verifies the installed revision before an experiment starts. If it is missing or incompatible, the setup installs the matching Chromium version. Concurrent experiments serialize browser installation with a file lock. On Linux, missing system libraries are installed when the process has root or non-interactive sudo access. No password prompt is attempted by detached jobs.
+
+   When a browser download or system-library installation is restricted, a working system Chromium/Chrome/Edge is tried; otherwise the verified browser-free PNG renderer preserves the displayed table values, headers and row striping (CSS-specific styling may differ). If a browser stops working during a run, the exporter automatically switches to the browser-free renderer. The PNG is validated and atomically replaces its destination only after successful rendering. CSV/model generation and experiment settings are unchanged.
+
+   Direct invocations such as `venv/bin/python pca.py` (Windows: `venv\Scripts\python.exe pca.py`) also check rendering before computation; imported exporters check lazily. For supported operating systems and browser networking requirements, see [Playwright's browser documentation](https://playwright.dev/python/docs/browsers). Browser setup cannot bypass network restrictions, administrator policy, insufficient disk space or unsupported operating systems. Other project dependencies retain their existing platform requirements.
+
+   The rendering setup can be independently verified using `venv/bin/python -m utils.table_images` (Windows: `venv\Scripts\python.exe -m utils.table_images`). Regression tests run with `venv/bin/python -m unittest discover -s tests -p test_table_images.py -v`. The portability workflow checks managed Chromium installation and PNG exports in clean Linux, macOS and Windows virtual environments.
 
 Download supported benchmark datasets:
 

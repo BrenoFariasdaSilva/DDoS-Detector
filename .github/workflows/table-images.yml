@@ -1,0 +1,51 @@
+name: Table image portability
+
+on:
+  push:
+    paths:
+      - 'utils/table_images.py'
+      - 'tests/test_table_images.py'
+      - 'Makefile'
+      - 'requirements.txt'
+      - '*.py'
+      - '.github/workflows/table-images.yml'
+  pull_request:
+    paths:
+      - 'utils/table_images.py'
+      - 'tests/test_table_images.py'
+      - 'Makefile'
+      - 'requirements.txt'
+      - '*.py'
+      - '.github/workflows/table-images.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  render:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install only the project's pinned rendering dependencies
+        shell: bash
+        run: |
+          python -m venv venv
+          if [[ "$RUNNER_OS" == Windows ]]; then PY=venv/Scripts/python.exe; else PY=venv/bin/python; fi
+          "$PY" -c 'from pathlib import Path; names={"playwright","pandas","pillow","matplotlib","beautifulsoup4","filelock","jinja2"}; lines=Path("requirements.txt").read_text().splitlines(); Path("venv/rendering-requirements.txt").write_text("\n".join(line for line in lines if line.split("==",1)[0].lower() in names)+"\n")'
+          "$PY" -m pip install --no-user -r venv/rendering-requirements.txt
+      - name: Test first-run installation, real PNG output and fallback
+        shell: bash
+        env:
+          DDOS_TEST_MANAGED_BROWSER: '1'
+        run: |
+          if [[ "$RUNNER_OS" == Windows ]]; then PY=venv/Scripts/python.exe; else PY=venv/bin/python; fi
+          "$PY" -m unittest discover -s tests -p test_table_images.py -v
+          "$PY" -m utils.table_images
