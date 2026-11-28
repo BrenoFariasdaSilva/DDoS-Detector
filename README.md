@@ -470,3 +470,38 @@ The default `stacking.memory_management.reuse_combined_preprocessing: true` avoi
 - Disk storage increases during execution; check available space on the spill filesystem, including space for one original snapshot, one candidate population, one run split, one active augmented matrix pair, transient feature arrays and model artifacts. Initial CSV preprocessing/concatenation still requires memory. Memory mapping reduces anonymous allocations but does not impose a hard RSS or swap limit.
 
 The existing `stacking-full` command is unchanged. For regression testing, run `OMP_NUM_THREADS=1 venv/bin/python -m unittest discover -s tests -p 'test_stacking_combined_data_reuse.py' -v`.
+
+### Genetic Algorithm parallelism and recovery
+
+`--cpu-processes N` controls concurrent feature-mask evaluations, independently of
+`--verbose`. Each worker uses one Random Forest job and one native numerical-library
+thread when `N > 1`. With `--cpu-processes 1`, `--n-jobs` controls RF tree training
+parallelism. The worker count is fixed for a sweep (the resource monitor can suggest
+counts for subsequent sweeps); it is capped by the available logical CPUs and largest
+population. Start conservatively and monitor physical memory: model allocations remain
+private to each worker. The training arrays are shared through read-only memory maps.
+For example, `--cpu-processes 6 --n-jobs 1 --verbose --no-monitor` evaluates up to six
+unique masks simultaneously without changing the fixed 100-tree estimator, CV splits,
+fitness objectives or evolutionary operators.
+
+With resume and caching enabled, `ga_progress/fitness-*.sqlite3` commits each completed
+unique mask, including all CV metrics. Cache identities include dataset content, ordered
+features, prepared training data, CV/early-stop settings and software versions/source.
+Results are assigned in original mask order even when workers complete out of order.
+Each generation (including generation zero and the early-stop generation) is atomically
+checkpointed with population fitness, Hall of Fame, histories and Python/NumPy RNG
+states. Completed run checkpoints remain on disk. Compatible recovery may change worker
+counts or verbosity; changing scientific settings or source/dependency versions creates
+new checkpoint identities. Legacy checkpoint and split-cache files are intentionally
+not reused: they lack sufficient identity/state metadata. No legacy files are deleted.
+`--no-resume` disables durable mask and generation/run recovery, and the caching config
+controls the persistent fitness cache. Do not edit the source CSV or upgrade the
+software while a sweep runs. The existing unseeded initial evolutionary randomness is
+unchanged; resume restores the actual prior state rather than choosing a new seed.
+
+The temporary `ga-worker-*` directory contains shared training arrays and is normally
+removed on orderly pool shutdown. A hard kill can leave it behind; remove such a
+scratch directory only after all workers using it have exited. Do not delete the SQLite
+fitness cache or compatible checkpoint files when resuming. Runtime estimates depend on
+unique uncached masks, resource contention and the dataset; no specific speedup or
+bitwise agreement across different library/hardware versions is guaranteed.
