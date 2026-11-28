@@ -72,6 +72,7 @@ import multiprocessing  # For parallel fitness evaluation
 import numpy as np  # For numerical operations
 import os  # For running a command in the terminal
 import pandas as pd  # For data manipulation
+from pandas.io.formats.style import Styler  # Explicit import: pandas loads this namespace lazily
 import pickle  # For caching preprocessed data
 import platform  # For getting the operating system name
 import random  # For random number generation
@@ -7714,7 +7715,7 @@ def row_style_for_zebra(row):
     return [f"background-color: {bg};" for _ in row.index]  # Return style for every column in the row
 
 
-def apply_zebra_style(df: pd.DataFrame) -> pd.io.formats.style.Styler:
+def apply_zebra_style(df: pd.DataFrame) -> Styler:
     """
     Apply zebra-striping style to a DataFrame using pandas Styler.
 
@@ -7725,7 +7726,7 @@ def apply_zebra_style(df: pd.DataFrame) -> pd.io.formats.style.Styler:
     try:
         styled = df.style.apply(row_style_for_zebra, axis=1)  # Apply zebra function row-wise using top-level function
         styled = styled.set_table_attributes('style="border-collapse:collapse; width:100%;"')  # Tight table style
-        styled = cast(pd.io.formats.style.Styler, cast(Any, styled).set_properties(**{"border": "1px solid #ddd", "padding": "6px"}))  # Cell padding/border (cast to Any to satisfy typing)
+        styled = cast(Styler, cast(Any, styled).set_properties(**{"border": "1px solid #ddd", "padding": "6px"}))  # Cell padding/border (cast to Any to satisfy typing)
         return styled  # Return the styled object
     except Exception as e:
         print(str(e))  # Print error for visibility
@@ -7733,7 +7734,7 @@ def apply_zebra_style(df: pd.DataFrame) -> pd.io.formats.style.Styler:
         raise  # Propagate error to caller
 
 
-def export_dataframe_image(styled_df: pd.io.formats.style.Styler, output_path: Union[str, Path]):
+def export_dataframe_image(styled_df: Styler, output_path: Union[str, Path]):
     """
     Export a pandas Styler to a PNG image using the shared table-image renderer.
 

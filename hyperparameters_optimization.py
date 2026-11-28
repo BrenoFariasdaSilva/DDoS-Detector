@@ -67,6 +67,7 @@ import multiprocessing  # For parallel execution of non-n_jobs classifiers
 import numpy as np  # For numerical operations
 import os  # For running a command in the terminal
 import pandas as pd  # For data manipulation
+from pandas.io.formats.style import Styler  # Explicit import: pandas loads this namespace lazily
 import platform  # For getting the operating system name
 import psutil  # RAM and CPU core info
 import re  # For regular expressions
@@ -3936,7 +3937,7 @@ def calculate_execution_time(start_time, finish_time=None):
         raise
 
 
-def apply_zebra_style(df: pd.DataFrame) -> pd.io.formats.style.Styler:
+def apply_zebra_style(df: pd.DataFrame) -> Styler:
     """
     Apply zebra-striping style to a DataFrame using pandas Styler.
 
@@ -3958,7 +3959,7 @@ def apply_zebra_style(df: pd.DataFrame) -> pd.io.formats.style.Styler:
         raise  # Propagate exception (no silent failures)
 
 
-def export_dataframe_image(styled_df: pd.io.formats.style.Styler, output_path: Union[str, Path]):
+def export_dataframe_image(styled_df: Styler, output_path: Union[str, Path]):
     """
     Export a pandas Styler to a PNG image using the shared table-image renderer.
 
