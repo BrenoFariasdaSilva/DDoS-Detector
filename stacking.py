@@ -74,13 +74,12 @@ import concurrent.futures  # For parallel execution
 import copy  # For isolating per-run configuration without mutating caller state
 from contextlib import contextmanager  # For scoped cache file locking across threads and processes
 import ctypes  # For configuring Linux feature workers to terminate with their coordinator
-import dataframe_image as dfi  # For exporting DataFrame styled tables as PNG images
+from utils.table_images import preflight_table_images, render_table_image  # Shared venv-local browser setup and PNG export
 import datetime  # For getting the current date and time
 import fcntl  # For coordinating stacking artifact loads and atomic replacements on Linux
 import gc  # For explicit garbage collection to reclaim memory from deleted objects
 import glob  # For file pattern matching
 import hashlib  # Build stable digests for compact classifier metadata
-import importlib  # Import importlib for dynamic module import
 import json  # Import json for handling JSON strings within the CSV
 import lightgbm as lgb  # For LightGBM model
 import math  # For mathematical operations
@@ -5093,81 +5092,9 @@ def apply_zebra_style(df):
         raise  # Propagate exception without swallowing
 
 
-def is_playwright_installed() -> bool:
-    """
-    Verify if Playwright package is importable.
-
-    :return: Boolean indicating whether Playwright is installed.
-    """
-
-    try:  # Attempt dynamic import of Playwright to verify installation
-        importlib.import_module("playwright")  # Try to import the Playwright package
-        return True  # Return True when Playwright is importable
-    except Exception:  # Handle import failure gracefully
-        return False  # Return False when Playwright is not available
-
-
-def install_playwright_if_missing() -> None:
-    """
-    Install Playwright package into the active Python interpreter when missing.
-
-    :return: None
-    """
-
-    try:  # Wrap installation attempt in try/except to avoid interrupting pipeline
-        if is_playwright_installed():  # Verify if Playwright already installed
-            return  # Return early when Playwright is already present
-
-        subprocess.run([sys.executable, "-m", "pip", "install", "playwright"], check=False)  # Install Playwright using the active interpreter
-        return  # Return after attempting installation
-    except Exception as e:  # Handle any errors during Playwright installation
-        print(str(e))  # Print the exception string for diagnostics
-        try:  # Attempt to notify via Telegram if configured
-            send_exception_via_telegram(type(e), e, e.__traceback__)  # Send exception via Telegram hook
-        except Exception:  # Swallow any Telegram send errors silently
-            pass  # No-op when Telegram notification fails
-
-
-def install_playwright_chromium() -> None:
-    """
-    Install Playwright Chromium browser using the current Python interpreter.
-
-    :return: None
-    """
-
-    try:  # Attempt to install Chromium using Playwright module invocation
-        subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=False)  # Invoke Playwright install via the active interpreter
-        return  # Return after attempting Chromium installation
-    except Exception as e:  # Handle installation errors without raising
-        print(str(e))  # Print the exception string for diagnostics
-        try:  # Attempt to notify via Telegram if configured
-            send_exception_via_telegram(type(e), e, e.__traceback__)  # Send exception via Telegram hook
-        except Exception:  # Swallow any Telegram send errors silently
-            pass  # No-op when Telegram notification fails
-
-
-def ensure_playwright_chromium() -> None:
-    """
-    Ensure Playwright and Chromium are installed for PNG exports.
-
-    :return: None
-    """
-
-    try:  # Orchestrate Playwright installation steps safely
-        install_playwright_if_missing()  # Install Playwright into the active interpreter when needed
-        install_playwright_chromium()  # Install Chromium via Playwright using the active interpreter
-        return  # Return after attempting orchestration
-    except Exception as e:  # Handle unexpected orchestration errors gracefully
-        print(str(e))  # Print the exception string for diagnostics
-        try:  # Attempt to notify via Telegram if configured
-            send_exception_via_telegram(type(e), e, e.__traceback__)  # Send exception via Telegram hook
-        except Exception:  # Swallow any Telegram send errors silently
-            pass  # No-op when Telegram notification fails
-
-
 def export_dataframe_image(styled_df, output_path):
     """
-    Export a pandas Styler object to a PNG file using dataframe_image.
+    Export a pandas Styler object to a PNG file using the shared table-image renderer.
 
     :param styled_df: pandas Styler object to export
     :param output_path: Path to PNG file to write
@@ -5183,8 +5110,7 @@ def export_dataframe_image(styled_df, output_path):
         if not os.access(str(parent), os.W_OK):  # Verify write permission on parent
             raise PermissionError(f"Directory not writable: {parent}")  # Raise if not writable
 
-        ensure_playwright_chromium()  # Ensure Playwright Chromium is installed before exporting PNG
-        dfi.export(styled_df, str(out_path))  # Use dataframe_image to export styled DataFrame to PNG
+        render_table_image(styled_df, out_path)  # Shared verified PNG export
         return  # Return None explicitly
     except Exception:
         raise  # Propagate any exception (do not swallow)
@@ -8778,7 +8704,7 @@ def save_shap_summary_and_bar_plots(shap_values_summary, X_test_sampled, feature
                 plt.title(f"Mean absolute SHAP magnitude across {output_count} outputs")  # Document macro output aggregation on the summary plot.
             summary_plot_path = os.path.join(output_dir, f"{dataset_name}_{model_name}_shap_summary.png")  # Build summary plot file path
             plt.tight_layout()  # Adjust layout for tight fit
-            ensure_playwright_chromium()  # Ensure Playwright Chromium is installed before saving PNG
+
             ensure_figure_min_4k_and_save(fig=plt.gcf(), path=summary_plot_path, dpi=300, bbox_inches='tight')  # Save with minimum 4K resolution
             plt.close()  # Close summary figure
         except Exception:  # If summary plot generation fails
@@ -8793,7 +8719,7 @@ def save_shap_summary_and_bar_plots(shap_values_summary, X_test_sampled, feature
                 plt.title(f"Mean absolute SHAP magnitude across {output_count} outputs")  # Document macro output aggregation on the bar plot.
             bar_plot_path = os.path.join(output_dir, f"{dataset_name}_{model_name}_shap_bar.png")  # Build bar plot file path
             plt.tight_layout()  # Adjust layout for tight fit
-            ensure_playwright_chromium()  # Ensure Playwright Chromium is installed before saving PNG
+
             ensure_figure_min_4k_and_save(fig=plt.gcf(), path=bar_plot_path, dpi=300, bbox_inches='tight')  # Save with minimum 4K resolution
             plt.close()  # Close bar figure
         except Exception:  # If bar plot generation fails
@@ -9000,7 +8926,7 @@ def generate_lime_explanations(model, X_test, y_test, feature_names, output_dir,
                     fig = explanation.as_pyplot_figure()  # Get matplotlib figure
                     explanation_plot_path = os.path.join(output_dir, f"{dataset_name}_{model_name}_lime_instance_{idx}.png")  # Build plot path
                     plt.tight_layout()  # Adjust layout
-                    ensure_playwright_chromium()  # Ensure Playwright Chromium is installed before saving PNG
+
                     ensure_figure_min_4k_and_save(fig=plt.gcf(), path=explanation_plot_path, dpi=300, bbox_inches='tight')  # Save plot
                     plt.close()  # Close plot
                 except Exception:  # If plot save fails
@@ -23674,6 +23600,8 @@ def main(config=None):
     :param config: Configuration dictionary (uses global CONFIG if None)
     :return: None
     """
+    if __name__ == "__main__":
+        preflight_table_images()  # Verify image output before expensive computation.
     
     normal_completion = False  # Track whether the program reached successful explainability finalization.
     retention_lock = acquire_model_retention_session_lock(exclusive=False)

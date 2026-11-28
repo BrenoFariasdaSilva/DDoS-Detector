@@ -56,7 +56,7 @@ if __name__ in {"__main__", "__mp_main__"}:
 import argparse  # For command-line argument parsing
 import atexit  # For playing a sound when the program finishes
 import concurrent.futures  # For parallel execution
-import dataframe_image as dfi  # For exporting DataFrame styled tables as PNG images
+from utils.table_images import preflight_table_images, render_table_image  # Shared venv-local browser setup and PNG export
 import datetime  # For timestamping
 import glob  # For file pattern matching
 import json  # For serializing hyperparameters and other metadata
@@ -1597,16 +1597,16 @@ def apply_zebra_style(df: pd.DataFrame) -> pd.io.formats.style.Styler:
 
 def export_dataframe_image(styled_df: pd.io.formats.style.Styler, output_path: Union[str, Path]):
     """
-    Export a pandas Styler to a PNG image using dataframe_image.
+    Export a pandas Styler to a PNG image using the shared table-image renderer.
 
     :param styled_df: pandas Styler to export
     :param output_path: Destination PNG file path
-    :raises: Propagates exceptions from dataframe_image (no silent failures)
+    :raises: Propagates genuine image-write failures after browser fallback
     """
     try:
         out_p = Path(output_path)  # Normalize output path to Path
         out_p.parent.mkdir(parents=True, exist_ok=True)  # Ensure parent directory exists
-        dfi.export(cast(Any, styled_df), str(out_p))  # Use dataframe_image to export styled DataFrame to PNG with cast to satisfy static typing
+        render_table_image(styled_df, out_p)  # Shared verified PNG export
     except Exception as e:
         print(str(e))  # Print export error for visibility
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Notify via Telegram about export failure
@@ -2410,6 +2410,8 @@ def main():
 
     :return: None.
     """
+    if __name__ == "__main__":
+        preflight_table_images()  # Verify image output before expensive computation.
     
     try:
         global CURRENT_RUNTIME_PROCESS_NAME  # Preserve one exact resolved runtime title for child-worker reuse

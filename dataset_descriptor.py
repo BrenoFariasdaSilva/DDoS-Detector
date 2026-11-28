@@ -63,7 +63,7 @@ if __name__ in {"__main__", "__mp_main__"}:
 
 import argparse  # For parsing CLI arguments
 import atexit  # For playing a sound when the program finishes
-import dataframe_image as dfi  # For exporting DataFrame as PNG images
+from utils.table_images import preflight_table_images, render_table_image  # Shared venv-local browser setup and PNG export
 import datetime  # For timestamping
 import gc  # For explicit garbage collection
 import math  # For ceiling division in batch count computation
@@ -3202,205 +3202,27 @@ def upscale_image_if_needed(path, fallback=False):
         pass  # Continue silently on upscale failures to preserve original behavior
 
 
-def attempt_matplotlib_export_fallback(styled_df, output_path, e_inner):
-    """
-    Attempt to export a styled DataFrame to PNG using pure matplotlib table rendering as a last-resort fallback.
-
-    :param styled_df: pandas.Styler or DataFrame object to render as a table image.
-    :param output_path: File system path where the rendered PNG will be written.
-    :param e_inner: Exception from the previous fallback attempt, or None when a prior method succeeded.
-    :return: None when export succeeded, or the last encountered exception when matplotlib rendering also failed.
-    """
-
-    if e_inner is None:  # Skip matplotlib fallback when a prior method already succeeded
-        return None  # Prior method succeeded; no further fallback is needed
-    try:  # Attempt pure matplotlib table rendering as the final deterministic fallback
-        try:  # Extract the underlying DataFrame from the Styler when possible
-            df_to_render = getattr(styled_df, "data", styled_df)  # Access the raw DataFrame from a Styler or use the object as-is
-        except Exception:  # Fall back to using styled_df directly when attribute access fails
-            df_to_render = styled_df  # Use the original styled_df when data extraction is unavailable
-        fig = plt.figure(figsize=(12, 8))  # Create a matplotlib figure sized for a readable table layout
-        ax = fig.add_subplot(111)  # Add a single subplot to host the table
-        ax.axis("off")  # Disable axes to produce a table-only image without borders or ticks
-        try:  # Build the table from DataFrame values and column labels directly
-            table = ax.table(cellText=list(df_to_render.values), colLabels=list(df_to_render.columns), loc='center')  # Construct the matplotlib table from the DataFrame
-        except Exception:  # Fall back to stringified values when direct construction fails
-            table = ax.table(cellText=[[str(x) for x in row] for row in df_to_render.values], colLabels=[str(c) for c in df_to_render.columns], loc='center')  # Build table with all values converted to strings
-        table.auto_set_font_size(False)  # Disable automatic font sizing for consistent appearance
-        table.set_fontsize(6)  # Set a small font size to fit large tables within the figure bounds
-        fig.tight_layout()  # Adjust the layout to fit the table within the figure area
-        fig.savefig(output_path, dpi=300)  # Save the rendered table to disk at 300 DPI
-        plt.close(fig)  # Close the figure immediately after saving to free memory
-        if verify_filepath_exists(output_path):  # Verify the output file was actually created on disk
-            print(f"{BackgroundColors.GREEN}[DEBUG] Exported image (matplotlib fallback): {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}")  # Log matplotlib fallback success
-            print(f"{BackgroundColors.GREEN}[INFO] Table image successfully saved to: {BackgroundColors.CYAN}{os.path.abspath(output_path)}{Style.RESET_ALL}")  # Log the absolute save path
-            return None  # Return None to signal matplotlib export succeeded
-        else:  # File not present after the save attempt indicates a silent failure
-            return RuntimeError("Matplotlib fallback failed to produce output file")  # Return explicit error for caller to raise
-    except Exception as _e_matplot:  # Capture any exception during matplotlib rendering for final re-raise
-        return _e_matplot  # Return exception to allow the caller to perform final error handling
-
-
-def attempt_chrome_export_fallback(styled_df, output_path, e_inner, export_kwargs, timeout_ms):
-    """
-    Attempt to export a styled DataFrame to PNG using Chrome as the table conversion engine.
-
-    :param styled_df: pandas.Styler object to export as a PNG image.
-    :param output_path: File system path where the exported PNG will be written.
-    :param e_inner: Exception from the previous Playwright attempt, or None when Playwright succeeded.
-    :param export_kwargs: Pre-built keyword arguments dict from which Chrome kwargs will be derived.
-    :param timeout_ms: Timeout in milliseconds to pass to the Chrome conversion engine.
-    :return: None when export succeeded, or the last encountered exception when the Chrome export failed.
-    """
-
-    if e_inner is None:  # Skip Chrome fallback when Playwright already succeeded
-        return None  # Playwright succeeded; no fallback needed
-    try:  # Attempt Chrome-based dataframe_image export as the first deterministic fallback
-        chrome_kwargs = dict(export_kwargs)  # Copy the existing kwargs to preserve all prior options
-        chrome_kwargs["table_conversion"] = "chrome"  # Override conversion engine to Chrome
-        chrome_kwargs["timeout"] = timeout_ms  # Pass the configured timeout to the Chrome conversion engine
-        dfi.export(styled_df, output_path, **chrome_kwargs)  # Attempt PNG export using Chrome conversion
-        print(f"{BackgroundColors.GREEN}[DEBUG] Exported image (chrome fallback): {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}")  # Log Chrome fallback export success
-        upscale_image_if_needed(output_path, fallback=True)  # Upscale exported image after Chrome fallback
-        print(f"{BackgroundColors.GREEN}[INFO] Table image successfully saved to: {BackgroundColors.CYAN}{os.path.abspath(output_path)}{Style.RESET_ALL}")  # Log absolute save path
-        return None  # Return None to signal Chrome export succeeded
-    except Exception as _e_chrome:  # Record Chrome fallback exception for downstream matplotlib fallback
-        return _e_chrome  # Return exception to allow caller to attempt matplotlib fallback
-
-
-def attempt_playwright_export_with_retry(styled_df, output_path, export_kwargs, timeout_ms):
-    """
-    Attempt to export a styled DataFrame to PNG using Playwright-based dataframe_image with bounded retries.
-
-    :param styled_df: pandas.Styler object to export as a PNG image.
-    :param output_path: File system path where the exported PNG will be written.
-    :param export_kwargs: Pre-built keyword arguments dict for dfi.export including table_conversion and timeout.
-    :param timeout_ms: Timeout in milliseconds used as the fallback kwargs timeout when signature inspection fails.
-    :return: None when export succeeded, or the last encountered exception when all attempts failed.
-    """
-
-    max_attempts = 5  # Define the maximum number of bounded Playwright export attempts
-    e_inner = None  # Track the last exception; None signals success
-    for attempt in range(1, max_attempts + 1):  # Retry up to max_attempts times to handle transient failures
-        try:  # Try exporting using dataframe_image with Playwright and configured kwargs
-            dfi.export(styled_df, output_path, **export_kwargs)  # Export styled DataFrame to PNG using dataframe_image
-            print(f"{BackgroundColors.GREEN}[DEBUG] Exported image: {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}")  # Log successful export for diagnostics
-            upscale_image_if_needed(output_path, fallback=False)  # Upscale exported image if below 4k
-            print(f"{BackgroundColors.GREEN}[INFO] Table image successfully saved to: {BackgroundColors.CYAN}{os.path.abspath(output_path)}{Style.RESET_ALL}")  # Log absolute save path
-            e_inner = None  # Clear last exception on success
-            break  # Exit retry loop after successful export
-        except TypeError:  # Handle dfi versions that raise TypeError for unexpected kwargs
-            try:  # Attempt fallback export using only the minimal supported kwargs
-                try:  # Inspect dfi.export signature to determine supported timeout parameter
-                    _params_fallback = set(signature(dfi.export).parameters.keys())  # Get set of supported parameter names
-                except Exception:  # If signature inspection fails, treat all params as unsupported
-                    _params_fallback = set()  # Use empty set as conservative fallback
-                kwargs_fb: dict[str, Any] = {"table_conversion": "playwright"}  # Build minimal fallback kwargs
-                if "timeout" in _params_fallback:  # Attach timeout only when supported
-                    kwargs_fb["timeout"] = timeout_ms  # Attach timeout using the supported parameter name
-                dfi.export(styled_df, output_path, **kwargs_fb)  # Retry export with minimal kwargs
-                print(f"{BackgroundColors.GREEN}[DEBUG] Exported image (fallback): {BackgroundColors.CYAN}{output_path}{Style.RESET_ALL}")  # Log fallback export success
-                upscale_image_if_needed(output_path, fallback=True)  # Upscale exported image after fallback
-                print(f"{BackgroundColors.GREEN}[INFO] Table image successfully saved to: {BackgroundColors.CYAN}{os.path.abspath(output_path)}{Style.RESET_ALL}")  # Log save path after fallback
-                e_inner = None  # Clear last exception on success
-                break  # Exit retry loop after successful fallback export
-            except Exception as _inner_e:  # Capture fallback exception for downstream retry/raise handling
-                e_inner = _inner_e  # Record inner fallback exception
-        except Exception as _e_export:  # Capture general export exceptions for potential retry
-            e_inner = _e_export  # Record exception for downstream retry/raise logic
-
-        try:  # Import Playwright TimeoutError for precise timeout detection
-            from playwright._impl._errors import TimeoutError as PlaywrightTimeoutError  # Import when available
-        except Exception:  # Disable precise detection when import fails
-            PlaywrightTimeoutError = None  # Set to None when import is unavailable
-
-        if PlaywrightTimeoutError is not None and isinstance(e_inner, PlaywrightTimeoutError):  # Playwright timeout detected
-            if attempt < max_attempts:  # Retry if attempts remain
-                time.sleep(0.5)  # Brief pause before retry to allow transient conditions to clear
-                print(f"{BackgroundColors.YELLOW}[WARNING] Playwright screenshot timeout, retrying export (attempt {attempt})...{Style.RESET_ALL}")  # Log retry
-                continue  # Retry the export
-            else:  # Max attempts exhausted; fall through to fallback strategy
-                pass  # No-op; allow fallback to execute after loop
-        else:  # Non-timeout exception; retry if attempts remain
-            if attempt < max_attempts:  # Retry if attempts remain
-                time.sleep(0.2)  # Brief pause before next retry
-                continue  # Retry the export
-            else:  # Attempts exhausted; fall through to fallback strategy
-                pass  # No-op; allow fallback to execute after loop
-
-    return e_inner  # Return None on success or the last exception on failure
-
-
-def load_tableau_image_config():
-    """
-    Load the configuration file, resolve the table image timeout, and build the base dataframe_image export kwargs.
-
-    :return: Tuple of (timeout_ms, export_kwargs) where timeout_ms is the configured timeout in milliseconds and export_kwargs is a dict pre-populated with the Playwright conversion option and timeout parameters.
-    """
-
-    cfg = load_config_file()  # Load configuration from config.yaml if present in the workspace
-    timeout_ms = int((cfg or {}).get("dataset_descriptor", {}).get("table_image_timeout_ms", 30000))  # Determine timeout in milliseconds using config value with hardcoded fallback
-    src = "config" if (cfg or {}).get("dataset_descriptor", {}).get("table_image_timeout_ms") is not None else "default"  # Identify whether the timeout came from config or the default value
-    print(f"{BackgroundColors.GREEN}[CONFIG] table_image_timeout_ms = {BackgroundColors.CYAN}{timeout_ms}{Style.RESET_ALL} (source: {src})")  # Log the active timeout value and its source with colored terminal output
-    export_kwargs: dict[str, Any] = {"table_conversion": "playwright"}  # Build base export kwargs with Playwright as the conversion engine
-    export_kwargs["timeout"] = timeout_ms  # Inject the configured timeout so Playwright receives the correct value
-    try:  # Inspect dfi.export signature to attach the matching screenshot timeout parameter name
-        params = set(signature(dfi.export).parameters.keys())  # Retrieve the set of parameter names supported by dfi.export
-        for _pname in ("screenshot_timeout", "timeout", "playwright_timeout", "playwright_screenshot_timeout"):  # Iterate candidate timeout parameter names from various dfi versions
-            if _pname in params:  # Verify whether this candidate is present in the detected parameter set
-                export_kwargs[_pname] = timeout_ms  # Attach the timeout using the first matching parameter name
-                break  # Stop after the first supported parameter to avoid conflicting kwargs
-    except Exception:  # Ignore signature inspection failures to preserve original behavior
-        pass  # Continue without explicit screenshot timeout when inspection is unavailable
-    return timeout_ms, export_kwargs  # Return the resolved timeout and fully built export kwargs dict
-
-
 def export_dataframe_image(styled_df, output_path):
-    """
-    Export a pandas.Styler to a PNG image using dataframe_image.
-
-    :param styled_df: pandas.Styler object to export
-    :param output_path: Path to write PNG image
-    :return: None
-    """
-
-    try:  # Wrap to ensure exceptions are handled and module logging conventions are preserved
-        timeout_ms, export_kwargs = load_tableau_image_config()  # Load config, resolve the table image timeout, and build Playwright export kwargs
-
-        e_inner = attempt_playwright_export_with_retry(styled_df, output_path, export_kwargs, timeout_ms)  # Attempt export with bounded Playwright retries and return last exception or None on success
-
-        if e_inner is not None:  # If last Playwright/dfi attempt failed and no success occurred
-            e_inner = attempt_chrome_export_fallback(styled_df, output_path, e_inner, export_kwargs, timeout_ms)  # Try Chrome as first deterministic fallback and update e_inner
-
-        if e_inner is not None:  # If both Playwright and chrome fallbacks failed, attempt matplotlib rendering as last resort
-            e_inner = attempt_matplotlib_export_fallback(styled_df, output_path, e_inner)  # Try matplotlib as final fallback and update e_inner
-
-        if e_inner is not None:  # If all methods failed, re-raise the last encountered exception to be handled by outer block
-            raise e_inner  # Re-raise last exception to preserve original outer logging and telemetry behavior
-    except Exception as e:  # If export fails, log warning and continue without crashing
-        try:  # Try to import Playwright-specific TimeoutError for precise detection
-            from playwright._impl._errors import TimeoutError as PlaywrightTimeoutError  # Optional import of Playwright TimeoutError for specific handling
-        except Exception:  # If import fails, ensure variable is defined for downstream verification logic
-            PlaywrightTimeoutError = None  # Set to None when Playwright TimeoutError cannot be imported
-        if PlaywrightTimeoutError is not None and isinstance(e, PlaywrightTimeoutError):  # Verify if exception is Playwright TimeoutError
-            print(f"{BackgroundColors.YELLOW}[WARNING] Playwright screenshot timeout while exporting {BackgroundColors.CYAN}{output_path}{BackgroundColors.YELLOW}: {e}{Style.RESET_ALL}")  # Warn when Playwright timeout occurs with colored output
-        else:  # General failure when not a Playwright TimeoutError
-            print(f"{BackgroundColors.YELLOW}[WARNING] Failed to export image {BackgroundColors.CYAN}{output_path}{BackgroundColors.YELLOW}: {e}{Style.RESET_ALL}")  # Warn for general export failures with colored output
-        try:  # Send exception trace via Telegram for observability
-            send_exception_via_telegram(type(e), e, e.__traceback__)  # Send full traceback via Telegram for remote debugging
-        except Exception:  # Ignore failures when sending Telegram notifications to avoid cascading errors
-            pass  # Ignore failures when sending Telegram notifications
-        return  # Return gracefully to avoid terminating the program
-    finally:  # Ensure multiprocessing and large object cleanup regardless of export outcome
-        try:  # Attempt explicit multiprocessing resource finalization to avoid leaked semaphores
-            finalize_multiprocessing_resources()  # Finalize active child processes and resource tracker state
-        except Exception:  # Ignore cleanup failures to preserve non-fatal export semantics
-            pass  # Continue gracefully when finalization fails
-        try:  # Attempt to release styled object reference as soon as export flow ends
-            del styled_df  # Delete styled DataFrame reference to reduce retained memory
-        except Exception:  # Ignore delete failures to preserve behavior
-            pass  # Continue gracefully when reference deletion fails
-        gc.collect()  # Trigger garbage collection after export cleanup
+    """Export a styled table with shared automatic browser setup and fallback."""
+    try:
+        cfg = load_config_file()
+        timeout_ms = int((cfg or {}).get("dataset_descriptor", {}).get("table_image_timeout_ms", 30000))
+        backend = render_table_image(styled_df, output_path, timeout_ms=timeout_ms)
+        upscale_image_if_needed(output_path, fallback=backend == "native")
+        print(f"[INFO] Table image successfully saved to: {os.path.abspath(output_path)}")
+    except Exception as e:
+        print(f"[WARNING] Failed to export image {output_path}: {e}")
+        try:
+            send_exception_via_telegram(type(e), e, e.__traceback__)
+        except Exception:
+            pass
+        raise
+    finally:
+        try:
+            finalize_multiprocessing_resources()
+        except Exception:
+            pass
+        gc.collect()
 
 
 def generate_table_image_from_dataframe(df, output_path, config: dict | None = None):
@@ -4052,6 +3874,8 @@ def main():
 
     :return: None.
     """
+    if __name__ == "__main__":
+        preflight_table_images()  # Verify image output before expensive computation.
 
     try:  # Wrap full function logic to ensure production-safe monitoring
 

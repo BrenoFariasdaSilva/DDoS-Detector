@@ -69,7 +69,7 @@ import atexit  # For playing a sound when the program finishes
 import csv  # For writing per-directory results CSV
 import copy  # Isolate checkpoint-restored inference configuration
 import hashlib  # Compute stable experiment fingerprints and sample hashes
-import dataframe_image as dfi  # For exporting DataFrame to PNG images
+from utils.table_images import preflight_table_images, render_table_image  # Shared venv-local browser setup and PNG export
 import datetime  # For tracking execution time
 import json  # For saving/loading metrics history
 import math  # Use ceiling rounding for persisted duration values
@@ -6351,17 +6351,17 @@ def apply_zebra_style(df: pd.DataFrame) -> pd.io.formats.style.Styler:
 
 def export_dataframe_image(styled_df: pd.io.formats.style.Styler, output_path: Union[str, Path]):
     """
-    Export a pandas Styler to a PNG image using dataframe_image.
+    Export a pandas Styler to a PNG image using the shared table-image renderer.
 
     :param styled_df: pandas Styler object to export
     :param output_path: Path to output PNG file
-    :raises: Any exception raised by dataframe_image.export will be propagated
+    :raises: Genuine image-write failures after browser fallback are propagated
     """
 
     try:
         out_p = Path(output_path)  # Ensure Path object for output
         out_p.parent.mkdir(parents=True, exist_ok=True)  # Ensure parent directory exists before writing
-        dfi.export(cast(Any, styled_df), str(out_p))  # Export styled dataframe to PNG using dataframe_image with cast to satisfy static typing
+        render_table_image(styled_df, out_p)  # Shared verified PNG export
     except Exception as e:
         print(str(e))  # Print export error for visibility
         send_exception_via_telegram(type(e), e, e.__traceback__)  # Notify via Telegram
@@ -6374,7 +6374,7 @@ def generate_table_image_from_dataframe(df: pd.DataFrame, output_path: Union[str
 
     :param df: DataFrame in memory (must not be re-read from disk)
     :param output_path: Target PNG path (will be overwritten if exists)
-    :raises: PermissionError if directory not writable, or any dataframe_image error
+    :raises: PermissionError if directory not writable, or a genuine image-write error
     """
 
     try:
@@ -6400,7 +6400,7 @@ def generate_csv_and_image(df: pd.DataFrame, csv_path: Union[str, Path], is_visu
     :param df: DataFrame to save
     :param csv_path: Destination CSV file path
     :param is_visualizable: Flag indicating whether to generate PNG image
-    :raises: Propagates IO and dataframe_image exceptions
+    :raises: Propagates IO and image-rendering exceptions
     """
 
     try:
@@ -10351,6 +10351,8 @@ def main():
 
     :return: None.
     """
+    if __name__ == "__main__":
+        preflight_table_images()  # Verify image output before expensive computation.
 
     try:
         global CONFIG  # Declare global CONFIG variable

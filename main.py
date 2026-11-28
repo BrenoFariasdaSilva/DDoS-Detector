@@ -73,7 +73,7 @@ if __name__ in {"__main__", "__mp_main__"}:
 import arff as liac_arff  # For loading ARFF files
 import argparse  # For parsing runtime process-name overrides
 import atexit  # For registering a function to run at exit
-import dataframe_image as dfi  # For exporting DataFrame styled tables as PNG images
+from utils.table_images import preflight_table_images, render_table_image  # Shared venv-local browser setup and PNG export
 import datetime  # For timestamping
 import lightgbm as lgb  # For LightGBM model
 import math  # For mathematical operations
@@ -1137,7 +1137,7 @@ def apply_zebra_style(df):
 
 def export_dataframe_image(styled_df, output_path):
     """
-    Export a pandas Styler object to a PNG file using dataframe_image.
+    Export a pandas Styler object to a PNG file using the shared table-image renderer.
 
     :param styled_df: pandas Styler object to export
     :param output_path: Path to PNG file to write
@@ -1155,7 +1155,7 @@ def export_dataframe_image(styled_df, output_path):
         if not os.access(str(parent), os.W_OK):  # Verify write permission on parent
             raise PermissionError(f"Directory not writable: {parent}")  # Raise if not writable
 
-        dfi.export(styled_df, str(out_path))  # Use dataframe_image to export styled DataFrame to PNG
+        render_table_image(styled_df, out_path)  # Shared verified PNG export
         return  # Return None explicitly
     except Exception as e:
         print(str(e))
@@ -2175,6 +2175,8 @@ def main(use_cv=False, extract_features=True, compare_feature_selection=None):
     :param compare_feature_selection: Boolean flag to compare performance with/without feature selection (default is True if extract_features is True)
     :return: None
     """
+    if __name__ == "__main__":
+        preflight_table_images()  # Verify image output before expensive computation.
     
     try:
         print(
